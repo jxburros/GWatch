@@ -3,83 +3,62 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
   <title>GWatch</title>
-  <style>
-    body { font-family: Arial, sans-serif; margin: 2rem; }
-    form { display: grid; gap: 0.75rem; max-width: 420px; }
-    input, select, button { padding: 0.5rem; font-size: 1rem; }
-    #result { margin-top: 1rem; white-space: pre-wrap; }
-  </style>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230b0d10'/%3E%3Ccircle cx='16' cy='16' r='7' fill='%233dff8f'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="app.css">
 </head>
 <body>
-  <h1>GWatch Network Monitor</h1>
-  <form id="check-form">
-    <label for="type">
-      Check Type
-      <select id="type" name="type" required>
-        <option value="ping">Ping</option>
-        <option value="http">HTTP/S</option>
-        <option value="dns">DNS</option>
-      </select>
-    </label>
-
-    <label for="target">
-      Target
-      <input id="target" name="target" placeholder="example.com or https://example.com" required>
-    </label>
-
-    <label for="timeout">
-      Timeout (seconds)
-      <input id="timeout" name="timeout" type="number" min="1" value="5" required>
-    </label>
-
-    <button type="submit">Run Check</button>
-  </form>
-
-  <p id="status" role="status" aria-live="polite"></p>
-  <pre id="result"></pre>
-
+  <a class="skip-link" href="#view">Skip to content</a>
+  <div class="app" id="app">
+    <aside class="sidebar" aria-label="Primary">
+      <a class="brand" href="#/dashboard" aria-label="GWatch home">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">GWatch</span>
+      </a>
+      <nav class="nav" aria-label="Main navigation">
+        <a class="nav-link" href="#/dashboard" data-nav="dashboard"><span class="nav-icon" data-icon="grid"></span>Dashboard</a>
+        <a class="nav-link" href="#/nodes" data-nav="nodes"><span class="nav-icon" data-icon="server"></span>Nodes</a>
+        <a class="nav-link" href="#/incidents" data-nav="incidents"><span class="nav-icon" data-icon="activity"></span>Incidents</a>
+        <a class="nav-link" href="#/settings" data-nav="settings"><span class="nav-icon" data-icon="settings"></span>Settings</a>
+      </nav>
+      <div class="sidebar-footer">
+        <a class="nav-link nav-link-secondary" href="#/wallboard" data-nav="wallboard"><span class="nav-icon" data-icon="monitor"></span>Open wallboard</a>
+        <a class="service-health" href="#/settings/health" id="service-health" aria-live="polite">
+          <span class="health-dot" aria-hidden="true"></span>
+          <span class="health-text">Checking service…</span>
+        </a>
+      </div>
+    </aside>
+    <div class="main">
+      <header class="topbar">
+        <div class="topbar-title">
+          <h1 id="page-title">Dashboard</h1>
+          <p class="topbar-subtitle" id="page-subtitle" hidden></p>
+        </div>
+        <div class="topbar-actions" id="page-actions"></div>
+      </header>
+      <div class="api-banner" id="api-banner" role="alert" hidden>
+        <span class="api-banner-icon" data-icon="alert"></span>
+        <span id="api-banner-text">The GWatch service is not responding — is it running?</span>
+        <button class="btn btn-sm" id="api-banner-retry" type="button">Retry</button>
+      </div>
+      <main id="view" class="view" tabindex="-1"></main>
+    </div>
+  </div>
+  <div id="toasts" class="toasts" aria-live="polite" aria-relevant="additions"></div>
+  <div id="modals"></div>
   <script>
-    const form = document.getElementById('check-form');
-    const status = document.getElementById('status');
-    const result = document.getElementById('result');
-
-    form.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      status.textContent = 'Running...';
-      result.textContent = '';
-
-      const payload = {
-        type: document.getElementById('type').value,
-        target: document.getElementById('target').value,
-        timeoutSeconds: Number(document.getElementById('timeout').value)
-      };
-
-      try {
-        const response = await fetch('/api/check', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-
-        const contentType = response.headers.get('content-type') || '';
-        const isJSON = contentType.includes('application/json');
-        const data = isJSON ? await response.json() : { error: await response.text() };
-        if (!response.ok) {
-          status.textContent = `Request failed (${response.status})`;
-          result.textContent = JSON.stringify({
-            error: `Request failed (${response.status})`,
-            response: data
-          }, null, 2);
-          return;
-        }
-        status.textContent = 'Check complete.';
-        result.textContent = JSON.stringify(data, null, 2);
-      } catch (error) {
-        status.textContent = 'Request failed.';
-        result.textContent = String(error);
-      }
-    });
+    // The in-browser mock backend is only loaded when the page is opened with ?mock=1.
+    if (/(^|[?&])mock=1(&|$)/.test(location.search)) {
+      const s = document.createElement('script');
+      s.type = 'module';
+      s.src = 'mock.js';
+      s.onload = () => import('./app.js');
+      document.head.appendChild(s);
+    } else {
+      import('./app.js');
+    }
   </script>
 </body>
 </html>

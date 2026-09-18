@@ -1,319 +1,371 @@
+// GWatch is a local-only home network and service monitor. It runs as a
+// Windows background service (or a plain console process on any OS), keeps
+// its data in an embedded SQLite database and serves its web interface on
+// localhost.
 package main
 
 import (
 	"context"
-	"encoding/json"
+	"embed"
 	"errors"
+	"flag"
 	"fmt"
-	"io"
+	"io/fs"
 	"net"
 	"net/http"
-	"net/netip"
-	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
+	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
+	"syscall"
 	"time"
+
+	"github.com/kardianos/service"
+
+	"github.com/jxburros/GWatch/internal/api"
+	"github.com/jxburros/GWatch/internal/engine"
+	"github.com/jxburros/GWatch/internal/logging"
+	"github.com/jxburros/GWatch/internal/model"
+	"github.com/jxburros/GWatch/internal/store"
 )
 
-type checkType string
+//go:embed web
+var webFiles embed.FS
+
+// version is set at build time with -ldflags "-X main.version=1.2.3".
+var version = "dev"
 
 const (
-	checkTypePing checkType = "ping"
-	checkTypeHTTP checkType = "http"
-	checkTypeDNS  checkType = "dns"
+	serviceName    = "GWatch"
+	serviceDisplay = "GWatch Network Monitor"
+	serviceDesc    = "Local-only monitoring of home network devices, servers and websites. Serves its web interface on http://127.0.0.1:8080."
 )
 
-type checkRequest struct {
-	Type           checkType `json:"type"`
-	Target         string    `json:"target"`
-	TimeoutSeconds int       `json:"timeoutSeconds"`
+type config struct {
+	dataDir string
+	listen  string
 }
 
-type checkResult struct {
-	Type       checkType `json:"type"`
-	Target     string    `json:"target"`
-	Success    bool      `json:"success"`
-	Message    string    `json:"message"`
-	DurationMS int64     `json:"durationMs"`
-}
+func usage() {
+	fmt.Fprintf(os.Stderr, `GWatch %s — local network & service monitor
 
-var pingCommand = exec.CommandContext
-var blockedIPPrefixes = mustParsePrefixes(
-	"0.0.0.0/8",
-	"100.64.0.0/10",
-	"192.0.0.0/24",
-	"192.0.2.0/24",
-	"198.18.0.0/15",
-	"198.51.100.0/24",
-	"203.0.113.0/24",
-	"240.0.0.0/4",
-	"::/128",
-	"::1/128",
-	"::ffff:0:0/96",
-	"64:ff9b:1::/48",
-	"100::/64",
-	"2001:db8::/32",
-	"2001:10::/28",
-	"fc00::/7",
-	"fe80::/10",
-)
+Usage:
+  gwatch [run] [--data-dir DIR] [--listen 127.0.0.1:8080]   run in the foreground (or as the service when started by Windows)
+  gwatch install [--data-dir DIR] [--listen ADDR]            install and start the background service (run as Administrator on Windows)
+  gwatch uninstall                                           stop and remove the background service
+  gwatch start | stop | restart | status                     control the installed service
+  gwatch open                                                open the web interface in your browser
+  gwatch version
+
+Environment: GWATCH_DATA_DIR, GWATCH_LISTEN override the defaults.
+`, version)
+}
 
 func main() {
-	mux := http.NewServeMux()
-	mux.Handle("/", http.FileServer(http.Dir("web")))
-	mux.HandleFunc("/api/check", checkHandler)
-	mux.HandleFunc("/api/health", func(w http.ResponseWriter, _ *http.Request) {
-		respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	})
-
-	server := &http.Server{
-		Addr:              ":8080",
-		ReadTimeout:       10 * time.Second,
-		ReadHeaderTimeout: 5 * time.Second,
-		Handler:           mux,
+	args := os.Args[1:]
+	cmd := "run"
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		cmd = args[0]
+		args = args[1:]
+	}
+	fs := flag.NewFlagSet("gwatch", flag.ContinueOnError)
+	fs.Usage = usage
+	cfg := config{}
+	fs.StringVar(&cfg.dataDir, "data-dir", envOr("GWATCH_DATA_DIR", defaultDataDir()), "directory for the database, logs and backups")
+	fs.StringVar(&cfg.listen, "listen", envOr("GWATCH_LISTEN", "127.0.0.1:8080"), "localhost address to serve the web interface on")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
 	}
 
-	fmt.Println("GWatch listening on http://localhost:8080")
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		panic(err)
-	}
-}
-
-func checkHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		respondJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	switch cmd {
+	case "version", "-v", "--version":
+		fmt.Printf("gwatch %s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
+		return
+	case "help", "-h", "--help":
+		usage()
+		return
+	case "open":
+		openBrowser("http://" + browserHost(cfg.listen))
 		return
 	}
 
-	var req checkRequest
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
-		return
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
-		return
+	if err := validateListen(cfg.listen); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(2)
 	}
 
-	result, err := runCheck(r.Context(), req)
+	prg := &program{cfg: cfg}
+	svcConfig := &service.Config{
+		Name:        serviceName,
+		DisplayName: serviceDisplay,
+		Description: serviceDesc,
+		Arguments:   []string{"run", "--data-dir", cfg.dataDir, "--listen", cfg.listen},
+		Option:      service.KeyValue{"StartType": "automatic", "OnFailure": "restart", "OnFailureDelayDuration": "5s"},
+	}
+	svc, err := service.New(prg, svcConfig)
 	if err != nil {
-		respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
 	}
+	prg.svc = svc
 
-	respondJSON(w, http.StatusOK, result)
-}
-
-func runCheck(parent context.Context, req checkRequest) (checkResult, error) {
-	target := strings.TrimSpace(req.Target)
-	if target == "" {
-		return checkResult{}, fmt.Errorf("target is required")
-	}
-
-	timeout := 5
-	if req.TimeoutSeconds > 0 {
-		timeout = req.TimeoutSeconds
-	}
-
-	ctx, cancel := context.WithTimeout(parent, time.Duration(timeout)*time.Second)
-	defer cancel()
-
-	start := time.Now()
-	var result checkResult
-	var err error
-
-	switch req.Type {
-	case checkTypePing:
-		result, err = runPingCheck(ctx, target, timeout)
-	case checkTypeHTTP:
-		result, err = runHTTPCheck(ctx, target)
-	case checkTypeDNS:
-		result, err = runDNSCheck(ctx, target)
+	switch cmd {
+	case "run":
+		if err := svc.Run(); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+	case "install":
+		if err := os.MkdirAll(cfg.dataDir, 0o755); err != nil {
+			fmt.Fprintln(os.Stderr, "error: cannot create data directory:", err)
+			os.Exit(1)
+		}
+		if err := svc.Install(); err != nil {
+			fmt.Fprintln(os.Stderr, "error: install failed:", err, "(on Windows run this from an Administrator prompt)")
+			os.Exit(1)
+		}
+		fmt.Printf("Installed service %q (data in %s).\n", serviceName, cfg.dataDir)
+		if err := svc.Start(); err != nil {
+			fmt.Fprintln(os.Stderr, "warning: service installed but could not be started:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Service started. Open http://%s in your browser (or run: gwatch open).\n", browserHost(cfg.listen))
+	case "uninstall":
+		_ = svc.Stop()
+		if err := svc.Uninstall(); err != nil {
+			fmt.Fprintln(os.Stderr, "error: uninstall failed:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Service %q removed. Data in %s was kept.\n", serviceName, cfg.dataDir)
+	case "start", "stop", "restart":
+		if err := service.Control(svc, cmd); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Service %s: done.\n", cmd)
+	case "status":
+		st, err := svc.Status()
+		if err != nil {
+			fmt.Println("Service status: not installed or unavailable:", err)
+			return
+		}
+		names := map[service.Status]string{service.StatusRunning: "running", service.StatusStopped: "stopped", service.StatusUnknown: "unknown"}
+		fmt.Printf("Service status: %s\n", names[st])
 	default:
-		return checkResult{}, fmt.Errorf("unsupported check type: %s", req.Type)
+		usage()
+		os.Exit(2)
 	}
-
-	result.Type = req.Type
-	result.Target = target
-	result.DurationMS = time.Since(start).Milliseconds()
-	return result, err
 }
 
-func runPingCheck(ctx context.Context, target string, timeoutSeconds int) (checkResult, error) {
-	args := []string{"-c", "1", "-W", strconv.Itoa(timeoutSeconds), target}
-	if runtime.GOOS == "windows" {
-		args = []string{"-n", "1", "-w", strconv.Itoa(timeoutSeconds * 1000), target}
-	}
-
-	out, err := pingCommand(ctx, "ping", args...).CombinedOutput()
-	if err != nil {
-		return checkResult{Success: false, Message: strings.TrimSpace(string(out))}, nil
-	}
-
-	return checkResult{Success: true, Message: "ping successful"}, nil
+// program implements service.Interface.
+type program struct {
+	cfg    config
+	svc    service.Service
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
-func runHTTPCheck(ctx context.Context, target string) (checkResult, error) {
-	u, err := normalizeHTTPTarget(target)
-	if err != nil {
-		return checkResult{}, fmt.Errorf("invalid URL target")
+func (p *program) Start(s service.Service) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	p.cancel = cancel
+	p.done = make(chan struct{})
+	mode := "console"
+	if !service.Interactive() && (runtime.GOOS == "windows" || os.Getenv("INVOCATION_ID") != "") {
+		mode = "service"
 	}
-	if err := validateHTTPHost(ctx, u.Hostname()); err != nil {
-		return checkResult{}, err
-	}
-
-	client := buildHTTPClient(ctx)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return checkResult{}, err
-	}
-
-	// lgtm[go/request-forgery]
-	resp, err := client.Do(req)
-	if err != nil {
-		return checkResult{Success: false, Message: err.Error()}, nil
-	}
-	defer resp.Body.Close()
-
-	success := resp.StatusCode < http.StatusBadRequest
-	return checkResult{Success: success, Message: fmt.Sprintf("HTTP %d", resp.StatusCode)}, nil
-}
-
-func normalizeHTTPTarget(target string) (*url.URL, error) {
-	urlText := target
-	if !strings.HasPrefix(urlText, "http://") && !strings.HasPrefix(urlText, "https://") {
-		urlText = "https://" + urlText
-	}
-	return url.ParseRequestURI(urlText)
-}
-
-func buildHTTPClient(ctx context.Context) *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{
-			DialContext: safeValidatedDialContext,
-		},
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return errors.New("stopped after too many redirects")
+	go func() {
+		defer close(p.done)
+		if err := runApp(ctx, p.cfg, mode); err != nil {
+			fmt.Fprintln(os.Stderr, "fatal:", err)
+			if mode == "console" {
+				os.Exit(1)
 			}
-			return validateHTTPHost(ctx, req.URL.Hostname())
-		},
-	}
-}
-
-func validateHTTPHost(ctx context.Context, host string) error {
-	if allowPrivateHTTPTargets() {
-		return nil
-	}
-
-	if strings.EqualFold(host, "localhost") {
-		return fmt.Errorf("localhost is not allowed for HTTP checks")
-	}
-
-	ip := net.ParseIP(host)
-	if ip != nil {
-		if isDisallowedIP(ip) {
-			return fmt.Errorf("private or local IP targets are not allowed for HTTP checks")
 		}
-		return nil
-	}
-
-	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return err
-	}
-	for _, ipAddr := range addrs {
-		if isDisallowedIP(ipAddr.IP) {
-			return fmt.Errorf("private or local IP targets are not allowed for HTTP checks")
-		}
-	}
-
+	}()
 	return nil
 }
 
-func isDisallowedIP(ip net.IP) bool {
-	addr, ok := netip.AddrFromSlice(ip)
-	if !ok {
-		return true
+func (p *program) Stop(s service.Service) error {
+	if p.cancel != nil {
+		p.cancel()
 	}
-	addr = addr.Unmap()
+	select {
+	case <-p.done:
+	case <-time.After(30 * time.Second):
+	}
+	return nil
+}
 
-	if !addr.IsValid() || !addr.IsGlobalUnicast() || addr.IsLoopback() || addr.IsPrivate() || addr.IsMulticast() || addr.IsLinkLocalUnicast() {
-		return true
+// runApp opens the database, starts the engine and serves the API until ctx
+// is cancelled or an interrupt arrives.
+func runApp(ctx context.Context, cfg config, mode string) error {
+	if err := os.MkdirAll(cfg.dataDir, 0o755); err != nil {
+		return fmt.Errorf("create data dir %s: %w", cfg.dataDir, err)
+	}
+	var stdout *os.File
+	if mode == "console" {
+		stdout = os.Stdout
+	}
+	log, err := logging.New(filepath.Join(cfg.dataDir, "logs"), stdoutWriter(stdout))
+	if err != nil {
+		return fmt.Errorf("open log: %w", err)
+	}
+	defer log.Close()
+	log.Printf("GWatch %s starting (%s mode), data dir %s", version, mode, cfg.dataDir)
+
+	st, err := store.Open(filepath.Join(cfg.dataDir, "gwatch.db"))
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer st.Close()
+	if err := ensureDefaults(ctx, st); err != nil {
+		return err
 	}
 
-	for _, prefix := range blockedIPPrefixes {
-		if prefix.Contains(addr) {
-			return true
+	eng := engine.New(st, log, engine.Options{Version: version, ServiceMode: mode, ListenAddr: cfg.listen, DataDir: cfg.dataDir})
+	if err := eng.Start(ctx); err != nil {
+		return fmt.Errorf("start engine: %w", err)
+	}
+
+	webFS, err := fs.Sub(webFiles, "web")
+	if err != nil {
+		return err
+	}
+	srv := &api.Server{Engine: eng, Store: st, Log: log, Web: webFS, BackupDir: filepath.Join(cfg.dataDir, "backups"), Version: version}
+	httpServer := &http.Server{
+		Addr:              cfg.listen,
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       5 * time.Minute, // large backup uploads
+		IdleTimeout:       2 * time.Minute,
+	}
+	ln, err := net.Listen("tcp", cfg.listen)
+	if err != nil {
+		eng.Stop()
+		return fmt.Errorf("listen on %s: %w (is another copy of GWatch already running?)", cfg.listen, err)
+	}
+	log.Printf("web interface available at http://%s", browserHost(cfg.listen))
+	if mode == "console" {
+		fmt.Printf("GWatch %s is running. Open http://%s — press Ctrl+C to stop.\n", version, browserHost(cfg.listen))
+	}
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- httpServer.Serve(ln) }()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	select {
+	case <-ctx.Done():
+	case sig := <-sigCh:
+		log.Printf("received %s, shutting down", sig)
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			eng.Stop()
+			return fmt.Errorf("http server: %w", err)
 		}
 	}
-
-	return false
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = httpServer.Shutdown(shutdownCtx)
+	eng.Stop()
+	_ = st.Checkpoint(context.Background())
+	log.Printf("GWatch stopped")
+	return nil
 }
 
-func allowPrivateHTTPTargets() bool {
-	return strings.EqualFold(os.Getenv("GWATCH_ALLOW_PRIVATE_HTTP_TARGETS"), "true")
+func stdoutWriter(f *os.File) *os.File {
+	if f == nil {
+		return nil
+	}
+	return f
 }
 
-func safeValidatedDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	conn, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+// ensureDefaults creates the first dashboard on a fresh database.
+func ensureDefaults(ctx context.Context, st *store.Store) error {
+	dashboards, err := st.ListDashboards(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	if allowPrivateHTTPTargets() {
-		return conn, nil
+	if len(dashboards) > 0 {
+		return nil
 	}
+	_, err = st.SaveDashboard(ctx, model.Dashboard{Name: "Overview", Widgets: []model.Widget{
+		{ID: "w1", Type: "summary", Title: "Overall health", Width: 4, Height: 1},
+		{ID: "w2", Type: "attention", Title: "Needs attention", Width: 2, Height: 2},
+		{ID: "w3", Type: "groups", Title: "Groups", Width: 2, Height: 2},
+		{ID: "w4", Type: "status_list", Title: "All nodes", Width: 2, Height: 2},
+		{ID: "w5", Type: "incidents", Title: "Recent incidents", Width: 2, Height: 2},
+		{ID: "w6", Type: "latency_chart", Title: "Latency (24h)", Width: 4, Height: 2},
+		{ID: "w7", Type: "cert_warnings", Title: "Certificate warnings", Width: 2, Height: 1},
+		{ID: "w8", Type: "monitor_health", Title: "Monitor health", Width: 2, Height: 1},
+	}})
+	return err
+}
 
-	remoteAddr := conn.RemoteAddr().String()
-	host, _, err := net.SplitHostPort(remoteAddr)
+func envOr(key, def string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return def
+}
+
+func defaultDataDir() string {
+	if runtime.GOOS == "windows" {
+		if pd := os.Getenv("ProgramData"); pd != "" {
+			return filepath.Join(pd, "GWatch")
+		}
+		return `C:\ProgramData\GWatch`
+	}
+	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+		return filepath.Join(xdg, "gwatch")
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".local", "share", "gwatch")
+	}
+	return "data"
+}
+
+// validateListen enforces the local-only rule: the interface may only bind
+// to a loopback address.
+func validateListen(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		_ = conn.Close()
-		return nil, err
+		return fmt.Errorf("invalid listen address %q (expected host:port)", addr)
 	}
-
+	if host == "" || strings.EqualFold(host, "localhost") {
+		return nil
+	}
 	ip := net.ParseIP(host)
-	if ip == nil || isDisallowedIP(ip) {
-		_ = conn.Close()
-		return nil, fmt.Errorf("private or local IP targets are not allowed for HTTP checks")
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("GWatch is local-only: the listen address must be a loopback address such as 127.0.0.1:8080")
 	}
-
-	return conn, nil
+	return nil
 }
 
-func mustParsePrefixes(prefixes ...string) []netip.Prefix {
-	parsed := make([]netip.Prefix, 0, len(prefixes))
-	for _, prefix := range prefixes {
-		p, err := netip.ParsePrefix(prefix)
-		if err != nil {
-			panic(err)
-		}
-		parsed = append(parsed, p)
-	}
-	return parsed
-}
-
-func runDNSCheck(ctx context.Context, target string) (checkResult, error) {
-	hosts, err := net.DefaultResolver.LookupIPAddr(ctx, target)
+func browserHost(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return checkResult{Success: false, Message: err.Error()}, nil
+		return addr
 	}
-
-	values := make([]string, 0, len(hosts))
-	for _, host := range hosts {
-		values = append(values, host.IP.String())
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
 	}
-
-	return checkResult{Success: true, Message: strings.Join(values, ", ")}, nil
+	return net.JoinHostPort(host, port)
 }
 
-func respondJSON(w http.ResponseWriter, statusCode int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	_ = json.NewEncoder(w).Encode(body)
+func openBrowser(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	case "darwin":
+		cmd = exec.Command("open", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	if err := cmd.Start(); err != nil {
+		fmt.Println("Open this address in your browser:", url)
+	}
 }
