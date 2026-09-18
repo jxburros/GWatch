@@ -2,11 +2,16 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/jxburros/GWatch/internal/auth"
 	"github.com/jxburros/GWatch/internal/model"
 )
 
@@ -272,5 +277,211 @@ func TestAverageHostSamplesKeepsMissingMetricsMissing(t *testing.T) {
 	}
 	if got.MemPct != nil {
 		t.Errorf("memory was never reported and must stay absent, got %v", *got.MemPct)
+	}
+}
+
+// mintPairing asks for a pairing code the way the Hardware page does.
+func mintPairing(t *testing.T, ts *httptest.Server, name string) (code string, pairing model.PairingCode) {
+	t.Helper()
+	var out struct {
+		Code    string            `json:"code"`
+		Pairing model.PairingCode `json:"pairing"`
+	}
+	if status := call(t, ts, "POST", "/api/agents/pairings", map[string]any{"name": name}, &out); status != 201 {
+		t.Fatalf("mint pairing code: %d", status)
+	}
+	if out.Code == "" || out.Pairing.ID == 0 {
+		t.Fatalf("no code minted: %+v", out)
+	}
+	return out.Code, out.Pairing
+}
+
+// redeem presents a code the way gwatch-agent does: no credential at all, just
+// the code and what the machine says it is.
+func redeem(t *testing.T, ts *httptest.Server, code string) (int, string) {
+	t.Helper()
+	b, _ := json.Marshal(map[string]string{
+		"code": code, "hostname": "nas.local", "os": "linux", "arch": "arm64", "version": "1.0.0",
+	})
+	resp, err := http.Post(ts.URL+"/api/agents/pair", "application/json", bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(resp.Body)
+	return resp.StatusCode, buf.String()
+}
+
+func TestPairingCodeEnrolsOneMachine(t *testing.T) {
+	ts, _ := newTestServer(t)
+	code, pairing := mintPairing(t, ts, "nas")
+
+	if pairing.ExpiresAt.Sub(pairing.CreatedAt) > pairingCodeLifetime+time.Minute {
+		t.Errorf("a code should be short-lived, this one lasts %s", pairing.ExpiresAt.Sub(pairing.CreatedAt))
+	}
+	// The code is shown once. Listing the invitations afterwards must not
+	// hand it back, exactly as listing agents must not hand back a token.
+	var list []model.PairingCode
+	call(t, ts, "GET", "/api/agents/pairings", nil, &list)
+	if len(list) != 1 || list[0].Redeemed() {
+		t.Fatalf("pairing list: %+v", list)
+	}
+	blob, _ := json.Marshal(list)
+	if bytes.Contains(blob, []byte(code)) {
+		t.Fatal("the pairing list leaked the code")
+	}
+
+	// Typed with the dashes in the wrong place and in lower case, as it will
+	// be, it still works.
+	typed := strings.ToLower(strings.ReplaceAll(code, "-", " "))
+	status, body := redeem(t, ts, typed)
+	if status != 201 {
+		t.Fatalf("redeem: %d %s", status, body)
+	}
+	var out struct {
+		Token string      `json:"token"`
+		Agent model.Agent `json:"agent"`
+	}
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !auth.LooksLikeAgentToken(out.Token) {
+		t.Fatalf("a pairing should yield an agent token, got %q", out.Token)
+	}
+	if out.Agent.Name != "nas" || out.Agent.Hostname != "nas.local" || out.Agent.OS != "linux" {
+		t.Fatalf("unexpected agent: %+v", out.Agent)
+	}
+
+	// The token that came out is a real one, and it is good for exactly the
+	// one thing an agent token is ever good for.
+	if code, body := postReading(t, ts.URL, out.Token, reading("nas.local", 42)); code != 202 {
+		t.Fatalf("the paired token should be accepted: %d %s", code, body)
+	}
+
+	// The invitation is spent, and says which machine it produced.
+	call(t, ts, "GET", "/api/agents/pairings", nil, &list)
+	if len(list) != 1 || !list[0].Redeemed() || list[0].AgentID == nil || *list[0].AgentID != out.Agent.ID {
+		t.Fatalf("the invitation should record the machine it enrolled: %+v", list)
+	}
+	if status, _ := redeem(t, ts, code); status != 401 {
+		t.Errorf("a spent code must not enrol a second machine, got %d", status)
+	}
+}
+
+// Unknown, malformed, expired, cancelled and already-used codes must be
+// indistinguishable from outside: anything else is an oracle a guesser can
+// use to learn which of its attempts was close.
+func TestPairingRejectionsAreIndistinguishable(t *testing.T) {
+	ts, srv := newTestServer(t)
+	ctx := context.Background()
+
+	spent, _ := mintPairing(t, ts, "spent")
+	if status, body := redeem(t, ts, spent); status != 201 {
+		t.Fatalf("setup: %d %s", status, body)
+	}
+	cancelled, cancelledPairing := mintPairing(t, ts, "cancelled")
+	if status := call(t, ts, "DELETE", fmt.Sprintf("/api/agents/pairings/%d", cancelledPairing.ID), nil, nil); status != 204 {
+		t.Fatalf("cancel: %d", status)
+	}
+	// An expired code cannot be made through the API — it would mean waiting a
+	// quarter of an hour — so it is minted straight into the store.
+	expired, err := auth.NewPairingCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.Store.CreatePairingCode(ctx, "expired", nil, auth.HashToken(expired), "test",
+		time.Now().Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	unknown, err := auth.NewPairingCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var first string
+	for _, c := range []struct{ label, code string }{
+		{"unknown", unknown},
+		{"expired", expired},
+		{"cancelled", cancelled},
+		{"already used", spent},
+		{"not a code at all", "hello there"},
+		{"an agent token", "gwa_abcdefghijklmnopqrstuvwxyz234567"},
+		{"empty", ""},
+	} {
+		status, body := redeem(t, ts, c.code)
+		if status != http.StatusUnauthorized {
+			t.Errorf("%s: got %d, want 401", c.label, status)
+			continue
+		}
+		if first == "" {
+			first = body
+		} else if body != first {
+			t.Errorf("%s answered %q, but an unknown code answers %q; the two must not be tellable apart",
+				c.label, strings.TrimSpace(body), strings.TrimSpace(first))
+		}
+	}
+	if !strings.Contains(first, pairingRejected) {
+		t.Errorf("the rejection should say what to do next, got %q", first)
+	}
+	// Nothing was enrolled by any of that.
+	var agents []model.Agent
+	call(t, ts, "GET", "/api/agents", nil, &agents)
+	if len(agents) != 1 {
+		t.Errorf("only the one real pairing should have registered a machine, got %d", len(agents))
+	}
+}
+
+// Guessing is what a short code has to survive, so a wrong one costs from the
+// same per-IP failure budget as a wrong password.
+func TestPairingIsRateLimited(t *testing.T) {
+	ts, _ := newTestServer(t)
+	wrong, err := auth.NewPairingCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	limited := false
+	for i := 0; i < failureLimit+2; i++ {
+		status, _ := redeem(t, ts, wrong)
+		if status == http.StatusTooManyRequests {
+			limited = true
+			break
+		}
+		if status != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: %d", i, status)
+		}
+	}
+	if !limited {
+		t.Fatalf("guessing should run out of attempts within %d tries", failureLimit+2)
+	}
+	// A real code presented from a blocked address is refused too: the limiter
+	// fails closed rather than letting one lucky guess through.
+	code, _ := mintPairing(t, ts, "nas")
+	if status, _ := redeem(t, ts, code); status != http.StatusTooManyRequests {
+		t.Errorf("the limiter should hold even for a valid code, got %d", status)
+	}
+}
+
+// Redeeming is the one agent route with no credential on it, so the routes
+// around it must still be shut.
+func TestPairingAdminRoutesNeedAnAdministrator(t *testing.T) {
+	ts, srv := newTestServer(t)
+	allowTestRemote(srv)
+	for _, c := range []struct{ method, path string }{
+		{"GET", "/api/agents/pairings"},
+		{"POST", "/api/agents/pairings"},
+		{"DELETE", "/api/agents/pairings/1"},
+	} {
+		status, body, _ := as(t, ts, creds{Remote: "192.168.1.50:9999"}, c.method, c.path, nil, nil)
+		if status != 401 && status != 403 {
+			t.Errorf("%s %s was open to a stranger: %d %s", c.method, c.path, status, body)
+		}
+	}
+	// Minting a code needs a name, exactly as registering a machine does.
+	if status := call(t, ts, "POST", "/api/agents/pairings", map[string]any{"name": "  "}, nil); status != 400 {
+		t.Errorf("a nameless invitation should be refused, got %d", status)
+	}
+	if status := call(t, ts, "POST", "/api/agents/pairings", map[string]any{"name": "nas", "nodeId": 4242}, nil); status != 400 {
+		t.Errorf("an invitation for a node that does not exist should be refused, got %d", status)
 	}
 }

@@ -54,6 +54,25 @@ CREATE TABLE IF NOT EXISTS host_samples (
   PRIMARY KEY (host_key, ts)
 );
 CREATE INDEX IF NOT EXISTS idx_host_samples_ts ON host_samples(ts);
+
+-- Invitations to enrol a machine. A row survives being redeemed, revoked or
+-- expiring: it is what lets the Hardware page say where an agent came from,
+-- and keeping it is also what makes "already used" a state the redemption
+-- query can see rather than an absence it has to guess at.
+CREATE TABLE IF NOT EXISTS agent_pairings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  node_id INTEGER REFERENCES nodes(id) ON DELETE SET NULL,
+  code_hash TEXT NOT NULL UNIQUE,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  redeemed_at TEXT,
+  revoked_at TEXT,
+  agent_id INTEGER REFERENCES agents(id) ON DELETE SET NULL,
+  redeemed_addr TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_agent_pairings_expires ON agent_pairings(expires_at);
 `
 
 const agentCols = `id, name, node_id, prefix, enabled, created_by, created_at, revoked_at, last_seen_at, last_addr, last_version, hostname, os, arch`
@@ -207,6 +226,204 @@ func (s *Store) TouchAgent(ctx context.Context, id int64, addr, version, hostnam
 		hostname = ?, os = ?, arch = ? WHERE id = ?`,
 		fmtTime(time.Now()), addr, version, hostname, os, arch, id)
 	return err
+}
+
+// SetAgentIdentity records what a machine says it is. It is used at enrolment,
+// where the machine describes itself before it has sent a reading, so unlike
+// TouchAgent it deliberately leaves last_seen_at alone: being enrolled is not
+// the same as having reported in, and the Hardware page draws that distinction.
+func (s *Store) SetAgentIdentity(ctx context.Context, id int64, hostname, os, arch string) error {
+	_, err := s.Exec(ctx, `UPDATE agents SET hostname = ?, os = ?, arch = ? WHERE id = ?`,
+		hostname, os, arch, id)
+	return err
+}
+
+// ---- pairing codes ----
+
+const pairingCols = `id, name, node_id, created_by, created_at, expires_at, redeemed_at, revoked_at, agent_id, redeemed_addr`
+
+func scanPairing(sc interface{ Scan(...any) error }) (model.PairingCode, error) {
+	var p model.PairingCode
+	var nodeID, agentID sql.NullInt64
+	var createdAt, expiresAt string
+	var redeemedAt, revokedAt sql.NullString
+	err := sc.Scan(&p.ID, &p.Name, &nodeID, &p.CreatedBy, &createdAt, &expiresAt,
+		&redeemedAt, &revokedAt, &agentID, &p.RedeemedAddr)
+	if err != nil {
+		return model.PairingCode{}, err
+	}
+	p.NodeID = int64Ptr(nodeID)
+	p.AgentID = int64Ptr(agentID)
+	p.CreatedAt = mustTime(createdAt)
+	p.ExpiresAt = mustTime(expiresAt)
+	p.RedeemedAt = parseTime(redeemedAt)
+	p.RevokedAt = parseTime(revokedAt)
+	return p, nil
+}
+
+// scanPairingWithHash reads a row that carries the stored digest as well, for
+// the one caller that has to check the digest rather than trust the lookup.
+func scanPairingWithHash(sc interface{ Scan(...any) error }) (model.PairingCode, string, error) {
+	var p model.PairingCode
+	var nodeID, agentID sql.NullInt64
+	var createdAt, expiresAt, hash string
+	var redeemedAt, revokedAt sql.NullString
+	err := sc.Scan(&p.ID, &p.Name, &nodeID, &p.CreatedBy, &createdAt, &expiresAt,
+		&redeemedAt, &revokedAt, &agentID, &p.RedeemedAddr, &hash)
+	if err != nil {
+		return model.PairingCode{}, "", err
+	}
+	p.NodeID = int64Ptr(nodeID)
+	p.AgentID = int64Ptr(agentID)
+	p.CreatedAt = mustTime(createdAt)
+	p.ExpiresAt = mustTime(expiresAt)
+	p.RedeemedAt = parseTime(redeemedAt)
+	p.RevokedAt = parseTime(revokedAt)
+	return p, hash, nil
+}
+
+// CreatePairingCode records an invitation to enrol one machine. Only the hash
+// of the code is stored, exactly as an agent token's is: the code is shown
+// once, when it is minted, and a lost one is replaced rather than recovered.
+func (s *Store) CreatePairingCode(ctx context.Context, name string, nodeID *int64, codeHash, createdBy string, expiresAt time.Time) (model.PairingCode, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return model.PairingCode{}, errors.New("a name is required")
+	}
+	if codeHash == "" {
+		return model.PairingCode{}, errors.New("a code is required")
+	}
+	res, err := s.Exec(ctx, `INSERT INTO agent_pairings(name, node_id, code_hash, created_by, created_at, expires_at)
+		VALUES (?,?,?,?,?,?)`, name, nodeID, codeHash, createdBy, fmtTime(time.Now()), fmtTime(expiresAt))
+	if err != nil {
+		if isUniqueViolation(err) {
+			return model.PairingCode{}, ErrDuplicate
+		}
+		return model.PairingCode{}, err
+	}
+	id, _ := res.LastInsertId()
+	return s.GetPairingCode(ctx, id)
+}
+
+// GetPairingCode returns one invitation.
+func (s *Store) GetPairingCode(ctx context.Context, id int64) (model.PairingCode, error) {
+	row := s.reader.QueryRowContext(ctx, `SELECT `+pairingCols+` FROM agent_pairings WHERE id = ?`, id)
+	p, err := scanPairing(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.PairingCode{}, ErrNotFound
+	}
+	return p, err
+}
+
+// ListPairingCodes returns recent invitations, newest first. Codes that have
+// been used or have run out are kept in the list rather than swept away: an
+// administrator looking at the Hardware page wants to see that the machine
+// they invited five minutes ago did in fact turn up.
+func (s *Store) ListPairingCodes(ctx context.Context, limit int) ([]model.PairingCode, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	rows, err := s.reader.QueryContext(ctx,
+		`SELECT `+pairingCols+` FROM agent_pairings ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.PairingCode{}
+	for rows.Next() {
+		p, err := scanPairing(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// RedeemPairingCode claims an invitation for the machine presenting it and
+// reports what it was for.
+//
+// The claim is the whole point of this being one method rather than a lookup
+// followed by an update the caller makes. Reading the row, deciding it is
+// still good and marking it used all happen inside a single write
+// transaction on the one writer connection, so two machines racing with the
+// same code cannot both be told yes: the second finds redeemed_at already set
+// and is turned away like any other spent code.
+//
+// Every way of failing — no such code, expired, already redeemed, cancelled —
+// comes back as ErrNotFound, because the caller must not be able to tell them
+// apart either. Which one it was is recorded in the audit trail, where only an
+// administrator can read it.
+//
+// The stored digest is returned with the row so the caller can compare it
+// against the one it computed in constant time. The comparison SQLite already
+// did to find the row is not constant time, which does not matter for a digest
+// of a high-entropy code, but the credential the caller ends up trusting
+// should still be one it checked itself.
+func (s *Store) RedeemPairingCode(ctx context.Context, codeHash string, now time.Time, addr string) (model.PairingCode, string, error) {
+	var out model.PairingCode
+	var stored string
+	err := s.WriteTx(ctx, func(tx *sql.Tx) error {
+		row := tx.QueryRowContext(ctx, `SELECT `+pairingCols+`, code_hash FROM agent_pairings WHERE code_hash = ?`, codeHash)
+		p, hash, err := scanPairingWithHash(row)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if !p.Pending(now) {
+			return ErrNotFound
+		}
+		stored = hash
+		// The guard on redeemed_at is belt and braces: the transaction above
+		// already serialises the race, and this makes the statement itself
+		// refuse to claim a code twice however it is reached.
+		res, err := tx.ExecContext(ctx,
+			`UPDATE agent_pairings SET redeemed_at = ?, redeemed_addr = ? WHERE id = ? AND redeemed_at IS NULL`,
+			fmtTime(now), addr, p.ID)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
+		redeemed := now
+		p.RedeemedAt = &redeemed
+		p.RedeemedAddr = addr
+		out = p
+		return nil
+	})
+	if err != nil {
+		return model.PairingCode{}, "", err
+	}
+	return out, stored, nil
+}
+
+// AttachPairingAgent notes which machine a redeemed invitation produced. It is
+// a separate step because the agent does not exist until the code has been
+// claimed, and claiming it is what must not be allowed to happen twice.
+func (s *Store) AttachPairingAgent(ctx context.Context, id, agentID int64) error {
+	_, err := s.Exec(ctx, `UPDATE agent_pairings SET agent_id = ? WHERE id = ?`, agentID, id)
+	return err
+}
+
+// RevokePairingCode cancels an invitation that has not been used. A code that
+// was already redeemed, cancelled or expired is left exactly as it is, so
+// cancelling cannot rewrite the record of an enrolment that already happened.
+func (s *Store) RevokePairingCode(ctx context.Context, id int64) error {
+	res, err := s.Exec(ctx,
+		`UPDATE agent_pairings SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL AND redeemed_at IS NULL`,
+		fmtTime(time.Now()), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		if _, err := s.GetPairingCode(ctx, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ---- readings ----

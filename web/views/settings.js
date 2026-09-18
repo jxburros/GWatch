@@ -6,6 +6,7 @@ import { api, qs } from '../api.js';
 import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, openModal, emptyState, skeleton, banner, eventRow, busy, applyTheme, applyAccent, ACCENT_PRESETS, hexToRgb } from '../components.js';
 import { relTime, dateTime, bytes, num, duration, retentionSpan, toLocalInput, fromLocalInput, weekdayShort, timeShort, plural } from '../fmt.js';
 import { openEndpointEditor, endpointRow, triggerRow, openTriggerEditor } from './automation.js';
+import { tipsEnabled, setTipsEnabled, resetTips, seenCount, resetOnboarding, TIPS } from '../tips.js';
 
 // `viewer: true` marks the sections an account without the admin role may
 // open. Everything else reads or writes settings, which the server refuses to
@@ -141,7 +142,25 @@ export async function mount(root, ctx) {
         themeWrap),
       h('section', { class: 'card' }, h('h2', null, 'Accent colour'), h('p', { class: 'lead' }, 'Used for buttons, highlights, the active navigation item and the first chart line.'), swatches,
         h('div', { class: 'row', style: { marginTop: '14px', gap: '8px' } }, h('button', { class: 'btn btn-primary', type: 'button' }, 'Primary button'), h('button', { class: 'btn', type: 'button' }, 'Button'), h('span', { class: 'chip active' }, 'Active chip'), h('a', { href: '#/settings/appearance' }, 'A link')),
-        isAdmin ? h('hr', { class: 'divider' }) : null, isAdmin ? saveBar() : null));
+        isAdmin ? h('hr', { class: 'divider' }) : null, isAdmin ? saveBar() : null),
+      guidanceCard());
+  }
+
+  /* Tips and the first-run tour are a property of this browser, not of the
+     monitor, so they sit with the theme rather than in the saved settings and
+     a viewer may change them as freely as an administrator. */
+  function guidanceCard() {
+    const seen = h('p', { class: 'note' });
+    const refresh = () => { seen.textContent = tipsEnabled() ? `${seenCount()} of ${TIPS.length} tips shown so far.` : 'Tips are off. Nothing appears until you turn them on.'; };
+    const tips = toggle({ label: 'Show tips as I go', checked: tipsEnabled(), onChange: (on) => { setTipsEnabled(on); refresh(); } });
+    refresh();
+    return h('section', { class: 'card' }, h('h2', null, 'Guidance'),
+      h('p', { class: 'lead' }, 'Tips are small hints that point at one control and explain what it does. Each one appears once and is then gone. Remembered by this browser only.'),
+      h('div', { class: 'stack-sm' }, tips, seen,
+        h('div', { class: 'btn-group', style: { marginTop: '6px' } },
+          h('button', { class: 'btn', type: 'button', onclick: () => { resetTips(); refresh(); toast('Tips reset', { kind: 'success' }); } }, icon('refresh'), 'Reset tips'),
+          h('button', { class: 'btn', type: 'button', onclick: () => { resetOnboarding(); ctx.navigate('/onboarding'); } }, icon('play'), 'Restart onboarding'),
+          h('a', { class: 'btn', href: '#/help' }, icon('help'), 'Open Help'))));
   }
 
   /* ---------- Network access ---------- */

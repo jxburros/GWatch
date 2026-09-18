@@ -211,6 +211,56 @@ routes — an administrator in the browser, never an API key:
 - `DELETE /api/agents/{id}` → 204. Revokes the token and keeps the machine's past
   readings. `?purge=1` deletes the machine and every reading it ever sent.
 
+### Pairing codes
+
+A pairing code is a short, human-readable stand-in for an agent token: eight
+characters from a Crockford-style base32 alphabet with the confusable ones removed
+(no `I`, `L`, `O`, `U`, `0` or `1`), shown as `XXXX-XXXX`. It exists so that enrolling
+a machine means typing eight characters into an installer prompt rather than copying a
+forty-character `gwa_…` token between computers. Thirty symbols over eight places is
+about 39 bits, and a code lives for fifteen minutes, is good for exactly one machine,
+and can be cancelled in the meantime.
+
+- `GET /api/agents/pairings` → `[PairingCode]`, newest first. The code itself is never
+  returned; the row carries `name`, `nodeId`, `createdAt`, `expiresAt`, and whichever
+  of `redeemedAt`, `revokedAt`, `agentId` and `redeemedAddr` apply.
+- `POST /api/agents/pairings` body `{ "name": "Living room NAS", "nodeId": null|id }` →
+  `{ "code": "XXXX-XXXX", "pairing": PairingCode }`. **The code is returned exactly
+  once.** Only its sha256 digest is stored, exactly as an agent token's is.
+- `DELETE /api/agents/pairings/{id}` → 204. Cancels an unused code. A code that was
+  already redeemed is left as it is, so cancelling cannot rewrite an enrolment that
+  already happened.
+
+### Redeeming a pairing code
+
+`POST /api/agents/pair` body
+`{ "code": "XXXX-XXXX", "hostname": …, "os": …, "arch": …, "version": … }` →
+`201 { "token": "gwa_…", "agent": Agent, "intervalSeconds": … }`.
+
+This is the one route under `/api/` that takes no credential, and it cannot take one:
+handing out a credential is what it is for. What stands in for one is the code — short
+lived, single use and cancellable — plus the same per-IP failure budget a wrong password
+or a wrong agent token is counted against, so guessing runs out of attempts long before
+it runs out of codes. The code is compared in constant time, redemption is atomic (two
+machines racing with one code enrol exactly one), and every attempt is written to the
+audit trail.
+
+An unknown code, a mistyped one, an expired one, a cancelled one and one that has
+already been used all answer `401` with the same message. Telling them apart would make
+the endpoint an oracle. Which one it actually was is recorded in the event log, where
+only an administrator can read it. Codes are read case-insensitively and dashes,
+underscores and whitespace are ignored wherever they land, so `a2b3 c4d5` and
+`A2B3-C4D5` are the same code.
+
+On the machine being enrolled this is `gwatch-agent pair --server URL --code XXXX-XXXX`,
+or `gwatch-agent install --server URL --code XXXX-XXXX` to pair and install the service
+in one go. The token that comes back is saved with owner-only permissions to
+`%ProgramData%\GWatch\agent-token` on Windows and `$XDG_DATA_HOME/gwatch/agent-token`
+(or `~/.local/share/gwatch/agent-token`) elsewhere — `GWATCH_AGENT_TOKEN_FILE` overrides
+it — and `run`, `once` and `serve` use it when `--token` is not given. The file is
+created 0600 under a 0700 directory; on Windows the inherited ACL is replaced with
+SYSTEM and the administrators group.
+
 ### Submitting a reading
 
 `POST /ingest/metrics` with `Authorization: Bearer gwa_…` and a `HostMetrics` body.

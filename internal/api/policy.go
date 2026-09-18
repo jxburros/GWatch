@@ -170,6 +170,15 @@ var policies = []routePolicy{
 	{"POST", "/api/agents", levelAdmin, keyDeny},
 	{"PUT", "/api/agents/{id}", levelAdmin, keyDeny},
 	{"DELETE", "/api/agents/{id}", levelAdmin, keyDeny},
+	{"GET", "/api/agents/pairings", levelAdmin, keyDeny},
+	{"POST", "/api/agents/pairings", levelAdmin, keyDeny},
+	{"DELETE", "/api/agents/pairings/{id}", levelAdmin, keyDeny},
+	// Redeeming a pairing code is public because it cannot be anything else:
+	// the machine typing the code has no credential yet, and getting one is
+	// the point of the call. The code itself is the credential — one machine,
+	// one use, fifteen minutes, cancellable — and wrong ones are counted
+	// against the same per-IP failure budget as wrong passwords.
+	{"POST", "/api/agents/pair", levelPublic, keyDeny},
 
 	{"GET", "/api/apikeys", levelAdmin, keyDeny},
 	{"POST", "/api/apikeys", levelAdmin, keyDeny},

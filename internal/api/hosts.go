@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -402,6 +403,240 @@ func (s *Server) forgetHost(key string) {
 	if s.Engine != nil {
 		s.Engine.Hosts().Forget(key)
 	}
+}
+
+// ---- pairing codes ----
+
+// pairingCodeLifetime is how long a minted pairing code stays redeemable.
+//
+// Fifteen minutes is chosen for the job the code actually does: someone is
+// standing at the GWatch screen, walking to another machine (or reading the
+// code to whoever is), and typing it into an installer prompt. A quarter of an
+// hour covers that with room for a wrong turn, and it is short enough that a
+// code left on a screen, in a chat message or on a sticky note is worthless by
+// the time anyone else finds it. Making it longer would buy nothing: a code
+// that has gone stale is replaced with two clicks.
+const pairingCodeLifetime = 15 * time.Minute
+
+// maxPairBody caps the enrolment request. It carries a code and a few words of
+// self-description, so a kilobyte is generous — and unlike the ingest route
+// this one is reached with no credential at all, which is exactly why the body
+// is bounded before anything is parsed.
+const maxPairBody = 4 << 10
+
+// pairingRejected is the single answer to every unusable code: unknown,
+// mistyped, expired, cancelled, or already used by another machine. Telling
+// them apart would turn the endpoint into an oracle — a guesser could learn
+// that a code exists but has run out, which is most of the way to knowing the
+// shape of the codes GWatch mints — so the person who mistyped theirs and the
+// person fishing for one get the same sentence.
+const pairingRejected = "that pairing code is not valid; ask for a fresh one in GWatch under Hardware"
+
+func (s *Server) handleListPairings(w http.ResponseWriter, r *http.Request) {
+	codes, err := s.Store.ListPairingCodes(r.Context(), 0)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, codes)
+}
+
+// handleCreatePairing mints a pairing code for a named machine. Like the token
+// minted by handleCreateAgent the code is returned exactly once, here; only its
+// hash is stored, so GWatch cannot show it again and a lost code is replaced
+// rather than recovered.
+func (s *Server) handleCreatePairing(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var body struct {
+		Name   string `json:"name"`
+		NodeID *int64 `json:"nodeId"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	switch {
+	case name == "":
+		writeError(w, http.StatusBadRequest, "give the machine a name so you can recognise it later")
+		return
+	case len(name) > 100:
+		writeError(w, http.StatusBadRequest, "the name is too long")
+		return
+	}
+	if body.NodeID != nil {
+		if _, err := s.Store.GetNode(ctx, *body.NodeID); err != nil {
+			writeError(w, http.StatusBadRequest, "the node this machine belongs to does not exist")
+			return
+		}
+	}
+
+	code, err := auth.NewPairingCode()
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	created, err := s.Store.CreatePairingCode(ctx, name, body.NodeID, auth.HashToken(code),
+		auth.FromContext(ctx).Label(), time.Now().Add(pairingCodeLifetime))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.auditAuth(ctx, "Pairing code created for "+created.Name,
+		fmt.Sprintf("Whoever types it within %s enrols one machine, which may then submit that machine's hardware readings and nothing else.",
+			pairingCodeLifetime))
+	writeJSON(w, http.StatusCreated, map[string]any{"code": code, "pairing": created})
+}
+
+// handleRevokePairing cancels an unused pairing code.
+func (s *Server) handleRevokePairing(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id, err := pathID(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	pairing, err := s.Store.GetPairingCode(ctx, id)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if err := s.Store.RevokePairingCode(ctx, id); err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.auditAuth(ctx, "Pairing code cancelled for "+pairing.Name, "Typing it now enrols nothing.")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handlePair exchanges a pairing code for a real agent token.
+//
+// This endpoint takes no credential, and it cannot: obtaining one is the whole
+// reason it exists. What stands in for the credential is the code itself —
+// short-lived, single-use, and cancellable — together with the same per-IP
+// failure budget a wrong password or a wrong agent token is counted against,
+// so guessing runs out of attempts long before it runs out of codes. Every
+// attempt, successful or not, is written to the audit trail.
+func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	ip := s.clientIP(r)
+	if allowed, wait := s.failLimiter.Allow(ip); !allowed {
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds()+0.999)))
+		writeError(w, http.StatusTooManyRequests, "too many failed attempts; try again shortly")
+		return
+	}
+
+	var body struct {
+		Code     string `json:"code"`
+		Hostname string `json:"hostname"`
+		OS       string `json:"os"`
+		Arch     string `json:"arch"`
+		Version  string `json:"version"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxPairBody)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "the body is not a GWatch pairing request")
+		return
+	}
+
+	// A code that is not even the right shape is refused with the same words
+	// as one that is: "you typed something that is not a code" and "you typed
+	// a code that has expired" must not be tellable apart from out here.
+	normalized, ok := auth.NormalizePairingCode(body.Code)
+	if !ok {
+		s.rejectPairing(ctx, w, ip, "The code presented was not in the right form.")
+		return
+	}
+	// Redeeming claims the code and hands back the digest that was stored with
+	// it. The claim is atomic, so two machines racing with the same code
+	// cannot both be enrolled; the digest comes back so the decision to trust
+	// this caller rests on a comparison made here, in constant time, rather
+	// than on the index lookup SQLite used to find the row.
+	want := auth.HashToken(normalized)
+	pairing, stored, err := s.Store.RedeemPairingCode(ctx, want, time.Now(), ip)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			s.rejectPairing(ctx, w, ip, "The code presented is unknown, expired, cancelled or already used.")
+			return
+		}
+		s.fail(w, err)
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(stored), []byte(want)) != 1 {
+		s.rejectPairing(ctx, w, ip, "The code presented did not match the one it was looked up by.")
+		return
+	}
+	s.failLimiter.Reset(ip)
+
+	// From here the code is spent whatever happens next. That is the right way
+	// round: a failure after the claim costs the administrator a fresh code,
+	// while a failure that gave the code back would hand a machine that can
+	// make registration fail an unlimited number of attempts at it.
+	token, prefix, err := auth.NewAgentToken()
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	created, err := s.Store.CreateAgent(ctx, pairing.Name, pairing.NodeID, prefix, auth.HashToken(token),
+		fmt.Sprintf("pairing code (%s)", pairing.CreatedBy))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if err := s.Store.AttachPairingAgent(ctx, pairing.ID, created.ID); err != nil {
+		s.Log.Errorf("attach pairing agent: %v", err)
+	}
+	// What the machine says it is goes on the record as its own claim, exactly
+	// as it does for a reading: GWatch did not go and look any of this up.
+	hostname := trimTo(body.Hostname, 200)
+	if err := s.Store.SetAgentIdentity(ctx, created.ID, hostname, trimTo(body.OS, 60), trimTo(body.Arch, 30)); err != nil {
+		s.Log.Errorf("record agent identity: %v", err)
+	}
+	created.Hostname, created.OS, created.Arch = hostname, trimTo(body.OS, 60), trimTo(body.Arch, 30)
+
+	s.auditAuth(ctx, "Machine paired: "+created.Name,
+		fmt.Sprintf("A pairing code was redeemed from %s by %s. The machine may submit its own hardware readings and nothing else.",
+			ip, describeMachine(hostname, body.OS, body.Arch, body.Version)))
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"token":           token,
+		"agent":           created,
+		"intervalSeconds": int(hostmon.DefaultSampleInterval.Seconds()),
+	})
+}
+
+// rejectPairing answers every unusable code identically and records the reason
+// where only an administrator can read it.
+func (s *Server) rejectPairing(ctx context.Context, w http.ResponseWriter, ip, detail string) {
+	s.auditAuthFailure(ctx, "Pairing rejected", detail+" It came from "+ip+".", ip)
+	writeError(w, http.StatusUnauthorized, pairingRejected)
+}
+
+// describeMachine names the machine in the audit entry the way it described
+// itself, falling back to something honest when it said nothing at all.
+func describeMachine(hostname, os, arch, version string) string {
+	parts := []string{}
+	for _, p := range []string{hostname, os, arch} {
+		if p = strings.TrimSpace(p); p != "" {
+			parts = append(parts, p)
+		}
+	}
+	if v := strings.TrimSpace(version); v != "" {
+		parts = append(parts, "agent "+v)
+	}
+	if len(parts) == 0 {
+		return "a machine that did not describe itself"
+	}
+	return strings.Join(parts, "/")
+}
+
+// trimTo bounds a string the machine sent about itself. None of these fields
+// are trusted for anything, but they are shown in the UI and written to the
+// event log, so their length is ours to decide rather than the caller's.
+func trimTo(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if len(s) > max {
+		return s[:max]
+	}
+	return s
 }
 
 // ---- the ingest endpoint ----

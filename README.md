@@ -1,3 +1,5 @@
+<img src="web/logo.svg" alt="" width="84" align="right">
+
 # GWatch
 
 [![CI](https://github.com/jxburros/GWatch/actions/workflows/ci.yml/badge.svg)](https://github.com/jxburros/GWatch/actions/workflows/ci.yml)
@@ -95,6 +97,12 @@ the wizard — it asks for a port and whether to allow other devices on your net
 installs the `GWatch` service, starts it, and adds a Start Menu shortcut. No PowerShell
 or command line needed. Full walkthrough, including upgrading and uninstalling:
 [`docs/INSTALL.md`](docs/INSTALL.md).
+
+The same release carries a second setup program, `gwatch-agent-setup-<version>.exe`. That
+one does not go on this machine — it goes on the *other* machines you want GWatch to
+report the health of. It asks for the server's address and a pairing code you generate in
+GWatch under **Hardware › Pair a machine**, and nothing else; see
+[`docs/HARDWARE.md`](docs/HARDWARE.md).
 
 **Advanced: the PowerShell scripts.** The setup program wraps these same steps; use them
 directly if you'd rather build from source, script an unattended rollout, or skip
@@ -243,8 +251,8 @@ request as a single job on a Windows runner (Linux runners are switched off for 
 | build + test | `go build ./...` and the whole test suite on Windows, the platform GWatch installs as a service on |
 | web assets | `node --check` on every file under `web/` — the UI is embedded with `//go:embed`, so the Go compiler never sees a syntax error there |
 | PowerShell | Parses `scripts/*.ps1`, since those scripts are the Windows install path |
-| installer | Compiles `scripts/installer/gwatch.iss` with Inno Setup into `gwatch-setup-*.exe` |
-| artefact | Uploads `gwatch-windows-amd64.exe` and `gwatch-setup-*.exe` |
+| installers | Compiles `scripts/installer/gwatch.iss` and `gwatch-agent.iss` with Inno Setup into `gwatch-setup-*.exe` and `gwatch-agent-setup-*.exe` |
+| artefact | Uploads `gwatch-windows-amd64.exe` and both setup programs |
 
 Pushing a tag such as `v1.2.0` additionally runs the `release` job, which cross-compiles
 `gwatch-<os>-<arch>[.exe]` for Windows, Linux and macOS, writes a `.sha256` checksum and
@@ -278,8 +286,9 @@ Layout:
 | `web/` | The browser interface (vanilla HTML/CSS/JS, no build step, embedded into the binary; open with `?mock=1` for an in-browser demo backend) |
 | `web/fonts/` | Barlow and Kode Mono, latin subsets, self-hosted so the UI still requests nothing from the internet ([SIL OFL 1.1](web/fonts/OFL.txt)) |
 | `scripts/` | Windows build / install / uninstall PowerShell scripts |
+| `scripts/installer/` | The two Inno Setup scripts, their shared branding and the wizard artwork |
 
-## License
+## License, terms and privacy
 
 GWatch is source-available under the [GWatch Community License](LICENSE): free to use,
 modify, and distribute, including commercially for deployment, support, and
@@ -293,3 +302,20 @@ line visible.
 The two typefaces shipped in `web/fonts/` — Barlow and Kode Mono — are third-party and
 carry their own licence, the [SIL Open Font License 1.1](web/fonts/OFL.txt), which
 travels with them.
+
+Three plain-language documents sit alongside the licence. They are written for
+transparency rather than by a lawyer, and they say so at the top:
+
+| Document | What it covers |
+|---|---|
+| [`docs/TERMS.md`](docs/TERMS.md) | Terms of use — acceptable use, no warranty, limitation of liability |
+| [`docs/PRIVACY.md`](docs/PRIVACY.md) | What GWatch stores, where, and the fact that none of it goes anywhere |
+| [`docs/DISCLAIMER.md`](docs/DISCLAIMER.md) | The security choices that are yours to make, and what happens if you make them badly |
+
+The setup program shows the licence and a digest of all three before it installs
+anything, and drops a copy in the install directory.
+
+## Credits
+
+GWatch is developed by **Jeffrey Guntly** and **Garrett Guntly**, and published by
+**JX Holdings, LLC**.

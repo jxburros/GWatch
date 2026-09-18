@@ -1,0 +1,239 @@
+GWatch
+A calm monitor for a home network and its services.
+
+Copyright (c) 2026 JX Holdings. Original developers: Jeffrey Guntly
+and Garrett Guntly.
+
+Published by JX Holdings, LLC.
+
+Please read this before installing. It contains, in order:
+
+  1. The GWatch Community License 1.0, in full -- the terms under which
+     you may use, modify and distribute GWatch.
+  2. A summary of the additional terms: acceptable use, privacy, and the
+     security disclaimer, with links to the full documents.
+
+(The license text below is reproduced word for word. The only change is
+typographic: em dashes are written as "--" so this file stays plain
+ASCII for the installer. The authoritative copy is the LICENSE file in
+the GWatch repository.)
+
+==============================================================================
+1. GWATCH COMMUNITY LICENSE 1.0
+==============================================================================
+
+GWatch Community License 1.0
+
+Copyright (c) 2026 JX Holdings.
+GWatch was developed by Jeffrey Guntly and Garrett Guntly.
+
+PLAIN-ENGLISH SUMMARY (not part of the license -- read the numbered
+sections below for the actual terms; if the two ever disagree, the
+numbered sections control)
+
+You can use, study, modify, host, and distribute GWatch for free,
+including running it commercially for clients or building paid support,
+deployment, and customization services on top of it. The one thing you
+can't do is take GWatch essentially as-is and sell it or resell access to
+it as if it were your own product. Whatever you distribute -- modified or
+not -- has to keep GWatch's name, logo, and copyright credit visible, and
+if you've changed it, you have to say clearly that your version isn't an
+official release. This is a source-available license, not an OSI-approved
+open-source license, because of that one commercial restriction and the
+attribution requirement. See TRADEMARKS.md for the separate policy
+governing the GWatch name and logo.
+
+1. GRANT OF RIGHTS
+
+Subject to the terms of this license, JX Holdings grants you a worldwide,
+royalty-free, non-exclusive license to use, reproduce, prepare derivative
+works of, publicly display, publicly perform, sublicense, and distribute
+the Software and derivative works of the Software ("Derivative Works"),
+in source or object form, for any purpose, commercial or otherwise,
+except as limited by Section 2.
+
+Each contributor grants you a license to any of that contributor's patent
+claims that are necessarily infringed by their contribution alone or by
+combination with the Software, for making, using, selling, and
+distributing the Software.
+
+2. RESTRICTION: YOU MAY NOT SELL THE SOFTWARE ITSELF
+
+You may not sell, license, or offer as a paid hosted/managed service the
+Software, or any Deployment consisting of the Software without a
+Significant Modification, where the value a customer is paying for is
+substantially the Software's own functionality rather than something you
+added.
+
+For the avoidance of doubt, this license places NO restriction on
+charging money for:
+
+  (a) installing, configuring, hosting, operating, or maintaining the
+      Software for a customer ("deployment and managed services");
+  (b) support, training, consulting, or incident response related to the
+      Software;
+  (c) a product or service that includes the Software but adds a
+      Significant Modification, provided the fee is genuinely for that
+      added value and not a repackaging of the unmodified Software for
+      resale.
+
+"Significant Modification" means a change to the Software's source code
+that is more than cosmetic, configuration, rebranding, or repackaging --
+for example, materially new features, a materially different
+architecture, or substantially rewritten functionality -- such that the
+result is a genuinely different product built on GWatch, not GWatch
+resold under another name.
+
+If you are unsure whether your intended use falls under this restriction,
+contact JX Holdings to discuss a commercial license before proceeding.
+
+3. MANDATORY ATTRIBUTION
+
+Every copy of the Software, and every Derivative Work (including one
+containing a Significant Modification), must retain, unmodified, not
+obscured, and reasonably visible to end users:
+
+  (a) the "GWatch" name, identifying the origin of the software;
+  (b) the GWatch logo, displayed at least once in the software's user
+      interface (e.g. an About/credits view) and in any documentation or
+      marketing material distributed with it;
+  (c) the following copyright notice, in the software's About/credits
+      view, its documentation, and its LICENSE file:
+      "Copyright (c) 2026 JX Holdings. Original developers: Jeffrey
+      Guntly and Garrett Guntly."; and
+  (d) this LICENSE file and TRADEMARKS.md, unmodified, alongside the
+      source.
+
+You may not remove, obscure, or replace the above to make a Derivative
+Work appear unrelated to GWatch, JX Holdings, Jeffrey Guntly, or Garrett
+Guntly.
+
+4. NO ENDORSEMENT -- MANDATORY NON-OFFICIAL NOTICE
+
+Complying with Section 3 does not make a Derivative Work official,
+reviewed, or endorsed by JX Holdings, Jeffrey Guntly, or Garrett Guntly.
+
+If you distribute the Software with any modification (Significant or
+not), you must additionally display, next to the attribution required by
+Section 3, a clear and conspicuous notice that your version is
+unofficial and not endorsed, for example:
+
+  "This is an independently modified version of GWatch, based on the
+  original project by JX Holdings. It is not an official release and is
+  not endorsed by, sponsored by, or affiliated with JX Holdings, Jeffrey
+  Guntly, or Garrett Guntly."
+
+You may not otherwise use the GWatch name, the GWatch logo, or the JX
+Holdings name in any way that states or implies affiliation, sponsorship,
+official status, or endorsement, beyond what Section 3 requires to
+identify the Software's origin. See TRADEMARKS.md for further limits on
+using these marks in your own product or company name.
+
+5. NO WARRANTY
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL
+JX HOLDINGS, JEFFREY GUNTLY, GARRETT GUNTLY, OR ANY OTHER CONTRIBUTOR BE
+LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH
+THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+6. TERMINATION
+
+Your rights under this license terminate automatically if you violate
+Section 2, 3, or 4 and do not cure the violation within 30 days of
+becoming aware of it.
+
+7. NOT OPEN SOURCE
+
+This license is not approved by the Open Source Initiative and does not
+meet the Open Source Definition, because Section 2 restricts commercial
+resale of the unmodified Software and Sections 3-4 impose mandatory
+attribution and notice requirements beyond what OSI-approved licenses
+permit. GWatch is source-available, not open source.
+
+==============================================================================
+2. SUMMARY OF ADDITIONAL TERMS
+==============================================================================
+
+This section is a plain-language digest, not a replacement for the full
+documents linked at the end. It is not legal advice and has not been
+reviewed by counsel.
+
+TERMS OF USE
+
+  * The license above governs copying and modifying the code; the
+    trademark policy governs the GWatch name and logo; the Terms of Use
+    govern your use of the software. All three apply at once.
+  * GWatch is source-available, not open source. You may use, modify,
+    host and build a paid deployment, support or customization business
+    around it; you may not resell the software itself or offer it
+    essentially unmodified as a paid hosted service.
+  * You are responsible for only probing hosts, addresses and names you
+    own, operate, or have permission to probe. GWatch sends ping, TCP,
+    HTTP, DNS and TLS traffic on a schedule; aimed at somebody else's
+    infrastructure that can be unlawful or breach an acceptable-use
+    policy, whatever you intended.
+  * Triggers, custom endpoints and custom script checks run commands on
+    this computer with the GWatch service's permissions. Anyone who can
+    edit one can run code on this machine.
+  * GWatch is not a life-safety, alarm, emergency, medical or
+    industrial-control system, and is not a substitute for a
+    professionally monitored service or a SIEM. Do not rely on it where
+    a missed or late alert causes injury or serious loss.
+  * The software is provided "as is", with no warranty of any kind, and
+    JX Holdings, LLC and the developers are not liable for damages
+    arising from it, to the fullest extent the law allows.
+
+PRIVACY
+
+  * GWatch is local-first and self-hosted. JX Holdings, LLC operates no
+    server, receives nothing, and could not read your data if asked.
+  * There is no telemetry, no analytics, no crash reporting and no
+    account. The interface loads nothing from the internet.
+  * Everything is kept in an embedded SQLite database in the data
+    directory (on Windows, C:\ProgramData\GWatch): checks and history,
+    hardware readings, incidents, the audit log, accounts, and settings.
+    Passwords, session tokens, API keys and agent tokens are stored only
+    as hashes; the SMTP, access and backup passwords are encrypted with
+    a key file kept beside the database.
+  * The only outbound traffic is the checks you configure, email through
+    your own SMTP server, update checks to GitHub when you press Check
+    for updates, notifications to endpoints you set up, and readings the
+    optional agent pushes to your own GWatch server.
+  * You are the data controller for everything GWatch records, including
+    any of it that counts as personal data where you live.
+
+SECURITY DISCLAIMER
+
+  * GWatch has no password by default and speaks plain HTTP. That is
+    safe on 127.0.0.1 and not safe anywhere else.
+  * Allowing other devices on your network exposes everything GWatch can
+    do to every device on that network until you create an account.
+  * Never forward GWatch's port from your router to the internet. For
+    remote access use a private network (Tailscale, WireGuard) or a
+    reverse proxy with TLS.
+  * Weak or reused passwords, disabled sign-in, shared read-write API
+    keys, endpoint tokens and agent tokens on machines you do not
+    control are all your risk to take.
+  * Stored SMTP and backup passwords are only as safe as this machine
+    and the permissions on the data directory.
+  * These are your choices to make in your own environment. JX Holdings,
+    LLC is not liable for their consequences.
+  * Recommended baseline: set a password, keep GWatch on your LAN, use a
+    reverse proxy with TLS for remote access, restrict the data
+    directory, give each token one job, and keep GWatch updated.
+
+FULL DOCUMENTS
+
+  Terms of Use
+    https://github.com/jxburros/GWatch/blob/main/docs/TERMS.md
+  Privacy Policy
+    https://github.com/jxburros/GWatch/blob/main/docs/PRIVACY.md
+  Security and Liability Disclaimer
+    https://github.com/jxburros/GWatch/blob/main/docs/DISCLAIMER.md
+  Trademark and Brand Policy
+    https://github.com/jxburros/GWatch/blob/main/TRADEMARKS.md
+  Remote access guidance
+    https://github.com/jxburros/GWatch/blob/main/docs/REMOTE-ACCESS.md

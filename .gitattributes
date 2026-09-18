@@ -3,5 +3,7 @@
 * text=auto eol=lf
 *.ps1 text eol=crlf
 *.png binary
+*.ico binary
+*.bmp binary
 *.woff2 binary
 *.gwbackup binary

@@ -9,6 +9,10 @@ build:
 windows:
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/gwatch.exe .
 
+# The two Windows setup programs are built by Inno Setup, which only runs on
+# Windows, so there is no make target for them — see scripts/build-installer.ps1
+# (one command, both installers) or scripts/installer/README.md.
+
 # gwatch-agent runs on the machines being watched rather than on this one, so
 # it is built for every platform someone might want to install it on. It is a
 # separate binary on purpose: it carries no database, no web interface and no

@@ -5,6 +5,7 @@
 import { api, subscribeUpdates } from '../api.js';
 import {
   h, icon, clear, replace, statusPill, emptyState, skeleton, rangeChips, relTimeEl,
+  openModal, confirmDialog, field, textInput, selectInput, toast,
 } from '../components.js';
 import { LineChart, SERIES_COLORS } from '../charts.js';
 import { bytes, pct, duration, dateTime, relTime, num } from '../fmt.js';
@@ -28,7 +29,12 @@ async function mountList(root, ctx) {
 
   ctx.setTitle('Hardware', {
     subtitle: 'Processor, memory, disk and throughput for this computer and every machine reporting in',
-    actions: [h('a', { class: 'btn', href: '#/settings/hardware' }, icon('cpu'), 'Manage machines')],
+    actions: [
+      ctx.me?.isAdmin
+        ? h('button', { class: 'btn btn-primary', type: 'button', onclick: () => pairMachine(load) }, icon('plus'), 'Pair a machine')
+        : null,
+      h('a', { class: 'btn', href: '#/settings/hardware' }, icon('cpu'), 'Manage machines'),
+    ].filter(Boolean),
   });
 
   async function load() {
@@ -47,8 +53,13 @@ async function mountList(root, ctx) {
       replace(listEl, h('div', { class: 'card' }, emptyState({
         icon: 'cpu',
         title: 'No hardware readings yet',
-        text: 'GWatch reads this computer by itself; the first reading appears within a minute of starting. To add another machine, register it under Settings › Hardware and install the agent on it.',
-        actions: [h('a', { class: 'btn btn-primary', href: '#/settings/hardware' }, 'Register a machine')],
+        text: 'GWatch reads this computer by itself; the first reading appears within a minute of starting. To add another machine, pair it from here and type the code into the agent on it.',
+        actions: [
+          ctx.me?.isAdmin
+            ? h('button', { class: 'btn btn-primary', type: 'button', onclick: () => pairMachine(load) }, 'Pair a machine')
+            : null,
+          h('a', { class: 'btn', href: '#/settings/hardware' }, 'Register a machine'),
+        ].filter(Boolean),
       })));
       return;
     }
@@ -61,6 +72,109 @@ async function mountList(root, ctx) {
     destroy() { state.destroyed = true; unsub(); },
     themeChanged() { /* the list draws no canvas */ },
   };
+}
+
+/* ---------------- Pairing a machine ---------------- */
+
+// Pairing exists because the other way round is miserable: an agent token is
+// forty characters of noise, and getting it onto another computer means
+// copying it through whatever channel is to hand. A pairing code is eight
+// characters somebody can read off this screen and type into an installer
+// prompt on the other machine — and it is worth almost nothing if it leaks,
+// being good for one machine, once, for about a quarter of an hour.
+
+async function pairMachine(reload) {
+  const name = textInput({ autocomplete: 'off', placeholder: 'e.g. Living room NAS' });
+  const nodes = await api.get('/api/nodes').catch(() => []);
+  const nodeSel = selectInput({
+    options: [{ value: '', label: 'Not attached to a node' }, ...nodes.map((n) => ({ value: String(n.id), label: n.name }))],
+    value: '',
+  });
+  const ok = await confirmDialog({
+    title: 'Pair a machine',
+    body: h('div', { class: 'stack' },
+      h('p', { class: 'lead' }, 'You will get a short code to type into the agent on the other machine. It enrols that one machine and then stops working.'),
+      field({ label: 'Name', input: name, help: 'How this machine appears under Hardware.' }),
+      field({ label: 'Node', input: nodeSel, help: 'Optional. Attaching it lets a hardware check on that node watch this machine.' })),
+    confirmLabel: 'Get a pairing code',
+  });
+  if (!ok) return;
+  try {
+    const res = await api.post('/api/agents/pairings', {
+      name: name.value.trim(),
+      nodeId: nodeSel.value ? Number(nodeSel.value) : null,
+    });
+    showPairingCode(res.code, res.pairing, reload);
+  } catch (e) { toast(e.message, { kind: 'error' }); }
+}
+
+// The code is shown here and nowhere else — GWatch keeps only a fingerprint of
+// it — so the command to run on the other machine is shown with it, and the
+// clock runs where the reader can see it rather than expiring behind their back.
+function showPairingCode(code, pairing, reload) {
+  const base = `${location.protocol}//${location.host}`;
+  const command = `gwatch-agent pair --server ${base} --code ${code}`;
+
+  const codeEl = h('div', {
+    class: 'mono',
+    style: {
+      fontSize: '38px', fontWeight: '600', letterSpacing: '0.12em', textAlign: 'center',
+      padding: '18px 12px', border: '1px solid var(--line-strong)', background: 'var(--elev)',
+      userSelect: 'all', wordBreak: 'break-all',
+    },
+  }, code);
+  const clockEl = h('span', { class: 'mono' }, '—');
+  const noteEl = h('p', { class: 'note' }, 'Expires in ', clockEl, '. Nothing is enrolled until the code is typed in.');
+
+  const copy = (what, label) => h('button', { class: 'btn', type: 'button', onclick: async () => {
+    try { await navigator.clipboard.writeText(what); toast(`${label} copied`, { kind: 'success' }); }
+    catch { toast('Could not copy — select it and copy it by hand.', { kind: 'error' }); }
+  } }, icon('copy'), label);
+
+  const cancelBtn = h('button', { class: 'btn btn-danger', type: 'button', onclick: async () => {
+    try {
+      await api.del(`/api/agents/pairings/${pairing.id}`);
+      toast('Pairing code cancelled', { kind: 'success' });
+      modal.close();
+    } catch (e) { toast(e.message, { kind: 'error' }); }
+  } }, 'Cancel this code');
+
+  const expiresAt = +new Date(pairing.expiresAt);
+  const tick = () => {
+    const left = expiresAt - Date.now();
+    if (left > 0) {
+      const secs = Math.floor(left / 1000);
+      clockEl.textContent = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+      return;
+    }
+    clearInterval(timer);
+    codeEl.style.opacity = '0.45';
+    codeEl.style.textDecoration = 'line-through';
+    cancelBtn.disabled = true;
+    replace(noteEl, h('b', null, 'This code has expired.'), ' Close this and pair the machine again to get a fresh one.');
+  };
+  const timer = setInterval(tick, 1000);
+  tick();
+
+  const modal = openModal({
+    title: 'Type this code on the other machine',
+    wide: true,
+    onClose: () => { clearInterval(timer); reload?.(); },
+    body: h('div', { class: 'stack' },
+      codeEl,
+      noteEl,
+      h('p', { class: 'lead' }, 'On the machine you want to watch, install gwatch-agent and run:'),
+      h('code', { class: 'agent-setup' }, command),
+      h('p', { class: 'note' }, 'The agent swaps the code for its own token, keeps the token on that machine and sends one reading to prove it worked. Use ',
+        h('code', null, 'gwatch-agent install --server … --code …'), ' instead to pair and install the background service in one go — the Windows installer asks for the address and this code and does exactly that.'),
+      h('p', { class: 'note' }, 'Letters only, in any case, and the dash does not matter. There is no I, L, O or U and no 0 or 1 in a code, so nothing here is the character you think it might be.'),
+      h('p', { class: 'note' }, 'What the machine ends up holding can do one thing: submit its own hardware readings. It cannot read or change anything in GWatch, and GWatch never connects back to it.'),
+      h('p', { class: 'note' }, 'If this GWatch is reached over HTTPS with a self-signed certificate, add ', h('code', null, '--insecure'), ' — the agent still uses TLS, it just stops checking the certificate.')),
+    footer: [cancelBtn, copy(code, 'Copy code'), h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
+      try { await navigator.clipboard.writeText(command); toast('Command copied', { kind: 'success' }); }
+      catch { toast('Could not copy — select the command and copy it by hand.', { kind: 'error' }); }
+    } }, icon('copy'), 'Copy command')],
+  });
 }
 
 function hostCard(host) {

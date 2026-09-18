@@ -99,23 +99,37 @@ If a key is compromised, drop its line at once and release with a new one. Users
 on older binaries will not accept that release and must reinstall by hand — say
 so in the release notes.
 
-## The installer artefact
+## The installer artefacts
 
-The `release` job also compiles `scripts/installer/gwatch.iss` with Inno Setup (via
-`iscc /DAppVersion=<tag> /DExePath=dist/gwatch-windows-amd64.exe`) and publishes
-`gwatch-setup-<version>.exe` alongside the raw binaries — see
-[`scripts/installer/README.md`](../scripts/installer/README.md) for what it does and how
-to build it locally. Two things to keep in mind:
+The `release` job also compiles both Inno Setup scripts and publishes the results
+alongside the raw binaries:
 
-- It is **not** Authenticode-signed. That's a real follow-up (Windows SmartScreen shows
+| Script | Built from | Published as |
+|---|---|---|
+| `scripts/installer/gwatch.iss` | `dist/gwatch-windows-amd64.exe` | `gwatch-setup-<version>.exe` |
+| `scripts/installer/gwatch-agent.iss` | `dist/gwatch-agent-windows-amd64.exe` | `gwatch-agent-setup-<version>.exe` |
+
+Both are compiled with `iscc /DAppVersion=<tag> /DExePath=<exe>` — see
+[`scripts/installer/README.md`](../scripts/installer/README.md) for what they do and how
+to build them locally. Three things to keep in mind:
+
+- Neither is **Authenticode-signed**. That's a real follow-up (Windows SmartScreen shows
   an "unknown publisher" warning until it is), separate from the ed25519 release
   signing described above — signing an `.exe` with a code-signing certificate is a
   different mechanism with its own cost/process, tracked but not yet done.
-- It is **not** picked up by the in-app self-updater. `pickAsset` (in
-  `internal/update`) only matches `gwatch-<os>-<arch>[.exe]`, so `gwatch-setup-*.exe`
-  is invisible to it by design — the installer is a first-install/reinstall path, not an
+- Neither is picked up by the in-app self-updater. `pickAsset` (in
+  `internal/update`) only matches `gwatch-<os>-<arch>[.exe]`, so `*-setup-*.exe`
+  is invisible to it by design — an installer is a first-install/reinstall path, not an
   update payload. The updater keeps managing the plain `gwatch.exe` binary in place as
   it does today.
+- They are built **after** the signing step, so they carry no `.sig` or `.sha256` of
+  their own. That is deliberate — they are outside the signed self-update chain — but it
+  means the release notes should point people at the raw binaries if they want something
+  they can verify.
+
+The wizard artwork under `scripts/installer/assets/` is committed, not generated at
+release time, so a release needs no image tooling on the runner. If the mark ever
+changes, `web/logo.svg` and those assets have to be updated together.
 
 ## Forks and private builds
 

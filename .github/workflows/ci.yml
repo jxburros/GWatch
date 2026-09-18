@@ -125,26 +125,36 @@ jobs:
           path: dist/gwatch-windows-amd64.exe
           if-no-files-found: error
 
-      # Compiles the Windows setup program from the exe just built, so every
-      # push/PR exercises scripts/installer/gwatch.iss the same way the
-      # release job does. See scripts/installer/README.md.
+      # Compiles both Windows setup programs from the exes just built, so every
+      # push/PR exercises scripts/installer/*.iss the same way the release job
+      # does. See scripts/installer/README.md.
+      - name: Build the agent executable
+        run: |
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=ci-${GITHUB_SHA::7}" -o dist/gwatch-agent-windows-amd64.exe ./cmd/gwatch-agent
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
         shell: pwsh
       # Runs under pwsh: Git Bash rewrites /D... arguments as Windows paths
       # (MSYS path conversion), which ISCC then reads as extra script names.
-      - name: Build Windows installer
+      - name: Build Windows installers
         shell: pwsh
         run: |
           $version = "0.0.0-ci-" + $env:GITHUB_SHA.Substring(0, 7)
-          $exe = Join-Path $PWD "dist\gwatch-windows-amd64.exe"
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" "/DExePath=$exe" scripts\installer\gwatch.iss
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          foreach ($pair in @(
+              @{ Script = "scripts\installer\gwatch.iss";       Exe = "dist\gwatch-windows-amd64.exe" },
+              @{ Script = "scripts\installer\gwatch-agent.iss"; Exe = "dist\gwatch-agent-windows-amd64.exe" })) {
+            $exe = Join-Path $PWD $pair.Exe
+            & $iscc "/DAppVersion=$version" "/DExePath=$exe" $pair.Script
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
           Get-ChildItem scripts\installer\Output
       - uses: actions/upload-artifact@v4
         with:
           name: gwatch-windows-installer
-          path: scripts/installer/Output/gwatch-setup-*.exe
+          path: |
+            scripts/installer/Output/gwatch-setup-*.exe
+            scripts/installer/Output/gwatch-agent-setup-*.exe
           if-no-files-found: error
 
   # Tagging v1.2.3 publishes a GitHub release with the binaries the in-app
@@ -257,14 +267,19 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
         shell: pwsh
-      - name: Build Windows installer
+      - name: Build Windows installers
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME -replace '^v', ''
-          $exe = Join-Path $PWD "dist\gwatch-windows-amd64.exe"
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" "/DExePath=$exe" scripts\installer\gwatch.iss
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Copy-Item scripts\installer\Output\gwatch-setup-*.exe dist\
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          foreach ($pair in @(
+              @{ Script = "scripts\installer\gwatch.iss";       Exe = "dist\gwatch-windows-amd64.exe" },
+              @{ Script = "scripts\installer\gwatch-agent.iss"; Exe = "dist\gwatch-agent-windows-amd64.exe" })) {
+            $exe = Join-Path $PWD $pair.Exe
+            & $iscc "/DAppVersion=$version" "/DExePath=$exe" $pair.Script
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          Copy-Item scripts\installer\Output\*setup-*.exe dist\
           Get-ChildItem dist
 
       - uses: softprops/action-gh-release@v2

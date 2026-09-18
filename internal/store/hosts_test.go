@@ -3,6 +3,9 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -231,5 +234,202 @@ func TestSaveHostSampleRequiresAKey(t *testing.T) {
 	s := openTest(t)
 	if err := s.SaveHostSample(context.Background(), model.HostSample{}); err == nil {
 		t.Fatal("a reading with no host key should be refused")
+	}
+}
+
+func TestPairingCodeLifecycle(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	node, err := s.CreateNode(ctx, model.Node{Name: "NAS", Host: "10.0.0.5", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.CreatePairingCode(ctx, "  nas  ", &node.ID, "hash-1", "pat (admin)", now.Add(15*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Name != "nas" {
+		t.Errorf("name should be trimmed, got %q", p.Name)
+	}
+	if !p.Pending(now) || p.NodeID == nil || *p.NodeID != node.ID {
+		t.Fatalf("unexpected pairing: %+v", p)
+	}
+	if _, err := s.CreatePairingCode(ctx, "other", nil, "hash-1", "", now.Add(time.Minute)); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("two invitations cannot share a code, got %v", err)
+	}
+	if _, err := s.CreatePairingCode(ctx, " ", nil, "hash-2", "", now.Add(time.Minute)); err == nil {
+		t.Error("a nameless invitation should be refused")
+	}
+
+	redeemed, stored, err := s.RedeemPairingCode(ctx, "hash-1", now, "192.168.1.9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored != "hash-1" {
+		t.Errorf("the stored digest should come back for the constant-time check, got %q", stored)
+	}
+	if !redeemed.Redeemed() || redeemed.RedeemedAddr != "192.168.1.9" || redeemed.Name != "nas" {
+		t.Fatalf("unexpected redemption: %+v", redeemed)
+	}
+
+	// Single use is the whole point: the second machine to try is turned away
+	// exactly as if the code had never existed.
+	if _, _, err := s.RedeemPairingCode(ctx, "hash-1", now, "192.168.1.10"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a spent code must not be redeemable again, got %v", err)
+	}
+	// And so is a code nobody ever minted.
+	if _, _, err := s.RedeemPairingCode(ctx, "hash-nope", now, ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an unknown code should be ErrNotFound, got %v", err)
+	}
+
+	agent, err := s.CreateAgent(ctx, "nas", &node.ID, "gwa_abcd", "token-hash", "pairing code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AttachPairingAgent(ctx, redeemed.ID, agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.GetPairingCode(ctx, redeemed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.AgentID == nil || *again.AgentID != agent.ID {
+		t.Fatalf("the invitation should remember the machine it produced: %+v", again)
+	}
+
+	// Cancelling afterwards must not rewrite the record of an enrolment that
+	// already happened.
+	if err := s.RevokePairingCode(ctx, redeemed.ID); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := s.GetPairingCode(ctx, redeemed.ID); after.Revoked() {
+		t.Error("a redeemed invitation should not be marked cancelled")
+	}
+}
+
+func TestPairingCodeExpires(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	p, err := s.CreatePairingCode(ctx, "nas", nil, "hash-exp", "", now.Add(-time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Pending(now) {
+		t.Error("a code whose time has passed is not pending")
+	}
+	if _, _, err := s.RedeemPairingCode(ctx, "hash-exp", now, ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an expired code must not be redeemable, got %v", err)
+	}
+	// Expiry is against the clock the caller passes, so the boundary is the
+	// instant itself: a code is dead at its expiry time, not a moment after.
+	live, err := s.CreatePairingCode(ctx, "nas", nil, "hash-live", "", now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live.Pending(live.ExpiresAt) {
+		t.Error("a code should be expired at exactly its expiry time")
+	}
+	if _, _, err := s.RedeemPairingCode(ctx, "hash-live", now.Add(2*time.Minute), ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("redemption should honour the clock it is given, got %v", err)
+	}
+}
+
+func TestPairingCodeRevocation(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	p, err := s.CreatePairingCode(ctx, "nas", nil, "hash-rev", "", now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RevokePairingCode(ctx, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.GetPairingCode(ctx, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.Revoked() || after.Pending(now) {
+		t.Fatalf("a cancelled invitation should be cancelled: %+v", after)
+	}
+	if _, _, err := s.RedeemPairingCode(ctx, "hash-rev", now, ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a cancelled code must not be redeemable, got %v", err)
+	}
+	// Cancelling twice is not an error; cancelling something that is not there
+	// is.
+	if err := s.RevokePairingCode(ctx, p.ID); err != nil {
+		t.Errorf("cancelling twice should be harmless, got %v", err)
+	}
+	if err := s.RevokePairingCode(ctx, 9999); !errors.Is(err, ErrNotFound) {
+		t.Errorf("cancelling a code that does not exist should say so, got %v", err)
+	}
+}
+
+// Two machines given the same code at the same moment is the race the single
+// writer and the conditional update exist to settle. Exactly one may win.
+func TestConcurrentRedemptionYieldsOneWinner(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	now := time.Now()
+	if _, err := s.CreatePairingCode(ctx, "nas", nil, "hash-race", "", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	const racers = 8
+	start := make(chan struct{})
+	results := make(chan error, racers)
+	var wg sync.WaitGroup
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			_, _, err := s.RedeemPairingCode(ctx, "hash-race", time.Now(), fmt.Sprintf("10.0.0.%d", i))
+			results <- err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	won := 0
+	for err := range results {
+		switch {
+		case err == nil:
+			won++
+		case errors.Is(err, ErrNotFound):
+		default:
+			t.Fatalf("unexpected error from a racing redemption: %v", err)
+		}
+	}
+	if won != 1 {
+		t.Fatalf("%d of %d racers redeemed the same code; it must be exactly one", won, racers)
+	}
+}
+
+func TestListPairingCodesNewestFirst(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	for _, n := range []string{"one", "two", "three"} {
+		if _, err := s.CreatePairingCode(ctx, n, nil, "hash-"+n, "", time.Now().Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := s.ListPairingCodes(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 3 || list[0].Name != "three" {
+		t.Fatalf("unexpected list: %+v", list)
+	}
+	// The code itself is never in the list; only its hash was ever stored.
+	blob := fmt.Sprintf("%+v", list)
+	if strings.Contains(blob, "hash-three") {
+		t.Error("the list leaked a code digest")
 	}
 }

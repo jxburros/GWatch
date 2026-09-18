@@ -1,11 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="GWatch">
-  <!-- G-shaped magnifier with an eye: navy ring, gold iris, dark pupil -->
-  <g fill="none" stroke="#0d1f3f" stroke-linecap="round">
-    <path d="M100 42 A44 44 0 1 0 100 86" stroke-width="15"/>
-    <path d="M73 64 H105" stroke-width="15"/>
-    <path d="M92 92 L112 112" stroke-width="16"/>
+  <!-- The GWatch mark: a G drawn as a magnifier, with an eye for its lens.
+       Navy ring and handle, white sclera, gold iris, navy pupil. The geometry
+       below is measured from the master artwork, so edit the numbers together
+       or the G stops closing on itself. -->
+  <title>GWatch</title>
+  <!-- Sclera first: it is the plate everything else sits on, and its radius is
+       the ring's inner radius, so the two meet with no seam. -->
+  <circle cx="55.8" cy="55.8" r="39.5" fill="#fdfdfd"/>
+  <circle cx="56.8" cy="56.4" r="22.9" fill="#d3a32e"/>
+  <circle cx="56.9" cy="56.9" r="12.7" fill="#061b3b"/>
+  <circle cx="62.8" cy="51.6" r="3.6" fill="#ffffff"/>
+  <g fill="none" stroke="#061b3b" stroke-linecap="round">
+    <!-- The ring runs clockwise from -3deg the long way round to 330deg; the
+         27deg it leaves open is the G's mouth, closed underneath by the bar. -->
+    <path d="M101.2 53.42 A45.46 45.46 0 1 1 95.17 33.07" stroke-width="12.37"/>
+    <path d="M88.9 58.81 H101.6" stroke-width="11.44"/>
+    <path d="M94.46 94.62 L115.57 115.88" stroke-width="16.24"/>
   </g>
-  <circle cx="58" cy="64" r="21" fill="#d4a017"/>
-  <circle cx="58" cy="64" r="12" fill="#0d1f3f"/>
-  <circle cx="63" cy="59" r="3.6" fill="#ffffff"/>
 </svg>
