@@ -49,7 +49,8 @@ brief that defines the scope lives in [`local-network-monitoring-product-brief.m
   CSV export; the service log with level filter and download; one page for every export.
 - **Automation**: per-node **triggers** run an action when the node goes down, recovers,
   becomes degraded, changes status, exceeds a latency, and so on — an HTTP request
-  (webhook), a git command in a repository, custom code (sh, bash, PowerShell, cmd,
+  (webhook), a native **Slack**, **Microsoft Teams**, **ntfy** or **Pushover**
+  notification, a git command in a repository, custom code (sh, bash, PowerShell, cmd,
   Python, Node or any command) or "run another node's checks now". **Custom endpoints**
   expose the same actions at `/hook/<name>` (optionally token-protected) so a router, a
   CI job or Home Assistant can poke GWatch. Placeholders such as `{{node.name}}`,
