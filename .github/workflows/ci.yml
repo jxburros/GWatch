@@ -131,13 +131,16 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
         shell: pwsh
+      # Runs under pwsh: Git Bash rewrites /D... arguments as Windows paths
+      # (MSYS path conversion), which ISCC then reads as extra script names.
       - name: Build Windows installer
+        shell: pwsh
         run: |
-          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" \
-            "/DAppVersion=0.0.0-ci-${GITHUB_SHA::7}" \
-            "/DExePath=$(pwd)/dist/gwatch-windows-amd64.exe" \
-            scripts/installer/gwatch.iss
-          ls -lh scripts/installer/Output
+          $version = "0.0.0-ci-" + $env:GITHUB_SHA.Substring(0, 7)
+          $exe = Join-Path $PWD "dist\gwatch-windows-amd64.exe"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" "/DExePath=$exe" scripts\installer\gwatch.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem scripts\installer\Output
       - uses: actions/upload-artifact@v4
         with:
           name: gwatch-windows-installer
@@ -237,14 +240,14 @@ jobs:
         run: choco install innosetup --no-progress -y
         shell: pwsh
       - name: Build Windows installer
+        shell: pwsh
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" \
-            "/DAppVersion=${version}" \
-            "/DExePath=$(pwd)/dist/gwatch-windows-amd64.exe" \
-            scripts/installer/gwatch.iss
-          cp scripts/installer/Output/gwatch-setup-*.exe dist/
-          ls -lh dist
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          $exe = Join-Path $PWD "dist\gwatch-windows-amd64.exe"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" "/DExePath=$exe" scripts\installer\gwatch.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item scripts\installer\Output\gwatch-setup-*.exe dist\
+          Get-ChildItem dist
 
       - uses: softprops/action-gh-release@v2
         with:
