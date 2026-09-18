@@ -113,6 +113,10 @@ what the web interface and the favicon use. Change one and change the other.
 
 ## Known limitations
 
+- The executables themselves carry no icon resource, so `gwatch.exe` still shows the
+  generic Windows icon in Explorer. Embedding one needs a `.syso` resource object
+  linked into the Go build; the installer, its shortcuts and Add/Remove Programs all
+  use `gwatch.ico` in the meantime.
 - Neither setup program is Authenticode-signed, so Windows SmartScreen shows an
   "unknown publisher" warning. See
   [`docs/RELEASING.md`](../../docs/RELEASING.md#the-installer-artefact).

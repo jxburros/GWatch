@@ -53,7 +53,10 @@ WizardStyle=modern
 OutputDir=Output
 OutputBaseFilename=gwatch-setup-{#AppVersion}
 UninstallDisplayName={#AppName} {#AppVersion}
-UninstallDisplayIcon={app}\gwatch.exe
+; gwatch.exe has no icon resource of its own -- a Go binary carries one
+; only if a .syso is linked in -- so Add/Remove Programs is pointed at
+; the icon installed beside it rather than at a blank default.
+UninstallDisplayIcon={app}\gwatch.ico
 SetupLogging=yes
 
 ; ---- Branding -------------------------------------------------------------
