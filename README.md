@@ -287,6 +287,7 @@ Layout:
 | `web/fonts/` | Barlow and Kode Mono, latin subsets, self-hosted so the UI still requests nothing from the internet ([SIL OFL 1.1](web/fonts/OFL.txt)) |
 | `scripts/` | Windows build / install / uninstall PowerShell scripts |
 | `scripts/installer/` | The two Inno Setup scripts, their shared branding and the wizard artwork |
+| `cmd/gwatch-rsrc/` | Builds the `.syso` resource objects that put the GWatch icon inside the Windows executables (`make rsrc`) |
 
 ## License, terms and privacy
 

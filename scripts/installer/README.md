@@ -111,12 +111,30 @@ it on the inner pages' white header strip and the mark's navy needs the contrast
 The vector form of the same mark is [`web/logo.svg`](../../web/logo.svg), which is
 what the web interface and the favicon use. Change one and change the other.
 
+### The executables' own icon
+
+`gwatch.ico` is also compiled into `gwatch.exe` and `gwatch-agent.exe`, so they
+carry their icon in Explorer, the task bar and Alt-Tab rather than falling back to
+the generic Windows program icon. A Go binary gets one only if a COFF resource
+object is linked in, which is what the committed `rsrc_windows_amd64.syso` /
+`rsrc_windows_arm64.syso` files in the repository root and in `cmd/gwatch-agent/`
+are. The `_windows_<arch>` suffixes are ordinary Go build constraints, so Linux and
+macOS builds ignore them.
+
+They are generated from `gwatch.ico` by [`cmd/gwatch-rsrc`](../../cmd/gwatch-rsrc),
+and regenerated with:
+
+```sh
+make rsrc
+```
+
+That is deterministic — running it when the icon has not changed produces no diff —
+so it only needs running after editing `gwatch.ico`. Version information is
+deliberately *not* embedded: the version is a build-time `-ldflags` value, and a
+committed object would pin it to whatever it was when the object was generated.
+
 ## Known limitations
 
-- The executables themselves carry no icon resource, so `gwatch.exe` still shows the
-  generic Windows icon in Explorer. Embedding one needs a `.syso` resource object
-  linked into the Go build; the installer, its shortcuts and Add/Remove Programs all
-  use `gwatch.ico` in the meantime.
 - Neither setup program is Authenticode-signed, so Windows SmartScreen shows an
   "unknown publisher" warning. See
   [`docs/RELEASING.md`](../../docs/RELEASING.md#the-installer-artefact).

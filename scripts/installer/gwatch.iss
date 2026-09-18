@@ -53,10 +53,10 @@ WizardStyle=modern
 OutputDir=Output
 OutputBaseFilename=gwatch-setup-{#AppVersion}
 UninstallDisplayName={#AppName} {#AppVersion}
-; gwatch.exe has no icon resource of its own -- a Go binary carries one
-; only if a .syso is linked in -- so Add/Remove Programs is pointed at
-; the icon installed beside it rather than at a blank default.
-UninstallDisplayIcon={app}\gwatch.ico
+; gwatch.exe carries its own icon now (see cmd/gwatch-rsrc and the
+; rsrc_windows_*.syso objects), so Add/Remove Programs and the shortcuts
+; can point straight at the executable.
+UninstallDisplayIcon={app}\gwatch.exe
 SetupLogging=yes
 
 ; ---- Branding -------------------------------------------------------------
@@ -89,16 +89,16 @@ Name: "desktopicon"; Description: "Create a &desktop icon"; GroupDescription: "A
 [Files]
 Source: "{#ExePath}"; DestDir: "{app}"; DestName: "gwatch.exe"; Flags: ignoreversion
 ; The licence and the terms digest travel with the install, so they are still
-; readable on a machine that has no way to reach GitHub.
+; readable on a machine that has no way to reach GitHub. The icon does not
+; need shipping separately -- it is inside gwatch.exe.
 Source: "license.txt"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
-Source: "assets\gwatch.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\GWatch Monitor"; Filename: "{app}\gwatch.exe"; Parameters: "open --listen ""{code:GetListenAddr}"""; IconFilename: "{app}\gwatch.ico"; Comment: "Open the GWatch web interface"
+Name: "{group}\GWatch Monitor"; Filename: "{app}\gwatch.exe"; Parameters: "open --listen ""{code:GetListenAddr}"""; Comment: "Open the GWatch web interface"
 Name: "{group}\GWatch documentation"; Filename: "{#DocsURL}"; Comment: "Guides, recipes and reference on GitHub"
 Name: "{group}\Licence and terms"; Filename: "{app}\LICENSE.txt"; Comment: "The GWatch Community License and a summary of the terms"
 Name: "{group}\Uninstall GWatch"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\GWatch Monitor"; Filename: "{app}\gwatch.exe"; Parameters: "open --listen ""{code:GetListenAddr}"""; IconFilename: "{app}\gwatch.ico"; Tasks: desktopicon; Comment: "Open the GWatch web interface"
+Name: "{autodesktop}\GWatch Monitor"; Filename: "{app}\gwatch.exe"; Parameters: "open --listen ""{code:GetListenAddr}"""; Tasks: desktopicon; Comment: "Open the GWatch web interface"
 
 [Run]
 ; Fresh install: register + start the service (gwatch install starts it

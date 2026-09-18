@@ -57,10 +57,10 @@ WizardStyle=modern
 OutputDir=Output
 OutputBaseFilename=gwatch-agent-setup-{#AppVersion}
 UninstallDisplayName={#AppName} {#AppVersion}
-; gwatch.exe has no icon resource of its own -- a Go binary carries one
-; only if a .syso is linked in -- so Add/Remove Programs is pointed at
-; the icon installed beside it rather than at a blank default.
-UninstallDisplayIcon={app}\gwatch.ico
+; gwatch-agent.exe carries its own icon now (see cmd/gwatch-rsrc and the
+; rsrc_windows_*.syso objects), so Add/Remove Programs and the shortcuts
+; can point straight at the executable.
+UninstallDisplayIcon={app}\gwatch-agent.exe
 SetupLogging=yes
 
 LicenseFile=license.txt
@@ -85,10 +85,9 @@ ConnectDescription=Tell the agent which GWatch server to report to, and prove it
 [Files]
 Source: "{#ExePath}"; DestDir: "{app}"; DestName: "gwatch-agent.exe"; Flags: ignoreversion
 Source: "license.txt"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
-Source: "assets\gwatch.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Agent status"; Filename: "{cmd}"; Parameters: "/k """"{app}\gwatch-agent.exe"" status"""; IconFilename: "{app}\gwatch.ico"; Comment: "Show whether the agent service is running"
+Name: "{group}\Agent status"; Filename: "{cmd}"; Parameters: "/k """"{app}\gwatch-agent.exe"" status"""; IconFilename: "{app}\gwatch-agent.exe"; Comment: "Show whether the agent service is running"
 Name: "{group}\Hardware monitoring guide"; Filename: "{#DocsURL}/HARDWARE.md"; Comment: "What the agent reports and how to read it"
 Name: "{group}\Licence and terms"; Filename: "{app}\LICENSE.txt"
 Name: "{group}\Uninstall GWatch Agent"; Filename: "{uninstallexe}"

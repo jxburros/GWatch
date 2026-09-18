@@ -185,6 +185,9 @@ TERMS OF USE
   * The software is provided "as is", with no warranty of any kind, and
     JX Holdings, LLC and the developers are not liable for damages
     arising from it, to the fullest extent the law allows.
+  * The Terms of Use are governed by the laws of the State of Minnesota,
+    United States, and disputes are brought in the state or federal
+    courts located there.
 
 PRIVACY
 

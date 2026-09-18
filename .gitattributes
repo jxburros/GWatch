@@ -5,5 +5,6 @@
 *.png binary
 *.ico binary
 *.bmp binary
+*.syso binary
 *.woff2 binary
 *.gwbackup binary

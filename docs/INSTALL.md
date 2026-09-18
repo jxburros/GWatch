@@ -131,7 +131,7 @@ your history and settings; choose **Yes** to remove everything.
   Signing is tracked as a follow-up — see
   [`docs/RELEASING.md`](RELEASING.md#the-installer-artefact).
 - The in-app updater (**Settings › Updates**) does not download or install the
-  installer itself; it manages the `gwatch.exe` program file directly, in place. Both
+  setup program itself; it manages the `gwatch.exe` program file directly, in place. Both
   work fine, and either one applies as an upgrade path.
 
 ## Advanced: the PowerShell scripts

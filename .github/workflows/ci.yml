@@ -86,6 +86,19 @@ jobs:
         working-directory: mcp
         run: go build ./...
 
+      # The .syso resource objects are committed, not built at release time, so
+      # they can silently fall out of step with the icon they came from.
+      # Regenerating is deterministic, so a diff here means one was forgotten.
+      - name: Windows icon resources are up to date
+        run: |
+          go run ./cmd/gwatch-rsrc -ico scripts/installer/assets/gwatch.ico -out rsrc
+          go run ./cmd/gwatch-rsrc -ico scripts/installer/assets/gwatch.ico -out cmd/gwatch-agent/rsrc
+          if ! git diff --quiet -- '*.syso'; then
+            echo "::error::the committed .syso files do not match scripts/installer/assets/gwatch.ico — run 'make rsrc' and commit the result"
+            git diff --stat -- '*.syso'
+            exit 1
+          fi
+
       # The web UI is embedded with //go:embed, so a syntax error in an asset
       # is invisible to the Go compiler and only shows up as a blank page.
       - name: Web assets

@@ -1,7 +1,7 @@
 VERSION ?= dev
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build windows agent agent-all test test-race cover fmt fmt-check vet tidy-check web-check ci run keygen sign verify-release mcp-build mcp-test mcp-fmt
+.PHONY: build windows rsrc agent agent-all test test-race cover fmt fmt-check vet tidy-check web-check ci run keygen sign verify-release mcp-build mcp-test mcp-fmt
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/gwatch .
@@ -12,6 +12,15 @@ windows:
 # The two Windows setup programs are built by Inno Setup, which only runs on
 # Windows, so there is no make target for them — see scripts/build-installer.ps1
 # (one command, both installers) or scripts/installer/README.md.
+
+# Regenerates the .syso resource objects that give gwatch.exe and
+# gwatch-agent.exe their icon. The outputs are committed, so this only needs
+# running when scripts/installer/assets/gwatch.ico changes — but it is
+# deterministic, so running it when nothing changed produces no diff.
+ICON := scripts/installer/assets/gwatch.ico
+rsrc:
+	go run ./cmd/gwatch-rsrc -ico $(ICON) -out rsrc
+	go run ./cmd/gwatch-rsrc -ico $(ICON) -out cmd/gwatch-agent/rsrc
 
 # gwatch-agent runs on the machines being watched rather than on this one, so
 # it is built for every platform someone might want to install it on. It is a

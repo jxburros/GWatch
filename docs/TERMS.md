@@ -169,13 +169,10 @@ while you were using it.
 
 ## Governing law
 
-These terms are governed by the laws of **[jurisdiction]**, without regard to
-its conflict-of-laws rules, and any dispute arising out of them will be brought
-in the courts of **[jurisdiction]**.
-
-> **To be filled in by JX Holdings, LLC.** This placeholder is deliberate — the
-> correct jurisdiction is a decision for the company and its counsel, not
-> something to guess. Replace both occurrences before publishing this document.
+These terms are governed by the laws of the **State of Minnesota, United
+States**, without regard to its conflict-of-laws rules, and any dispute arising
+out of them will be brought in the state or federal courts located in
+Minnesota.
 
 ## Changes to these terms
 
