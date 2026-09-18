@@ -1,4 +1,7 @@
-VERSION ?= dev
+# The version lives in the VERSION file, so a local build, the installer and a
+# release all say the same thing. Releases are cut by tagging v<VERSION>; CI
+# checks the two agree before it publishes anything (see docs/RELEASING.md).
+VERSION ?= $(shell tr -d ' \t\r\n' < VERSION)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
 .PHONY: build windows rsrc agent agent-all test test-race cover fmt fmt-check vet tidy-check web-check ci run keygen sign verify-release mcp-build mcp-test mcp-fmt

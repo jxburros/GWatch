@@ -37,28 +37,49 @@ Do this once, on a machine you trust, before the first signed release.
 
 ## Cutting a release
 
+The version lives in the [`VERSION`](../VERSION) file at the repository root.
+That is what a local `make build`, `scripts\build.ps1` and both setup programs
+read, so a build always reports the version of the commit it came from. A
+release is that file plus a matching tag:
+
 ```sh
-git tag v1.2.0
-git push origin v1.2.0
+# 1. Set the version and write the changelog entry
+echo 0.2.0 > VERSION
+$EDITOR CHANGELOG.md
+git commit -am "Release 0.2.0"
+git push
+
+# 2. Tag it
+git tag v0.2.0
+git push origin v0.2.0
 ```
+
+The tag must match `VERSION` exactly, `v` prefix aside. CI checks this first and
+refuses the release otherwise, because a mismatch ships binaries whose own
+`gwatch version` output contradicts the file they were downloaded from.
+
+GWatch is pre-1.0 while it is in beta. A `0.x` version switches on the beta
+notices in the web interface and on the installers' welcome page; they turn
+themselves off at `1.0.0`, with nothing to remember to remove.
 
 The `release` job in `.github/workflows/ci.yml` then:
 
-1. fails immediately if `GWATCH_SIGNING_KEY` is unset, or if its public key is
+1. fails immediately if the tag and `VERSION` disagree;
+2. fails immediately if `GWATCH_SIGNING_KEY` is unset, or if its public key is
    not listed in `release_keys.txt` — that combination would publish binaries
    that reject their own updates;
-2. cross-compiles `gwatch-<os>-<arch>[.exe]` for Windows, Linux and macOS and
+3. cross-compiles `gwatch-<os>-<arch>[.exe]` for Windows, Linux and macOS and
    writes a `.sha256` next to each;
-3. cross-compiles the MCP companion (`gwatch-mcp-<os>-<arch>`, versioned from
+4. cross-compiles the MCP companion (`gwatch-mcp-<os>-<arch>`, versioned from
    `mcp/VERSION`) and the hardware agent (`gwatch-agent-<os>-<arch>`, which adds
    `linux/arm` for Raspberry Pi class machines). Both names sit inside the
    `dist/gwatch-*` glob so they are signed and checksummed like everything else,
    and both stay invisible to the in-app updater, which matches only the exact
    names `gwatch-<os>-<arch>[.exe]`;
-4. signs every binary (`gwatch-sign sign`) and verifies the result against the
+5. signs every binary (`gwatch-sign sign`) and verifies the result against the
    pinned keys (`gwatch-sign verify`) — the same check the updater runs on the
    user's machine;
-5. publishes all of `dist/*`, binaries plus `.sha256` plus `.sig`, as the
+6. publishes all of `dist/*`, binaries plus `.sha256` plus `.sig`, as the
    release.
 
 To do the same by hand:

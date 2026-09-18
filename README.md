@@ -14,6 +14,12 @@ served on `http://127.0.0.1:8080` (optionally to the rest of your LAN).
 No cloud account, no AI features, never exposed to the internet by itself. The product
 brief that defines the scope lives in [`local-network-monitoring-product-brief.md`](local-network-monitoring-product-brief.md).
 
+> **GWatch is in beta (0.1.0).** It works and it looks after your data, but the
+> interface and the JSON API can still change between releases, and bugs are likelier
+> now than they will be at 1.0 — which is reserved for the first public, stable
+> release. [`CHANGELOG.md`](CHANGELOG.md) lists what is in this version and the gaps it
+> ships with. Please [report anything that looks wrong](https://github.com/jxburros/GWatch/issues).
+
 ## What it does
 
 - **Check types**: Ping (latency, min/max, jitter, packet loss), HTTP/S (status expectations,
@@ -110,7 +116,7 @@ running a downloaded `.exe`.
 
 1. Build (or download) `gwatch.exe`. With Go 1.24+ installed:
    ```powershell
-   powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -Version 1.0.0
+   powershell -ExecutionPolicy Bypass -File scripts\build.ps1
    ```
 2. Install the service from an **Administrator** PowerShell:
    ```powershell
@@ -254,7 +260,7 @@ request as a single job on a Windows runner (Linux runners are switched off for 
 | installers | Compiles `scripts/installer/gwatch.iss` and `gwatch-agent.iss` with Inno Setup into `gwatch-setup-*.exe` and `gwatch-agent-setup-*.exe` |
 | artefact | Uploads `gwatch-windows-amd64.exe` and both setup programs |
 
-Pushing a tag such as `v1.2.0` additionally runs the `release` job, which cross-compiles
+Pushing a tag such as `v0.1.0` additionally runs the `release` job, which cross-compiles
 `gwatch-<os>-<arch>[.exe]` for Windows, Linux and macOS, writes a `.sha256` checksum and
 an ed25519 `.sig` signature next to each, and publishes a GitHub release. Those asset
 names are what **Settings › Updates** looks for.
@@ -286,6 +292,7 @@ Layout:
 | `web/` | The browser interface (vanilla HTML/CSS/JS, no build step, embedded into the binary; open with `?mock=1` for an in-browser demo backend) |
 | `web/fonts/` | Barlow and Kode Mono, latin subsets, self-hosted so the UI still requests nothing from the internet ([SIL OFL 1.1](web/fonts/OFL.txt)) |
 | `scripts/` | Windows build / install / uninstall PowerShell scripts |
+| `VERSION` | The version every build reports; a release is the tag `v<VERSION>` |
 | `scripts/installer/` | The two Inno Setup scripts, their shared branding and the wizard artwork |
 | `cmd/gwatch-rsrc/` | Builds the `.syso` resource objects that put the GWatch icon inside the Windows executables (`make rsrc`) |
 

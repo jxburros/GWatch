@@ -5,6 +5,7 @@
 import { api } from '../api.js';
 import { h, icon, clear, replace, toggle, emptyState, toast } from '../components.js';
 import { onboardingDone, resetOnboarding, tipsEnabled, setTipsEnabled, resetTips, seenCount, TIPS } from '../tips.js';
+import { isBeta } from '../fmt.js';
 
 const REPO_URL = 'https://github.com/jxburros/GWatch';
 const DOCS_URL = `${REPO_URL}/blob/main/docs`;
@@ -262,7 +263,17 @@ function docsCard() {
 function aboutCard() {
   // The same source the Settings › About tab uses, so the two never disagree.
   const version = h('span', { class: 'mono' }, '…');
-  api.get('/api/version').then((v) => { version.textContent = `${v.version ? `v${v.version}` : 'unknown'} · ${v.platform || 'unknown'}`; }).catch(() => { version.textContent = 'version unavailable'; });
+  // Filled in once the service answers; the beta note appears with it rather
+  // than flashing in on a version nobody has read yet.
+  const betaNote = h('p', { class: 'note', hidden: true });
+  api.get('/api/version').then((v) => {
+    version.textContent = `${v.version ? `v${v.version}` : 'unknown'} · ${v.platform || 'unknown'}`;
+    if (!isBeta(v.version)) return;
+    betaNote.hidden = false;
+    betaNote.append(h('b', null, 'This is a beta release. '),
+      'GWatch works and keeps your data safely, but features and the layout can still change between releases. ',
+      h('a', { href: `${REPO_URL}/issues`, target: '_blank', rel: 'noopener' }, 'Report anything that looks wrong', icon('external')), '.');
+  }).catch(() => { version.textContent = 'version unavailable'; });
   return h('section', { class: 'card help-about' },
     h('h2', null, 'About GWatch'),
     h('div', { class: 'row', style: { alignItems: 'flex-start', gap: '16px' } },
@@ -271,5 +282,6 @@ function aboutCard() {
         h('p', null, 'A self-hosted monitor for the machines, sites and services on your own network.'),
         h('p', { class: 'muted' }, version),
         h('p', null, 'By ', h('b', null, 'JX Holdings, LLC'), '. Developed by ', h('b', null, 'Jeffrey Guntly'), ' and ', h('b', null, 'Garrett Guntly'), '.'),
+        betaNote,
         h('p', { class: 'note' }, 'Source, releases and issues: ', h('a', { href: REPO_URL, target: '_blank', rel: 'noopener' }, 'github.com/jxburros/GWatch', icon('external'))))));
 }

@@ -161,3 +161,12 @@ export function retentionSpan(days) {
   if (n % 7 === 0 && n >= 14 && n < 60) return plural(n / 7, 'week');
   return plural(n, 'day');
 }
+
+/** True while the version number is still pre-1.0, which is what GWatch uses
+    to mean "beta". Nothing has to be switched off at 1.0: the first release
+    numbered 1.x stops reporting itself as a beta on its own. A dev or CI build
+    is not a beta — it is something else entirely, and says so already. */
+export function isBeta(version) {
+  const v = String(version || '').trim().replace(/^v/, '');
+  return /^0\./.test(v);
+}

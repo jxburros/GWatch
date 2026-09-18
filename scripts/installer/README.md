@@ -17,12 +17,14 @@ From a Windows machine with [Go 1.24+](https://go.dev/dl/) and
 [Inno Setup 6](https://jrsoftware.org/isdl.php) installed:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1 -Version 1.0.0
+powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1
 ```
 
 That compiles both executables, compiles both setup programs and copies the
-results into `dist\`. Add `-Which Monitor` or `-Which Agent` to build only one,
-and `-Iscc <path>` if Inno Setup is somewhere the script does not look.
+results into `dist\`. The version comes from the repository's
+[`VERSION`](../../VERSION) file unless `-Version` overrides it. Add
+`-Which Monitor` or `-Which Agent` to build only one, and `-Iscc <path>` if Inno
+Setup is somewhere the script does not look.
 
 Install Inno Setup with either of:
 
@@ -35,10 +37,10 @@ choco install innosetup --no-progress -y
 
 ```powershell
 # 1. Build the executables
-powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -Version 1.0.0
+powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 
 # 2. Compile a setup program from one of them
-iscc /DAppVersion=1.0.0 /DExePath=..\..\dist\gwatch.exe gwatch.iss
+iscc /DAppVersion=0.1.0 /DExePath=..\..\dist\gwatch.exe gwatch.iss
 ```
 
 Run step 2 from PowerShell, not Git Bash: Git Bash rewrites `/DAppVersion=…` as a
@@ -54,7 +56,7 @@ plain `iscc gwatch.iss` works for a quick local test build.
 
 CI compiles both setup programs on every push and pull request. Open the run on
 the **Actions** tab and download the **`gwatch-windows-installer`** artefact.
-Tagging `v1.2.3` attaches both to the GitHub release — see
+Tagging `v0.1.0` attaches both to the GitHub release — see
 [`docs/RELEASING.md`](../../docs/RELEASING.md).
 
 ## What the monitor's installer does
@@ -68,7 +70,7 @@ service, removes the firewall rule, and asks (default: no) whether to delete the
 data directory.
 
 ```powershell
-gwatch-setup-1.0.0.exe /VERYSILENT /PORT=8080 /LAN=1
+gwatch-setup-0.1.0.exe /VERYSILENT /PORT=8080 /LAN=1
 ```
 
 `/PORT` defaults to `8080` and `/LAN` to `0`.
@@ -86,7 +88,7 @@ already-used code produces a real error message instead of a service that never
 reports.
 
 ```powershell
-gwatch-agent-setup-1.0.0.exe /VERYSILENT /SERVER=http://gwatch.lan:8080 /CODE=ABCD-2345 /NAME=nas
+gwatch-agent-setup-0.1.0.exe /VERYSILENT /SERVER=http://gwatch.lan:8080 /CODE=ABCD-2345 /NAME=nas
 ```
 
 `/INSECURE=1` accepts a self-signed certificate on the server.

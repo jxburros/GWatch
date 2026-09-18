@@ -4,7 +4,7 @@
 
 import { api, qs } from '../api.js';
 import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, openModal, emptyState, skeleton, banner, eventRow, busy, applyTheme, applyAccent, ACCENT_PRESETS, hexToRgb } from '../components.js';
-import { relTime, dateTime, bytes, num, duration, retentionSpan, toLocalInput, fromLocalInput, weekdayShort, timeShort, plural } from '../fmt.js';
+import { relTime, dateTime, bytes, num, duration, retentionSpan, toLocalInput, fromLocalInput, weekdayShort, timeShort, plural, isBeta } from '../fmt.js';
 import { openEndpointEditor, endpointRow, triggerRow, openTriggerEditor } from './automation.js';
 import { tipsEnabled, setTipsEnabled, resetTips, seenCount, resetOnboarding, TIPS } from '../tips.js';
 
@@ -947,16 +947,20 @@ export async function mount(root, ctx) {
     const v = state.version || await api.get('/api/version').catch(() => null);
     const versionText = v?.version ? `v${v.version}` : 'unknown';
     const platformText = v?.platform || 'unknown';
+    const beta = isBeta(v?.version) ? h('span', { class: 'beta-tag' }, 'Beta') : null;
     return h('div', { class: 'stack' },
       h('section', { class: 'card' },
         h('div', { style: { display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' } },
           h('img', { src: 'logo.svg', alt: 'GWatch logo', width: '64', height: '64' }),
           h('div', null,
-            h('h2', { style: { marginBottom: '2px' } }, 'GWatch'),
+            h('h2', { style: { marginBottom: '2px' } }, 'GWatch', beta),
             h('p', { class: 'lead', style: { margin: 0 } }, 'A self-hosted monitor for the machines, sites and services on your own network.'),
             h('div', { class: 'muted', style: { marginTop: '4px' } }, `${versionText} · ${platformText}`))),
         h('div', { class: 'health-cards', style: { marginTop: '14px' } },
-          hcard(versionText, 'Installed version'), hcard(platformText, 'Platform'))),
+          hcard(versionText, 'Installed version'), hcard(platformText, 'Platform')),
+        isBeta(v?.version)
+          ? h('p', { class: 'note', style: { marginTop: '12px' } }, 'This is a beta. GWatch is usable and its data is kept safely, but features and the layout can still change between releases, and a bug here is more likely than it will be at 1.0. ', h('a', { href: 'https://github.com/jxburros/GWatch/issues', target: '_blank', rel: 'noopener' }, 'Report anything that looks wrong.'))
+          : null),
       h('section', { class: 'card' },
         h('h2', null, 'Copyright & credit'),
         h('p', null, GWATCH_COPYRIGHT),

@@ -75,7 +75,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Messages]
 WelcomeLabel1=Install [name]
-WelcomeLabel2=[name/ver] watches the devices, servers and websites on your network and tells you when one stops answering.%n%nIt runs entirely on this computer: your monitoring data stays in a database here, and nothing is sent to {#Publisher}.%n%nDeveloped by {#Developers}.
+WelcomeLabel2=[name/ver] watches the devices, servers and websites on your network and tells you when one stops answering.%n%nIt runs entirely on this computer: your monitoring data stays in a database here, and nothing is sent to {#Publisher}.%n%nDeveloped by {#Developers}.{#BetaNote}
 FinishedHeadingLabel=GWatch is running
 FinishedLabel=GWatch is installed as a Windows service and starts with this computer.%n%nOne thing is worth doing now: GWatch has no access password until you set one. Open Settings > Users & access in the web interface before anyone else can reach this computer.
 

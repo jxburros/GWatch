@@ -1,5 +1,10 @@
 # Installing GWatch on Windows
 
+> **This is a beta.** GWatch works and keeps your data safely, but features and the
+> layout can still change between releases. See
+> [`CHANGELOG.md`](../CHANGELOG.md) for what this version includes and what it does
+> not.
+
 This is a plain-language walkthrough for installing GWatch with the setup program — no
 PowerShell or command line needed. If you're comfortable with PowerShell, or need to
 automate the install, see [Advanced: the PowerShell scripts](#advanced-the-powershell-scripts)
@@ -91,7 +96,7 @@ Nothing is opened up on the machine running the agent: it dials out to GWatch an
 up, and GWatch is given no way back in. To install across several machines at once:
 
 ```powershell
-gwatch-agent-setup-1.0.0.exe /VERYSILENT /SERVER=http://gwatch.lan:8080 /CODE=ABCD-2345
+gwatch-agent-setup-0.1.0.exe /VERYSILENT /SERVER=http://gwatch.lan:8080 /CODE=ABCD-2345
 ```
 
 Each machine needs its own code. See [`HARDWARE.md`](HARDWARE.md) for what the agent

@@ -1,7 +1,9 @@
 # Builds the GWatch Windows setup programs end to end: compiles the Go
 # executables, then wraps each one with Inno Setup.
 #
-#   powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1 -Version 1.0.0
+#   powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1
+#
+# With no -Version, the number in the repository's VERSION file is used.
 #
 # Needs Go 1.24+ and Inno Setup 6. Install Inno Setup with either of:
 #   winget install JRSoftware.InnoSetup
@@ -11,13 +13,14 @@
 # finished setup programs are copied into dist\ next to the executables.
 [CmdletBinding()]
 param(
-    [string]$Version = "dev",
+    [string]$Version,
     [ValidateSet("Monitor", "Agent", "Both")]
     [string]$Which = "Both",
     [string]$Iscc
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
+if (-not $Version) { $Version = (Get-Content (Join-Path $root "VERSION") -Raw).Trim() }
 $installer = Join-Path $PSScriptRoot "installer"
 $dist = Join-Path $root "dist"
 

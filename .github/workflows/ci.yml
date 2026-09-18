@@ -195,6 +195,20 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # The VERSION file is what local builds and the installer read, and the
+      # tag is what the release is named after. If they disagree, a release
+      # ships binaries whose own --version output contradicts the download they
+      # came from, so stop before anything is built.
+      - name: Tag matches VERSION
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          file="$(tr -d ' \t\r\n' < VERSION)"
+          if [ "$tag" != "$file" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match the VERSION file (${file}). Update VERSION, commit, and re-tag."
+            exit 1
+          fi
+          echo "releasing ${file}"
+
       # Fail before anything is built if the release could not be signed, or
       # could be signed with a key the shipped binaries would not trust.
       - name: Signing key
