@@ -36,16 +36,18 @@
     <button type="submit">Run Check</button>
   </form>
 
-  <pre id="result" role="status" aria-live="polite" aria-busy="false"></pre>
+  <p id="status" role="status" aria-live="polite"></p>
+  <pre id="result"></pre>
 
   <script>
     const form = document.getElementById('check-form');
+    const status = document.getElementById('status');
     const result = document.getElementById('result');
 
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
-      result.textContent = 'Running...';
-      result.setAttribute('aria-busy', 'true');
+      status.textContent = 'Running...';
+      result.textContent = '';
 
       const payload = {
         type: document.getElementById('type').value,
@@ -64,18 +66,18 @@
         const isJSON = contentType.includes('application/json');
         const data = isJSON ? await response.json() : { error: await response.text() };
         if (!response.ok) {
+          status.textContent = `Request failed (${response.status})`;
           result.textContent = JSON.stringify({
             error: `Request failed (${response.status})`,
             response: data
           }, null, 2);
-          result.setAttribute('aria-busy', 'false');
           return;
         }
+        status.textContent = 'Check complete.';
         result.textContent = JSON.stringify(data, null, 2);
-        result.setAttribute('aria-busy', 'false');
       } catch (error) {
+        status.textContent = 'Request failed.';
         result.textContent = String(error);
-        result.setAttribute('aria-busy', 'false');
       }
     });
   </script>

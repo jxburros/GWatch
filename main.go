@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -214,7 +215,47 @@ func validateHTTPHost(ctx context.Context, host string) error {
 }
 
 func isDisallowedIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast()
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return true
+	}
+	addr = addr.Unmap()
+
+	if !addr.IsValid() || !addr.IsGlobalUnicast() || addr.IsLoopback() || addr.IsPrivate() || addr.IsMulticast() || addr.IsLinkLocalUnicast() {
+		return true
+	}
+
+	blockedPrefixes := []string{
+		"0.0.0.0/8",
+		"100.64.0.0/10",
+		"192.0.0.0/24",
+		"192.0.2.0/24",
+		"198.18.0.0/15",
+		"198.51.100.0/24",
+		"203.0.113.0/24",
+		"240.0.0.0/4",
+		"::/128",
+		"::1/128",
+		"::ffff:0:0/96",
+		"64:ff9b:1::/48",
+		"100::/64",
+		"2001:db8::/32",
+		"2001:10::/28",
+		"fc00::/7",
+		"fe80::/10",
+	}
+
+	for _, prefix := range blockedPrefixes {
+		p, err := netip.ParsePrefix(prefix)
+		if err != nil {
+			continue
+		}
+		if p.Contains(addr) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func allowPrivateHTTPTargets() bool {
