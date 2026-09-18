@@ -1,0 +1,10 @@
+dist/
+data/
+*.db
+*.db-wal
+*.db-shm
+*.gwbackup
+*.log
+GWatch
+gwatch
+gwatch.exe

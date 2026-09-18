@@ -1,0 +1,528 @@
+// Small DOM toolkit: element builder, icons, status pills, toasts, modals,
+// dropdown menus, chip input, form fields, empty states and skeletons.
+
+import { relTime, ms as fmtMs } from './fmt.js';
+
+/* ---------- Element builder ---------- */
+
+export function h(tag, attrs, ...children) {
+  const el = document.createElement(tag);
+  if (attrs && typeof attrs === 'object' && !(attrs instanceof Node) && !Array.isArray(attrs)) {
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v == null || v === false) continue;
+      if (k === 'class') el.className = v;
+      else if (k === 'html') el.innerHTML = v;
+      else if (k === 'text') el.textContent = v;
+      else if (k === 'dataset') Object.assign(el.dataset, v);
+      else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
+      else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v);
+      else if (k === 'value' && ('value' in el)) el.value = v;
+      else if (k === 'checked' || k === 'disabled' || k === 'selected' || k === 'readOnly' || k === 'multiple') el[k] = !!v;
+      else if (v === true) el.setAttribute(k, '');
+      else el.setAttribute(k, String(v));
+    }
+  } else if (attrs != null) {
+    children.unshift(attrs);
+  }
+  append(el, children);
+  return el;
+}
+
+export function append(el, children) {
+  for (const c of children) {
+    if (c == null || c === false || c === true) continue;
+    if (Array.isArray(c)) { append(el, c); continue; }
+    if (c instanceof Node) el.appendChild(c);
+    else el.appendChild(document.createTextNode(String(c)));
+  }
+  return el;
+}
+
+export function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); return el; }
+export function replace(el, ...children) { clear(el); append(el, children); return el; }
+export function frag(...children) { const f = document.createDocumentFragment(); append(f, children); return f; }
+
+/* ---------- Icons (inline SVG, stroke based) ---------- */
+
+const ICONS = {
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  alert: '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
+  question: '<circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01"/>',
+  pause: '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>',
+  wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+  dot: '<circle cx="12" cy="12" r="5" fill="currentColor" stroke="none"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  minus: '<path d="M5 12h14"/>',
+  play: '<path d="M6 4l14 8-14 8z" fill="currentColor" stroke="none"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  trash: '<path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m2 0v14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V6h12z"/>',
+  more: '<circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>',
+  bell: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/>',
+  bellOff: '<path d="M13.7 21a2 2 0 0 1-3.4 0M18.6 13A17.9 17.9 0 0 1 18 8M6.3 6.3A6 6 0 0 0 6 8c0 7-3 9-3 9h14M18 8a6 6 0 0 0-9.3-5M1 1l22 22"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  server: '<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01M6 18h.01"/>',
+  monitor: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  external: '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3"/>',
+  arrowUp: '<path d="M12 19V5M5 12l7-7 7 7"/>',
+  arrowDown: '<path d="M12 5v14M19 12l-7 7-7-7"/>',
+  arrowLeft: '<path d="M19 12H5M12 19l-7-7 7-7"/>',
+  arrowRight: '<path d="M5 12h14M12 5l7 7-7 7"/>',
+  chevronDown: '<path d="m6 9 6 6 6-6"/>',
+  chevronRight: '<path d="m9 18 6-6-6-6"/>',
+  note: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/>',
+  globe: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10 15 15 0 0 1-4-10 15 15 0 0 1 4-10z"/>',
+  router: '<rect x="2" y="13" width="20" height="8" rx="2"/><path d="M6 17h.01M10 17h.01M12 9V3M8 6l4-3 4 3"/>',
+  api: '<path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/>',
+  zap: '<path d="M13 2 3 14h9l-1 8 10-12h-9z"/>',
+  moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
+  save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/>',
+  mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/>',
+  database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.7-4 3-9 3s-9-1.3-9-3M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/>',
+  heart: '<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>',
+  eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+  power: '<path d="M18.4 6.6a9 9 0 1 1-12.8 0M12 2v10"/>',
+  layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/>',
+  hash: '<path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/>',
+  lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  home: '<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/>',
+  tv: '<rect x="2" y="7" width="20" height="15" rx="2"/><path d="m17 2-5 5-5-5"/>',
+  filter: '<path d="M22 3H2l8 9.5V19l4 2v-8.5z"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  sleep: '<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/>',
+  gitCommit: '<circle cx="12" cy="12" r="4"/><path d="M1.05 12H7M17 12h5.95"/>',
+  cpu: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/>',
+};
+
+export function icon(name, cls = '') {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('class', `icon ${cls}`.trim());
+  svg.innerHTML = ICONS[name] || ICONS.dot;
+  return svg;
+}
+export function iconInto(el, name) { el.appendChild(icon(name)); return el; }
+
+/* ---------- Status ---------- */
+
+export const STATUS = {
+  up: { label: 'Up', icon: 'check', cls: 'status-up', color: 'var(--up)' },
+  down: { label: 'Down', icon: 'x', cls: 'status-down', color: 'var(--down)' },
+  degraded: { label: 'Degraded', icon: 'alert', cls: 'status-degraded', color: 'var(--warn)' },
+  unknown: { label: 'Unknown', icon: 'question', cls: 'status-unknown', color: 'var(--unknown)' },
+  paused: { label: 'Paused', icon: 'pause', cls: 'status-paused', color: 'var(--paused)' },
+  maintenance: { label: 'Maintenance', icon: 'wrench', cls: 'status-maintenance', color: 'var(--maint)' },
+};
+export function statusMeta(status) { return STATUS[status] || STATUS.unknown; }
+
+export function statusPill(status, { label, large = false } = {}) {
+  const m = statusMeta(status);
+  return h('span', { class: `pill ${m.cls} ${large ? 'pill-lg' : ''}`, role: 'status' }, icon(m.icon), label || m.label);
+}
+
+export function statusGlyph(status, { text = true } = {}) {
+  const m = statusMeta(status);
+  const el = h('span', { class: `status-glyph text-${status in STATUS ? status : 'unknown'}` }, icon(m.icon));
+  if (text) el.append(m.label);
+  else el.append(h('span', { class: 'sr-only' }, m.label));
+  return el;
+}
+
+/** Compact "check chip": glyph + name + latency, for node rows. */
+export function checkChip(check, state, { href } = {}) {
+  const status = state?.status || (check.enabled === false ? 'paused' : 'unknown');
+  const m = statusMeta(status);
+  const chip = h(href ? 'a' : 'span', { class: 'check-chip', href, title: `${check.name}: ${m.label}${state?.lastMessage ? ' — ' + state.lastMessage : ''}` },
+    h('span', { class: `text-${status}`, style: { display: 'inline-flex' } }, icon(m.icon)),
+    h('span', { class: 'sr-only' }, m.label + ' '),
+    check.name,
+  );
+  if (state?.lastLatencyMs != null && status !== 'paused') chip.append(h('span', { class: 'lat' }, fmtMs(state.lastLatencyMs)));
+  return chip;
+}
+
+export function importanceBadge(importance) {
+  if (!importance || importance === 'normal') return null;
+  const icons = { low: 'minus', high: 'arrowUp', critical: 'zap' };
+  return h('span', { class: `importance importance-${importance}` }, icon(icons[importance] || 'dot'), importance);
+}
+
+/* ---------- Toasts ---------- */
+
+export function toast(message, { kind = 'info', timeout = 4500, action } = {}) {
+  const root = document.getElementById('toasts');
+  if (!root) return;
+  const icons = { success: 'check', error: 'alert', info: 'info' };
+  const el = h('div', { class: `toast toast-${kind}`, role: kind === 'error' ? 'alert' : 'status' }, icon(icons[kind] || 'info'), h('span', null, message));
+  if (action) el.append(h('button', { class: 'btn btn-sm', onclick: () => { action.onClick(); el.remove(); } }, action.label));
+  const closeBtn = h('button', { class: 'btn btn-ghost btn-sm icon-btn', 'aria-label': 'Dismiss', onclick: () => el.remove() }, icon('x'));
+  if (!action) el.append(closeBtn);
+  root.appendChild(el);
+  if (timeout > 0) setTimeout(() => el.remove(), timeout);
+  return el;
+}
+
+/* ---------- Modals ---------- */
+
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+export function openModal({ title, body, footer, wide = false, onClose, closeOnBackdrop = true, ariaLabel }) {
+  const root = document.getElementById('modals');
+  const prevFocus = document.activeElement;
+  const dialog = h('div', { class: `modal ${wide ? 'modal-wide' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-label': ariaLabel || title || 'Dialog' });
+  const backdrop = h('div', { class: 'modal-backdrop' }, dialog);
+  const close = (result) => {
+    if (!backdrop.isConnected) return;
+    backdrop.remove();
+    document.removeEventListener('keydown', onKey);
+    if (onClose) onClose(result);
+    if (prevFocus && prevFocus.focus) { try { prevFocus.focus(); } catch { /* ignore */ } }
+  };
+  const onKey = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); close(undefined); }
+    if (e.key === 'Tab') {
+      const f = [...dialog.querySelectorAll(FOCUSABLE)].filter((x) => x.offsetParent !== null);
+      if (!f.length) return;
+      const first = f[0]; const last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  };
+  const head = h('div', { class: 'modal-head' }, h('h2', null, title || ''), h('button', { class: 'btn btn-ghost icon-btn', type: 'button', 'aria-label': 'Close', onclick: () => close(undefined) }, icon('x')));
+  const bodyEl = h('div', { class: 'modal-body' });
+  append(bodyEl, [body]);
+  dialog.append(head, bodyEl);
+  if (footer) { const f = h('div', { class: 'modal-foot' }); append(f, [footer]); dialog.append(f); }
+  backdrop.addEventListener('mousedown', (e) => { if (closeOnBackdrop && e.target === backdrop) close(undefined); });
+  document.addEventListener('keydown', onKey);
+  root.appendChild(backdrop);
+  requestAnimationFrame(() => {
+    const first = dialog.querySelector('.modal-body ' + FOCUSABLE) || dialog.querySelector(FOCUSABLE);
+    if (first) first.focus();
+  });
+  return { el: dialog, body: bodyEl, close };
+}
+
+export function confirmDialog({ title = 'Are you sure?', message, confirmLabel = 'Confirm', cancelLabel = 'Cancel', danger = false, body } = {}) {
+  return new Promise((resolve) => {
+    let result = false;
+    const m = openModal({
+      title,
+      body: [message ? h('p', null, message) : null, body],
+      footer: [
+        h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, cancelLabel),
+        h('button', { class: `btn ${danger ? 'btn-danger' : 'btn-primary'}`, type: 'button', onclick: () => { result = true; m.close(); } }, confirmLabel),
+      ],
+      onClose: () => resolve(result),
+    });
+  });
+}
+
+export function promptDialog({ title, message, label = 'Name', value = '', placeholder = '', type = 'text', confirmLabel = 'Save', required = true } = {}) {
+  return new Promise((resolve) => {
+    let result = null;
+    const input = h('input', { type, value, placeholder, id: 'prompt-input', autocomplete: type === 'password' ? 'current-password' : 'off' });
+    const form = h('form', { onsubmit: (e) => { e.preventDefault(); if (required && !input.value.trim()) { input.focus(); return; } result = input.value; m.close(); } },
+      message ? h('p', { style: { marginBottom: '14px' } }, message) : null,
+      field({ label, input }),
+    );
+    const m = openModal({
+      title,
+      body: form,
+      footer: [
+        h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Cancel'),
+        h('button', { class: 'btn btn-primary', type: 'button', onclick: () => form.requestSubmit() }, confirmLabel),
+      ],
+      onClose: () => resolve(result),
+    });
+  });
+}
+
+/* ---------- Dropdown menu ---------- */
+
+let openMenu = null;
+export function closeMenus() { if (openMenu) { openMenu.remove(); openMenu = null; document.removeEventListener('mousedown', onDocDown, true); document.removeEventListener('keydown', onDocKey, true); } }
+function onDocDown(e) { if (openMenu && !openMenu.contains(e.target)) closeMenus(); }
+function onDocKey(e) { if (e.key === 'Escape') closeMenus(); }
+
+/** items: [{label, icon, onClick, danger, href, download, sep}] */
+export function showMenu(anchor, items) {
+  closeMenus();
+  const menu = h('div', { class: 'menu', role: 'menu' });
+  for (const it of items) {
+    if (!it) continue;
+    if (it.sep) { menu.append(h('div', { class: 'menu-sep', role: 'separator' })); continue; }
+    const cls = `menu-item ${it.danger ? 'danger' : ''}`;
+    const el = it.href
+      ? h('a', { class: cls, role: 'menuitem', href: it.href, download: it.download || null, target: it.target || null, onclick: () => closeMenus() }, it.icon ? icon(it.icon) : null, it.label)
+      : h('button', { class: cls, role: 'menuitem', type: 'button', disabled: !!it.disabled, onclick: () => { closeMenus(); it.onClick && it.onClick(); } }, it.icon ? icon(it.icon) : null, it.label);
+    menu.append(el);
+  }
+  document.body.appendChild(menu);
+  const r = anchor.getBoundingClientRect();
+  const mw = menu.offsetWidth; const mh = menu.offsetHeight;
+  let left = r.right - mw; let top = r.bottom + 6;
+  if (left < 8) left = 8;
+  if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 6);
+  menu.style.left = `${left}px`; menu.style.top = `${top}px`;
+  openMenu = menu;
+  document.addEventListener('mousedown', onDocDown, true);
+  document.addEventListener('keydown', onDocKey, true);
+  const first = menu.querySelector('.menu-item');
+  if (first) first.focus();
+  return menu;
+}
+
+export function menuButton(items, { label = 'More actions', small = false, cls = '' } = {}) {
+  const btn = h('button', { class: `btn icon-btn ${small ? 'btn-sm' : ''} ${cls}`, type: 'button', 'aria-label': label, 'aria-haspopup': 'menu' }, icon('more'));
+  btn.addEventListener('click', (e) => { e.stopPropagation(); showMenu(btn, typeof items === 'function' ? items() : items); });
+  return btn;
+}
+
+/* ---------- Form helpers ---------- */
+
+let idSeq = 0;
+export function uid(prefix = 'f') { return `${prefix}-${++idSeq}`; }
+
+export function field({ label, input, help, error, id, cls = '' }) {
+  const fid = id || input?.id || uid();
+  if (input && !input.id) input.id = fid;
+  const el = h('div', { class: `field ${cls} ${error ? 'has-error' : ''}` },
+    label ? h('label', { for: fid }, label) : null,
+    input,
+    help ? h('div', { class: 'help' }, help) : null,
+    error ? h('div', { class: 'error', role: 'alert' }, error) : null,
+  );
+  el.setError = (msg) => {
+    el.querySelector('.error')?.remove();
+    el.classList.toggle('has-error', !!msg);
+    if (msg) el.append(h('div', { class: 'error', role: 'alert' }, msg));
+  };
+  return el;
+}
+
+export function textInput(attrs = {}) { return h('input', { type: 'text', ...attrs }); }
+export function numberInput(attrs = {}) { return h('input', { type: 'number', ...attrs }); }
+export function textarea(attrs = {}) { return h('textarea', attrs); }
+
+/** options: [{value, label, disabled}] or ['a','b'] */
+export function selectInput({ options, value, ...attrs } = {}) {
+  const sel = h('select', attrs);
+  for (const o of options || []) {
+    const opt = typeof o === 'object' ? o : { value: o, label: o };
+    sel.append(h('option', { value: opt.value, disabled: !!opt.disabled }, opt.label ?? opt.value));
+  }
+  if (value !== undefined) sel.value = String(value);
+  return sel;
+}
+
+export function checkbox({ label, checked = false, onChange, id, disabled } = {}) {
+  const input = h('input', { type: 'checkbox', checked, id: id || uid('cb'), disabled: !!disabled });
+  if (onChange) input.addEventListener('change', () => onChange(input.checked));
+  const el = h('label', { class: 'checkbox', for: input.id }, input, h('span', null, label));
+  el.input = input;
+  return el;
+}
+
+export function toggle({ label, checked = false, onChange, id, disabled, ariaLabel } = {}) {
+  const input = h('input', { type: 'checkbox', role: 'switch', checked, id: id || uid('sw'), disabled: !!disabled, 'aria-label': ariaLabel || null });
+  if (onChange) input.addEventListener('change', () => onChange(input.checked));
+  const el = h('label', { class: 'switch', for: input.id }, input, h('span', { class: 'track', 'aria-hidden': 'true' }), label ? h('span', null, label) : null);
+  el.input = input;
+  return el;
+}
+
+/** Chip / tag input. `.value` returns an array of strings. */
+export function chipInput({ values = [], placeholder = 'Add…', suggestions = [], onChange, validate, id } = {}) {
+  let items = [...values];
+  const listId = suggestions.length ? uid('dl') : null;
+  const input = h('input', { type: 'text', placeholder, id: id || uid('chip'), list: listId, autocomplete: 'off' });
+  const wrap = h('div', { class: 'chip-input', onclick: (e) => { if (e.target === wrap) input.focus(); } });
+  if (listId) wrap.append(h('datalist', { id: listId }, suggestions.map((s) => h('option', { value: s }))));
+  const render = () => {
+    [...wrap.querySelectorAll('.chip-item')].forEach((c) => c.remove());
+    items.forEach((v, i) => {
+      const chip = h('span', { class: 'chip-item' }, v, h('button', { type: 'button', 'aria-label': `Remove ${v}`, onclick: () => { items.splice(i, 1); render(); onChange && onChange(items); } }, icon('x')));
+      wrap.insertBefore(chip, input);
+    });
+  };
+  const commit = () => {
+    const raw = input.value.split(/[,\n;]+/).map((s) => s.trim()).filter(Boolean);
+    let changed = false;
+    for (const v of raw) {
+      if (validate && !validate(v)) { input.setCustomValidity('Invalid value'); input.reportValidity(); continue; }
+      if (!items.includes(v)) { items.push(v); changed = true; }
+    }
+    input.value = '';
+    input.setCustomValidity('');
+    if (changed) { render(); onChange && onChange(items); }
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); commit(); }
+    else if (e.key === 'Backspace' && !input.value && items.length) { items.pop(); render(); onChange && onChange(items); }
+  });
+  input.addEventListener('blur', commit);
+  input.addEventListener('change', commit);
+  wrap.append(input);
+  render();
+  Object.defineProperty(wrap, 'value', { get: () => [...items], set: (v) => { items = [...(v || [])]; render(); } });
+  wrap.input = input;
+  return wrap;
+}
+
+/* ---------- Misc ---------- */
+
+export function emptyState({ icon: ic = 'info', title, text, actions, compact = false } = {}) {
+  return h('div', { class: `empty ${compact ? 'empty-compact' : ''}` },
+    h('span', { class: 'empty-icon' }, icon(ic)),
+    title ? h('h3', null, title) : null,
+    text ? h('p', null, text) : null,
+    actions ? h('div', { class: 'btn-group' }, actions) : null,
+  );
+}
+
+export function skeleton({ lines = 3, height } = {}) {
+  if (height) return h('div', { class: 'skeleton-block', style: { height: typeof height === 'number' ? `${height}px` : height }, 'aria-busy': 'true' });
+  const el = h('div', { class: 'skeleton', 'aria-busy': 'true' });
+  for (let i = 0; i < lines; i++) el.append(h('div', { class: 'skeleton-line', style: { width: `${100 - (i * 17) % 45}%` } }));
+  return el;
+}
+
+export function banner(kind, text, { icon: ic, actions } = {}) {
+  const icons = { warn: 'alert', down: 'x', maint: 'wrench', info: 'info', up: 'check' };
+  const el = h('div', { class: `banner banner-${kind}` }, icon(ic || icons[kind] || 'info'), h('div', { style: { flex: '1' } }, text));
+  if (actions) el.append(h('div', { class: 'btn-group' }, actions));
+  return el;
+}
+
+export function rangeChips(current, onChange, { ranges = ['1h', '24h', '7d', '30d', '1y'], small = true } = {}) {
+  const wrap = h('div', { class: 'range-chips', role: 'group', 'aria-label': 'Time range' });
+  for (const r of ranges) {
+    const b = h('button', { type: 'button', class: `chip ${r === current ? 'active' : ''}`, 'aria-pressed': r === current ? 'true' : 'false', onclick: () => { if (r !== current) onChange(r); } }, r);
+    wrap.append(b);
+  }
+  return wrap;
+}
+
+export function relTimeEl(v, { prefix = '' } = {}) {
+  const el = h('span', { title: v ? new Date(v).toLocaleString() : '' }, prefix + relTime(v));
+  el.dataset.rel = v || '';
+  return el;
+}
+
+export function tagList(tags, { group } = {}) {
+  const wrap = h('span', { class: 'n-tags' });
+  if (group) wrap.append(h('span', { class: 'tag tag-group' }, group));
+  for (const t of tags || []) wrap.append(h('span', { class: 'tag' }, t));
+  return wrap;
+}
+
+export function busy(btn, label) {
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  if (label) btn.textContent = label;
+  return () => { btn.disabled = false; btn.innerHTML = orig; };
+}
+
+/* ---------- Event type metadata for timelines ---------- */
+
+export const EVENT_META = {
+  down: { label: 'Went down', icon: 'x', cls: 'ev-down' },
+  recovered: { label: 'Recovered', icon: 'check', cls: 'ev-up' },
+  warning: { label: 'Warning', icon: 'alert', cls: 'ev-warn' },
+  warning_cleared: { label: 'Warning cleared', icon: 'check', cls: 'ev-up' },
+  cert_warning: { label: 'Certificate warning', icon: 'shield', cls: 'ev-warn' },
+  cert_warning_cleared: { label: 'Certificate warning cleared', icon: 'shield', cls: 'ev-up' },
+  content_changed: { label: 'Response changed', icon: 'eye', cls: 'ev-warn' },
+  alert_sent: { label: 'Alert sent', icon: 'mail', cls: 'ev-info' },
+  alert_suppressed: { label: 'Alert suppressed', icon: 'bellOff', cls: 'ev-neutral' },
+  alert_failed: { label: 'Alert failed', icon: 'alert', cls: 'ev-down' },
+  silenced: { label: 'Silenced', icon: 'bellOff', cls: 'ev-neutral' },
+  unsilenced: { label: 'Unsilenced', icon: 'bell', cls: 'ev-neutral' },
+  maintenance_began: { label: 'Maintenance began', icon: 'wrench', cls: 'ev-maint' },
+  maintenance_ended: { label: 'Maintenance ended', icon: 'wrench', cls: 'ev-maint' },
+  config_changed: { label: 'Configuration changed', icon: 'settings', cls: 'ev-neutral' },
+  affected_by_parent: { label: 'Affected by parent', icon: 'link', cls: 'ev-maint' },
+  service_started: { label: 'Service started', icon: 'power', cls: 'ev-info' },
+  service_stopped: { label: 'Service stopped', icon: 'power', cls: 'ev-neutral' },
+  monitor_gap: { label: 'Monitoring gap', icon: 'moon', cls: 'ev-warn' },
+  internal_error: { label: 'Internal error', icon: 'alert', cls: 'ev-down' },
+  backup: { label: 'Backup', icon: 'save', cls: 'ev-info' },
+  restore: { label: 'Restore', icon: 'upload', cls: 'ev-info' },
+  retention: { label: 'Retention', icon: 'database', cls: 'ev-neutral' },
+  note: { label: 'Note', icon: 'note', cls: 'ev-info' },
+};
+export function eventMeta(type) { return EVENT_META[type] || { label: type, icon: 'info', cls: 'ev-neutral' }; }
+
+export function eventIcon(type) {
+  const m = eventMeta(type);
+  return h('span', { class: `ev-icon ${m.cls}`, title: m.label }, icon(m.icon));
+}
+
+/** Compact event row used in widgets and the node detail page. */
+export function eventRow(ev, { showNode = true, now = Date.now() } = {}) {
+  const m = eventMeta(ev.type);
+  const link = ev.nodeId ? `#/nodes/${ev.nodeId}` : null;
+  const title = h('div', { class: 'ev-title' });
+  if (showNode && ev.nodeName) title.append(link ? h('a', { href: link, style: { color: 'inherit' } }, ev.nodeName) : ev.nodeName, ev.checkName ? ` › ${ev.checkName}` : '', ' — ');
+  title.append(ev.title || m.label);
+  return h('div', { class: 'event-row' },
+    eventIcon(ev.type),
+    h('div', { class: 'ev-body' }, title, ev.detail ? h('div', { class: 'ev-detail' }, ev.detail) : null),
+    h('div', { class: 'ev-time', title: new Date(ev.ts).toLocaleString() }, relTime(ev.ts, now)),
+  );
+}
+
+/** Group checks by node for pickers: returns [{node, checks}] */
+export function checkOptions(nodes, filterType) {
+  const out = [];
+  for (const n of nodes || []) {
+    const checks = (n.checks || []).filter((c) => !filterType || filterType(c));
+    if (checks.length) out.push({ node: n, checks });
+  }
+  return out;
+}
+
+/** Multi-select list of checks with "Node › Check" labels. `.value` → array of ids. */
+export function checkMultiSelect(nodes, selected = [], { filterType, onChange } = {}) {
+  let sel = new Set((selected || []).map(Number));
+  const wrap = h('div', { class: 'check-list', role: 'group', 'aria-label': 'Checks' });
+  const groups = checkOptions(nodes, filterType);
+  if (!groups.length) wrap.append(h('div', { class: 'note' }, 'No matching checks yet.'));
+  for (const g of groups) {
+    for (const c of g.checks) {
+      const cb = checkbox({ label: `${g.node.name} › ${c.name}`, checked: sel.has(Number(c.id)), onChange: (v) => { if (v) sel.add(Number(c.id)); else sel.delete(Number(c.id)); onChange && onChange([...sel]); } });
+      cb.append(h('span', { class: 'tag', style: { marginLeft: 'auto' } }, c.type));
+      wrap.append(cb);
+    }
+  }
+  Object.defineProperty(wrap, 'value', { get: () => [...sel] });
+  return wrap;
+}
+
+export const CHECK_TYPES = [
+  { value: 'ping', label: 'Ping', desc: 'Is it reachable, and how fast does it answer? Uses ICMP echo (ping).' },
+  { value: 'http', label: 'HTTP/S', desc: 'Load a web page or API URL and check the response code and response time.' },
+  { value: 'cert', label: 'HTTPS certificate', desc: 'Check that the TLS certificate is valid and warn before it expires.' },
+  { value: 'tcp', label: 'TCP port', desc: 'Can a connection be opened on a port? Good for SSH (22), Plex (32400), databases.' },
+  { value: 'dns', label: 'DNS', desc: 'Does the hostname resolve, optionally to the addresses you expect?' },
+  { value: 'keyword', label: 'Keyword', desc: 'Load a page and check that some text is present (or absent).' },
+  { value: 'json', label: 'JSON', desc: 'Call an API and check that a value at a path matches what you expect.' },
+];
+export function checkTypeLabel(t) { return (CHECK_TYPES.find((x) => x.value === t) || { label: t }).label; }

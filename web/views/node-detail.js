@@ -1,0 +1,292 @@
+// Node detail: header, per-check cards with result inspector, charts, events.
+
+import { api, getHistoryMulti, qs } from '../api.js';
+import { h, icon, clear, replace, statusPill, statusGlyph, importanceBadge, tagList, banner, toast, confirmDialog, showMenu, menuButton, emptyState, skeleton, eventRow, rangeChips, checkTypeLabel } from '../components.js';
+import { LineChart, toSeries, uptimeBar, uptimeLegend, SERIES_COLORS } from '../charts.js';
+import { relTime, ms as fmtMs, pct, dateTime, interval, plural, timeShort } from '../fmt.js';
+import { resultInspector } from './inspector.js';
+
+export async function mount(root, ctx) {
+  const id = ctx.params.id;
+  const state = { node: null, events: [], range: '24h', charts: [], expanded: new Set(), results: new Map(), destroyed: false, history: null };
+
+  const headEl = h('div');
+  const bannersEl = h('div', { class: 'stack-sm', style: { marginBottom: '20px' } });
+  const checksEl = h('div', { class: 'stack' });
+  const chartsEl = h('section', { class: 'card', 'aria-label': 'History' });
+  const eventsEl = h('section', { class: 'card', 'aria-label': 'Events' });
+  root.append(headEl, bannersEl, h('div', { class: 'stack' }, checksEl, chartsEl, eventsEl));
+  headEl.append(skeleton({ lines: 2 }));
+
+  async function load({ quiet = false } = {}) {
+    const [node, events] = await Promise.all([api.get(`/api/nodes/${id}`), api.get(`/api/events${qs({ nodeId: id, limit: 30 })}`).catch(() => [])]);
+    if (state.destroyed) return;
+    state.node = node; state.events = events || [];
+    renderHead(); renderBanners(); renderChecks(); renderEvents();
+    if (!quiet || !state.history) await loadHistory();
+    else await loadHistory();
+  }
+
+  /* ---------- Header ---------- */
+  function renderHead() {
+    const n = state.node;
+    ctx.setTitle(n.name, {
+      actions: [
+        h('button', { class: 'btn', type: 'button', onclick: runAll }, icon('play'), 'Run all now'),
+        h('a', { class: 'btn btn-primary', href: `#/nodes/${n.id}/edit` }, icon('edit'), 'Edit'),
+        menuButton(() => [
+          { label: n.enabled === false ? 'Enable node' : 'Disable node', icon: 'power', onClick: () => setEnabled(n.enabled === false) },
+          { label: 'Duplicate', icon: 'copy', onClick: duplicate },
+          { sep: true },
+          { label: 'Silence alerts for 1 hour', icon: 'bellOff', onClick: () => silence(60) },
+          { label: 'Silence alerts for 8 hours', icon: 'bellOff', onClick: () => silence(480) },
+          { label: 'Silence alerts for 24 hours', icon: 'bellOff', onClick: () => silence(1440) },
+          anySilenced() ? { label: 'Unsilence', icon: 'bell', onClick: () => silence(0) } : null,
+          { sep: true },
+          { label: 'Export events CSV', icon: 'download', href: `/api/export/events.csv${qs({ nodeId: n.id })}`, download: `events-${n.id}.csv` },
+          { label: 'Delete node', icon: 'trash', danger: true, onClick: remove },
+        ], { label: 'More actions' }),
+      ],
+    });
+    replace(headEl, h('div', { class: 'detail-head' },
+      h('div', { class: 'd-title' },
+        h('h1', null, statusPill(n.status || 'unknown', { large: true }), n.name),
+        h('div', { class: 'd-meta' },
+          h('span', { class: 'host' }, n.host),
+          n.group ? h('span', { class: 'tag tag-group' }, n.group) : null,
+          ...(n.tags || []).map((t) => h('span', { class: 'tag' }, t)),
+          importanceBadge(n.importance),
+          n.template ? h('span', { class: 'dim small' }, `from ${n.template} template`) : null,
+        ),
+        n.notes ? h('p', { class: 'muted', style: { maxWidth: '720px', whiteSpace: 'pre-wrap' } }, n.notes) : null,
+      ),
+    ));
+  }
+
+  function anySilenced() {
+    const st = state.node?.stateByCheck || {};
+    return Object.values(st).some((s) => s.silencedUntil && new Date(s.silencedUntil) > new Date());
+  }
+
+  function renderBanners() {
+    const n = state.node;
+    clear(bannersEl);
+    const states = n.stateByCheck || {};
+    const affected = Object.values(states).find((s) => s.affectedByNodeName);
+    if (affected) bannersEl.append(banner('maint', h('span', null, h('b', null, `${n.name} appears unavailable because ${affected.affectedByNodeName} is down.`), ' Alerts for this node are suppressed until the parent recovers; results are still recorded.'), { icon: 'link' }));
+    if (n.inMaintenance || n.status === 'maintenance') bannersEl.append(banner('maint', h('span', null, h('b', null, 'In maintenance.'), ' Alerts are paused during this window. Checks keep running and results are kept.'), { icon: 'wrench' }));
+    if (n.enabled === false) bannersEl.append(banner('info', h('span', null, h('b', null, 'This node is disabled.'), ' No checks run until you enable it.'), { icon: 'pause', actions: h('button', { class: 'btn btn-sm', type: 'button', onclick: () => setEnabled(true) }, 'Enable') }));
+    const silenced = Object.values(states).filter((s) => s.silencedUntil && new Date(s.silencedUntil) > new Date());
+    if (silenced.length) {
+      const until = silenced.map((s) => s.silencedUntil).sort().pop();
+      bannersEl.append(banner('info', h('span', null, h('b', null, 'Alerts silenced'), ` until ${dateTime(until, { seconds: false })} (${relTime(until)}).`), { icon: 'bellOff', actions: h('button', { class: 'btn btn-sm', type: 'button', onclick: () => silence(0) }, 'Unsilence') }));
+    }
+    const suppressed = Object.values(states).find((s) => s.alertSuppressed && s.suppressReason && s.suppressReason !== 'dependency' && s.suppressReason !== 'silenced' && s.suppressReason !== 'maintenance');
+    if (suppressed) bannersEl.append(banner('info', `Alerts currently suppressed (${suppressed.suppressReason}).`, { icon: 'bellOff' }));
+  }
+
+  /* ---------- Checks ---------- */
+  function renderChecks() {
+    const n = state.node;
+    clear(checksEl);
+    const checks = n.checks || [];
+    if (!checks.length) { checksEl.append(h('div', { class: 'card' }, emptyState({ icon: 'activity', title: 'No checks on this node', text: 'Add a ping, HTTP or TCP check so GWatch can start watching it.', actions: h('a', { class: 'btn btn-primary', href: `#/nodes/${n.id}/edit` }, 'Add checks') }))); return; }
+    for (const c of checks) checksEl.append(checkCard(c));
+  }
+
+  function checkCard(c) {
+    const n = state.node;
+    const st = (n.stateByCheck || {})[c.id] || {};
+    const last = (n.lastResults || {})[c.id] || null;
+    const status = c.enabled === false ? 'paused' : (st.status || 'unknown');
+    const card = h('section', { class: 'card check-card', 'aria-label': c.name });
+    const expanded = state.expanded.has(c.id);
+    const target = c.config?.target || n.host;
+    const runBtn = h('button', { class: 'btn btn-sm', type: 'button', onclick: () => runCheck(c, runBtn) }, icon('play'), 'Run now');
+    const detailBtn = h('button', { class: 'btn btn-sm', type: 'button', 'aria-expanded': expanded ? 'true' : 'false', onclick: () => { if (state.expanded.has(c.id)) state.expanded.delete(c.id); else state.expanded.add(c.id); renderChecks(); } }, icon(expanded ? 'chevronDown' : 'chevronRight'), expanded ? 'Hide details' : 'Inspect last result');
+    card.append(h('div', { class: 'check-card-head' },
+      h('div', { class: 'c-title' },
+        h('div', { class: 'c-type' }, checkTypeLabel(c.type), ' · every ', interval(c.intervalSeconds), c.config?.target ? ` · ${c.config.target}` : ''),
+        h('h3', null, statusPill(status), c.name),
+        h('div', { class: 'c-msg' }, st.lastMessage || last?.message || (c.enabled === false ? 'Paused — this check is disabled.' : 'Waiting for the first result.')),
+        st.affectedByNodeName ? h('div', { class: 'affected-note' }, icon('link'), `affected by ${st.affectedByNodeName}`) : null,
+        st.silencedUntil && new Date(st.silencedUntil) > new Date() ? h('div', { class: 'small muted' }, icon('bellOff'), ` silenced until ${timeShort(st.silencedUntil)}`) : null,
+      ),
+      h('div', { class: 'btn-group' }, runBtn, detailBtn, menuButton(() => [
+        { label: c.enabled === false ? 'Enable check' : 'Disable check', icon: 'power', onClick: () => setCheckEnabled(c, c.enabled === false) },
+        { label: 'Silence 1 hour', icon: 'bellOff', onClick: () => silenceCheck(c, 60) },
+        { label: 'Silence 24 hours', icon: 'bellOff', onClick: () => silenceCheck(c, 1440) },
+        st.silencedUntil && new Date(st.silencedUntil) > new Date() ? { label: 'Unsilence', icon: 'bell', onClick: () => silenceCheck(c, 0) } : null,
+        { sep: true },
+        { label: 'Export results CSV', icon: 'download', href: `/api/export/results.csv${qs({ checkId: c.id, limit: 5000 })}`, download: `results-${c.id}.csv` },
+        { label: 'Export history CSV', icon: 'download', href: `/api/export/history.csv${qs({ checkId: c.id, range: state.range })}`, download: `history-${c.id}-${state.range}.csv` },
+        { label: 'Edit checks', icon: 'edit', href: `#/nodes/${n.id}/edit` },
+      ], { label: `Options for ${c.name}`, small: true })),
+    ));
+    const stats = h('div', { class: 'check-stats' },
+      stat(st.lastLatencyMs != null ? fmtMs(st.lastLatencyMs) : '—', c.type === 'ping' ? 'Avg RTT' : c.type === 'http' || c.type === 'keyword' || c.type === 'json' ? 'Response' : 'Latency'),
+      stat(st.lastRunAt ? relTime(st.lastRunAt) : '—', 'Last run', st.lastRunAt),
+      stat(st.nextRunAt && c.enabled !== false ? relTime(st.nextRunAt) : '—', 'Next run', st.nextRunAt),
+      stat(String(st.consecutiveFailures ?? 0), 'Consecutive failures', null, st.consecutiveFailures > 0 ? 'text-down' : ''),
+      last?.lossPct != null ? stat(pct(last.lossPct), 'Packet loss', null, last.lossPct > 0 ? 'text-degraded' : '') : null,
+      last?.details?.cert ? stat(plural(last.details.cert.daysRemaining, 'day'), 'Cert expires in', null, last.details.cert.daysRemaining <= 14 ? 'text-degraded' : '') : null,
+      st.lastChangeAt ? stat(relTime(st.lastChangeAt), `${status[0].toUpperCase()}${status.slice(1)} since`, st.lastChangeAt) : null,
+    );
+    card.append(stats);
+    if (expanded) {
+      card.append(resultInspector(last, c));
+      const recent = h('div', { style: { marginTop: '16px' } }, h('div', { class: 'section-title' }, 'Recent results'), skeleton({ lines: 3 }));
+      card.append(recent);
+      loadResults(c).then((rows) => { if (!state.destroyed) replace(recent, h('div', { class: 'section-title' }, 'Recent results'), resultsTable(rows, c)); }).catch((e) => replace(recent, h('div', { class: 'note' }, e.message)));
+    }
+    return card;
+  }
+
+  function stat(value, label, ts, cls = '') {
+    return h('div', { class: 'stat' }, h('div', { class: `stat-value mono ${cls}`, title: ts ? dateTime(ts) : '' }, value), h('div', { class: 'stat-label' }, label));
+  }
+
+  async function loadResults(c) {
+    const rows = await api.get(`/api/checks/${c.id}/results?limit=20`);
+    state.results.set(c.id, rows || []);
+    return rows || [];
+  }
+
+  function resultsTable(rows, c) {
+    if (!rows.length) return h('p', { class: 'note' }, 'No results recorded yet.');
+    const table = h('table', { class: 'table' }, h('thead', null, h('tr', null, h('th', null, 'Time'), h('th', null, 'Result'), h('th', null, 'Message'), h('th', { class: 'num' }, c.type === 'ping' ? 'Avg RTT' : 'Time'), c.type === 'ping' ? h('th', { class: 'num' }, 'Loss') : h('th', { class: 'num' }, 'Code'))));
+    const tb = h('tbody');
+    for (const r of rows) {
+      const tr = h('tr', { style: { cursor: 'pointer' }, tabindex: 0, title: 'Show details' },
+        h('td', { class: 'mono nowrap' }, timeShort(r.ts, { seconds: true }), h('span', { class: 'dim' }, ` · ${relTime(r.ts)}`)),
+        h('td', null, statusGlyph(r.status || (r.success ? 'up' : 'down'))),
+        h('td', { class: 'muted' }, r.message || r.error || ''),
+        h('td', { class: 'num' }, fmtMs(r.latencyMs)),
+        c.type === 'ping' ? h('td', { class: 'num' }, pct(r.lossPct)) : h('td', { class: 'num' }, r.details?.statusCode ? String(r.details.statusCode) : '—'));
+      const open = () => {
+        const next = tr.nextElementSibling;
+        if (next && next.classList.contains('detail-row')) { next.remove(); return; }
+        tr.after(h('tr', { class: 'detail-row' }, h('td', { colspan: 5, style: { padding: '0 0 12px' } }, resultInspector(r, c, { compact: true }))));
+      };
+      tr.addEventListener('click', open);
+      tr.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+      tb.append(tr);
+    }
+    table.append(tb);
+    return h('div', { class: 'table-wrap' }, table);
+  }
+
+  /* ---------- Charts ---------- */
+  async function loadHistory() {
+    const n = state.node;
+    const checks = (n.checks || []);
+    const ids = checks.map((c) => c.id);
+    clearCharts();
+    clear(chartsEl);
+    const head = h('div', { class: 'card-head' }, h('h2', null, 'History'), h('div', { class: 'card-actions' }, rangeChips(state.range, (r) => { state.range = r; loadHistory(); })));
+    chartsEl.append(head);
+    if (!ids.length) { chartsEl.append(h('p', { class: 'note' }, 'Charts appear once this node has checks.')); return; }
+    const body = h('div', { class: 'stack' }, skeleton({ height: 220 }));
+    chartsEl.append(body);
+    let series;
+    try { series = await getHistoryMulti(ids, state.range); } catch (e) { replace(body, h('p', { class: 'note' }, 'Could not load history: ' + e.message)); return; }
+    if (state.destroyed) return;
+    state.history = series;
+    clear(body);
+    const list = Array.isArray(series) ? series : [series];
+    const from = list[0]?.from, to = list[0]?.to, bucket = list[0]?.bucketSeconds || 0;
+    const latencySeries = list.filter((hs) => (hs.points || []).some((p) => p.avgMs != null));
+
+    // Latency / response time chart
+    const latHost = h('div', null);
+    const latChart = new LineChart(latHost, { unit: 'ms', height: 240, ariaLabel: 'Latency history', title: `${n.name} — latency (${state.range})` });
+    state.charts.push(latChart);
+    latChart.setData({ series: latencySeries.map((hs, i) => ({ ...toSeries(hs, 'avg', SERIES_COLORS[i % SERIES_COLORS.length]), name: hs.checkName })), from, to, bucketSeconds: bucket });
+    body.append(chartSection('Latency / response time', latHost, () => latChart.exportPNG(`${slug(n.name)}-latency-${state.range}.png`), ids));
+
+    // Packet loss for ping checks
+    const pings = list.filter((hs) => hs.checkType === 'ping');
+    if (pings.length) {
+      const lossHost = h('div', null);
+      const lossChart = new LineChart(lossHost, { unit: '%', height: 160, yMin: 0, yMax: 100, ariaLabel: 'Packet loss history', title: `${n.name} — packet loss (${state.range})` });
+      state.charts.push(lossChart);
+      lossChart.setData({ series: pings.map((hs, i) => ({ ...toSeries(hs, 'loss', SERIES_COLORS[i % SERIES_COLORS.length]), name: hs.checkName })), from, to, bucketSeconds: bucket });
+      body.append(chartSection('Packet loss', lossHost, () => lossChart.exportPNG(`${slug(n.name)}-loss-${state.range}.png`), pings.map((p) => p.checkId)));
+    }
+
+    // Uptime bars
+    const up = h('div', null, h('div', { class: 'section-title' }, `Availability — ${state.range}`));
+    for (const hs of list) {
+      const avail = hs.summary?.availability;
+      const cls = avail == null ? '' : avail >= 99.9 ? 'text-up' : avail >= 95 ? 'text-degraded' : 'text-down';
+      up.append(h('div', { class: 'uptime-row' }, h('div', { class: 'uptime-name' }, hs.checkName, h('div', { class: 'sub' }, `${hs.summary?.count ?? 0} samples · ${hs.summary?.failures ?? 0} failures`)), uptimeBar(hs.points, { bucketSeconds: hs.bucketSeconds, from: hs.from, to: hs.to }), h('div', { class: `uptime-pct ${cls}` }, pct(avail, 2))));
+    }
+    up.append(uptimeLegend());
+    body.append(up);
+  }
+
+  function chartSection(title, host, onExportPng, ids) {
+    const csvBtn = h('button', { class: 'btn btn-sm', type: 'button', onclick: () => showMenu(csvBtn, ids.map((cid) => { const c = state.node.checks.find((x) => x.id === cid); return { label: `CSV — ${c ? c.name : cid}`, icon: 'download', href: `/api/export/history.csv${qs({ checkId: cid, range: state.range })}`, download: `history-${cid}-${state.range}.csv` }; })) }, icon('download'), 'Export CSV');
+    return h('div', null,
+      h('div', { class: 'row-between', style: { marginBottom: '8px' } }, h('div', { class: 'section-title', style: { marginBottom: 0 } }, title), h('div', { class: 'btn-group' }, h('button', { class: 'btn btn-sm', type: 'button', onclick: onExportPng }, icon('image'), 'Export PNG'), csvBtn)),
+      host);
+  }
+  function clearCharts() { state.charts.forEach((c) => c.destroy()); state.charts = []; }
+  const slug = (s) => String(s).toLowerCase().replace(/[^\w]+/g, '-');
+
+  /* ---------- Events ---------- */
+  function renderEvents() {
+    clear(eventsEl);
+    eventsEl.append(h('div', { class: 'card-head' }, h('h2', null, 'Events'), h('a', { class: 'btn btn-sm', href: `#/incidents?nodeId=${id}` }, 'Open timeline')));
+    if (!state.events.length) { eventsEl.append(h('p', { class: 'note' }, 'No events recorded for this node yet.')); return; }
+    const list = h('div', { class: 'event-rows' });
+    for (const ev of state.events) list.append(eventRow(ev, { showNode: false }));
+    eventsEl.append(list);
+  }
+
+  /* ---------- Actions ---------- */
+  async function runAll() {
+    try { const rs = await api.post(`/api/nodes/${id}/run`); toast(`Ran ${plural(rs?.length ?? 0, 'check')}`, { kind: 'success' }); await load({ quiet: true }); } catch (e) { toast(e.message, { kind: 'error' }); }
+  }
+  async function runCheck(c, btn) {
+    btn.disabled = true;
+    try { const r = await api.post(`/api/checks/${c.id}/run`); toast(`${c.name}: ${r.message || (r.success ? 'succeeded' : 'failed')}`, { kind: r.success ? 'success' : 'error' }); state.expanded.add(c.id); await load({ quiet: true }); } catch (e) { toast(e.message, { kind: 'error' }); btn.disabled = false; }
+  }
+  async function setEnabled(enabled) {
+    try { await api.post(`/api/nodes/${id}/enable`, { enabled }); toast(enabled ? 'Node enabled' : 'Node disabled', { kind: 'success' }); await load({ quiet: true }); } catch (e) { toast(e.message, { kind: 'error' }); }
+  }
+  async function setCheckEnabled(c, enabled) {
+    try { await api.post(`/api/checks/${c.id}/enable`, { enabled }); toast(`${c.name} ${enabled ? 'enabled' : 'disabled'}`, { kind: 'success' }); await load({ quiet: true }); } catch (e) { toast(e.message, { kind: 'error' }); }
+  }
+  async function silence(minutes) {
+    const checks = state.node.checks || [];
+    try {
+      await Promise.all(checks.map((c) => api.post(`/api/checks/${c.id}/silence`, { minutes })));
+      toast(minutes ? `Alerts silenced for ${interval(minutes * 60)}` : 'Alerts unsilenced', { kind: 'success' });
+      await load({ quiet: true });
+    } catch (e) { toast(e.message, { kind: 'error' }); }
+  }
+  async function silenceCheck(c, minutes) {
+    try { await api.post(`/api/checks/${c.id}/silence`, { minutes }); toast(minutes ? `${c.name} silenced for ${interval(minutes * 60)}` : `${c.name} unsilenced`, { kind: 'success' }); await load({ quiet: true }); } catch (e) { toast(e.message, { kind: 'error' }); }
+  }
+  async function duplicate() {
+    try { const copy = await api.post(`/api/nodes/${id}/duplicate`); toast(`Created "${copy.name}"`, { kind: 'success' }); ctx.navigate(`/nodes/${copy.id}/edit`); } catch (e) { toast(e.message, { kind: 'error' }); }
+  }
+  async function remove() {
+    const n = state.node;
+    const ok = await confirmDialog({ title: `Delete ${n.name}?`, message: 'The node, its checks and all recorded history will be removed. This cannot be undone.', confirmLabel: 'Delete node', danger: true });
+    if (!ok) return;
+    try { await api.del(`/api/nodes/${id}`); toast(`${n.name} deleted`, { kind: 'success' }); ctx.navigate('/nodes'); } catch (e) { toast(e.message, { kind: 'error' }); }
+  }
+
+  try { await load(); } catch (e) {
+    replace(root, h('div', { class: 'card' }, emptyState({ icon: 'alert', title: e.status === 404 ? 'Node not found' : 'Could not load this node', text: e.message, actions: h('a', { class: 'btn', href: '#/nodes' }, 'Back to nodes') })));
+    ctx.setTitle('Node');
+    return { destroy() { state.destroyed = true; } };
+  }
+
+  return {
+    refresh: () => load({ quiet: true }),
+    destroy() { state.destroyed = true; clearCharts(); },
+  };
+}
