@@ -215,6 +215,16 @@ export async function mount(root, ctx) {
     };
     const render = (eps, trs) => {
       clear(wrap);
+      // /hook/ URLs are not covered by the access password, so an endpoint
+      // without a token is open to everyone who can reach this port.
+      const open = (eps || []).filter((e) => !e.token);
+      if (open.length) {
+        wrap.append(banner('warn', h('span', null, h('b', null, open.length === 1 ? 'One custom endpoint has no token: ' : `${open.length} custom endpoints have no token: `),
+          ...open.flatMap((e, i) => [i ? ', ' : '', h('code', null, `/hook/${e.slug}`)]),
+          '. Anyone who can reach this computer on the network can call them.'), {
+          actions: open.map((e) => h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => { const saved = await openEndpointEditor(e, { nodes }); if (saved) load(); } }, icon('edit'), open.length === 1 ? 'Edit' : `Edit ${e.name}`)),
+        }));
+      }
       const epCard = h('section', { class: 'card' },
         h('div', { class: 'card-head' }, h('div', null, h('h2', null, 'Custom endpoints'), h('p', { class: 'lead', style: { marginBottom: 0 } }, 'URLs other systems can call to make GWatch do something: run a node\'s checks after a reboot, run a script, call a webhook or pull a git repository. Each lives at ', h('code', null, '/hook/<name>'), '.')),
           h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => { const saved = await openEndpointEditor(null, { nodes }); if (saved) load(); } }, icon('plus'), 'New endpoint')));
