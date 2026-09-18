@@ -139,12 +139,7 @@ func runPingCheck(ctx context.Context, target string, timeoutSeconds int) (check
 }
 
 func runHTTPCheck(ctx context.Context, target string) (checkResult, error) {
-	urlText := target
-	if !strings.HasPrefix(urlText, "http://") && !strings.HasPrefix(urlText, "https://") {
-		urlText = "https://" + urlText
-	}
-
-	u, err := url.ParseRequestURI(urlText)
+	u, err := normalizeHTTPTarget(target)
 	if err != nil {
 		return checkResult{}, fmt.Errorf("invalid URL target")
 	}
@@ -152,14 +147,7 @@ func runHTTPCheck(ctx context.Context, target string) (checkResult, error) {
 		return checkResult{}, err
 	}
 
-	client := &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return errors.New("stopped after too many redirects")
-			}
-			return validateHTTPHost(ctx, req.URL.Hostname())
-		},
-	}
+	client := buildHTTPClient(ctx)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return checkResult{}, err
@@ -174,6 +162,25 @@ func runHTTPCheck(ctx context.Context, target string) (checkResult, error) {
 
 	success := resp.StatusCode < http.StatusBadRequest
 	return checkResult{Success: success, Message: fmt.Sprintf("HTTP %d", resp.StatusCode)}, nil
+}
+
+func normalizeHTTPTarget(target string) (*url.URL, error) {
+	urlText := target
+	if !strings.HasPrefix(urlText, "http://") && !strings.HasPrefix(urlText, "https://") {
+		urlText = "https://" + urlText
+	}
+	return url.ParseRequestURI(urlText)
+}
+
+func buildHTTPClient(ctx context.Context) *http.Client {
+	return &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("stopped after too many redirects")
+			}
+			return validateHTTPHost(ctx, req.URL.Hostname())
+		},
+	}
 }
 
 func validateHTTPHost(ctx context.Context, host string) error {
@@ -197,15 +204,10 @@ func validateHTTPHost(ctx context.Context, host string) error {
 	if err != nil {
 		return err
 	}
-	hasAllowed := false
 	for _, ipAddr := range addrs {
-		if !isDisallowedIP(ipAddr.IP) {
-			hasAllowed = true
-			break
+		if isDisallowedIP(ipAddr.IP) {
+			return fmt.Errorf("private or local IP targets are not allowed for HTTP checks")
 		}
-	}
-	if !hasAllowed {
-		return fmt.Errorf("private or local IP targets are not allowed for HTTP checks")
 	}
 
 	return nil

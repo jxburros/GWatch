@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"strconv"
@@ -41,6 +42,28 @@ func TestRunHTTPCheckRejectsLocalhostHostname(t *testing.T) {
 	_, err := runHTTPCheck(context.Background(), "http://localhost")
 	if err == nil {
 		t.Fatal("expected localhost/private hostname rejection")
+	}
+}
+
+func TestNormalizeHTTPTargetAddsHTTPSScheme(t *testing.T) {
+	u, err := normalizeHTTPTarget("example.com")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if u.Scheme != "https" {
+		t.Fatalf("expected https scheme, got %q", u.Scheme)
+	}
+}
+
+func TestRedirectValidationRejectsLocalhost(t *testing.T) {
+	client := buildHTTPClient(context.Background())
+	u, err := url.Parse("http://localhost/redirect")
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	req := &http.Request{URL: u}
+	if err := client.CheckRedirect(req, nil); err == nil {
+		t.Fatal("expected localhost redirect to be rejected")
 	}
 }
 
