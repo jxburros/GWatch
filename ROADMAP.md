@@ -171,9 +171,16 @@ promise.
 
 ## Open decisions (don't resolve casually)
 
-- **Licensing/support model**: still undecided. Affects how the API-key tiers (2.2)
-  and the MCP companion (Phase 3) get positioned — e.g. whether either is ever a paid
-  tier. Revisit deliberately, not as a side effect of another task.
+- **Licensing/support model**: decided. GWatch is source-available (see `LICENSE`
+  and `TRADEMARKS.md`), close to open source but with two restrictions: nobody may
+  charge for unaltered copies of the software (including offering it as a paid
+  hosted service without a Significant Modification), and nobody may remove or
+  obscure credit to GWatch, JX Holdings, and the original developers. Consequences
+  for this roadmap: there are no paid tiers for the API keys (2.2) or the MCP
+  companion (Phase 3) — everything ships free. The only commercial restriction is
+  reselling unmodified GWatch or offering it as a paid hosted service without
+  significant modification; deployment, support, and customization services remain
+  fair game. Attribution is mandatory in every copy and derivative.
 
 ## Explicit non-goals (keep scope from drifting toward Zabbix/PRTG)
 
