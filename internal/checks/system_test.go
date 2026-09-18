@@ -110,6 +110,26 @@ func TestEvaluateHostStaleReading(t *testing.T) {
 	}
 }
 
+func TestHumanAge(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		{5 * time.Second, "5 seconds"},
+		{time.Second, "1 second"},
+		{time.Minute, "1 minute"},
+		{90 * time.Second, "1 minute"},
+		{10 * time.Minute, "10 minutes"},
+		{3 * time.Hour, "3.0 hours"},
+		{72 * time.Hour, "3 days"},
+	}
+	for _, tt := range tests {
+		if got := humanAge(tt.d); got != tt.want {
+			t.Errorf("humanAge(%s) = %q, want %q", tt.d, got, tt.want)
+		}
+	}
+}
+
 // The staleness deadline is floored, so a check running every 10 seconds does
 // not report the machine down over ordinary scheduling jitter.
 func TestStaleAfterHasAFloor(t *testing.T) {

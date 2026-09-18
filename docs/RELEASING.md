@@ -49,10 +49,16 @@ The `release` job in `.github/workflows/ci.yml` then:
    that reject their own updates;
 2. cross-compiles `gwatch-<os>-<arch>[.exe]` for Windows, Linux and macOS and
    writes a `.sha256` next to each;
-3. signs every binary (`gwatch-sign sign`) and verifies the result against the
+3. cross-compiles the MCP companion (`gwatch-mcp-<os>-<arch>`, versioned from
+   `mcp/VERSION`) and the hardware agent (`gwatch-agent-<os>-<arch>`, which adds
+   `linux/arm` for Raspberry Pi class machines). Both names sit inside the
+   `dist/gwatch-*` glob so they are signed and checksummed like everything else,
+   and both stay invisible to the in-app updater, which matches only the exact
+   names `gwatch-<os>-<arch>[.exe]`;
+4. signs every binary (`gwatch-sign sign`) and verifies the result against the
    pinned keys (`gwatch-sign verify`) — the same check the updater runs on the
    user's machine;
-4. publishes all of `dist/*`, binaries plus `.sha256` plus `.sig`, as the
+5. publishes all of `dist/*`, binaries plus `.sha256` plus `.sig`, as the
    release.
 
 To do the same by hand:

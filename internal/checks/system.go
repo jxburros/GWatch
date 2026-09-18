@@ -280,13 +280,22 @@ func pctString(v float64) string { return fmt.Sprintf("%.0f%%", v) }
 func humanAge(d time.Duration) string {
 	switch {
 	case d < time.Minute:
-		return fmt.Sprintf("%d seconds", int(d.Seconds()))
+		return plural(int(d.Seconds()), "second")
 	case d < time.Hour:
-		return fmt.Sprintf("%d minutes", int(d.Minutes()))
+		return plural(int(d.Minutes()), "minute")
 	case d < 48*time.Hour:
 		return fmt.Sprintf("%.1f hours", d.Hours())
 	}
 	return fmt.Sprintf("%.0f days", d.Hours()/24)
+}
+
+// plural renders a count with its unit, so an alert reads "1 minute" rather
+// than "1 minutes".
+func plural(n int, unit string) string {
+	if n == 1 {
+		return "1 " + unit
+	}
+	return fmt.Sprintf("%d %ss", n, unit)
 }
 
 // validateSystemCheck reports a configuration the hardware check cannot run.

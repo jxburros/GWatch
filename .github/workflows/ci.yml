@@ -221,6 +221,24 @@ jobs:
           done
           ls -lh ../dist
 
+      # The hardware agent runs on the machines being watched rather than on
+      # the one running GWatch, so it is built for more platforms than the
+      # server is — linux/arm covers the Raspberry Pi class of machine people
+      # actually put agents on. Like the MCP companion it lands inside the
+      # dist/gwatch-* glob so it is signed and checksummed, and stays invisible
+      # to the in-app updater, which matches the exact names
+      # gwatch-<goos>-<goarch>[.exe] and not gwatch-agent-linux-amd64.
+      - name: Cross-compile the hardware agent
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64 linux/arm darwin/arm64 darwin/amd64; do
+            goos="${target%/*}"; goarch="${target#*/}"
+            out="dist/gwatch-agent-${goos}-${goarch}"; [ "$goos" = "windows" ] && out="$out.exe"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags "-s -w -X main.version=${version}" -o "$out" ./cmd/gwatch-agent
+            sha256sum "$out" | sed 's#dist/##' > "$out.sha256"
+          done
+          ls -lh dist
+
       # Sign every binary, then verify the signatures with the keys pinned into
       # this checkout — exactly what the updater does on the user's machine.
       - name: Sign release assets
