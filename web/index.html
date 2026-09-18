@@ -14,23 +14,23 @@
 <body>
   <h1>GWatch Network Monitor</h1>
   <form id="check-form">
-    <label>
+    <label for="type">
       Check Type
-      <select id="type" required>
+      <select id="type" name="type" required>
         <option value="ping">Ping</option>
         <option value="http">HTTP/S</option>
         <option value="dns">DNS</option>
       </select>
     </label>
 
-    <label>
+    <label for="target">
       Target
-      <input id="target" placeholder="example.com or https://example.com" required>
+      <input id="target" name="target" placeholder="example.com or https://example.com" required>
     </label>
 
-    <label>
+    <label for="timeout">
       Timeout (seconds)
-      <input id="timeout" type="number" min="1" value="5" required>
+      <input id="timeout" name="timeout" type="number" min="1" value="5" required>
     </label>
 
     <button type="submit">Run Check</button>
@@ -59,7 +59,16 @@
           body: JSON.stringify(payload)
         });
 
-        const data = await response.json();
+        const contentType = response.headers.get('content-type') || '';
+        const isJSON = contentType.includes('application/json');
+        const data = isJSON ? await response.json() : { error: await response.text() };
+        if (!response.ok) {
+          result.textContent = JSON.stringify({
+            error: `Request failed (${response.status})`,
+            response: data
+          }, null, 2);
+          return;
+        }
         result.textContent = JSON.stringify(data, null, 2);
       } catch (error) {
         result.textContent = String(error);

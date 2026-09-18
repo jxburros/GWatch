@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -48,6 +49,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              ":8080",
+		ReadTimeout:       10 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second,
 		Handler:           mux,
 	}
@@ -65,7 +67,9 @@ func checkHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req checkRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
 		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 		return
 	}
@@ -138,6 +142,9 @@ func runHTTPCheck(ctx context.Context, target string) (checkResult, error) {
 	if err != nil {
 		return checkResult{}, fmt.Errorf("invalid URL target")
 	}
+	if err := validateHTTPHost(u.Hostname()); err != nil {
+		return checkResult{}, err
+	}
 
 	client := &http.Client{}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -153,6 +160,27 @@ func runHTTPCheck(ctx context.Context, target string) (checkResult, error) {
 
 	success := resp.StatusCode < http.StatusBadRequest
 	return checkResult{Success: success, Message: fmt.Sprintf("HTTP %d", resp.StatusCode)}, nil
+}
+
+func validateHTTPHost(host string) error {
+	if strings.EqualFold(os.Getenv("GWATCH_ALLOW_PRIVATE_HTTP_TARGETS"), "true") {
+		return nil
+	}
+
+	if strings.EqualFold(host, "localhost") {
+		return fmt.Errorf("localhost is not allowed for HTTP checks")
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return nil
+	}
+
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast() {
+		return fmt.Errorf("private or local IP targets are not allowed for HTTP checks")
+	}
+
+	return nil
 }
 
 func runDNSCheck(ctx context.Context, target string) (checkResult, error) {
