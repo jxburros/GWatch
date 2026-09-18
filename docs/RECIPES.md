@@ -174,65 +174,38 @@ Discord embed variant:
 
 ### Slack (incoming webhook)
 
-- **Action type**: `HTTP request`.
-- **Method**: `POST`.
-- **URL**: `https://hooks.slack.com/services/T000/B000/XXXXXXXXXXXXXXXXXXXXXXXX`
-- **Body**:
-  ```json
-  {"text": "*{{node.name}}* — {{check.name}} is now *{{status}}* ({{target}})"}
-  ```
-
-Both send with the standard `curl`:
-```bash
-curl -X POST 'https://hooks.slack.com/services/T000/B000/XXXX' \
-  -H 'Content-Type: application/json' \
-  -d '{"text": "*Router* — Ping is now *down* (192.168.1.1)"}'
-```
+Slack has a native **action type**: pick `Slack` in the action editor, paste
+your incoming webhook URL (`https://hooks.slack.com/services/T000/B000/XXXX`)
+and optionally set **Message** (defaults to
+`{{node.name}} is {{status}}: {{message}}`). It posts `{"text": ...}` built
+with proper JSON encoding, so quotes or newlines in `{{message}}` can't break
+the payload — no manual escaping needed. Use **Test this action** to send a
+sample message. See [`docs/API.md`](API.md#automation) for the field list, or
+the [appendix](#appendix-manual-http-recipes-for-slack-ntfy-and-pushover)
+below for the equivalent hand-built HTTP request.
 
 ## 4. Push notifications: ntfy and Pushover
 
-### ntfy.sh (or self-hosted ntfy)
+Both have native **action types**, so you no longer need to hand-build the
+HTTP request:
 
-ntfy takes the message as the raw POST body and reads title/priority/tags
-from headers, not JSON — set them in the **Request headers** grid rather than
-in a JSON `body`.
+- **ntfy**: pick `ntfy` in the action editor, set **Topic** (and **Server**
+  if self-hosting, default `https://ntfy.sh`), optionally **Title**,
+  **Message**, **Priority**, **Tags** and an **Access token** for a
+  protected topic. GWatch sends the message as the request body and
+  title/priority/tags as headers, exactly like the manual recipe below, but
+  without you having to fill in the **Request headers** grid by hand.
+- **Pushover**: pick `Pushover`, set **Application token** and **User key**,
+  optionally **Title**, **Message** and **Priority**. GWatch form-encodes the
+  request the way Pushover expects.
 
-- **Action type**: `HTTP request`.
-- **Method**: `POST`.
-- **URL**: `https://ntfy.sh/gwatch-home-alerts` (your topic).
-- **Headers**:
-  - `Title`: `{{node.name}} is {{status}}`
-  - `Priority`: `high` (use `urgent` for down, `default` for recovered — you
-    can make two triggers, one per condition, with different priorities)
-  - `Tags`: `warning,{{event}}`
-- **Body**: `{{check.name}} on {{target}} — {{message}}` (plain text, so
-  quotes in `{{message}}` are harmless here)
-
-```bash
-curl -X POST 'https://ntfy.sh/gwatch-home-alerts' \
-  -H 'Title: Plex Server is down' -H 'Priority: urgent' -H 'Tags: warning,down' \
-  -d 'Ping on 192.168.1.20 — Request timeout'
-```
-
-### Pushover
-
-- **Action type**: `HTTP request`.
-- **Method**: `POST`.
-- **URL**: `https://api.pushover.net/1/messages.json`
-- **Headers**: `Content-Type: application/x-www-form-urlencoded` — but GWatch
-  always sends the literal `body` text, so build a URL-encoded body by hand
-  (Pushover also accepts JSON with `Content-Type: application/json`, which is
-  simpler here):
-- **Body** (JSON):
-  ```json
-  {"token": "YOUR_APP_TOKEN", "user": "YOUR_USER_KEY", "title": "{{node.name}} is {{status}}", "message": "{{check.name}} on {{target}}", "priority": 0}
-  ```
-
-```bash
-curl -X POST 'https://api.pushover.net/1/messages.json' \
-  -H 'Content-Type: application/json' \
-  -d '{"token":"YOUR_APP_TOKEN","user":"YOUR_USER_KEY","title":"Plex Server is down","message":"Ping on 192.168.1.20","priority":0}'
-```
+Both default **Title** to `GWatch {{instance}}` and **Message** to
+`{{node.name}} is {{status}}: {{message}}` when left blank, and both use
+**Test this action** to send a sample notification. See
+[`docs/API.md`](API.md#automation) for the field list, or the
+[appendix](#appendix-manual-http-recipes-for-slack-ntfy-and-pushover) below
+for the equivalent hand-built HTTP requests (useful if you're on an older
+GWatch version, or want more control over the exact payload).
 
 ## 5. Recovery actions: restart a container, chain another node's checks
 
@@ -375,6 +348,71 @@ An already-saved trigger can also be fired for real with
 recorded), and an endpoint can be run manually from the UI, which posts
 `{"method": "MANUAL", "remote": "ui"}` as the endpoint's `{{method}}`/
 `{{remote}}` placeholders.
+
+## Appendix: manual HTTP recipes for Slack, ntfy and Pushover
+
+Kept for reference (older GWatch versions without the native `slack`, `ntfy`
+and `pushover` action types, or if you want full control over the payload).
+Prefer the native actions in recipes 3 and 4 above for new triggers.
+
+### Slack (incoming webhook, via HTTP request action)
+
+- **Action type**: `HTTP request`.
+- **Method**: `POST`.
+- **URL**: `https://hooks.slack.com/services/T000/B000/XXXXXXXXXXXXXXXXXXXXXXXX`
+- **Body**:
+  ```json
+  {"text": "*{{node.name}}* — {{check.name}} is now *{{status}}* ({{target}})"}
+  ```
+
+```bash
+curl -X POST 'https://hooks.slack.com/services/T000/B000/XXXX' \
+  -H 'Content-Type: application/json' \
+  -d '{"text": "*Router* — Ping is now *down* (192.168.1.1)"}'
+```
+
+### ntfy.sh (or self-hosted ntfy, via HTTP request action)
+
+ntfy takes the message as the raw POST body and reads title/priority/tags
+from headers, not JSON — set them in the **Request headers** grid rather than
+in a JSON `body`.
+
+- **Action type**: `HTTP request`.
+- **Method**: `POST`.
+- **URL**: `https://ntfy.sh/gwatch-home-alerts` (your topic).
+- **Headers**:
+  - `Title`: `{{node.name}} is {{status}}`
+  - `Priority`: `high` (use `urgent` for down, `default` for recovered — you
+    can make two triggers, one per condition, with different priorities)
+  - `Tags`: `warning,{{event}}`
+- **Body**: `{{check.name}} on {{target}} — {{message}}` (plain text, so
+  quotes in `{{message}}` are harmless here)
+
+```bash
+curl -X POST 'https://ntfy.sh/gwatch-home-alerts' \
+  -H 'Title: Plex Server is down' -H 'Priority: urgent' -H 'Tags: warning,down' \
+  -d 'Ping on 192.168.1.20 — Request timeout'
+```
+
+### Pushover (via HTTP request action)
+
+- **Action type**: `HTTP request`.
+- **Method**: `POST`.
+- **URL**: `https://api.pushover.net/1/messages.json`
+- **Headers**: `Content-Type: application/x-www-form-urlencoded` — but GWatch
+  always sends the literal `body` text, so build a URL-encoded body by hand
+  (Pushover also accepts JSON with `Content-Type: application/json`, which is
+  simpler here):
+- **Body** (JSON):
+  ```json
+  {"token": "YOUR_APP_TOKEN", "user": "YOUR_USER_KEY", "title": "{{node.name}} is {{status}}", "message": "{{check.name}} on {{target}}", "priority": 0}
+  ```
+
+```bash
+curl -X POST 'https://api.pushover.net/1/messages.json' \
+  -H 'Content-Type: application/json' \
+  -d '{"token":"YOUR_APP_TOKEN","user":"YOUR_USER_KEY","title":"Plex Server is down","message":"Ping on 192.168.1.20","priority":0}'
+```
 
 ## Security
 

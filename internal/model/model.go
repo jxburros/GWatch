@@ -684,16 +684,20 @@ type GapInfo struct {
 type ActionType string
 
 const (
-	ActionHTTP    ActionType = "http"     // send an HTTP request (webhook)
-	ActionGit     ActionType = "git"      // run a git command in a repository
-	ActionScript  ActionType = "script"   // run custom code with an interpreter
-	ActionRunNode ActionType = "run_node" // run every check of a node right now
+	ActionHTTP     ActionType = "http"     // send an HTTP request (webhook)
+	ActionGit      ActionType = "git"      // run a git command in a repository
+	ActionScript   ActionType = "script"   // run custom code with an interpreter
+	ActionRunNode  ActionType = "run_node" // run every check of a node right now
+	ActionSlack    ActionType = "slack"    // post to a Slack incoming webhook
+	ActionTeams    ActionType = "teams"    // post an Adaptive Card to a Teams webhook
+	ActionNtfy     ActionType = "ntfy"     // publish to an ntfy topic
+	ActionPushover ActionType = "pushover" // send a Pushover notification
 )
 
 // Valid reports whether the action type is known.
 func (t ActionType) Valid() bool {
 	switch t {
-	case ActionHTTP, ActionGit, ActionScript, ActionRunNode:
+	case ActionHTTP, ActionGit, ActionScript, ActionRunNode, ActionSlack, ActionTeams, ActionNtfy, ActionPushover:
 		return true
 	}
 	return false
@@ -730,6 +734,19 @@ type Action struct {
 
 	// run_node
 	NodeID *int64 `json:"nodeId,omitempty"`
+
+	// slack, teams: WebhookURL. ntfy: Server + Topic (+ optional Token/Priority/Tags).
+	// pushover: Token + UserKey (+ optional Priority). Title/Message are shared by
+	// slack, teams, ntfy and pushover.
+	WebhookURL string `json:"webhookUrl,omitempty"`
+	Title      string `json:"title,omitempty"`
+	Message    string `json:"message,omitempty"`
+	Topic      string `json:"topic,omitempty"`
+	Server     string `json:"server,omitempty"`
+	Priority   string `json:"priority,omitempty"`
+	Tags       string `json:"tags,omitempty"`
+	Token      string `json:"token,omitempty"`
+	UserKey    string `json:"userKey,omitempty"`
 
 	TimeoutSeconds int `json:"timeoutSeconds,omitempty"` // default 30
 }

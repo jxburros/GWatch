@@ -137,13 +137,19 @@ See [`docs/RECIPES.md`](RECIPES.md) for copy-pasteable trigger/endpoint recipes 
   A token is **required**: saving with an empty `token` is rejected with 400 unless `allowNoToken` is `true`, the explicit acknowledgement that anyone who can reach the port may run the action. A token must be at least 8 characters, and supplying one forces `allowNoToken` back to `false`.
 - `ANY /hook/{slug}` → runs the endpoint's action and answers `ActionResult` (200, or 502 when the action failed). The token is passed as `?token=`, `X-GWatch-Token` or `Authorization: Bearer`; a wrong token is 401. An endpoint with no stored token is refused with 401 unless `allowNoToken` is set. `/hook/` URLs are not covered by the LAN access password, so the token is their only protection. The request body and query parameters are available to the action as `{{body}}` and `{{query.<name>}}`.
 
-An `Action` is `{ "type": "http|git|script|run_node", "timeoutSeconds", ... }`:
+An `Action` is `{ "type": "http|slack|teams|ntfy|pushover|git|script|run_node", "timeoutSeconds", ... }`:
 | type | fields |
 |---|---|
 | `http` | `method` (auto: POST with body, else GET), `url`, `headers`, `body`, `expectedStatus` (default 200-399), `ignoreTlsErrors` |
+| `slack` | `webhookUrl` (https://, a Slack incoming webhook), `message` |
+| `teams` | `webhookUrl` (https://, a Teams/Power Automate webhook), `title`, `message` |
+| `ntfy` | `server` (default `https://ntfy.sh`), `topic`, `title`, `message`, `priority` (`min\|low\|default\|high\|urgent` or `1`-`5`), `tags`, `token` (optional bearer token) |
+| `pushover` | `token` (application token), `userKey`, `title`, `message`, `priority` (`-2`..`2`) |
 | `git` | `repo` (working directory), `gitArgs` (everything after `git`) |
 | `script` | `interpreter` (`sh`, `bash`, `powershell`, `cmd`, `python`, `node`, `custom`), `command` (for custom; `{{file}}` is the script path), `code`, `workDir`, `allowUntrustedInput` |
 | `run_node` | `nodeId` |
+
+`slack`, `teams`, `ntfy` and `pushover` all default `title` to `"GWatch {{instance}}"` and `message` to `"{{node.name}} is {{status}}: {{message}}"` when left blank; both fields are JSON-safe (or form/header-safe) no matter what characters `{{message}}` expands to, since the payload is built with `encoding/json` (or form-encoding for Pushover, headers for ntfy) instead of string concatenation.
 
 String fields may contain `{{placeholders}}`: `node.name`, `node.host`, `node.group`, `check.name`, `check.type`, `target`, `status`, `prev_status`, `message`, `error`, `success`, `latencyMs`, `lossPct`, `statusCode`, `failures`, `event`, `ts`, `instance`, `body`, `query.<name>`. Scripts also receive them as `GWATCH_*` environment variables (`node.name` → `GWATCH_NODE_NAME`).
 

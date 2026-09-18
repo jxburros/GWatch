@@ -186,6 +186,10 @@ func Validate(a model.Action) error {
 		if a.NodeID == nil || *a.NodeID <= 0 {
 			return errors.New("a node is required")
 		}
+	case model.ActionSlack, model.ActionTeams, model.ActionNtfy, model.ActionPushover:
+		if err := ValidateNotify(a); err != nil {
+			return err
+		}
 	}
 	if a.TimeoutSeconds < 0 || time.Duration(a.TimeoutSeconds)*time.Second > maxTimeout {
 		return fmt.Errorf("timeout must be between 0 and %d seconds", int(maxTimeout.Seconds()))
@@ -239,6 +243,14 @@ func (r *Runner) Run(ctx context.Context, a model.Action, vars Vars) (res model.
 		res.OK = true
 		res.Output = fmt.Sprintf("Ran the checks of node %d.", *a.NodeID)
 		return res
+	case model.ActionSlack:
+		return r.runSlack(ctx, a, vars, res)
+	case model.ActionTeams:
+		return r.runTeams(ctx, a, vars, res)
+	case model.ActionNtfy:
+		return r.runNtfy(ctx, a, vars, res)
+	case model.ActionPushover:
+		return r.runPushover(ctx, a, vars, res)
 	}
 	res.Error = "unsupported action"
 	return res

@@ -8,9 +8,19 @@ import { relTime } from '../fmt.js';
 
 export const ACTION_TYPES = [
   { value: 'http', label: 'HTTP request', icon: 'webhook', desc: 'Call a webhook or any URL (GET / POST …) with an optional body.' },
+  { value: 'slack', label: 'Slack', icon: 'hash', desc: 'Post a message to a Slack incoming webhook.' },
+  { value: 'teams', label: 'Microsoft Teams', icon: 'layers', desc: 'Post an Adaptive Card to a Teams (or Power Automate) webhook.' },
+  { value: 'ntfy', label: 'ntfy', icon: 'bell', desc: 'Publish a push notification to an ntfy.sh (or self-hosted) topic.' },
+  { value: 'pushover', label: 'Pushover', icon: 'zap', desc: 'Send a push notification through Pushover.' },
   { value: 'git', label: 'Git command', icon: 'git', desc: 'Run git in a repository on this computer, e.g. pull --ff-only.' },
   { value: 'script', label: 'Custom code', icon: 'code', desc: 'Run a script with sh, bash, PowerShell, cmd, Python, Node or any command.' },
   { value: 'run_node', label: 'Run a node now', icon: 'play', desc: 'Run every check of a node immediately.' },
+];
+const NOTIFY_PRIORITIES = [
+  { value: '', label: 'Default' }, { value: 'min', label: 'Min' }, { value: 'low', label: 'Low' }, { value: 'default', label: 'Default (explicit)' }, { value: 'high', label: 'High' }, { value: 'urgent', label: 'Urgent' },
+];
+const PUSHOVER_PRIORITIES = [
+  { value: '', label: 'Normal (0)' }, { value: '-2', label: 'Lowest (-2)' }, { value: '-1', label: 'Low (-1)' }, { value: '0', label: 'Normal (0)' }, { value: '1', label: 'High (1)' }, { value: '2', label: 'Emergency (2)' },
 ];
 export const CONDITIONS = [
   { value: 'down', label: 'Goes down' }, { value: 'recovered', label: 'Recovers' }, { value: 'degraded', label: 'Becomes degraded' }, { value: 'warning_cleared', label: 'Warning cleared' },
@@ -37,6 +47,10 @@ export function actionSummary(a, nodes = []) {
   if (!a) return '';
   switch (a.type) {
     case 'http': return `${a.method || (a.body ? 'POST' : 'GET')} ${a.url || ''}`;
+    case 'slack': return `Slack → ${a.webhookUrl || '?'}`;
+    case 'teams': return `Teams → ${a.webhookUrl || '?'}`;
+    case 'ntfy': return `ntfy → ${(a.server || 'https://ntfy.sh').replace(/\/$/, '')}/${a.topic || '?'}`;
+    case 'pushover': return `Pushover → user ${a.userKey || '?'}`;
     case 'git': return `git ${a.gitArgs || ''} in ${a.repo || '?'}`;
     case 'script': return `${a.interpreter || 'script'} · ${(a.code || '').split('\n')[0].slice(0, 60)}`;
     case 'run_node': { const n = nodes.find((x) => Number(x.id) === Number(a.nodeId)); return `run checks of ${n ? n.name : `node ${a.nodeId ?? '?'}`}`; }
@@ -56,7 +70,7 @@ function placeholderHelp(extra = []) {
  * Action editor. Returns an element with `.value` → action object.
  */
 export function actionEditor(action = {}, { nodes = [], defaultInterpreter = 'sh', nodeId = null } = {}) {
-  const a = { type: 'http', method: '', url: '', headers: {}, body: '', ignoreTlsErrors: false, expectedStatus: '', repo: '', gitArgs: '', interpreter: defaultInterpreter, command: '', code: '', workDir: '', allowUntrustedInput: false, nodeId: nodeId, timeoutSeconds: 30, ...(action || {}) };
+  const a = { type: 'http', method: '', url: '', headers: {}, body: '', ignoreTlsErrors: false, expectedStatus: '', repo: '', gitArgs: '', interpreter: defaultInterpreter, command: '', code: '', workDir: '', allowUntrustedInput: false, nodeId: nodeId, timeoutSeconds: 30, webhookUrl: '', title: '', message: '', topic: '', server: '', priority: '', tags: '', token: '', userKey: '', ...(action || {}) };
   if (!a.interpreter) a.interpreter = defaultInterpreter;
   const typeSel = selectInput({ options: ACTION_TYPES.map((t) => ({ value: t.value, label: t.label })), value: a.type, onchange: () => { a.type = typeSel.value; renderType(); } });
   const typeDesc = h('div', { class: 'help' });
@@ -84,6 +98,23 @@ export function actionEditor(action = {}, { nodes = [], defaultInterpreter = 'sh
   };
   renderHeaders();
 
+  // slack / teams
+  const webhookUrl = textInput({ value: a.webhookUrl || '', class: 'mono', placeholder: 'https://hooks.slack.com/services/…', oninput: () => { a.webhookUrl = webhookUrl.value; } });
+  const notifyTitle = textInput({ value: a.title || '', placeholder: 'GWatch {{instance}}', oninput: () => { a.title = notifyTitle.value; } });
+  const notifyMessage = textarea({ class: 'code', value: a.message || '', rows: 3, placeholder: '{{node.name}} is {{status}}: {{message}}', oninput: () => { a.message = notifyMessage.value; } });
+
+  // ntfy
+  const ntfyServer = textInput({ value: a.server || '', class: 'mono', placeholder: 'https://ntfy.sh (default)', oninput: () => { a.server = ntfyServer.value; } });
+  const ntfyTopic = textInput({ value: a.topic || '', class: 'mono', placeholder: 'gwatch-alerts', oninput: () => { a.topic = ntfyTopic.value; } });
+  const ntfyPriority = selectInput({ options: NOTIFY_PRIORITIES, value: a.priority || '', onchange: () => { a.priority = ntfyPriority.value; } });
+  const ntfyTags = textInput({ value: a.tags || '', placeholder: 'warning,{{event}}', oninput: () => { a.tags = ntfyTags.value; } });
+  const ntfyToken = textInput({ value: a.token || '', class: 'mono', placeholder: 'Optional access token', oninput: () => { a.token = ntfyToken.value; } });
+
+  // pushover
+  const pushoverToken = textInput({ value: a.token || '', class: 'mono', placeholder: 'Application token', oninput: () => { a.token = pushoverToken.value; } });
+  const pushoverUser = textInput({ value: a.userKey || '', class: 'mono', placeholder: 'User key', oninput: () => { a.userKey = pushoverUser.value; } });
+  const pushoverPriority = selectInput({ options: PUSHOVER_PRIORITIES, value: a.priority || '', onchange: () => { a.priority = pushoverPriority.value; } });
+
   // git
   const repo = textInput({ value: a.repo || '', class: 'mono', placeholder: 'C:\\repos\\homelab or /srv/homelab', oninput: () => { a.repo = repo.value; } });
   const gitArgs = textInput({ value: a.gitArgs || '', class: 'mono', placeholder: 'pull --ff-only', oninput: () => { a.gitArgs = gitArgs.value; } });
@@ -110,6 +141,34 @@ export function actionEditor(action = {}, { nodes = [], defaultInterpreter = 'sh
       case 'http':
         typeArea.append(h('div', { class: 'form-grid' }, field({ label: 'URL', input: url, cls: 'span-2' }), field({ label: 'Method', input: method }), field({ label: 'Expected status', input: expected, help: 'A code, range or list. Anything else counts as a failed run.' }), field({ label: 'Request headers', input: headersWrap, cls: 'span-2' }), field({ label: 'Body', input: body, cls: 'span-2', help: 'JSON bodies get Content-Type: application/json automatically.' }), h('div', { class: 'span-2' }, tls)));
         break;
+      case 'slack':
+      case 'teams':
+        typeArea.append(h('div', { class: 'form-grid' },
+          field({ label: 'Webhook URL', input: webhookUrl, cls: 'span-2', help: a.type === 'slack' ? 'A Slack incoming webhook URL (https://hooks.slack.com/services/…).' : 'A Teams (or Power Automate workflow) webhook URL.' }),
+          field({ label: 'Title', input: notifyTitle, help: a.type === 'teams' ? 'Used as the Adaptive Card heading. Leave blank for "GWatch {{instance}}".' : 'Not sent to Slack, kept for consistency with other channels.' }),
+          field({ label: 'Message', input: notifyMessage, cls: 'span-2', help: 'Leave blank for "{{node.name}} is {{status}}: {{message}}". Use Test this action to send a test message.' }),
+        ));
+        break;
+      case 'ntfy':
+        typeArea.append(h('div', { class: 'form-grid' },
+          field({ label: 'Server', input: ntfyServer, help: 'Leave blank for https://ntfy.sh.' }),
+          field({ label: 'Topic', input: ntfyTopic, help: 'Letters, digits, - and _ only.' }),
+          field({ label: 'Priority', input: ntfyPriority }),
+          field({ label: 'Tags', input: ntfyTags, help: 'Comma-separated ntfy tags/emoji shortcodes.' }),
+          field({ label: 'Access token', input: ntfyToken, help: 'Optional, for a protected topic.' }),
+          field({ label: 'Title', input: notifyTitle }),
+          field({ label: 'Message', input: notifyMessage, cls: 'span-2', help: 'Leave blank for "{{node.name}} is {{status}}: {{message}}". Use Test this action to send a test message.' }),
+        ));
+        break;
+      case 'pushover':
+        typeArea.append(h('div', { class: 'form-grid' },
+          field({ label: 'Application token', input: pushoverToken }),
+          field({ label: 'User key', input: pushoverUser }),
+          field({ label: 'Priority', input: pushoverPriority }),
+          field({ label: 'Title', input: notifyTitle }),
+          field({ label: 'Message', input: notifyMessage, cls: 'span-2', help: 'Leave blank for "{{node.name}} is {{status}}: {{message}}". Use Test this action to send a test message.' }),
+        ));
+        break;
       case 'git':
         typeArea.append(h('div', { class: 'form-grid' }, field({ label: 'Repository directory', input: repo, cls: 'span-2', help: 'The command runs in this directory on the computer running GWatch.' }), field({ label: 'Git arguments', input: gitArgs, cls: 'span-2', help: 'Everything after "git". Placeholders are expanded, e.g. commit -am "{{node.name}} {{status}}".' })));
         break;
@@ -131,6 +190,9 @@ export function actionEditor(action = {}, { nodes = [], defaultInterpreter = 'sh
   Object.defineProperty(wrap, 'value', { get: () => {
     const out = { type: a.type, timeoutSeconds: Number(a.timeoutSeconds) || 30 };
     if (a.type === 'http') Object.assign(out, { method: a.method || '', url: a.url.trim(), headers: a.headers || {}, body: a.body || '', expectedStatus: a.expectedStatus || '', ignoreTlsErrors: !!a.ignoreTlsErrors });
+    if (a.type === 'slack' || a.type === 'teams') Object.assign(out, { webhookUrl: (a.webhookUrl || '').trim(), title: a.title || '', message: a.message || '' });
+    if (a.type === 'ntfy') Object.assign(out, { server: (a.server || '').trim(), topic: (a.topic || '').trim(), priority: a.priority || '', tags: a.tags || '', token: a.token || '', title: a.title || '', message: a.message || '' });
+    if (a.type === 'pushover') Object.assign(out, { token: (a.token || '').trim(), userKey: (a.userKey || '').trim(), priority: a.priority || '', title: a.title || '', message: a.message || '' });
     if (a.type === 'git') Object.assign(out, { repo: a.repo.trim(), gitArgs: a.gitArgs.trim() });
     if (a.type === 'script') Object.assign(out, { interpreter: a.interpreter || defaultInterpreter, command: a.command || '', code: a.code || '', workDir: a.workDir || '', allowUntrustedInput: !!a.allowUntrustedInput });
     if (a.type === 'run_node') Object.assign(out, { nodeId: a.nodeId != null ? Number(a.nodeId) : null });
