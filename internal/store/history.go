@@ -402,8 +402,8 @@ func (s *Store) InsertEventsBatch(ctx context.Context, events []model.Event) err
 			if len(e.Meta) > 0 {
 				meta = string(e.Meta)
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO events(ts, type, node_id, check_id, node_name, check_name, title, detail, meta) VALUES (?,?,?,?,?,?,?,?,?)`,
-				e.Timestamp.UnixMilli(), string(e.Type), nullInt64(e.NodeID), nullInt64(e.CheckID), e.NodeName, e.CheckName, e.Title, e.Detail, meta); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO events(ts, type, node_id, check_id, node_name, check_name, title, detail, meta, actor) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+				e.Timestamp.UnixMilli(), string(e.Type), nullInt64(e.NodeID), nullInt64(e.CheckID), e.NodeName, e.CheckName, e.Title, e.Detail, meta, e.Actor); err != nil {
 				return err
 			}
 		}

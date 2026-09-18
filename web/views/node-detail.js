@@ -39,7 +39,7 @@ export async function mount(root, ctx) {
     clear(triggersEl);
     triggersEl.append(h('div', { class: 'card-head' },
       h('div', null, h('h2', null, icon('zap'), 'Triggers'), h('p', { class: 'note' }, 'Run a webhook, a git command, custom code or another node\'s checks when this node changes state.')),
-      h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: async () => { const saved = await openTriggerEditor(null, { node: n, nodes: state.nodes }); if (saved) loadTriggers(); } }, icon('plus'), 'Add trigger')));
+      h('button', { class: 'btn btn-sm btn-primary admin-only', type: 'button', onclick: async () => { const saved = await openTriggerEditor(null, { node: n, nodes: state.nodes }); if (saved) loadTriggers(); } }, icon('plus'), 'Add trigger')));
     if (!state.triggers.length) { triggersEl.append(h('p', { class: 'note' }, 'No triggers on this node. Example: when it goes down, POST to a Discord webhook; when it recovers, run "git pull" in your homelab repo.')); return; }
     for (const t of state.triggers) triggersEl.append(triggerRow(t, { node: n, nodes: state.nodes, onChange: loadTriggers }));
   }
@@ -49,19 +49,19 @@ export async function mount(root, ctx) {
     const n = state.node;
     ctx.setTitle(n.name, {
       actions: [
-        h('button', { class: 'btn', type: 'button', onclick: runAll }, icon('play'), 'Run all now'),
-        h('a', { class: 'btn btn-primary', href: `#/nodes/${n.id}/edit` }, icon('edit'), 'Edit'),
+        h('button', { class: 'btn admin-only', type: 'button', onclick: runAll }, icon('play'), 'Run all now'),
+        h('a', { class: 'btn btn-primary admin-only', href: `#/nodes/${n.id}/edit` }, icon('edit'), 'Edit'),
         menuButton(() => [
-          { label: n.enabled === false ? 'Enable node' : 'Disable node', icon: 'power', onClick: () => setEnabled(n.enabled === false) },
-          { label: 'Duplicate', icon: 'copy', onClick: duplicate },
-          { sep: true },
-          { label: 'Silence alerts for 1 hour', icon: 'bellOff', onClick: () => silence(60) },
-          { label: 'Silence alerts for 8 hours', icon: 'bellOff', onClick: () => silence(480) },
-          { label: 'Silence alerts for 24 hours', icon: 'bellOff', onClick: () => silence(1440) },
-          anySilenced() ? { label: 'Unsilence', icon: 'bell', onClick: () => silence(0) } : null,
+          { label: n.enabled === false ? 'Enable node' : 'Disable node', icon: 'power', onClick: () => setEnabled(n.enabled === false), adminOnly: true },
+          { label: 'Duplicate', icon: 'copy', onClick: duplicate, adminOnly: true },
+          { sep: true, adminOnly: true },
+          { label: 'Silence alerts for 1 hour', icon: 'bellOff', onClick: () => silence(60), adminOnly: true },
+          { label: 'Silence alerts for 8 hours', icon: 'bellOff', onClick: () => silence(480), adminOnly: true },
+          { label: 'Silence alerts for 24 hours', icon: 'bellOff', onClick: () => silence(1440), adminOnly: true },
+          anySilenced() ? { label: 'Unsilence', icon: 'bell', onClick: () => silence(0), adminOnly: true } : null,
           { sep: true },
           { label: 'Export events CSV', icon: 'download', href: `/api/export/events.csv${qs({ nodeId: n.id })}`, download: `events-${n.id}.csv` },
-          { label: 'Delete node', icon: 'trash', danger: true, onClick: remove },
+          { label: 'Delete node', icon: 'trash', danger: true, onClick: remove, adminOnly: true },
         ], { label: 'More actions' }),
       ],
     });
@@ -108,7 +108,7 @@ export async function mount(root, ctx) {
     const n = state.node;
     clear(checksEl);
     const checks = n.checks || [];
-    if (!checks.length) { checksEl.append(h('div', { class: 'card' }, emptyState({ icon: 'activity', title: 'No checks on this node', text: 'Add a ping, HTTP or TCP check so GWatch can start watching it.', actions: h('a', { class: 'btn btn-primary', href: `#/nodes/${n.id}/edit` }, 'Add checks') }))); return; }
+    if (!checks.length) { checksEl.append(h('div', { class: 'card' }, emptyState({ icon: 'activity', title: 'No checks on this node', text: 'Add a ping, HTTP or TCP check so GWatch can start watching it.', actions: h('a', { class: 'btn btn-primary admin-only', href: `#/nodes/${n.id}/edit` }, 'Add checks') }))); return; }
     for (const c of checks) checksEl.append(checkCard(c));
   }
 
@@ -131,14 +131,14 @@ export async function mount(root, ctx) {
         st.silencedUntil && new Date(st.silencedUntil) > new Date() ? h('div', { class: 'small muted' }, icon('bellOff'), ` silenced until ${timeShort(st.silencedUntil)}`) : null,
       ),
       h('div', { class: 'btn-group' }, runBtn, detailBtn, menuButton(() => [
-        { label: c.enabled === false ? 'Enable check' : 'Disable check', icon: 'power', onClick: () => setCheckEnabled(c, c.enabled === false) },
-        { label: 'Silence 1 hour', icon: 'bellOff', onClick: () => silenceCheck(c, 60) },
-        { label: 'Silence 24 hours', icon: 'bellOff', onClick: () => silenceCheck(c, 1440) },
-        st.silencedUntil && new Date(st.silencedUntil) > new Date() ? { label: 'Unsilence', icon: 'bell', onClick: () => silenceCheck(c, 0) } : null,
+        { label: c.enabled === false ? 'Enable check' : 'Disable check', icon: 'power', onClick: () => setCheckEnabled(c, c.enabled === false), adminOnly: true },
+        { label: 'Silence 1 hour', icon: 'bellOff', onClick: () => silenceCheck(c, 60), adminOnly: true },
+        { label: 'Silence 24 hours', icon: 'bellOff', onClick: () => silenceCheck(c, 1440), adminOnly: true },
+        st.silencedUntil && new Date(st.silencedUntil) > new Date() ? { label: 'Unsilence', icon: 'bell', onClick: () => silenceCheck(c, 0), adminOnly: true } : null,
         { sep: true },
         { label: 'Export results CSV', icon: 'download', href: `/api/export/results.csv${qs({ checkId: c.id, limit: 5000 })}`, download: `results-${c.id}.csv` },
         { label: 'Export history CSV', icon: 'download', href: `/api/export/history.csv${qs({ checkId: c.id, range: state.range })}`, download: `history-${c.id}-${state.range}.csv` },
-        { label: 'Edit checks', icon: 'edit', href: `#/nodes/${n.id}/edit` },
+        { label: 'Edit checks', icon: 'edit', href: `#/nodes/${n.id}/edit`, adminOnly: true },
       ], { label: `Options for ${c.name}`, small: true })),
     ));
     const stats = h('div', { class: 'check-stats' },

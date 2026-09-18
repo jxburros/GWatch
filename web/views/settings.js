@@ -7,25 +7,44 @@ import { h, icon, clear, replace, field, textInput, numberInput, textarea, selec
 import { relTime, dateTime, bytes, num, duration, retentionSpan, toLocalInput, fromLocalInput, weekdayShort, timeShort, plural } from '../fmt.js';
 import { openEndpointEditor, endpointRow, triggerRow, openTriggerEditor } from './automation.js';
 
+// `viewer: true` marks the sections an account without the admin role may
+// open. Everything else reads or writes settings, which the server refuses to
+// a viewer, so those tabs are not offered at all.
 const TABS = [
-  { id: 'general', label: 'General' }, { id: 'appearance', label: 'Appearance' }, { id: 'network', label: 'Network access' }, { id: 'alerts', label: 'Alerts' },
+  { id: 'general', label: 'General' }, { id: 'appearance', label: 'Appearance', viewer: true }, { id: 'users', label: 'Users & access' },
+  { id: 'network', label: 'Network access' }, { id: 'alerts', label: 'Alerts' },
   { id: 'automation', label: 'Automation' }, { id: 'retention', label: 'Retention' }, { id: 'maintenance', label: 'Maintenance' },
-  { id: 'backups', label: 'Backups' }, { id: 'updates', label: 'Updates' }, { id: 'health', label: 'Monitor health' },
+  { id: 'backups', label: 'Backups' }, { id: 'updates', label: 'Updates' }, { id: 'health', label: 'Monitor health', viewer: true },
+  { id: 'about', label: 'About', viewer: true },
+];
+
+const REPO_URL = 'https://github.com/jxburros/GWatch';
+const GWATCH_COPYRIGHT = 'Copyright (c) 2026 JX Holdings. Original developers: Jeffrey Guntly and Garrett Guntly.';
+// Go module dependencies from go.mod, with licenses confirmed by reading each
+// module's LICENSE file under $(go env GOMODCACHE).
+const DEPENDENCIES = [
+  { name: 'kardianos/service', use: 'runs GWatch as a background service on Windows, macOS and Linux', license: 'zlib' },
+  { name: 'prometheus-community/pro-bing', use: 'sends the ICMP pings used by ping checks', license: 'MIT' },
+  { name: 'modernc.org/sqlite', use: 'the embedded database that stores history, events and settings', license: 'BSD-3-Clause' },
+  { name: 'golang.org/x/crypto', use: 'password hashing for accounts and the access password', license: 'BSD-3-Clause' },
 ];
 
 export async function mount(root, ctx) {
-  const state = { tab: TABS.some((t) => t.id === ctx.params.tab) ? ctx.params.tab : 'general', settings: null, version: null, destroyed: false, panelRefresh: null };
+  const isAdmin = !!ctx.me?.isAdmin;
+  const visibleTabs = TABS.filter((t) => isAdmin || t.viewer);
+  const state = { tab: visibleTabs.some((t) => t.id === ctx.params.tab) ? ctx.params.tab : (isAdmin ? 'general' : 'health'), settings: null, version: null, destroyed: false, panelRefresh: null };
   if (ctx.params.tab === 'logs') { ctx.navigate('/audit/log'); return { destroy() {} }; }
   const nav = h('nav', { class: 'settings-nav', 'aria-label': 'Settings sections' });
   const panel = h('div', { class: 'settings-panel' });
-  const versionEl = h('div', { class: 'version-line' });
+  const versionLink = h('a', { href: '#/settings/about' });
+  const versionEl = h('div', { class: 'version-line' }, versionLink);
   root.append(h('div', { class: 'settings-layout' }, nav, h('div', null, panel, versionEl)));
 
-  api.get('/api/version').then((v) => { state.version = v; versionEl.textContent = `GWatch ${v.version || ''} · ${v.platform || ''}`; }).catch(() => {});
+  api.get('/api/version').then((v) => { state.version = v; versionLink.textContent = `GWatch ${v.version || ''} · ${v.platform || ''}`; }).catch(() => {});
 
   function renderNav() {
     clear(nav);
-    for (const t of TABS) nav.append(h('a', { href: `#/settings/${t.id}`, class: t.id === state.tab ? 'active' : '', 'aria-current': t.id === state.tab ? 'page' : null }, t.label));
+    for (const t of visibleTabs) nav.append(h('a', { href: `#/settings/${t.id}`, class: t.id === state.tab ? 'active' : '', 'aria-current': t.id === state.tab ? 'page' : null }, t.label));
   }
 
   async function loadSettings() { state.settings = await api.get('/api/settings'); return state.settings; }
@@ -38,17 +57,24 @@ export async function mount(root, ctx) {
   }
 
   async function renderTab() {
+    const t = visibleTabs.find((x) => x.id === state.tab) || visibleTabs[0];
+    state.tab = t.id;
     renderNav();
-    const t = TABS.find((x) => x.id === state.tab);
     ctx.setTitle('Settings', { subtitle: t.label });
     replace(panel, skeleton({ lines: 5 }));
     state.panelRefresh = null;
     try {
-      const fn = { general: tabGeneral, appearance: tabAppearance, network: tabNetwork, alerts: tabAlerts, automation: tabAutomation, retention: tabRetention, maintenance: tabMaintenance, backups: tabBackups, updates: tabUpdates, health: tabHealth }[state.tab];
+      const fn = { general: tabGeneral, appearance: tabAppearance, users: tabUsers, network: tabNetwork, alerts: tabAlerts, automation: tabAutomation, retention: tabRetention, maintenance: tabMaintenance, backups: tabBackups, updates: tabUpdates, health: tabHealth, about: tabAbout }[state.tab];
       const el = await fn();
-      if (!state.destroyed) replace(panel, el);
+      if (state.destroyed) return;
+      replace(panel, isAdmin ? el : h('div', { class: 'stack' }, readOnlyNotice(), el));
     } catch (e) { replace(panel, h('div', { class: 'card' }, emptyState({ icon: 'alert', title: 'Could not load settings', text: e.message }))); }
   }
+
+  // A viewer sees why most of this page is missing, rather than a page that
+  // just looks broken.
+  const readOnlyNotice = () => banner('info',
+    `You are signed in as a viewer${ctx.me?.name ? ` (${ctx.me.name})` : ''}. You can see this monitor but not change it — settings, accounts, automation and backups need an administrator account.`);
 
   const saveBar = (label = 'Save changes') => { const b = h('button', { class: 'btn btn-primary', type: 'button', onclick: () => saveSettings(b) }, icon('save'), label); return h('div', { class: 'form-actions' }, b); };
   const unit = (input, u) => h('div', { class: 'input-with-unit' }, input, h('span', { class: 'unit' }, u));
@@ -79,8 +105,9 @@ export async function mount(root, ctx) {
 
   /* ---------- Appearance ---------- */
   async function tabAppearance() {
-    const s = state.settings || await loadSettings();
-    const g = s.general;
+    // A viewer cannot read settings, so their theme choice is theirs alone:
+    // it starts from what /api/me reported and is remembered by this browser.
+    const g = isAdmin ? (state.settings || await loadSettings()).general : { theme: ctx.me?.theme || 'dark', accentColor: ctx.me?.accentColor || '#7c6cff' };
     const themes = [
       { value: 'dark', label: 'Dark', desc: 'Low-glare, for wall displays and night owls.', bg: '#0a0c10', card: '#10131a', fg: '#e9edf2' },
       { value: 'light', label: 'Light', desc: 'Bright, high contrast on white.', bg: '#eef1f5', card: '#ffffff', fg: '#10151d' },
@@ -106,10 +133,14 @@ export async function mount(root, ctx) {
     };
     renderSwatches();
     return h('form', { class: 'stack', onsubmit: (e) => { e.preventDefault(); saveSettings(); } },
-      h('section', { class: 'card' }, h('h2', null, 'Theme'), h('p', { class: 'lead' }, 'Changes apply immediately; press Save to keep them for every browser that opens this GWatch.'), themeWrap),
+      h('section', { class: 'card' }, h('h2', null, 'Theme'),
+        h('p', { class: 'lead' }, isAdmin
+          ? 'Changes apply immediately; press Save to keep them for every browser that opens this GWatch.'
+          : 'Changes apply immediately and are remembered by this browser. Only an administrator can change the theme for everyone.'),
+        themeWrap),
       h('section', { class: 'card' }, h('h2', null, 'Accent colour'), h('p', { class: 'lead' }, 'Used for buttons, highlights, the active navigation item and the first chart line.'), swatches,
         h('div', { class: 'row', style: { marginTop: '14px', gap: '8px' } }, h('button', { class: 'btn btn-primary', type: 'button' }, 'Primary button'), h('button', { class: 'btn', type: 'button' }, 'Button'), h('span', { class: 'chip active' }, 'Active chip'), h('a', { href: '#/settings/appearance' }, 'A link')),
-        h('hr', { class: 'divider' }), saveBar()));
+        isAdmin ? h('hr', { class: 'divider' }) : null, isAdmin ? saveBar() : null));
   }
 
   /* ---------- Network access ---------- */
@@ -144,11 +175,15 @@ export async function mount(root, ctx) {
     return h('form', { class: 'stack', onsubmit: (e) => { e.preventDefault(); saveBtn.click(); } },
       h('section', { class: 'card' }, h('h2', null, 'Remote access'), h('p', { class: 'lead' }, 'By default the interface is only served on this computer. Turn this on to open it from a phone, tablet or another PC on the same network. GWatch is never exposed to the internet by itself.'),
         h('div', { class: 'stack' }, remote,
-          h('div', { class: 'form-grid' }, field({ label: 'Access password', input: h('div', { class: 'input-with-unit' }, pw, clearPw), help: 'Other devices are asked for it (any user name). This computer never is.' })),
           info?.listenAddress ? h('p', { class: 'note' }, 'Listening on ', h('code', null, info.listenAddress), info.remoteAccess ? ' — reachable from the network.' : ' — this computer only.', info.restartNeeded ? h('span', { class: 'text-down' }, ' Rebinding failed; a restart is needed.') : null) : null,
         ),
         h('hr', { class: 'divider' }), h('div', { class: 'form-actions' }, saveBtn)),
       h('section', { class: 'card' }, h('h2', null, 'Open GWatch from another device'), h('p', { class: 'lead' }, 'Use one of these addresses. A firewall on this computer may need to allow the port.'), urls),
+      h('section', { class: 'card' }, h('h2', null, 'Legacy: shared access password'),
+        h('p', { class: 'lead' }, 'One password, no user name, the same for everyone — GWatch’s original way of keeping other devices out. User accounts under ', h('a', { href: '#/settings/users' }, 'Users & access'), ' replace it: they give each person their own password, a viewer role that cannot change anything, and a name in the audit log.'),
+        h('p', { class: 'note' }, 'It still works, so nothing breaks on upgrade, and scripts using it keep going. Leave it empty once you have accounts.'),
+        h('div', { class: 'form-grid' }, field({ label: 'Access password', input: h('div', { class: 'input-with-unit' }, pw, clearPw), help: 'Other devices are asked for it (any user name). This computer is not, unless you require a sign-in here as well.' })),
+        h('hr', { class: 'divider' }), saveBar()),
       h('section', { class: 'card' }, h('h2', null, 'Command-line alternative'), h('p', { class: 'note' }, 'You can also start the service with ', h('code', null, '--listen 0.0.0.0:8080'), ' (or set ', h('code', null, 'GWATCH_LISTEN'), ') to bind every interface regardless of this setting.')));
   }
 
@@ -215,14 +250,24 @@ export async function mount(root, ctx) {
     };
     const render = (eps, trs) => {
       clear(wrap);
+      // /hook/ URLs are not covered by the access password, so an endpoint
+      // without a token is open to everyone who can reach this port.
+      const open = (eps || []).filter((e) => !e.token);
+      if (open.length) {
+        wrap.append(banner('warn', h('span', null, h('b', null, open.length === 1 ? 'One custom endpoint has no token: ' : `${open.length} custom endpoints have no token: `),
+          ...open.flatMap((e, i) => [i ? ', ' : '', h('code', null, `/hook/${e.slug}`)]),
+          '. Anyone who can reach this computer on the network can call them.'), {
+          actions: open.map((e) => h('button', { class: 'btn btn-sm admin-only', type: 'button', onclick: async () => { const saved = await openEndpointEditor(e, { nodes }); if (saved) load(); } }, icon('edit'), open.length === 1 ? 'Edit' : `Edit ${e.name}`)),
+        }));
+      }
       const epCard = h('section', { class: 'card' },
         h('div', { class: 'card-head' }, h('div', null, h('h2', null, 'Custom endpoints'), h('p', { class: 'lead', style: { marginBottom: 0 } }, 'URLs other systems can call to make GWatch do something: run a node\'s checks after a reboot, run a script, call a webhook or pull a git repository. Each lives at ', h('code', null, '/hook/<name>'), '.')),
-          h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => { const saved = await openEndpointEditor(null, { nodes }); if (saved) load(); } }, icon('plus'), 'New endpoint')));
+          h('button', { class: 'btn btn-primary admin-only', type: 'button', onclick: async () => { const saved = await openEndpointEditor(null, { nodes }); if (saved) load(); } }, icon('plus'), 'New endpoint')));
       if (!eps.length) epCard.append(emptyState({ icon: 'webhook', title: 'No endpoints yet', text: 'Create one and call its URL from a script, a router, Home Assistant, a CI job — anything that can make an HTTP request.', compact: true }));
       for (const e of eps) epCard.append(endpointRow(e, { nodes, onChange: load }));
       const trCard = h('section', { class: 'card' },
         h('div', { class: 'card-head' }, h('div', null, h('h2', null, 'Triggers on nodes'), h('p', { class: 'lead', style: { marginBottom: 0 } }, 'Triggers run an action when something happens on a node. They are created on each node\'s page; this is the overview.')),
-          nodes.length ? h('button', { class: 'btn', type: 'button', onclick: async () => {
+          nodes.length ? h('button', { class: 'btn admin-only', type: 'button', onclick: async () => {
             const sel = h('select', null, nodes.map((n) => h('option', { value: n.id }, n.name)));
             const ok = await confirmDialog({ title: 'New trigger', message: 'Which node should it watch?', confirmLabel: 'Continue', body: h('div', { class: 'field' }, sel) });
             if (!ok) return;
@@ -370,17 +415,22 @@ export async function mount(root, ctx) {
 
   /* ---------- Backups ---------- */
   async function tabBackups() {
+    const s = state.settings || await loadSettings();
+    s.backups = s.backups || { enabled: false, intervalHours: 24, keep: 7, includeHistory: true, password: '' };
+    const bk = s.backups;
     const listCard = h('section', { class: 'card' });
     const statusLine = h('div');
+    const nextLine = h('div');
     const load = async () => {
       const data = await api.get('/api/backups');
       render(data || { backups: [], status: {} });
     };
     const render = (data) => {
-      clear(listCard); clear(statusLine);
+      clear(listCard); clear(statusLine); clear(nextLine);
       const st = data.status || {};
       if (st.lastBackupAt) statusLine.append(banner(st.lastBackupOk ? 'up' : 'down', h('span', null, h('b', null, st.lastBackupOk ? 'Last backup succeeded ' : 'Last backup failed '), `${relTime(st.lastBackupAt)}${st.lastBackupFile ? ' · ' + st.lastBackupFile : ''}${st.lastError ? ' · ' + st.lastError : ''}`, st.lastRestoreAt ? ` · last restore ${relTime(st.lastRestoreAt)}` : '')));
       else statusLine.append(banner('info', 'No backup has been made yet. Create one so you can move to a new computer without re-creating every node.'));
+      if (bk.enabled) nextLine.append(banner('info', data.nextScheduledAt ? h('span', null, h('b', null, 'Next scheduled backup: '), relTime(data.nextScheduledAt)) : 'Automatic backups are enabled; the next one runs once saved.'));
       listCard.append(h('div', { class: 'card-head' }, h('div', null, h('h2', null, 'Backups on this computer'), h('p', { class: 'lead', style: { marginBottom: 0 } }, data.dir ? h('span', { class: 'mono' }, data.dir) : 'Encrypted archives stored locally.'))));
       if (!data.backups?.length) { listCard.append(emptyState({ icon: 'save', title: 'No backups yet', compact: true })); return; }
       for (const b of data.backups) {
@@ -434,9 +484,30 @@ export async function mount(root, ctx) {
       try { const r = await api.post('/api/backups/restore-existing', { fileName: b.fileName, password: pwIn.value, includeHistory: hist.input.checked }); toast(`Restored ${plural(r.nodes ?? 0, 'node')} and ${plural(r.checks ?? 0, 'check')}`, { kind: 'success' }); load(); }
       catch (e) { toast(`Restore failed: ${e.message}`, { kind: 'error' }); }
     }
+    const autoEnabled = toggle({ label: 'Create backups automatically', checked: !!bk.enabled, onChange: (v) => { bk.enabled = v; } });
+    const autoInterval = numField(bk, 'intervalHours', 'Every', { unitLabel: 'hours', min: 1 });
+    const autoKeep = numField(bk, 'keep', 'Keep the newest', { unitLabel: 'archives', min: 1 });
+    const autoHist = checkbox({ label: 'Include performance history and events (bigger archives)', checked: !!bk.includeHistory, onChange: (v) => { bk.includeHistory = v; } });
+    const autoPw = h('input', { type: 'password', value: bk.password || '', autocomplete: 'new-password', placeholder: bk.password ? '' : 'Required to enable automatic backups', oninput: () => { bk.password = autoPw.value; } });
+    const autoPw2 = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'Repeat the password (leave blank to keep the saved one)' });
+    const autoSaveBtn = h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
+      if (autoPw2.value && autoPw.value !== autoPw2.value) { toast('The passwords do not match', { kind: 'error' }); autoPw2.focus(); return; }
+      if (bk.enabled && !bk.password) { toast('A password is required to enable automatic backups', { kind: 'error' }); autoPw.focus(); return; }
+      const done = busy(autoSaveBtn, 'Saving…');
+      await saveSettings();
+      done();
+      load();
+    } }, icon('save'), 'Save automatic backup settings');
+    const autoCard = h('section', { class: 'card' }, h('h2', null, 'Automatic backups'), h('p', { class: 'lead' }, 'Runs unattended in the background on the schedule below, using the same encrypted format as a manual backup. Archives older than the number to keep are deleted automatically.'),
+      autoEnabled,
+      h('div', { class: 'form-grid', style: { marginTop: '12px' } },
+        autoInterval, autoKeep, h('div', { class: 'span-2' }, autoHist),
+        field({ label: 'Password', input: autoPw, help: bk.password ? 'A password is already saved; leave blank to keep it.' : 'Backups are always encrypted, so a password is required to enable this.' }),
+        field({ label: 'Confirm password', input: autoPw2 })),
+      h('div', { class: 'form-actions', style: { marginTop: '12px' } }, autoSaveBtn), nextLine);
     await load();
     state.panelRefresh = load;
-    return h('div', { class: 'stack' }, statusLine, createCard, listCard, restoreCard);
+    return h('div', { class: 'stack' }, statusLine, createCard, autoCard, listCard, restoreCard);
   }
 
   /* ---------- Updates ---------- */
@@ -525,10 +596,241 @@ export async function mount(root, ctx) {
     return wrap;
   }
 
+  /* ---------- Users & access ---------- */
+  async function tabUsers() {
+    const wrap = h('div', { class: 'stack' });
+    const render = async () => {
+      const [users, keys] = await Promise.all([api.get('/api/users'), api.get('/api/apikeys')]);
+      const s = state.settings || await loadSettings();
+      const admins = users.filter((u) => u.role === 'admin').length;
+      replace(wrap, usersCard(users, admins, render), localLoginCard(s, admins), apiKeysCard(keys, render), scopesCard());
+    };
+    await render();
+    state.panelRefresh = render;
+    return wrap;
+  }
+
+  function usersCard(users, admins, reload) {
+    const rows = h('div', { class: 'stack-joined' });
+    for (const u of users) {
+      // The server refuses to remove or demote the last administrator; the
+      // controls say so up front instead of letting the person find out.
+      const isLastAdmin = u.role === 'admin' && admins <= 1;
+      const role = selectInput({
+        options: [{ value: 'admin', label: 'Administrator' }, { value: 'viewer', label: 'Viewer' }],
+        value: u.role, disabled: isLastAdmin,
+        title: isLastAdmin ? 'This is the only administrator account' : null,
+        onchange: async () => {
+          try {
+            await api.put(`/api/users/${u.id}`, { role: role.value });
+            toast(`${u.username} is now ${role.value === 'admin' ? 'an administrator' : 'a viewer'}`, { kind: 'success' });
+            await reload();
+          } catch (e) { toast(e.message, { kind: 'error' }); role.value = u.role; }
+        },
+      });
+      rows.append(h('div', { class: 'access-row' },
+        h('div', null,
+          h('div', { class: 'a-name' }, icon('user'), h('b', null, u.username)),
+          h('div', { class: 'a-meta' },
+            h('span', null, `Added ${dateTime(u.createdAt)}`),
+            h('span', null, u.lastLoginAt ? `Last signed in ${relTime(u.lastLoginAt)}` : 'Never signed in'))),
+        h('div', { class: 'row', style: { gap: '6px' } },
+          role,
+          h('button', { class: 'btn btn-sm', type: 'button', onclick: () => resetPassword(u, reload) }, 'Reset password'),
+          h('button', {
+            class: 'btn btn-sm btn-danger', type: 'button', disabled: isLastAdmin,
+            title: isLastAdmin ? 'The only administrator account cannot be deleted' : `Delete ${u.username}`,
+            onclick: () => deleteUser(u, reload),
+          }, icon('trash'))),
+      ));
+    }
+    return h('section', { class: 'card' },
+      h('div', { class: 'card-head' }, h('h2', null, 'User accounts'),
+        h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => addUser(reload) }, icon('plus'), 'Add user')),
+      h('p', { class: 'lead' }, 'Administrators can change anything. Viewers see dashboards, charts, history, incidents and the audit log, and are refused — with an explanation — on every change.'),
+      users.length ? rows : emptyState({ icon: 'users', title: 'No accounts yet', text: 'Without accounts, anyone using this computer has full access and nobody else has any. Add an administrator to sign in from other devices.', compact: true }));
+  }
+
+  async function addUser(reload) {
+    const name = textInput({ autocomplete: 'off', placeholder: 'e.g. pat' });
+    const pw = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'At least 8 characters' });
+    const role = selectInput({ options: [{ value: 'viewer', label: 'Viewer — can look, cannot change' }, { value: 'admin', label: 'Administrator — full access' }], value: 'viewer' });
+    const ok = await confirmDialog({
+      title: 'Add a user',
+      body: h('div', { class: 'stack' },
+        field({ label: 'User name', input: name }),
+        field({ label: 'Password', input: pw, help: 'Choose something long. There is no reset by email; an administrator resets it here.' }),
+        field({ label: 'Role', input: role })),
+      confirmLabel: 'Create account',
+    });
+    if (!ok) return;
+    try {
+      await api.post('/api/users', { username: name.value.trim(), password: pw.value, role: role.value });
+      toast(`Account created for ${name.value.trim()}`, { kind: 'success' });
+      await reload();
+    } catch (e) { toast(e.message, { kind: 'error' }); }
+  }
+
+  async function resetPassword(u, reload) {
+    const pw = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'At least 8 characters' });
+    const ok = await confirmDialog({
+      title: `Reset the password for ${u.username}`,
+      body: h('div', { class: 'stack' },
+        h('p', { class: 'lead' }, 'Every browser signed in as this account is signed out.'),
+        field({ label: 'New password', input: pw })),
+      confirmLabel: 'Reset password',
+    });
+    if (!ok) return;
+    try { await api.put(`/api/users/${u.id}`, { password: pw.value }); toast('Password reset', { kind: 'success' }); await reload(); }
+    catch (e) { toast(e.message, { kind: 'error' }); }
+  }
+
+  async function deleteUser(u, reload) {
+    const ok = await confirmDialog({ title: `Delete ${u.username}?`, message: 'The account and its sessions are removed. Anything it set up stays, and the audit log keeps its name.', confirmLabel: 'Delete account', danger: true });
+    if (!ok) return;
+    try { await api.del(`/api/users/${u.id}`); toast('Account deleted', { kind: 'success' }); await reload(); }
+    catch (e) { toast(e.message, { kind: 'error' }); }
+  }
+
+  function localLoginCard(s, admins) {
+    const g = s.general;
+    const sw = toggle({
+      label: 'Require sign-in on this computer too',
+      checked: !!g.requireLoginLocally,
+      disabled: admins === 0,
+      onChange: async (v) => {
+        g.requireLoginLocally = v;
+        const saved = await saveSettings();
+        g.requireLoginLocally = !!saved?.general?.requireLoginLocally;
+        sw.input.checked = g.requireLoginLocally;
+      },
+    });
+    return h('section', { class: 'card' }, h('h2', null, 'Sign-in on this computer'),
+      h('p', { class: 'lead' }, 'A browser on the computer GWatch runs on is treated as an administrator without signing in — that is what makes a fresh install usable straight away. Turn this on once you have accounts and want everyone, here included, to sign in.'),
+      sw,
+      admins === 0
+        ? h('p', { class: 'note' }, 'Create an administrator account first — otherwise this would lock you out of your own monitor.')
+        : h('p', { class: 'note' }, 'Keep a password manager entry for at least one administrator. If every password is lost, the way back in is to restore a backup taken before this was turned on.'));
+  }
+
+  function apiKeysCard(keys, reload) {
+    const rows = h('div', { class: 'stack-joined' });
+    for (const k of keys) {
+      rows.append(h('div', { class: `access-row ${k.revokedAt ? 'revoked' : ''}` },
+        h('div', null,
+          h('div', { class: 'a-name' }, icon('key'), h('b', null, k.name),
+            h('span', { class: 'chip' }, k.scope === 'readwrite' ? 'Read & write' : 'Read-only'),
+            k.revokedAt ? h('span', { class: 'chip' }, 'Revoked') : null),
+          h('div', { class: 'a-meta' },
+            h('code', null, `${k.prefix}…`),
+            h('span', null, `Created ${dateTime(k.createdAt)}${k.createdBy ? ` by ${k.createdBy}` : ''}`),
+            h('span', null, k.lastUsedAt ? `Last used ${relTime(k.lastUsedAt)}` : 'Never used'),
+            k.revokedAt ? h('span', null, `Revoked ${relTime(k.revokedAt)}`) : null)),
+        k.revokedAt ? h('span', { class: 'muted' }, '—') : h('button', { class: 'btn btn-sm btn-danger', type: 'button', onclick: () => revokeKey(k, reload) }, 'Revoke'),
+      ));
+    }
+    return h('section', { class: 'card' },
+      h('div', { class: 'card-head' }, h('h2', null, 'API keys'),
+        h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => createKey(reload) }, icon('plus'), 'New API key')),
+      h('p', { class: 'lead' }, 'For scripts, home-automation systems and read-only dashboards away from home. A key is shown once, when you create it.'),
+      keys.length ? rows : emptyState({ icon: 'key', title: 'No API keys', text: 'Create one when something other than a browser needs to read this monitor.', compact: true }));
+  }
+
+  async function createKey(reload) {
+    const name = textInput({ autocomplete: 'off', placeholder: 'e.g. Home Assistant' });
+    const scope = selectInput({
+      options: [
+        { value: 'read', label: 'Read-only — query data, change nothing' },
+        { value: 'readwrite', label: 'Read & write — may also create and change nodes and checks' },
+      ], value: 'read',
+    });
+    const ok = await confirmDialog({
+      title: 'Create an API key',
+      body: h('div', { class: 'stack' },
+        field({ label: 'Name', input: name, help: 'So you can recognise it later and revoke the right one.' }),
+        field({ label: 'Scope', input: scope, help: 'Start read-only. No key of either scope can reach settings, backups, updates, accounts or automation.' })),
+      confirmLabel: 'Create key',
+    });
+    if (!ok) return;
+    try {
+      const res = await api.post('/api/apikeys', { name: name.value.trim(), scope: scope.value });
+      await reload();
+      showKeyOnce(res.key);
+    } catch (e) { toast(e.message, { kind: 'error' }); }
+  }
+
+  function showKeyOnce(key) {
+    const copy = h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
+      try { await navigator.clipboard.writeText(key); toast('Key copied', { kind: 'success' }); }
+      catch { toast('Could not copy — select the key and copy it by hand.', { kind: 'error' }); }
+    } }, icon('copy'), 'Copy key');
+    openModal({
+      title: 'Your new API key',
+      body: h('div', { class: 'stack' },
+        h('p', { class: 'lead' }, 'Copy it now. GWatch keeps only a fingerprint of it, so it cannot be shown again — if you lose it, revoke it and make another.'),
+        h('div', { class: 'key-reveal' }, key),
+        h('p', { class: 'note' }, 'Send it as ', h('code', null, 'Authorization: Bearer <key>'), ' or ', h('code', null, 'X-API-Key: <key>'), '.')),
+      footer: copy,
+    });
+  }
+
+  async function revokeKey(k, reload) {
+    const ok = await confirmDialog({ title: `Revoke ${k.name}?`, message: 'Anything still using this key stops working immediately. This cannot be undone.', confirmLabel: 'Revoke key', danger: true });
+    if (!ok) return;
+    try { await api.del(`/api/apikeys/${k.id}`); toast('Key revoked', { kind: 'success' }); await reload(); }
+    catch (e) { toast(e.message, { kind: 'error' }); }
+  }
+
+  function scopesCard() {
+    const item = (t, d) => h('div', null, h('b', null, t), h('div', { class: 'muted', style: { fontSize: '13px' } }, d));
+    return h('section', { class: 'card' }, h('h2', null, 'What a key can and cannot do'),
+      h('div', { class: 'stack-sm', style: { marginTop: '8px' } },
+        item('Read-only', 'Overview, status, nodes and checks, history and charts, incidents, dashboards, and the CSV exports of history, results and events.'),
+        item('Read & write', 'Everything above, plus creating, changing, deleting, enabling, running and silencing nodes and checks, notes, maintenance windows, dashboards and charts.'),
+        item('Never, whatever the scope', 'Settings, backups and restores, updates, user accounts, API keys, the configuration export, the service log, and anything that runs a trigger, a custom endpoint or an action on this computer.')),
+      h('p', { class: 'note' }, 'That last line is deliberate: a key is for reading a monitor from elsewhere, not for administering the machine it runs on. ', h('code', null, 'docs/REMOTE-ACCESS.md'), ' covers how to reach GWatch from outside your network safely.'));
+  }
+
+  /* ---------- About ---------- */
+  async function tabAbout() {
+    const v = state.version || await api.get('/api/version').catch(() => null);
+    const versionText = v?.version ? `v${v.version}` : 'unknown';
+    const platformText = v?.platform || 'unknown';
+    return h('div', { class: 'stack' },
+      h('section', { class: 'card' },
+        h('div', { style: { display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' } },
+          h('img', { src: 'logo.svg', alt: 'GWatch logo', width: '64', height: '64' }),
+          h('div', null,
+            h('h2', { style: { marginBottom: '2px' } }, 'GWatch'),
+            h('p', { class: 'lead', style: { margin: 0 } }, 'A self-hosted monitor for the machines, sites and services on your own network.'),
+            h('div', { class: 'muted', style: { marginTop: '4px' } }, `${versionText} · ${platformText}`))),
+        h('div', { class: 'health-cards', style: { marginTop: '14px' } },
+          hcard(versionText, 'Installed version'), hcard(platformText, 'Platform'))),
+      h('section', { class: 'card' },
+        h('h2', null, 'Copyright & credit'),
+        h('p', null, GWATCH_COPYRIGHT),
+        h('p', { class: 'muted' }, 'This notice, the GWatch name and the logo above are required attribution under the project license (see below) and may not be removed or obscured in a copy or derivative of this software.')),
+      h('section', { class: 'card' },
+        h('h2', null, 'Links'),
+        h('div', { class: 'stack-sm' },
+          h('div', null, h('a', { href: REPO_URL, target: '_blank', rel: 'noopener' }, 'GitHub repository')),
+          h('div', null, h('a', { href: `${REPO_URL}/releases`, target: '_blank', rel: 'noopener' }, 'Releases')),
+          h('div', null, h('a', { href: `${REPO_URL}/tree/main/docs`, target: '_blank', rel: 'noopener' }, 'Documentation')),
+          h('div', null, h('a', { href: `${REPO_URL}/blob/main/LICENSE`, target: '_blank', rel: 'noopener' }, 'LICENSE')),
+          h('div', null, h('a', { href: `${REPO_URL}/blob/main/TRADEMARKS.md`, target: '_blank', rel: 'noopener' }, 'TRADEMARKS.md')))),
+      h('section', { class: 'card' },
+        h('h2', null, 'License summary'),
+        h('p', null, 'GWatch is source-available under the GWatch Community License 1.0. You are free to use, modify and distribute it, including for commercial deployment and support work. You may not resell it unmodified as a competing product, and every copy must keep the required attribution above. This summary is informal — the ', h('a', { href: `${REPO_URL}/blob/main/LICENSE`, target: '_blank', rel: 'noopener' }, 'LICENSE'), ' file is what actually governs.')),
+      h('section', { class: 'card' },
+        h('h2', null, 'Acknowledgements'),
+        h('p', { class: 'lead' }, 'GWatch is written in Go and depends on a small number of open-source libraries:'),
+        h('div', { class: 'stack-sm' }, ...DEPENDENCIES.map((d) => h('div', null, h('b', null, d.name), h('span', { class: 'tag', style: { marginLeft: '8px' } }, d.license), h('div', { class: 'muted', style: { fontSize: '13px' } }, d.use))))));
+  }
+
   await renderTab();
   return {
     refresh: () => state.panelRefresh && state.panelRefresh(),
-    async update(params) { const tab = TABS.some((t) => t.id === params.tab) ? params.tab : (params.tab === 'logs' ? 'health' : 'general'); if (tab !== state.tab) { state.tab = tab; await renderTab(); } return true; },
+    async update(params) { const tab = visibleTabs.some((t) => t.id === params.tab) ? params.tab : (params.tab === 'logs' ? 'health' : visibleTabs[0].id); if (tab !== state.tab) { state.tab = tab; await renderTab(); } return true; },
     destroy() { state.destroyed = true; },
   };
 }

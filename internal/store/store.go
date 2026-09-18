@@ -16,22 +16,39 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jxburros/GWatch/internal/secrets"
+
 	_ "modernc.org/sqlite"
 )
+
+// KeyFileName is the name of the machine-local secrets key file kept next to
+// the database file.
+const KeyFileName = "gwatch.key"
 
 // ErrNotFound is returned when a row does not exist.
 var ErrNotFound = errors.New("not found")
 
 // Store wraps the SQLite database.
 type Store struct {
-	path   string
-	writer *sql.DB
-	reader *sql.DB
-	wmu    sync.Mutex
+	path    string
+	writer  *sql.DB
+	reader  *sql.DB
+	wmu     sync.Mutex
+	secrets *secrets.Box
+
+	secmu      sync.RWMutex
+	secretsErr error
 }
 
 // Open opens (creating if needed) the database at path and applies the schema.
+// Secrets stored in the settings row are encrypted with the key file
+// "gwatch.key" kept alongside the database, which is created if missing.
 func Open(path string) (*Store, error) {
+	return OpenWithKeyFile(path, filepath.Join(filepath.Dir(path), KeyFileName))
+}
+
+// OpenWithKeyFile is Open with an explicit path for the secrets key file.
+func OpenWithKeyFile(path, keyFile string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
@@ -54,12 +71,38 @@ func Open(path string) (*Store, error) {
 	reader.SetMaxIdleConns(4)
 	reader.SetConnMaxLifetime(0)
 
-	s := &Store{path: path, writer: writer, reader: reader}
+	box, err := secrets.Load(keyFile)
+	if err != nil {
+		writer.Close()
+		reader.Close()
+		return nil, fmt.Errorf("load secrets key: %w", err)
+	}
+
+	s := &Store{path: path, writer: writer, reader: reader, secrets: box}
 	if err := s.migrate(); err != nil {
 		s.Close()
 		return nil, err
 	}
+	if err := s.migrateSecrets(context.Background()); err != nil {
+		s.Close()
+		return nil, err
+	}
 	return s, nil
+}
+
+// SecretsHealthy reports the last secrets problem seen while loading settings
+// (for example a key file that cannot decrypt the stored values). It returns
+// nil while everything decrypts cleanly.
+func (s *Store) SecretsHealthy() error {
+	s.secmu.RLock()
+	defer s.secmu.RUnlock()
+	return s.secretsErr
+}
+
+func (s *Store) setSecretsErr(err error) {
+	s.secmu.Lock()
+	s.secretsErr = err
+	s.secmu.Unlock()
 }
 
 // Path returns the database file path.
@@ -265,11 +308,53 @@ CREATE TABLE IF NOT EXISTS dashboards (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'viewer',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_login_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  remote TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+
+CREATE TABLE IF NOT EXISTS api_keys (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  prefix TEXT NOT NULL DEFAULT '',
+  key_hash TEXT NOT NULL UNIQUE,
+  scope TEXT NOT NULL DEFAULT 'read',
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  last_used_at TEXT,
+  revoked_at TEXT
+);
 `
+
+// addedColumns lists columns added to tables that older databases created
+// before the column existed. CREATE TABLE IF NOT EXISTS leaves such a table
+// alone, so each one is added with ALTER TABLE when PRAGMA table_info shows it
+// missing. Adding an entry here is the way to extend an existing table.
+var addedColumns = []struct{ table, column, ddl string }{
+	{"endpoints", "allow_no_token", "ALTER TABLE endpoints ADD COLUMN allow_no_token INTEGER NOT NULL DEFAULT 0"},
+	{"events", "actor", "ALTER TABLE events ADD COLUMN actor TEXT NOT NULL DEFAULT ''"},
+}
 
 func (s *Store) migrate() error {
 	ctx := context.Background()
-	return s.WriteTx(ctx, func(tx *sql.Tx) error {
+	if err := s.WriteTx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, schema); err != nil {
 			return fmt.Errorf("apply schema: %w", err)
 		}
@@ -282,7 +367,54 @@ func (s *Store) migrate() error {
 			_, err = tx.ExecContext(ctx, "INSERT INTO schema_version(version) VALUES (1)")
 		}
 		return err
-	})
+	}); err != nil {
+		return err
+	}
+	return s.addMissingColumns(ctx)
+}
+
+func (s *Store) addMissingColumns(ctx context.Context) error {
+	cache := map[string]map[string]bool{}
+	for _, c := range addedColumns {
+		have, ok := cache[c.table]
+		if !ok {
+			cols, err := s.tableColumns(ctx, c.table)
+			if err != nil {
+				return fmt.Errorf("inspect %s: %w", c.table, err)
+			}
+			cache[c.table] = cols
+			have = cols
+		}
+		if len(have) == 0 || have[c.column] {
+			continue // the table does not exist, or the column is already there
+		}
+		if _, err := s.Exec(ctx, c.ddl); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return fmt.Errorf("add %s.%s: %w", c.table, c.column, err)
+		}
+		have[c.column] = true
+	}
+	return nil
+}
+
+func (s *Store) tableColumns(ctx context.Context, table string) (map[string]bool, error) {
+	// PRAGMA takes no bound parameters; table names here are compile-time
+	// constants from addedColumns, never user input.
+	rows, err := s.reader.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	have := map[string]bool{}
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			return nil, err
+		}
+		have[name] = true
+	}
+	return have, rows.Err()
 }
 
 // ---- helpers ----

@@ -19,6 +19,7 @@ function defaultCheck(type, settings) {
     case 'dns': base.config = { recordType: 'A' }; break;
     case 'keyword': base.config = { method: 'GET', keyword: '', followRedirects: true }; break;
     case 'json': base.config = { method: 'GET', jsonPath: '', jsonExpected: '' }; break;
+    case 'custom': base.config = { command: '', workDir: '', env: {} }; base.name = 'Custom script'; break;
   }
   return base;
 }
@@ -282,6 +283,40 @@ export async function mount(root, ctx) {
         const server = textInput({ value: cfg.dnsServer || '', placeholder: 'System resolver', oninput: () => { cfg.dnsServer = server.value; } });
         return h('div', { class: 'form-grid' }, targetField(c, err, 'Hostname override', d.host ? `Uses node host (${d.host})` : 'example.com'), field({ label: 'Record type', input: rt }), field({ label: 'Expected values', input: expected, help: 'Optional. Every resolved value must be in this list.' }), field({ label: 'DNS server', input: server, help: 'Optional resolver host[:port], e.g. 192.168.1.2 or 1.1.1.1:53.' }), ...warnFields(c));
       }
+      case 'custom': {
+        const cmd = textarea({ value: cfg.command || '', class: 'code', rows: 2, placeholder: "e.g. /usr/local/bin/check-disk.sh {{target}}", oninput: () => { cfg.command = cmd.value; } });
+        const workdir = textInput({ value: cfg.workDir || '', placeholder: "Optional — defaults to the service's own working directory", oninput: () => { cfg.workDir = workdir.value; } });
+        const envWrap = h('div', { class: 'kv-rows' });
+        const renderEnv = () => {
+          clear(envWrap);
+          const entries = Object.entries(cfg.env || {});
+          entries.forEach(([k, v]) => {
+            const kIn = textInput({ value: k, placeholder: 'NAME', class: 'mono', 'aria-label': 'Environment variable name' });
+            const vIn = textInput({ value: v, placeholder: 'value', 'aria-label': 'Environment variable value' });
+            const commit = () => { const next = {}; envWrap.querySelectorAll('.kv-row').forEach((r) => { const [a, b] = r.querySelectorAll('input'); if (a.value.trim()) next[a.value.trim()] = b.value; }); cfg.env = next; };
+            kIn.addEventListener('change', commit); vIn.addEventListener('input', commit);
+            envWrap.append(h('div', { class: 'kv-row' }, kIn, vIn, h('button', { class: 'btn btn-sm icon-btn', type: 'button', 'aria-label': 'Remove variable', onclick: () => { const nv = { ...cfg.env }; delete nv[k]; cfg.env = nv; renderEnv(); } }, icon('x'))));
+          });
+          envWrap.append(h('div', null, h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { cfg.env = { ...(cfg.env || {}), [`VAR_${entries.length + 1}`]: '' }; renderEnv(); } }, icon('plus'), 'Add variable')));
+        };
+        renderEnv();
+        return h('div', { class: 'stack' },
+          h('div', { class: 'banner banner-warn' }, icon('alert'), h('div', null,
+            h('b', null, 'Runs on this machine. '), "The command executes with the GWatch service's own permissions. Only trusted administrators should be able to create or edit a custom check.")),
+          h('div', { class: 'form-grid' },
+            targetField(c, err, 'Target', 'Passed as {{target}} and GWATCH_TARGET', 'Optional. Passed to the command as the GWATCH_TARGET environment variable, and substituted for {{target}} in any argument that contains it.'),
+            field({ label: 'Command', input: cmd, cls: 'span-2', error: err.command, help: "No shell is used: the command line is split on whitespace (quote with ' or \" to keep a value together, e.g. a path with spaces). Use sh -c '...' (or cmd /C ... on Windows) explicitly if you need pipes, globbing or environment expansion." }),
+            field({ label: 'Working directory', input: workdir }),
+            field({ label: 'Environment variables', input: envWrap, cls: 'span-2' }),
+          ),
+          h('details', { class: 'collapsible' },
+            h('summary', null, icon('chevronRight'), 'Output contract'),
+            h('div', { class: 'stack-sm', style: { paddingTop: '8px' } },
+              h('p', { class: 'note' }, 'Exit code 0 = up, 2 = degraded, anything else = down. The check is killed and reported "timed out" if it runs past the timeout above.'),
+              h('p', { class: 'note' }, 'Stdout may contain lines of the form ', h('code', null, 'key=value'), ' (case-insensitive keys): ', h('code', null, 'status=up|degraded|down'), ' overrides the exit code, ', h('code', null, 'message=...'), ' is shown as the result message, ', h('code', null, 'latency_ms=<number>'), ' sets the charted latency, and ', h('code', null, 'error=...'), ' sets the error text. Any other output (stdout and stderr, up to 8 KiB) is kept and shown with the result.'),
+            )),
+        );
+      }
       default: return h('p', { class: 'note' }, 'No settings for this type.');
     }
   }
@@ -332,6 +367,7 @@ export async function mount(root, ctx) {
       if (c.type === 'cert' && c.config.port && (c.config.port < 1 || c.config.port > 65535)) e.port = 'Port must be 1–65535.';
       if (c.type === 'keyword' && !(c.config.keyword || '').trim()) e.keyword = 'Enter the text to look for.';
       if (c.type === 'json' && !(c.config.jsonPath || '').trim()) e.jsonPath = 'Enter a JSON path.';
+      if (c.type === 'custom' && !(c.config.command || '').trim()) e.command = 'Enter a command to run.';
       if (['http', 'keyword', 'json'].includes(c.type) && c.config.target && !/^(https?:\/\/)?[^\s/]+/.test(c.config.target.trim())) e.target = 'Enter a valid URL.';
       if (Object.keys(e).length) { errors.checks[c._key] = e; count += Object.keys(e).length; }
     }

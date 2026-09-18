@@ -8,6 +8,26 @@ done, and don't let scope creep pull any item toward the non-goals at the bottom
 
 ---
 
+## Status (September 2026)
+
+Every phase below has been implemented on the public-release branch. What each item
+became, and what still needs a human:
+
+| Item | Where it lives | Follow-up |
+|---|---|---|
+| 1.1 endpoint tokens | `internal/api/automation.go`, Settings › Automation banner | — |
+| 1.2 script placeholders | `internal/actions` (`expandScriptCode`, `buildGitArgs`, `allowUntrustedInput`) | `cmd` scripts get a sanitized literal, not a reference (cmd re-parses `%VAR%`); documented |
+| 1.3 signed updates | `internal/update/sign.go`, `cmd/gwatch-sign`, `docs/RELEASING.md` | **Generate the release key, paste the public key into `internal/update/release_keys.txt`, add the `GWATCH_SIGNING_KEY` secret.** Until then self-update reports releases but refuses to install them (fail closed) |
+| 1.4 secrets at rest | `internal/secrets`, `gwatch.key` next to `gwatch.db` | — |
+| 2.1 admin/viewer accounts | `internal/auth`, `internal/api/policy.go`, Settings › Users & access, audit `actor` | — |
+| 2.2 API keys, `/api/v1`, custom checks | `internal/api/auth.go`, `internal/checks/custom.go` | — |
+| 2.3 Slack / Teams / ntfy / Pushover | `internal/actions/notify.go` | — |
+| 2.4 scheduled backups, restore path | `internal/engine/backupjob.go`, `docs/RESTORE.md` | — |
+| 2.5 read-only remote access | viewer role + read-only keys, `docs/REMOTE-ACCESS.md` | Decision: bring your own VPN/reverse proxy; GWatch never becomes internet-facing |
+| 3.1 / 3.2 MCP server | separate module `mcp/` (`gwatch-mcp`), read-only by default | Decide the `mcp/vX.Y.Z` tag scheme before advertising `go install` |
+| 3.3 trigger recipes | `docs/RECIPES.md` | — |
+| 4.1 Windows installer | `scripts/installer/gwatch.iss`, `docs/INSTALL.md` | Not yet compiled on a Windows machine; run the CI job once and test install/upgrade/uninstall by hand |
+
 ## Phase 1 — Now: security hardening (blocking; do before any public release)
 
 ### 1.1 Require auth by default on custom endpoints
@@ -111,10 +131,12 @@ done, and don't let scope creep pull any item toward the non-goals at the bottom
 - This is the first time GWatch data is designed to leave the LAN, so scope it tightly:
   its own dedicated token/API-key type (reuse the scoping from 2.2), rate limiting, and
   explicitly no access to triggers, custom endpoints, backups, or settings.
-- Consider whether this is a lightweight hosted relay/tunnel helper or purely
-  "user sets up their own remote access (VPN/reverse proxy) and GWatch just needs a
-  proper read-only scope to point it at" — the latter is far less work and keeps
-  GWatch itself from becoming an internet-facing service.
+- **Decided: no relay, no tunnel helper.** GWatch does not become an internet-facing
+  service. The user brings their own remote access — Tailscale/WireGuard, or a reverse
+  proxy with TLS — and points it at GWatch with a read-only API key or a viewer
+  account. A service that runs commands, holds an SMTP password and can restore from an
+  uploaded archive should not be published to the open internet, and shipping a tunnel
+  would make doing so by accident easy. See [`docs/REMOTE-ACCESS.md`](docs/REMOTE-ACCESS.md).
 - **Done when**: a read-only token can view dashboards/history from outside the LAN and
   is rejected on every write/trigger/settings endpoint.
 
@@ -171,9 +193,16 @@ promise.
 
 ## Open decisions (don't resolve casually)
 
-- **Licensing/support model**: still undecided. Affects how the API-key tiers (2.2)
-  and the MCP companion (Phase 3) get positioned — e.g. whether either is ever a paid
-  tier. Revisit deliberately, not as a side effect of another task.
+- **Licensing/support model**: decided. GWatch is source-available (see `LICENSE`
+  and `TRADEMARKS.md`), close to open source but with two restrictions: nobody may
+  charge for unaltered copies of the software (including offering it as a paid
+  hosted service without a Significant Modification), and nobody may remove or
+  obscure credit to GWatch, JX Holdings, and the original developers. Consequences
+  for this roadmap: there are no paid tiers for the API keys (2.2) or the MCP
+  companion (Phase 3) — everything ships free. The only commercial restriction is
+  reselling unmodified GWatch or offering it as a paid hosted service without
+  significant modification; deployment, support, and customization services remain
+  fair game. Attribution is mandatory in every copy and derivative.
 
 ## Explicit non-goals (keep scope from drifting toward Zabbix/PRTG)
 

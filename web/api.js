@@ -23,6 +23,30 @@ function setConnection(ok, err) {
   for (const fn of connListeners) { try { fn(ok); } catch (e) { console.error(e); } }
 }
 
+// ---- identity ----
+// The shell listens here so that a 401 anywhere in the app can take the whole
+// page to the sign-in screen, and a 403 can explain itself with the server's
+// own wording rather than a generic "forbidden".
+const authListeners = new Set();
+export function onAuthChallenge(fn) { authListeners.add(fn); return () => authListeners.delete(fn); }
+function challenge(reason) { for (const fn of authListeners) { try { fn(reason); } catch (e) { console.error(e); } } }
+
+const denyListeners = new Set();
+export function onDenied(fn) { denyListeners.add(fn); return () => denyListeners.delete(fn); }
+
+// Paths that must never trigger the sign-in screen: they are how the screen
+// itself works, or they are polled in the background by the shell.
+const AUTH_PATHS = ['/api/auth/', '/api/me', '/api/health', '/api/version'];
+const isAuthPath = (path) => AUTH_PATHS.some((p) => path.startsWith(p));
+
+/** The principal behind this browser, as /api/me last reported it. */
+export let me = { kind: '', isAdmin: false, canWrite: false, signedIn: false };
+
+export async function refreshMe() {
+  try { me = await request('GET', '/api/me'); } catch { /* keep the last answer */ }
+  return me;
+}
+
 export async function request(method, path, body, opts = {}) {
   const init = { method, headers: {} };
   if (body instanceof FormData) init.body = body;
@@ -47,6 +71,10 @@ export async function request(method, path, body, opts = {}) {
   }
   if (!res.ok) {
     const msg = (data && typeof data === 'object' && data.error) ? data.error : (typeof data === 'string' && data.trim() ? data.trim().slice(0, 300) : `Request failed (${res.status})`);
+    if (path.startsWith('/api/') && !isAuthPath(path)) {
+      if (res.status === 401) challenge(msg);
+      else if (res.status === 403) for (const fn of denyListeners) { try { fn(msg); } catch (e) { console.error(e); } }
+    }
     throw new ApiError(msg, res.status, data);
   }
   return data;
@@ -58,7 +86,14 @@ export const api = {
   put: (path, body) => request('PUT', path, body),
   del: (path) => request('DELETE', path),
   upload: (path, formData) => request('POST', path, formData),
+  me: () => me,
+  refreshMe,
 };
+
+/** What the sign-in screen needs to know before it draws itself. */
+export const getAuthSetup = () => api.get('/api/auth/setup');
+export const signIn = (username, password) => api.post('/api/auth/login', { username, password });
+export const signOut = () => api.post('/api/auth/logout');
 
 export function qs(params) {
   const p = new URLSearchParams();

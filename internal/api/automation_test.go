@@ -100,21 +100,21 @@ func TestTriggersEndpointsAndHooks(t *testing.T) {
 
 	// endpoints
 	var ep model.Endpoint
-	epBody := map[string]any{"name": "Router rebooted", "slug": "Router Rebooted!", "enabled": true, "method": "POST", "token": "s3cret", "action": map[string]any{"type": "run_node", "nodeId": node.ID}}
+	epBody := map[string]any{"name": "Router rebooted", "slug": "Router Rebooted!", "enabled": true, "method": "POST", "token": "s3cret-token", "action": map[string]any{"type": "run_node", "nodeId": node.ID}}
 	if code := call(t, ts, "POST", "/api/endpoints", epBody, &ep); code != 200 || ep.Slug != "router-rebooted" {
 		t.Fatalf("create endpoint: %d %+v", code, ep)
 	}
 	if code := call(t, ts, "POST", "/api/endpoints", epBody, nil); code != 400 {
 		t.Fatalf("duplicate slug should be rejected, got %d", code)
 	}
-	if code := call(t, ts, "GET", "/hook/router-rebooted?token=s3cret", nil, nil); code != 405 {
+	if code := call(t, ts, "GET", "/hook/router-rebooted?token=s3cret-token", nil, nil); code != 405 {
 		t.Fatalf("expected 405 for wrong method, got %d", code)
 	}
 	if code := call(t, ts, "POST", "/hook/router-rebooted", map[string]any{}, nil); code != 401 {
 		t.Fatalf("expected 401 without token, got %d", code)
 	}
 	req, _ := http.NewRequest("POST", ts.URL+"/hook/router-rebooted", strings.NewReader("hello"))
-	req.Header.Set("X-GWatch-Token", "s3cret")
+	req.Header.Set("X-GWatch-Token", "s3cret-token")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -145,6 +145,85 @@ func TestTriggersEndpointsAndHooks(t *testing.T) {
 		t.Fatalf("meta: %+v", meta)
 	}
 	_ = srv
+}
+
+// callBody is call() that also returns the response body, so error messages can
+// be asserted on (call only decodes successful responses).
+func callBody(t *testing.T, ts *httptest.Server, method, path string, body any) (int, string) {
+	t.Helper()
+	var rdr io.Reader
+	if body != nil {
+		b, _ := json.Marshal(body)
+		rdr = strings.NewReader(string(b))
+	}
+	req, _ := http.NewRequest(method, ts.URL+path, rdr)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(data)
+}
+
+func TestEndpointTokenRequired(t *testing.T) {
+	ts, srv := newTestServer(t)
+	action := map[string]any{"type": "http", "url": "http://127.0.0.1:1/never"}
+
+	// no token and no acknowledgement: refused
+	code, msg := callBody(t, ts, "POST", "/api/endpoints", map[string]any{"name": "Open", "slug": "open", "enabled": true, "action": action})
+	if code != 400 || !strings.Contains(msg, "token is required") {
+		t.Fatalf("expected 400 without a token, got %d %s", code, msg)
+	}
+	// a short token is refused too
+	if code := call(t, ts, "POST", "/api/endpoints", map[string]any{"name": "Short", "slug": "short", "enabled": true, "token": "abc", "action": action}, nil); code != 400 {
+		t.Fatalf("expected 400 for a short token, got %d", code)
+	}
+	// acknowledged: saved, and callable without a token
+	var ep model.Endpoint
+	if code := call(t, ts, "POST", "/api/endpoints", map[string]any{"name": "Open", "slug": "open", "enabled": true, "allowNoToken": true, "action": map[string]any{"type": "run_node", "nodeId": 0}}, nil); code != 400 {
+		t.Fatalf("expected the action to still be validated, got %d", code)
+	}
+	if code := call(t, ts, "POST", "/api/endpoints", map[string]any{"name": "Open", "slug": "open", "enabled": true, "allowNoToken": true, "action": map[string]any{"type": "http", "url": "http://127.0.0.1:1/never"}}, &ep); code != 200 || !ep.AllowNoToken || ep.Token != "" {
+		t.Fatalf("create acknowledged endpoint: %d %+v", code, ep)
+	}
+	if code := call(t, ts, "POST", "/hook/open", map[string]any{}, nil); code != 502 {
+		// 502 = the action itself failed (nothing listens on port 1), which means
+		// the request got past the token check.
+		t.Fatalf("expected the hook to run without a token, got %d", code)
+	}
+	// supplying a token clears the acknowledgement
+	var saved model.Endpoint
+	if code := call(t, ts, "PUT", fmt.Sprintf("/api/endpoints/%d", ep.ID), map[string]any{"name": "Open", "slug": "open", "enabled": true, "allowNoToken": true, "token": "long-enough-token", "action": map[string]any{"type": "http", "url": "http://127.0.0.1:1/never"}}, &saved); code != 200 || saved.AllowNoToken || saved.Token != "long-enough-token" {
+		t.Fatalf("token should win over allowNoToken: %d %+v", code, saved)
+	}
+	if code := call(t, ts, "POST", "/hook/open", map[string]any{}, nil); code != 401 {
+		t.Fatalf("expected 401 once a token is set, got %d", code)
+	}
+
+	// an endpoint that lost its token (written straight to the store, as an old
+	// install would have it) is refused and reported by the meta endpoint
+	if _, err := srv.Store.SaveEndpoint(context.Background(), model.Endpoint{Name: "Legacy", Slug: "legacy", Enabled: true, Method: "ANY",
+		Action: model.Action{Type: model.ActionHTTP, URL: "http://127.0.0.1:1/never"}}); err != nil {
+		t.Fatal(err)
+	}
+	if code, msg := callBody(t, ts, "POST", "/hook/legacy", map[string]any{}); code != 401 || !strings.Contains(msg, "no token configured") {
+		t.Fatalf("expected 401 for the tokenless endpoint, got %d %s", code, msg)
+	}
+	var meta struct {
+		Tokenless []struct {
+			ID   int64  `json:"id"`
+			Name string `json:"name"`
+			Slug string `json:"slug"`
+		} `json:"tokenlessEndpoints"`
+	}
+	call(t, ts, "GET", "/api/automation/meta", nil, &meta)
+	if len(meta.Tokenless) != 1 || meta.Tokenless[0].Slug != "legacy" {
+		t.Fatalf("tokenlessEndpoints: %+v", meta.Tokenless)
+	}
 }
 
 func TestChartsStatusEventsAndAccessPassword(t *testing.T) {
@@ -225,10 +304,11 @@ func TestChartsStatusEventsAndAccessPassword(t *testing.T) {
 	if code := call(t, ts, "GET", "/api/health", nil, nil); code != 200 {
 		t.Fatalf("loopback should pass: %d", code)
 	}
-	// a non-loopback client must authenticate
+	// a non-loopback client must authenticate for anything but the public
+	// liveness and sign-in routes
 	h := srv.Handler()
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/health", nil)
+	req := httptest.NewRequest("GET", "/api/nodes", nil)
 	req.RemoteAddr = "192.168.1.20:5555"
 	h.ServeHTTP(rr, req)
 	if rr.Code != 401 || rr.Header().Get("WWW-Authenticate") == "" {
@@ -239,6 +319,14 @@ func TestChartsStatusEventsAndAccessPassword(t *testing.T) {
 	h.ServeHTTP(rr, req)
 	if rr.Code != 200 {
 		t.Fatalf("expected 200 with password, got %d", rr.Code)
+	}
+	// /api/health stays reachable without credentials, but only as liveness.
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/health", nil)
+	req.RemoteAddr = "192.168.1.20:5555"
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 || strings.Contains(rr.Body.String(), "databasePath") {
+		t.Fatalf("public health should be minimal: %d %s", rr.Code, rr.Body.String())
 	}
 	rr = httptest.NewRecorder()
 	req = httptest.NewRequest("GET", "/hook/none", nil)

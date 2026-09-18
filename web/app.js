@@ -1,7 +1,7 @@
 // GWatch web UI entry: hash router, shell (rail / topbar / status dots),
 // theme + accent handling and live updates.
 
-import { api, onConnection, connection, subscribeUpdates, debounce } from './api.js';
+import { api, onConnection, connection, subscribeUpdates, debounce, refreshMe, signOut, getAuthSetup, onAuthChallenge, onDenied } from './api.js';
 import { h, icon, clear, toast, closeMenus, replace, applyTheme, applyAccent, onThemeChange } from './components.js';
 import { relTime } from './fmt.js';
 
@@ -16,6 +16,7 @@ const routes = [
   { pattern: /^\/audit(?:\/([a-z]+))?$/, view: () => import('./views/audit.js'), params: ['tab'], nav: 'audit' },
   { pattern: /^\/settings(?:\/([a-z]+))?$/, view: () => import('./views/settings.js'), params: ['tab'], nav: 'settings' },
   { pattern: /^\/wallboard$/, view: () => import('./views/wallboard.js'), nav: 'wallboard', wallboard: true },
+  { pattern: /^\/login$/, view: () => import('./views/login.js'), nav: null, bare: true },
 ];
 
 const viewRoot = document.getElementById('view');
@@ -62,15 +63,41 @@ rail.addEventListener('pointerup', (e) => {
 rail.addEventListener('mouseleave', dropRailFocus);
 
 /* ---------- Theme / accent from settings ---------- */
-let themeSettings = null;
+/** The theme lives in settings, which only an administrator may read, so it is
+ *  served alongside the identity in /api/me and every account gets styled. */
 async function loadAppearance() {
   try {
-    const s = await api.get('/api/settings');
-    themeSettings = s.general || {};
-    applyTheme(themeSettings.theme || 'dark');
-    applyAccent(themeSettings.accentColor || '#7c6cff');
+    const me = await refreshMe();
+    applyTheme(me.theme || 'dark');
+    applyAccent(me.accentColor || '#7c6cff');
+    applyIdentity(me);
   } catch { /* keep the cached theme */ }
 }
+
+/* ---------- Signed-in identity ---------- */
+let identity = { kind: '', isAdmin: false, signedIn: false };
+const accountEl = document.getElementById('account');
+
+/** Reflect the principal on <body> so CSS can hide what a viewer cannot use,
+ *  and fill in the account block at the foot of the rail. */
+function applyIdentity(me) {
+  identity = me || identity;
+  document.body.classList.toggle('viewer', !identity.isAdmin);
+  document.body.classList.toggle('signed-in', !!identity.signedIn);
+  if (!accountEl) return;
+  accountEl.hidden = !identity.signedIn;
+  const out = document.getElementById('sign-out');
+  if (out) out.hidden = !identity.signedIn;
+  if (!identity.signedIn) return;
+  accountEl.querySelector('.account-name').textContent = identity.name || 'Signed in';
+  accountEl.querySelector('.account-role').textContent = identity.role === 'admin' ? 'Administrator' : 'Viewer';
+}
+
+document.getElementById('sign-out')?.addEventListener('click', async () => {
+  try { await signOut(); } catch { /* sign out locally anyway */ }
+  location.hash = '#/login';
+  location.reload();
+});
 onThemeChange(() => { if (current?.instance?.themeChanged) { try { current.instance.themeChanged(); } catch (e) { console.error(e); } } });
 
 export function parseHash() {
@@ -85,6 +112,7 @@ export function navigate(path) { location.hash = path.startsWith('#') ? path : `
 
 const ctxBase = {
   navigate,
+  get me() { return identity; },
   setTitle(title, { subtitle, actions } = {}) {
     if (titleEl.textContent !== title) {
       titleEl.classList.remove('title-enter');
@@ -110,6 +138,10 @@ async function route() {
     if (m) { match = m; r = candidate; break; }
   }
   if (!r) { navigate('/dashboard'); return; }
+
+  // A client that has to sign in sees nothing but the sign-in screen.
+  if (!r.bare && await loginRequired()) { navigate('/login'); return; }
+  document.body.classList.toggle('bare-mode', !!r.bare);
   const params = {};
   (r.params || []).forEach((name, i) => { params[name] = match[i + 1]; });
 
@@ -240,12 +272,27 @@ setInterval(refreshHealth, 60000);
 setInterval(refreshStatus, 30000);
 refreshHealth();
 refreshStatus();
-loadAppearance();
 
 /* ---------- Relative-time ticking ---------- */
 setInterval(() => {
   document.querySelectorAll('[data-rel]').forEach((el) => { if (el.dataset.rel) el.textContent = relTime(el.dataset.rel); });
 }, 10000);
+
+/* ---------- Sign-in gate ---------- */
+// Cached so that every navigation does not re-ask; a 401 from anywhere clears
+// it, which is what takes an expired session back to the sign-in screen.
+let authSetup = null;
+async function loginRequired() {
+  if (authSetup === null) {
+    try { authSetup = await getAuthSetup(); } catch { return false; } // the banner covers an unreachable service
+  }
+  return !!authSetup.loginRequired;
+}
+onAuthChallenge(() => {
+  authSetup = null;
+  if (parseHash().path !== '/login') navigate('/login');
+});
+onDenied((message) => toast(message, { kind: 'error', timeout: 8000 }));
 
 window.addEventListener('hashchange', route);
 window.addEventListener('error', (e) => { if (e.message) console.error('Unhandled:', e.message); });
@@ -256,4 +303,6 @@ window.addEventListener('unhandledrejection', (e) => {
   toast(msg, { kind: 'error' });
 });
 
-route();
+// Who is looking has to be known before the first view is built: views read
+// ctx.me to decide what they may offer, and the theme travels with it.
+loadAppearance().finally(route);

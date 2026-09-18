@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS endpoints (
   enabled INTEGER NOT NULL DEFAULT 1,
   method TEXT NOT NULL DEFAULT 'ANY',
   token TEXT NOT NULL DEFAULT '',
+  allow_no_token INTEGER NOT NULL DEFAULT 0,
   action TEXT NOT NULL DEFAULT '{}',
   last_called_at TEXT,
   last_status TEXT NOT NULL DEFAULT '',
@@ -165,17 +166,18 @@ func (s *Store) DeleteTrigger(ctx context.Context, id int64) error {
 
 // ---- endpoints ----
 
-const endpointCols = `id, name, slug, description, enabled, method, token, action, last_called_at, last_status, last_output, call_count, created_at, updated_at`
+const endpointCols = `id, name, slug, description, enabled, method, token, allow_no_token, action, last_called_at, last_status, last_output, call_count, created_at, updated_at`
 
 func scanEndpoint(sc interface{ Scan(...any) error }) (model.Endpoint, error) {
 	var e model.Endpoint
-	var enabled int
+	var enabled, allowNoToken int
 	var action, created, updated string
 	var lastCalled sql.NullString
-	if err := sc.Scan(&e.ID, &e.Name, &e.Slug, &e.Description, &enabled, &e.Method, &e.Token, &action, &lastCalled, &e.LastStatus, &e.LastOutput, &e.CallCount, &created, &updated); err != nil {
+	if err := sc.Scan(&e.ID, &e.Name, &e.Slug, &e.Description, &enabled, &e.Method, &e.Token, &allowNoToken, &action, &lastCalled, &e.LastStatus, &e.LastOutput, &e.CallCount, &created, &updated); err != nil {
 		return e, err
 	}
 	e.Enabled = enabled == 1
+	e.AllowNoToken = allowNoToken == 1
 	_ = json.Unmarshal([]byte(action), &e.Action)
 	e.LastCalledAt = parseTime(lastCalled)
 	e.CreatedAt, e.UpdatedAt = mustTime(created), mustTime(updated)
@@ -226,8 +228,8 @@ func (s *Store) SaveEndpoint(ctx context.Context, e model.Endpoint) (model.Endpo
 	e.UpdatedAt = now
 	if e.ID == 0 {
 		e.CreatedAt = now
-		res, err := s.Exec(ctx, `INSERT INTO endpoints(name, slug, description, enabled, method, token, action, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-			e.Name, e.Slug, e.Description, boolInt(e.Enabled), e.Method, e.Token, jsonString(e.Action), fmtTime(now), fmtTime(now))
+		res, err := s.Exec(ctx, `INSERT INTO endpoints(name, slug, description, enabled, method, token, allow_no_token, action, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			e.Name, e.Slug, e.Description, boolInt(e.Enabled), e.Method, e.Token, boolInt(e.AllowNoToken), jsonString(e.Action), fmtTime(now), fmtTime(now))
 		if err != nil {
 			if strings.Contains(err.Error(), "UNIQUE") {
 				return e, fmt.Errorf("an endpoint with the slug %q already exists", e.Slug)
@@ -237,8 +239,8 @@ func (s *Store) SaveEndpoint(ctx context.Context, e model.Endpoint) (model.Endpo
 		e.ID, _ = res.LastInsertId()
 		return e, nil
 	}
-	res, err := s.Exec(ctx, `UPDATE endpoints SET name=?, slug=?, description=?, enabled=?, method=?, token=?, action=?, updated_at=? WHERE id=?`,
-		e.Name, e.Slug, e.Description, boolInt(e.Enabled), e.Method, e.Token, jsonString(e.Action), fmtTime(now), e.ID)
+	res, err := s.Exec(ctx, `UPDATE endpoints SET name=?, slug=?, description=?, enabled=?, method=?, token=?, allow_no_token=?, action=?, updated_at=? WHERE id=?`,
+		e.Name, e.Slug, e.Description, boolInt(e.Enabled), e.Method, e.Token, boolInt(e.AllowNoToken), jsonString(e.Action), fmtTime(now), e.ID)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			return e, fmt.Errorf("an endpoint with the slug %q already exists", e.Slug)

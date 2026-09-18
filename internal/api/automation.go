@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jxburros/GWatch/internal/actions"
+	"github.com/jxburros/GWatch/internal/auth"
 	"github.com/jxburros/GWatch/internal/model"
 	"github.com/jxburros/GWatch/internal/store"
 	"github.com/jxburros/GWatch/internal/update"
@@ -189,8 +190,32 @@ func (s *Server) handleTestAction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.Engine.TestAction(r.Context(), body.Action, body.NodeID))
 }
 
+// tokenlessEndpoint identifies a custom endpoint that anyone who can reach the
+// port may call. The Settings > Automation tab warns about them.
+type tokenlessEndpoint struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+}
+
+func (s *Server) tokenlessEndpoints(ctx context.Context) []tokenlessEndpoint {
+	out := []tokenlessEndpoint{}
+	list, err := s.Store.ListEndpoints(ctx)
+	if err != nil {
+		return out
+	}
+	for _, e := range list {
+		if strings.TrimSpace(e.Token) == "" {
+			out = append(out, tokenlessEndpoint{ID: e.ID, Name: e.Name, Slug: e.Slug})
+		}
+	}
+	return out
+}
+
 func (s *Server) handleAutomationMeta(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
+		"tokenlessEndpoints": s.tokenlessEndpoints(r.Context()),
+		"minTokenLength":     minEndpointToken,
 		"conditions":         model.TriggerConditions,
 		"interpreters":       actions.Interpreters(),
 		"defaultInterpreter": actions.DefaultInterpreter(),
@@ -199,6 +224,9 @@ func (s *Server) handleAutomationMeta(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---- endpoints ----
+
+// minEndpointToken is the shortest token a custom endpoint may be saved with.
+const minEndpointToken = 8
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
@@ -215,13 +243,33 @@ func slugify(s string) string {
 	return strings.Trim(b.String(), "-")
 }
 
+// endpointDoc is an endpoint as the API returns it. The token is the only
+// thing guarding a /hook/ URL, so it is replaced by a flag for anyone who is
+// not an administrator; hasToken still lets the UI show whether one is set.
+type endpointDoc struct {
+	model.Endpoint
+	HasToken bool `json:"hasToken"`
+}
+
+func endpointDocs(list []model.Endpoint, redact bool) []endpointDoc {
+	out := make([]endpointDoc, 0, len(list))
+	for _, e := range list {
+		d := endpointDoc{Endpoint: e, HasToken: e.Token != ""}
+		if redact {
+			d.Token = ""
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
 func (s *Server) handleListEndpoints(w http.ResponseWriter, r *http.Request) {
 	list, err := s.Store.ListEndpoints(r.Context())
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, list)
+	writeJSON(w, http.StatusOK, endpointDocs(list, !auth.FromContext(r.Context()).IsAdmin()))
 }
 
 func (s *Server) handleSaveEndpoint(w http.ResponseWriter, r *http.Request) {
@@ -264,6 +312,18 @@ func (s *Server) handleSaveEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	e.Token = strings.TrimSpace(e.Token)
+	if e.Token != "" {
+		// A token and "allow calls without a token" are mutually exclusive; the
+		// token wins so an acknowledgement cannot linger on a protected endpoint.
+		e.AllowNoToken = false
+		if len(e.Token) < minEndpointToken {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("the token must be at least %d characters", minEndpointToken))
+			return
+		}
+	} else if !e.AllowNoToken {
+		writeError(w, http.StatusBadRequest, "a token is required; generate one or explicitly allow calls without a token")
+		return
+	}
 	if err := s.normalizeAction(&e.Action); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -324,6 +384,13 @@ func (s *Server) handleHook(w http.ResponseWriter, r *http.Request) {
 	}
 	if e.Method != "ANY" && e.Method != r.Method {
 		writeError(w, http.StatusMethodNotAllowed, "this endpoint accepts "+e.Method)
+		return
+	}
+	// /hook/ is exempt from the LAN access password, so the endpoint's own token
+	// is the only thing protecting it. An endpoint whose token went missing is
+	// refused unless its owner explicitly allowed anonymous calls.
+	if e.Token == "" && !e.AllowNoToken {
+		writeError(w, http.StatusUnauthorized, "this endpoint has no token configured")
 		return
 	}
 	if e.Token != "" {
@@ -641,7 +708,7 @@ func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "info": info})
 		return
 	}
-	s.Engine.RecordEvent(model.Event{Type: model.EventUpdate, Title: "Checked for updates", Detail: fmt.Sprintf("Current %s, latest release %s%s.", info.CurrentVersion, info.LatestVersion, map[bool]string{true: " — update available", false: ""}[info.UpdateAvailable])})
+	s.recordEvent(r.Context(), model.Event{Type: model.EventUpdate, Title: "Checked for updates", Detail: fmt.Sprintf("Current %s, latest release %s%s.", info.CurrentVersion, info.LatestVersion, map[bool]string{true: " — update available", false: ""}[info.UpdateAvailable])})
 	writeJSON(w, http.StatusOK, info)
 }
 
@@ -654,11 +721,11 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	info, err := s.Updater.Apply(ctx, s.updateRepo())
 	if err != nil {
-		s.Engine.RecordEvent(model.Event{Type: model.EventUpdate, Title: "Update failed", Detail: err.Error()})
+		s.recordEvent(r.Context(), model.Event{Type: model.EventUpdate, Title: "Update failed", Detail: err.Error()})
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "info": info})
 		return
 	}
-	s.Engine.RecordEvent(model.Event{Type: model.EventUpdate, Title: "Update installed: " + info.LatestVersion, Detail: fmt.Sprintf("Downloaded %s from %s. The service restarts to finish the update.", info.AssetName, info.Repo)})
+	s.recordEvent(r.Context(), model.Event{Type: model.EventUpdate, Title: "Update installed: " + info.LatestVersion, Detail: fmt.Sprintf("Downloaded %s from %s. The service restarts to finish the update.", info.AssetName, info.Repo)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "info": info, "restarting": s.Updater.Status().Restarting})
 }
 

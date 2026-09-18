@@ -9,7 +9,7 @@ const STATUS_ORDER = ['down', 'degraded', 'unknown', 'maintenance', 'up', 'pause
 export async function mount(root, ctx) {
   const state = { nodes: [], groups: { groups: [], tags: [] }, templates: null, q: ctx.query.get('q') || '', group: ctx.query.get('group') || '', status: ctx.query.get('status') || '', tag: ctx.query.get('tag') || '', destroyed: false };
 
-  ctx.setTitle('Nodes', { actions: [h('button', { class: 'btn btn-primary', type: 'button', onclick: () => openTemplatePicker(state, ctx) }, icon('plus'), 'Add node')] });
+  ctx.setTitle('Nodes', { actions: [h('button', { class: 'btn btn-primary admin-only', type: 'button', onclick: () => openTemplatePicker(state, ctx) }, icon('plus'), 'Add node')] });
 
   const searchInput = h('input', { type: 'search', placeholder: 'Search name, host, group or tag…', value: state.q, 'aria-label': 'Search nodes', oninput: () => { state.q = searchInput.value; renderList(); } });
   const countEl = h('span', { class: 'filter-count' });
@@ -62,7 +62,7 @@ export async function mount(root, ctx) {
     clear(listEl);
     if (!state.nodes.length) {
       countEl.textContent = '';
-      listEl.append(h('div', { class: 'card' }, emptyState({ icon: 'server', title: 'No nodes yet', text: 'Add your router, a website or a home server. Templates fill in sensible checks for you.', actions: h('button', { class: 'btn btn-primary', type: 'button', onclick: () => openTemplatePicker(state, ctx) }, icon('plus'), 'Add your first node') })));
+      listEl.append(h('div', { class: 'card' }, emptyState({ icon: 'server', title: 'No nodes yet', text: 'Add your router, a website or a home server. Templates fill in sensible checks for you.', actions: h('button', { class: 'btn btn-primary admin-only', type: 'button', onclick: () => openTemplatePicker(state, ctx) }, icon('plus'), 'Add your first node') })));
       return;
     }
     const rows = state.nodes.filter(matches);
@@ -94,7 +94,9 @@ export async function mount(root, ctx) {
     for (const c of n.checks || []) chips.append(checkChip(c, states[c.id], { href: `#/nodes/${n.id}` }));
     if (!(n.checks || []).length) chips.append(h('span', { class: 'dim small' }, 'No checks'));
     const last = Object.values(states).map((s) => s?.lastRunAt).filter(Boolean).sort().pop();
-    const enabledToggle = toggle({ checked: n.enabled !== false, ariaLabel: `${n.name} enabled`, onChange: (v) => setEnabled(n, v) });
+    // Left visible for a viewer — whether a node is paused is worth seeing —
+    // but not operable, since the server would refuse the change anyway.
+    const enabledToggle = toggle({ checked: n.enabled !== false, ariaLabel: `${n.name} enabled`, disabled: !ctx.me?.isAdmin, onChange: (v) => setEnabled(n, v) });
     const row = h('article', { class: `node-row ${n.enabled === false ? 'disabled' : ''}`, 'aria-label': n.name },
       h('div', null, statusPill(n.status || 'unknown'), n.inMaintenance && n.status !== 'maintenance' ? h('div', { class: 'tiny text-maintenance', style: { marginTop: '4px' } }, 'in maintenance') : null),
       h('div', { class: 'n-name' }, h('a', { href: `#/nodes/${n.id}` }, n.name || 'Unnamed node'), n.host ? h('span', { class: 'n-host' }, n.host) : h('span', { class: 'n-host dim' }, 'targets set per check'), tagList(n.tags || [])),
@@ -108,12 +110,12 @@ export async function mount(root, ctx) {
   function rowMenu(n) {
     return [
       { label: 'Open', icon: 'external', href: `#/nodes/${n.id}` },
-      { label: 'Edit', icon: 'edit', href: `#/nodes/${n.id}/edit` },
-      { label: 'Run all checks now', icon: 'play', onClick: () => runNow(n) },
-      { label: 'Duplicate', icon: 'copy', onClick: () => duplicate(n) },
-      { label: n.enabled === false ? 'Enable' : 'Disable', icon: 'power', onClick: () => setEnabled(n, n.enabled === false) },
-      { sep: true },
-      { label: 'Delete', icon: 'trash', danger: true, onClick: () => remove(n) },
+      { label: 'Edit', icon: 'edit', href: `#/nodes/${n.id}/edit`, adminOnly: true },
+      { label: 'Run all checks now', icon: 'play', onClick: () => runNow(n), adminOnly: true },
+      { label: 'Duplicate', icon: 'copy', onClick: () => duplicate(n), adminOnly: true },
+      { label: n.enabled === false ? 'Enable' : 'Disable', icon: 'power', onClick: () => setEnabled(n, n.enabled === false), adminOnly: true },
+      { sep: true, adminOnly: true },
+      { label: 'Delete', icon: 'trash', danger: true, onClick: () => remove(n), adminOnly: true },
     ];
   }
 

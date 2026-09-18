@@ -120,6 +120,12 @@ func (c *Client) Check(ctx context.Context, repo, current string) (model.UpdateI
 		info.AssetName, info.AssetURL, info.AssetSize = a.Name, a.BrowserDownloadURL, a.Size
 	}
 	info.UpdateAvailable = info.CurrentIsDev || CompareVersions(info.LatestVersion, current) > 0
+	if !c.SigningEnabled() {
+		// Checking still works so the user learns a new version exists, but
+		// installing it will be refused: say so here rather than at the end of
+		// a download.
+		info.Error = ErrNoSigningKey.Error() + "; this release can only be installed by hand from " + info.ReleaseURL
+	}
 	return info, nil
 }
 
@@ -192,7 +198,7 @@ func pickAsset(assets []ghAsset, goos, goarch string) *ghAsset {
 	}
 	for _, a := range assets {
 		name := strings.ToLower(a.Name)
-		if strings.HasSuffix(name, ".sha256") || strings.HasSuffix(name, ".txt") || strings.HasSuffix(name, ".zip") || strings.HasSuffix(name, ".tar.gz") {
+		if strings.HasSuffix(name, ".sha256") || strings.HasSuffix(name, SignatureExt) || strings.HasSuffix(name, ".txt") || strings.HasSuffix(name, ".zip") || strings.HasSuffix(name, ".tar.gz") {
 			continue
 		}
 		for _, w := range want {
@@ -217,11 +223,19 @@ func pickAsset(assets []ghAsset, goos, goarch string) *ghAsset {
 // ErrNoAsset is returned when the release has no binary for this platform.
 var ErrNoAsset = errors.New("the release has no executable for this platform")
 
-// Download fetches the asset into dir and verifies it against a sibling
-// <name>.sha256 asset when one exists. It returns the downloaded path.
+// Download fetches the asset into dir and verifies its ed25519 signature
+// against the release signing keys pinned into this build. Verification is
+// mandatory: there is no path on which this returns a file that was not signed
+// by a pinned key. The sibling <name>.sha256 asset is still checked when the
+// release publishes one, as a cheap guard against transit corruption, but it
+// never stands in for the signature. It returns the downloaded path.
 func (c *Client) Download(ctx context.Context, info model.UpdateInfo, dir string) (string, error) {
 	if info.AssetURL == "" {
 		return "", ErrNoAsset
+	}
+	keys := TrustedKeys()
+	if len(keys) == 0 {
+		return "", ErrNoSigningKey
 	}
 	req, err := http.NewRequestWithContext(ctx, "GET", info.AssetURL, nil)
 	if err != nil {
@@ -254,17 +268,52 @@ func (c *Client) Download(ctx context.Context, info model.UpdateInfo, dir string
 		os.Remove(tmp.Name())
 		return "", fmt.Errorf("download incomplete: got %d bytes, expected %d", n, info.AssetSize)
 	}
+	digest := hash.Sum(nil)
 	if sum, err := c.fetchChecksum(ctx, info.AssetURL); err == nil && sum != "" {
-		if got := hex.EncodeToString(hash.Sum(nil)); !strings.EqualFold(got, sum) {
+		if got := hex.EncodeToString(digest); !strings.EqualFold(got, sum) {
 			os.Remove(tmp.Name())
 			return "", fmt.Errorf("checksum mismatch: downloaded file is %s, release says %s", got, sum)
 		}
+	}
+	sigText, err := c.fetchSignature(ctx, info.AssetURL)
+	if err != nil {
+		os.Remove(tmp.Name())
+		return "", fmt.Errorf("%w: %s has no %s asset, so it cannot be verified", ErrUnsigned, info.AssetName, SignatureExt)
+	}
+	if err := VerifyDigest(digest, sigText, keys); err != nil {
+		os.Remove(tmp.Name())
+		return "", fmt.Errorf("%w: %s was not signed by a release key this build trusts (%s)", err, info.AssetName, strings.Join(KeyIDs(), ", "))
 	}
 	if err := os.Chmod(tmp.Name(), 0o755); err != nil {
 		os.Remove(tmp.Name())
 		return "", err
 	}
 	return tmp.Name(), nil
+}
+
+// fetchSignature downloads the <asset>.sig file published next to the asset.
+func (c *Client) fetchSignature(ctx context.Context, assetURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", assetURL+SignatureExt, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "GWatch-updater")
+	resp, err := c.http().Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", ErrUnsigned
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		return "", err
+	}
+	if len(b) == 0 {
+		return "", ErrUnsigned
+	}
+	return string(b), nil
 }
 
 func (c *Client) fetchChecksum(ctx context.Context, assetURL string) (string, error) {

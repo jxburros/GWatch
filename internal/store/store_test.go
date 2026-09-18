@@ -2,11 +2,15 @@ package store
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jxburros/GWatch/internal/model"
+	"github.com/jxburros/GWatch/internal/secrets"
 )
 
 func openTest(t *testing.T) *Store {
@@ -182,5 +186,161 @@ func TestEventsSettingsDashboardsMaintenance(t *testing.T) {
 	ms, _ := s.ListMaintenance(ctx)
 	if len(ms) != 1 || !ms[0].Active(time.Now()) {
 		t.Fatalf("maintenance active: %+v", ms)
+	}
+}
+
+// rawSettingsRow returns the settings row exactly as it sits on disk.
+func rawSettingsRow(t *testing.T, s *Store) string {
+	t.Helper()
+	var raw string
+	if err := s.Reader().QueryRow("SELECT value FROM settings WHERE key = 'settings'").Scan(&raw); err != nil {
+		t.Fatalf("read raw settings: %v", err)
+	}
+	return raw
+}
+
+func TestSettingsSecretsSealedAtRest(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	st, err := s.LoadSettings(ctx)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	st.Alerts.SMTP.Password = "smtp-sup3r-secret"
+	st.General.AccessPassword = "lan-acc3ss-secret"
+	if err := s.SaveSettings(ctx, st); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	raw := rawSettingsRow(t, s)
+	if strings.Contains(raw, "smtp-sup3r-secret") || strings.Contains(raw, "lan-acc3ss-secret") {
+		t.Fatalf("passwords stored in cleartext: %s", raw)
+	}
+	if strings.Count(raw, secrets.Prefix) != 2 {
+		t.Fatalf("expected two sealed values in row: %s", raw)
+	}
+
+	got, err := s.LoadSettings(ctx)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got.Alerts.SMTP.Password != "smtp-sup3r-secret" || got.General.AccessPassword != "lan-acc3ss-secret" {
+		t.Fatalf("round trip lost secrets: %+v", got)
+	}
+	if err := s.SecretsHealthy(); err != nil {
+		t.Fatalf("SecretsHealthy: %v", err)
+	}
+}
+
+func TestSettingsEmptySecretsStayEmpty(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	st, _ := s.LoadSettings(ctx)
+	if err := s.SaveSettings(ctx, st); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got, _ := s.LoadSettings(ctx)
+	if got.Alerts.SMTP.Password != "" || got.General.AccessPassword != "" {
+		t.Fatalf("empty secrets became non-empty: %+v", got)
+	}
+}
+
+func TestPlaintextSettingsMigratedOnOpen(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	ctx := context.Background()
+
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	st, _ := s.LoadSettings(ctx)
+	st.Alerts.SMTP.Password = "legacy-smtp"
+	st.General.AccessPassword = "legacy-access"
+	// Bypass SaveSettings to simulate a database written before encryption.
+	if err := s.PutSetting(ctx, "settings", st); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if raw := rawSettingsRow(t, s); !strings.Contains(raw, "legacy-smtp") {
+		t.Fatalf("precondition: plaintext not written: %s", raw)
+	}
+	s.Close()
+
+	s2, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+	raw := rawSettingsRow(t, s2)
+	if strings.Contains(raw, "legacy-smtp") || strings.Contains(raw, "legacy-access") {
+		t.Fatalf("plaintext survived migration: %s", raw)
+	}
+	if strings.Count(raw, secrets.Prefix) != 2 {
+		t.Fatalf("expected sealed values after migration: %s", raw)
+	}
+	got, err := s2.LoadSettings(ctx)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got.Alerts.SMTP.Password != "legacy-smtp" || got.General.AccessPassword != "legacy-access" {
+		t.Fatalf("migration lost values: %+v", got)
+	}
+}
+
+func TestWrongKeyFileYieldsEmptySecrets(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	ctx := context.Background()
+
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	st, _ := s.LoadSettings(ctx)
+	st.Alerts.SMTP.Password = "smtp-secret"
+	st.General.AccessPassword = "access-secret"
+	st.Alerts.Recipients = []string{"a@b.c"}
+	if err := s.SaveSettings(ctx, st); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	s.Close()
+
+	// Replace the key file: the rest of the settings must still load.
+	if err := os.Remove(filepath.Join(dir, KeyFileName)); err != nil {
+		t.Fatalf("remove key: %v", err)
+	}
+	s2, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen with new key: %v", err)
+	}
+	defer s2.Close()
+	got, err := s2.LoadSettings(ctx)
+	if err != nil {
+		t.Fatalf("load must not fail on undecryptable secrets: %v", err)
+	}
+	if got.Alerts.SMTP.Password != "" || got.General.AccessPassword != "" {
+		t.Fatalf("secrets should be empty with a different key: %+v", got)
+	}
+	if len(got.Alerts.Recipients) != 1 {
+		t.Fatalf("non-secret settings lost: %+v", got)
+	}
+	if s2.SecretsHealthy() == nil {
+		t.Fatalf("SecretsHealthy should report the decryption failure")
+	}
+}
+
+func TestKeyFileCreatedNextToDatabase(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+	fi, err := os.Stat(filepath.Join(dir, KeyFileName))
+	if err != nil {
+		t.Fatalf("key file: %v", err)
+	}
+	if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
+		t.Fatalf("key file perms = %v, want 0600", fi.Mode().Perm())
 	}
 }

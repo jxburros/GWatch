@@ -3,7 +3,9 @@ package backup
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -149,5 +151,70 @@ func TestBackupRestore(t *testing.T) {
 	sum3, err := Restore(ctx, st3, filepath.Join(bdir, info.FileName), "pw", false)
 	if err != nil || sum3.Results != 0 || sum3.Nodes != 2 {
 		t.Fatalf("config-only restore: %v %+v", err, sum3)
+	}
+}
+
+func TestPrune(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "p.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	bdir := filepath.Join(dir, "backups")
+
+	// Nothing to prune yet.
+	if removed, err := Prune(bdir, 3); err != nil || len(removed) != 0 {
+		t.Fatalf("prune empty dir: %v %+v", err, removed)
+	}
+
+	// Backup archive names have second resolution, so create each under a
+	// unique name (renaming right after Create) to avoid collisions, and
+	// give each a distinct mtime so List/Prune ordering is deterministic.
+	var names []string
+	for i := 0; i < 5; i++ {
+		info, err := Create(ctx, st, bdir, "pw", false, "test")
+		if err != nil {
+			t.Fatalf("create %d: %v", i, err)
+		}
+		src := filepath.Join(bdir, info.FileName)
+		name := fmt.Sprintf("gwatch-backup-prune-%d%s", i, Extension)
+		dst := filepath.Join(bdir, name)
+		if src != dst {
+			if err := os.Rename(src, dst); err != nil {
+				t.Fatal(err)
+			}
+		}
+		names = append(names, name)
+		mt := time.Now().Add(time.Duration(i) * time.Second)
+		_ = os.Chtimes(dst, mt, mt)
+	}
+	list, err := List(bdir)
+	if err != nil || len(list) != 5 {
+		t.Fatalf("list before prune: %v %+v", err, list)
+	}
+	// Keep the 2 newest (last created, highest mtime).
+	removed, err := Prune(bdir, 2)
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if len(removed) != 3 {
+		t.Fatalf("expected 3 removed, got %+v", removed)
+	}
+	list, err = List(bdir)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("list after prune: %v %+v", err, list)
+	}
+	// The two newest (by mtime, i.e. the last two created) must remain.
+	remaining := map[string]bool{list[0].FileName: true, list[1].FileName: true}
+	for _, want := range names[3:] {
+		if !remaining[want] {
+			t.Fatalf("expected %s to survive prune, remaining=%+v", want, remaining)
+		}
+	}
+	// keep <= 0 removes nothing.
+	if removed, err := Prune(bdir, 0); err != nil || len(removed) != 0 {
+		t.Fatalf("prune keep=0: %v %+v", err, removed)
 	}
 }

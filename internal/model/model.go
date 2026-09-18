@@ -22,10 +22,11 @@ const (
 	CheckDNS     CheckType = "dns"     // hostname resolves (optionally to expected values)
 	CheckKeyword CheckType = "keyword" // HTTP/S response contains / does not contain text
 	CheckJSON    CheckType = "json"    // HTTP/S JSON response has expected value at a path
+	CheckCustom  CheckType = "custom"  // user-supplied command/script, output parsed for status/metrics
 )
 
 // AllCheckTypes lists the supported check types in display order.
-var AllCheckTypes = []CheckType{CheckPing, CheckHTTP, CheckCert, CheckTCP, CheckDNS, CheckKeyword, CheckJSON}
+var AllCheckTypes = []CheckType{CheckPing, CheckHTTP, CheckCert, CheckTCP, CheckDNS, CheckKeyword, CheckJSON, CheckCustom}
 
 // Valid reports whether the type is one the engine can run.
 func (t CheckType) Valid() bool {
@@ -54,6 +55,8 @@ func (t CheckType) Label() string {
 		return "Keyword"
 	case CheckJSON:
 		return "JSON"
+	case CheckCustom:
+		return "Custom script"
 	}
 	return string(t)
 }
@@ -191,6 +194,12 @@ type CheckConfig struct {
 	// Warning thresholds (0 = disabled)
 	LatencyWarnMS     float64 `json:"latencyWarnMs,omitempty"`
 	PacketLossWarnPct float64 `json:"packetLossWarnPct,omitempty"`
+
+	// Custom: a command/script GWatch runs on schedule. See docs/API.md for
+	// the output contract (status=/message=/latency_ms=/error= lines).
+	Command string            `json:"command,omitempty"`
+	WorkDir string            `json:"workDir,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
 }
 
 // AlertOverride lets a check override global alert defaults. Nil pointers
@@ -258,6 +267,10 @@ type ResultDetails struct {
 
 	// TCP
 	RemoteAddr string `json:"remoteAddr,omitempty"`
+
+	// Custom: combined stdout/stderr of the command (after stripping the
+	// key=value control lines), capped at 8 KiB.
+	Output string `json:"output,omitempty"`
 }
 
 // CertInfo describes the leaf certificate presented by a TLS server.
@@ -329,6 +342,7 @@ const (
 	EventTriggerFired       EventType = "trigger_fired"   // an automation trigger ran an action
 	EventEndpointCalled     EventType = "endpoint_called" // a custom endpoint was invoked
 	EventUpdate             EventType = "update"          // application update checked / applied
+	EventAuth               EventType = "auth"            // sign-in, sign-out, account or API-key change
 )
 
 // Event is one entry in the incident/event timeline.
@@ -343,6 +357,52 @@ type Event struct {
 	Title     string          `json:"title"`
 	Detail    string          `json:"detail"`
 	Meta      json.RawMessage `json:"meta,omitempty"`
+	// Actor names who caused the event, e.g. "local", "pat (admin)" or
+	// "api key Home Assistant (read-write)". It is empty for events the
+	// monitoring engine produces by itself (check results, the scheduler).
+	Actor string `json:"actor,omitempty"`
+}
+
+// User is a GWatch account. The password hash never leaves the store.
+type User struct {
+	ID          int64      `json:"id"`
+	Username    string     `json:"username"`
+	Role        string     `json:"role"` // "admin" | "viewer"
+	CreatedAt   time.Time  `json:"createdAt"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
+	LastLoginAt *time.Time `json:"lastLoginAt,omitempty"`
+}
+
+// APIKey is a minted API key. The secret itself is shown once, at creation,
+// and only its sha256 digest is stored.
+type APIKey struct {
+	ID         int64      `json:"id"`
+	Name       string     `json:"name"`
+	Prefix     string     `json:"prefix"` // first characters of the key, for display
+	Scope      string     `json:"scope"`  // "read" | "readwrite"
+	CreatedBy  string     `json:"createdBy"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+	RevokedAt  *time.Time `json:"revokedAt,omitempty"`
+}
+
+// Revoked reports whether the key can no longer be used.
+func (k APIKey) Revoked() bool { return k.RevokedAt != nil }
+
+// Principal is the JSON shape of the identity behind the current request,
+// served by GET /api/me. It mirrors internal/auth.Principal plus the few
+// display fields the web interface needs before it can load settings.
+type Principal struct {
+	Kind        string `json:"kind"` // "" | "local" | "user" | "apikey" | "password"
+	Name        string `json:"name,omitempty"`
+	Role        string `json:"role,omitempty"`
+	Scope       string `json:"scope,omitempty"`
+	UserID      int64  `json:"userId,omitempty"`
+	IsAdmin     bool   `json:"isAdmin"`
+	CanWrite    bool   `json:"canWrite"`
+	SignedIn    bool   `json:"signedIn"`
+	Theme       string `json:"theme,omitempty"`
+	AccentColor string `json:"accentColor,omitempty"`
 }
 
 // MaintenanceWindow silences alerts for a node, a group or everything.
@@ -466,8 +526,22 @@ type GeneralSettings struct {
 	Theme                string  `json:"theme"`             // "dark" | "light" | "system"
 	AccentColor          string  `json:"accentColor"`       // hex colour used for the accent, e.g. "#7c6cff"
 	RemoteAccess         bool    `json:"remoteAccess"`      // listen on every interface so other devices on the LAN can open the UI
-	AccessPassword       string  `json:"accessPassword"`    // optional password required from non-loopback clients (HTTP basic auth)
+	AccessPassword       string  `json:"accessPassword"`    // legacy: password required from non-loopback clients (HTTP basic auth)
 	UpdateRepo           string  `json:"updateRepo"`        // GitHub "owner/repo" checked for new releases
+	// RequireLoginLocally makes a browser on this computer sign in like every
+	// other client. It only takes effect once at least one account exists, so
+	// it can never lock the owner out of a fresh install.
+	RequireLoginLocally bool `json:"requireLoginLocally"`
+}
+
+// BackupSettings controls scheduled, unattended backups. Backups are always
+// encrypted, so a password is required to enable them.
+type BackupSettings struct {
+	Enabled        bool   `json:"enabled"`
+	IntervalHours  int    `json:"intervalHours"` // default 24, 1-720 (30 days)
+	Keep           int    `json:"keep"`          // how many archives to retain, default 7, 1-365
+	IncludeHistory bool   `json:"includeHistory"`
+	Password       string `json:"password"`
 }
 
 // Settings is the complete settings document.
@@ -475,6 +549,7 @@ type Settings struct {
 	General   GeneralSettings   `json:"general"`
 	Alerts    AlertSettings     `json:"alerts"`
 	Retention RetentionSettings `json:"retention"`
+	Backups   BackupSettings    `json:"backups"`
 }
 
 // DefaultSettings returns the settings used on first run.
@@ -509,6 +584,12 @@ func DefaultSettings() Settings {
 			HourlyDays:  730,
 			DailyDays:   0,
 			EventDays:   730,
+		},
+		Backups: BackupSettings{
+			Enabled:        false,
+			IntervalHours:  24,
+			Keep:           7,
+			IncludeHistory: true,
 		},
 	}
 }
@@ -654,16 +735,20 @@ type GapInfo struct {
 type ActionType string
 
 const (
-	ActionHTTP    ActionType = "http"     // send an HTTP request (webhook)
-	ActionGit     ActionType = "git"      // run a git command in a repository
-	ActionScript  ActionType = "script"   // run custom code with an interpreter
-	ActionRunNode ActionType = "run_node" // run every check of a node right now
+	ActionHTTP     ActionType = "http"     // send an HTTP request (webhook)
+	ActionGit      ActionType = "git"      // run a git command in a repository
+	ActionScript   ActionType = "script"   // run custom code with an interpreter
+	ActionRunNode  ActionType = "run_node" // run every check of a node right now
+	ActionSlack    ActionType = "slack"    // post to a Slack incoming webhook
+	ActionTeams    ActionType = "teams"    // post an Adaptive Card to a Teams webhook
+	ActionNtfy     ActionType = "ntfy"     // publish to an ntfy topic
+	ActionPushover ActionType = "pushover" // send a Pushover notification
 )
 
 // Valid reports whether the action type is known.
 func (t ActionType) Valid() bool {
 	switch t {
-	case ActionHTTP, ActionGit, ActionScript, ActionRunNode:
+	case ActionHTTP, ActionGit, ActionScript, ActionRunNode, ActionSlack, ActionTeams, ActionNtfy, ActionPushover:
 		return true
 	}
 	return false
@@ -692,9 +777,27 @@ type Action struct {
 	Command     string `json:"command,omitempty"`     // custom interpreter command line; {{file}} is the script path
 	Code        string `json:"code,omitempty"`
 	WorkDir     string `json:"workDir,omitempty"`
+	// AllowUntrustedInput acknowledges that placeholder values may contain
+	// anything the caller chooses. It is only consulted for the "custom"
+	// interpreter, where GWatch cannot know how to quote a value safely and
+	// therefore refuses to splice placeholders into the code without it.
+	AllowUntrustedInput bool `json:"allowUntrustedInput,omitempty"`
 
 	// run_node
 	NodeID *int64 `json:"nodeId,omitempty"`
+
+	// slack, teams: WebhookURL. ntfy: Server + Topic (+ optional Token/Priority/Tags).
+	// pushover: Token + UserKey (+ optional Priority). Title/Message are shared by
+	// slack, teams, ntfy and pushover.
+	WebhookURL string `json:"webhookUrl,omitempty"`
+	Title      string `json:"title,omitempty"`
+	Message    string `json:"message,omitempty"`
+	Topic      string `json:"topic,omitempty"`
+	Server     string `json:"server,omitempty"`
+	Priority   string `json:"priority,omitempty"`
+	Tags       string `json:"tags,omitempty"`
+	Token      string `json:"token,omitempty"`
+	UserKey    string `json:"userKey,omitempty"`
 
 	TimeoutSeconds int `json:"timeoutSeconds,omitempty"` // default 30
 }
@@ -738,13 +841,17 @@ type Trigger struct {
 // Endpoint is a user-defined HTTP endpoint served at /hook/{slug} that runs
 // an action when called.
 type Endpoint struct {
-	ID           int64      `json:"id"`
-	Name         string     `json:"name"`
-	Slug         string     `json:"slug"`
-	Description  string     `json:"description"`
-	Enabled      bool       `json:"enabled"`
-	Method       string     `json:"method"` // GET | POST | ANY
-	Token        string     `json:"token"`  // optional shared secret (X-GWatch-Token header or ?token=)
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Slug        string `json:"slug"`
+	Description string `json:"description"`
+	Enabled     bool   `json:"enabled"`
+	Method      string `json:"method"` // GET | POST | ANY
+	Token       string `json:"token"`  // shared secret (X-GWatch-Token header, ?token= or Bearer)
+	// AllowNoToken is the explicit acknowledgement that this endpoint may be
+	// called by anyone who can reach the port. Without it an empty token is
+	// rejected when saving and refused when called.
+	AllowNoToken bool       `json:"allowNoToken"`
 	Action       Action     `json:"action"`
 	LastCalledAt *time.Time `json:"lastCalledAt"`
 	LastStatus   string     `json:"lastStatus"`
