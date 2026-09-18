@@ -301,7 +301,7 @@
 
   /* ---------- Settings / health / backups ---------- */
   let settings = {
-    general: { instanceName: 'Home monitor', defaultIntervalSeconds: 60, defaultTimeoutSeconds: 10, maxConcurrentChecks: 8, minIntervalSeconds: 10, wallboardRefreshSeconds: 15, latencyWarnMs: 0, packetLossWarnPct: 0, theme: 'dark', accentColor: '#7c6cff', remoteAccess: false, accessPassword: '', updateRepo: 'jxburros/GWatch' },
+    general: { instanceName: 'Home monitor', defaultIntervalSeconds: 60, defaultTimeoutSeconds: 10, maxConcurrentChecks: 8, minIntervalSeconds: 10, wallboardRefreshSeconds: 15, latencyWarnMs: 0, packetLossWarnPct: 0, theme: 'dark', accentColor: '#7c6cff', remoteAccess: false, accessPassword: '', requireLoginLocally: false, updateRepo: 'jxburros/GWatch' },
     alerts: { enabled: true, recipients: ['jeff@example.com', 'sam@example.com'], failureThreshold: 2, cooldownMinutes: 60, notifyRecovery: true, notifyWarnings: true, certWarnDays: 14, smtp: { host: 'smtp.example.com', port: 587, username: 'gwatch@example.com', password: '********', from: 'GWatch <gwatch@example.com>', security: 'starttls' } },
     retention: { rawDays: 30, fiveMinDays: 180, hourlyDays: 730, dailyDays: 0, eventDays: 730 },
   };
@@ -488,7 +488,13 @@
   const err = (status, message) => Object.assign(new Error(message), { status });
 
   on('GET', /^\/api\/health$/, () => health());
-  on('GET', /^\/api\/version$/, () => ({ version: '0.4.1', platform: 'windows/amd64' }));
+  on('GET', /^\/api\/version$/, () => ({ version: '0.4.1', platform: 'windows/amd64', apiVersion: 1 }));
+  // The mock always plays an administrator on the machine GWatch runs on:
+  // there is nothing to sign in to, so the sign-in screen never appears.
+  on('GET', /^\/api\/me$/, () => ({ kind: 'local', name: 'this computer', role: 'admin', isAdmin: true, canWrite: true, signedIn: false, theme: settings.general.theme, accentColor: settings.general.accentColor }));
+  on('GET', /^\/api\/auth\/setup$/, () => ({ usersConfigured: false, loginRequired: false, accessPasswordSet: false, apiVersion: 1 }));
+  on('GET', /^\/api\/users$/, () => []);
+  on('GET', /^\/api\/apikeys$/, () => []);
   on('GET', /^\/api\/overview$/, () => overview());
   on('GET', /^\/api\/wallboard$/, () => wallboard());
   on('GET', /^\/api\/templates$/, () => templates);

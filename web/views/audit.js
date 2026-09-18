@@ -69,7 +69,7 @@ export async function mount(root, ctx) {
     function render() {
       clear(listEl); clear(foot);
       if (!events.length) { listEl.append(h('div', { class: 'card' }, emptyState({ icon: 'audit', title: 'No events match', text: 'Try a different search, type, node or time window.', compact: true }))); return; }
-      const table = h('table', { class: 'table audit-table' }, h('thead', null, h('tr', null, h('th', null, 'Time'), h('th', null, 'Type'), h('th', null, 'Node › check'), h('th', null, 'Event'))));
+      const table = h('table', { class: 'table audit-table' }, h('thead', null, h('tr', null, h('th', null, 'Time'), h('th', null, 'Type'), h('th', null, 'Node › check'), h('th', null, 'Event'), h('th', null, 'Who'))));
       const tb = h('tbody');
       for (const ev of events) {
         const m = eventMeta(ev.type);
@@ -78,6 +78,10 @@ export async function mount(root, ctx) {
           h('td', null, h('div', { class: 'row', style: { gap: '6px', flexWrap: 'nowrap' } }, eventIcon(ev.type), h('span', { class: 'ev-type' }, m.label))),
           h('td', null, ev.nodeName ? h('a', { href: ev.nodeId ? `#/nodes/${ev.nodeId}` : null }, ev.nodeName, ev.checkName ? ` › ${ev.checkName}` : '') : h('span', { class: 'dim' }, '—')),
           h('td', null, h('div', { class: 'strong' }, ev.title || m.label), ev.detail ? h('div', { class: 'ev-detail' }, ev.detail) : null),
+          // Empty for anything the monitoring engine did on its own.
+          h('td', { class: 'nowrap' }, ev.actor
+            ? h('span', { class: 'row', style: { gap: '5px', flexWrap: 'nowrap' } }, icon('user'), ev.actor)
+            : h('span', { class: 'dim' }, '—')),
         ));
       }
       table.append(tb);
