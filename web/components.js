@@ -216,6 +216,16 @@ export function statusGlyph(status, { text = true } = {}) {
   return el;
 }
 
+/** A glowing status circle. The halo colour comes from the status class, so it
+ *  stays right when the theme changes. `size` is 'sm' | '' | 'lg'. */
+export function statusOrb(status, { size = '', label } = {}) {
+  const m = statusMeta(status);
+  const key = status in STATUS ? status : 'unknown';
+  const el = h('span', { class: `orb orb-${key}${size ? ` orb-${size}` : ''}`, title: label || m.label });
+  el.append(h('span', { class: 'sr-only' }, label || m.label));
+  return el;
+}
+
 /** Compact "check chip": glyph + name + latency, for node rows. */
 export function checkChip(check, state, { href } = {}) {
   const status = state?.status || (check.enabled === false ? 'paused' : 'unknown');

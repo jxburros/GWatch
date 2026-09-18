@@ -3,7 +3,7 @@
 // layout (x, y, width, height per widget) is saved with the dashboard.
 
 import { api, getHistoryMulti, getHistoryAuto, qs } from '../api.js';
-import { h, icon, clear, replace, statusPill, statusGlyph, checkChip, toast, confirmDialog, promptDialog, openModal, menuButton, field, textInput, numberInput, selectInput, checkbox, emptyState, skeleton, eventRow, rangeChips, statusMeta, uid } from '../components.js';
+import { h, icon, clear, replace, statusPill, statusGlyph, checkChip, statusOrb, toast, confirmDialog, promptDialog, openModal, menuButton, field, textInput, numberInput, selectInput, checkbox, emptyState, skeleton, eventRow, rangeChips, statusMeta, uid } from '../components.js';
 import { relTime, bytes, plural, dateShort, duration } from '../fmt.js';
 import { chartConfigEditor, renderConfiguredChart, normalizeChartConfig } from '../chart-config.js';
 
@@ -507,7 +507,7 @@ export async function mount(root, ctx) {
       if (g.maintenance) parts.push(`${g.maintenance} maintenance`);
       if (g.paused) parts.push(`${g.paused} paused`);
       wrap.append(h('a', { class: 'group-card', href: `#/nodes?group=${encodeURIComponent(g.name)}` },
-        h('div', { class: 'row-between' }, h('span', { class: 'g-name' }, g.name), statusPill(g.status)),
+        h('div', { class: 'g-head' }, statusOrb(g.status), h('span', { class: 'g-name' }, g.name)),
         h('div', { class: 'g-count' }, parts.join(' · ') || `${g.total} nodes`)));
     }
     body.append(wrap);

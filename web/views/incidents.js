@@ -35,7 +35,7 @@ export async function mount(root, ctx) {
 
   const typeSel = selectInput({ options: TYPE_GROUPS, value: state.type, 'aria-label': 'Event type', onchange: () => { state.type = typeSel.value; reload(); } });
   const nodeSel = selectInput({ options: [{ value: '', label: 'All nodes' }], value: '', 'aria-label': 'Node', onchange: () => { state.nodeId = nodeSel.value; reload(); } });
-  const toolbar = h('div', { class: 'toolbar' }, h('div', { style: { minWidth: '220px' } }, typeSel), h('div', { style: { minWidth: '220px' } }, nodeSel));
+  const toolbar = h('section', { class: 'filter-bar', 'aria-label': 'Filter events' }, h('div', { class: 'toolbar' }, h('div', { style: { minWidth: '220px' } }, typeSel), h('div', { style: { minWidth: '220px' } }, nodeSel)));
   const listEl = h('div', null, skeleton({ lines: 5 }));
   const moreWrap = h('div', { style: { display: 'flex', justifyContent: 'center', marginTop: '8px' } });
   root.append(toolbar, listEl, moreWrap);

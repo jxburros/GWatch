@@ -91,7 +91,7 @@ export async function mount(root, ctx) {
       try { const rows = await fetchPage(null); if (state.destroyed) return; const seen = new Set(events.map((e) => e.id)); const fresh = (rows || []).filter((e) => !seen.has(e.id)); if (fresh.length) { events.unshift(...fresh); render(); } } catch { /* ignore */ }
     };
     return h('div', null,
-      h('div', { class: 'audit-toolbar' }, field({ label: 'Search', input: q }), field({ label: 'Type', input: type }), field({ label: 'Node', input: node }), field({ label: 'From', input: since }), field({ label: 'Until', input: until }), h('div', { class: 'btn-group' }, applyBtn, exportBtn)),
+      h('section', { class: 'filter-bar', 'aria-label': 'Filter the audit log' }, h('div', { class: 'audit-toolbar' }, field({ label: 'Search', input: q }), field({ label: 'Type', input: type }), field({ label: 'Node', input: node }), field({ label: 'From', input: since }), field({ label: 'Until', input: until }), h('div', { class: 'btn-group' }, applyBtn, exportBtn))),
       listEl, foot);
   }
 

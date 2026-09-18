@@ -12,10 +12,13 @@ export async function mount(root, ctx) {
   ctx.setTitle('Nodes', { actions: [h('button', { class: 'btn btn-primary', type: 'button', onclick: () => openTemplatePicker(state, ctx) }, icon('plus'), 'Add node')] });
 
   const searchInput = h('input', { type: 'search', placeholder: 'Search name, host, group or tag…', value: state.q, 'aria-label': 'Search nodes', oninput: () => { state.q = searchInput.value; renderList(); } });
-  const toolbar = h('div', { class: 'toolbar' }, h('div', { class: 'search' }, icon('search'), searchInput));
+  const countEl = h('span', { class: 'filter-count' });
+  const toolbar = h('div', { class: 'toolbar' }, h('div', { class: 'search' }, icon('search'), searchInput), countEl);
   const filters = h('div', { class: 'filters' });
-  const listEl = h('div', null, skeleton({ lines: 4 }));
-  root.append(toolbar, filters, listEl);
+  // Search and filters belong to the same control: one panel above the list.
+  const controls = h('section', { class: 'filter-bar', 'aria-label': 'Filter nodes' }, toolbar, filters);
+  const listEl = h('div', { class: 'node-list' }, skeleton({ lines: 4 }));
+  root.append(controls, listEl);
 
   async function load() {
     const [nodes, groups] = await Promise.all([api.get('/api/nodes'), api.get('/api/groups').catch(() => ({ groups: [], tags: [] }))]);
@@ -58,10 +61,14 @@ export async function mount(root, ctx) {
   function renderList() {
     clear(listEl);
     if (!state.nodes.length) {
+      countEl.textContent = '';
       listEl.append(h('div', { class: 'card' }, emptyState({ icon: 'server', title: 'No nodes yet', text: 'Add your router, a website or a home server. Templates fill in sensible checks for you.', actions: h('button', { class: 'btn btn-primary', type: 'button', onclick: () => openTemplatePicker(state, ctx) }, icon('plus'), 'Add your first node') })));
       return;
     }
     const rows = state.nodes.filter(matches);
+    countEl.textContent = rows.length === state.nodes.length
+      ? `${state.nodes.length} node${state.nodes.length === 1 ? '' : 's'}`
+      : `${rows.length} of ${state.nodes.length} nodes`;
     if (!rows.length) {
       listEl.append(h('div', { class: 'card' }, emptyState({ icon: 'search', title: 'No nodes match', text: 'Try a different search or clear the filters.', compact: true, actions: h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { state.q = ''; state.group = ''; state.status = ''; state.tag = ''; searchInput.value = ''; renderFilters(); renderList(); } }, 'Clear filters') })));
       return;
