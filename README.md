@@ -1,5 +1,7 @@
 # GWatch
 
+[![CI](https://github.com/jxburros/GWatch/actions/workflows/ci.yml/badge.svg)](https://github.com/jxburros/GWatch/actions/workflows/ci.yml)
+
 GWatch is a calm, local-only monitor for a home network and its services. It runs as a
 Windows background service (or a plain console program on Linux/macOS), checks your
 router, servers, websites and APIs on a schedule, keeps long-term history in an embedded
@@ -91,9 +93,28 @@ reachable from other computers.
 ## Development
 
 ```bash
-go vet ./... && go test ./...      # unit + integration tests (no external network needed)
+make test                         # go vet + unit and integration tests
+make ci                           # everything CI runs: gofmt, vet, go mod tidy, race tests
+make cover                        # race tests plus a per-function coverage report
 make windows                      # cross-compile dist/gwatch.exe from Linux/macOS
 ```
+
+The test suite needs no external network: HTTP, TLS and DNS checks are exercised against
+local `httptest` servers and a fake in-process DNS resolver, and ping output is parsed
+from fixtures, so the tests are deterministic on a CI runner.
+
+### Continuous integration
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push and pull
+request:
+
+| Job | What it guards |
+|---|---|
+| `lint` | `gofmt`, `go vet`, `go mod tidy` is a no-op, `go mod verify` |
+| `test` | Builds and runs the suite on Linux (with `-race` and coverage) and on Windows, the platform GWatch installs as a service on |
+| `web` | `node --check` on every file under `web/` — the UI is embedded with `//go:embed`, so the Go compiler never sees a syntax error there |
+| `build` | Cross-compiles `linux/amd64`, `linux/arm64`, `windows/amd64` and `darwin/arm64` with `CGO_ENABLED=0` and uploads the binaries |
+| `scripts` | Parses `scripts/*.ps1` with the PowerShell parser, since those scripts are the Windows install path |
 
 Layout:
 

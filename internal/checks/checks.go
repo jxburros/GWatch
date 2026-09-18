@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jxburros/GWatch/internal/model"
@@ -405,6 +406,39 @@ func hostPort(target string, cfgPort, defaultPort int) (string, int, error) {
 	return t, port, nil
 }
 
+// Winsock error numbers for the conditions netErrorLabel rewords. Windows
+// does not report the POSIX errnos for socket failures, and the text it
+// produces is localized, so they are matched numerically. The values never
+// occur on other platforms, so they are safe to test for everywhere.
+const (
+	wsaeNetUnreach  = syscall.Errno(10051)
+	wsaeConnReset   = syscall.Errno(10054)
+	wsaeConnRefused = syscall.Errno(10061)
+	wsaeHostUnreach = syscall.Errno(10065)
+)
+
+// netErrorLabel maps a socket error number to the wording shown to the user,
+// or "" when the error is not one of the conditions worth rewording. Matching
+// the errno rather than the message keeps the wording identical on Windows,
+// where the operating system text is both different and translated.
+func netErrorLabel(err error) string {
+	var errno syscall.Errno
+	if !errors.As(err, &errno) {
+		return ""
+	}
+	switch errno {
+	case syscall.ECONNREFUSED, wsaeConnRefused:
+		return "connection refused"
+	case syscall.EHOSTUNREACH, wsaeHostUnreach:
+		return "no route to host"
+	case syscall.ENETUNREACH, wsaeNetUnreach:
+		return "network is unreachable"
+	case syscall.ECONNRESET, wsaeConnReset:
+		return "connection reset by peer"
+	}
+	return ""
+}
+
 // describeNetError turns a low-level network error into the wording shown to
 // the user.
 func describeNetError(err error, timeout time.Duration) string {
@@ -435,6 +469,9 @@ func describeNetError(err error, timeout time.Duration) string {
 		msg := err.Error()
 		msg = strings.TrimPrefix(msg, "tls: ")
 		return "TLS: " + msg
+	}
+	if label := netErrorLabel(err); label != "" {
+		return label
 	}
 	msg := err.Error()
 	lower := strings.ToLower(msg)

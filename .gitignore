@@ -8,3 +8,5 @@ data/
 GWatch
 gwatch
 gwatch.exe
+coverage.out
+coverage.txt
