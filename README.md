@@ -62,6 +62,10 @@ brief that defines the scope lives in [`local-network-monitoring-product-brief.m
   access password for other devices (this computer is never challenged).
 - **Updates**: check GitHub releases from Settings › Updates and install the new
   executable in place (the previous one is kept as `.old`); the service restarts itself.
+  An update is only installed if its ed25519 signature verifies against a release key
+  pinned into the running binary — an unsigned, differently signed or altered download
+  is refused, never installed with a warning. A build with no key pinned (the default
+  for forks and local builds) still reports new releases but will not install them.
 - **Exports**: chart as PNG, history and results as CSV, events as CSV, service log,
   configuration as JSON.
 - **Backups**: one-click, password-encrypted (Argon2id + AES-256-GCM) archives of the
@@ -177,8 +181,18 @@ request as a single job on a Windows runner (Linux runners are switched off for 
 | artefact | Uploads `gwatch-windows-amd64.exe` |
 
 Pushing a tag such as `v1.2.0` additionally runs the `release` job, which cross-compiles
-`gwatch-<os>-<arch>[.exe]` for Windows, Linux and macOS with `.sha256` checksums and
-publishes a GitHub release. Those asset names are what **Settings › Updates** looks for.
+`gwatch-<os>-<arch>[.exe]` for Windows, Linux and macOS, writes a `.sha256` checksum and
+an ed25519 `.sig` signature next to each, and publishes a GitHub release. Those asset
+names are what **Settings › Updates** looks for.
+
+The signature is what the updater actually trusts: it verifies `<asset>.sig` against the
+public keys pinned in [`internal/update/release_keys.txt`](internal/update/release_keys.txt)
+and refuses to install anything else. Releasing therefore needs a one-time setup — generate
+the key pair with `make keygen` (`go run ./cmd/gwatch-sign keygen`), paste the printed
+`ed25519:…` line into `release_keys.txt`, keep `release.key` offline and store its base64
+seed as the `GWATCH_SIGNING_KEY` repository secret. The release job fails if that secret is
+missing, or if its public key is not listed in `release_keys.txt` (which would ship binaries
+that reject their own updates). Full steps: [`docs/RELEASING.md`](docs/RELEASING.md).
 
 Layout:
 
@@ -190,7 +204,8 @@ Layout:
 | `internal/checks` | Check runners: ping, http, cert, tcp, dns, keyword, json; node templates |
 | `internal/engine` | Scheduler, result processing, alert rules, dependencies, maintenance, retention, health, triggers |
 | `internal/actions` | Automation actions: HTTP requests, git commands, custom scripts, run-node |
-| `internal/update` | GitHub release check, download, checksum and executable swap |
+| `internal/update` | GitHub release check, download, checksum, signature verification and executable swap |
+| `cmd/gwatch-sign` | Maintainer CLI: generate the release signing key, sign and verify release assets |
 | `internal/mailer` | SMTP delivery and alert email rendering |
 | `internal/backup` | Encrypted backup archives and restore |
 | `internal/api` | JSON API (see `docs/API.md`) and static UI serving |

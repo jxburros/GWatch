@@ -150,8 +150,18 @@ String fields may contain `{{placeholders}}`: `node.name`, `node.host`, `node.gr
 ## Updates
 
 - `GET /api/update/status` → `{ "status": UpdateStatus, "repo": "owner/name", "version": "..." }`.
-- `POST /api/update/check` → `UpdateInfo` from the repository's latest GitHub release (502 with `{error, info}` when GitHub cannot be reached or there is no release).
-- `POST /api/update/apply` → downloads the platform asset (`gwatch-<os>-<arch>[.exe]`, verified against `<asset>.sha256` when published), swaps the executable and restarts the service → `{ ok, info, restarting }`.
+- `POST /api/update/check` → `UpdateInfo` from the repository's latest GitHub release (502 with `{error, info}` when GitHub cannot be reached or there is no release). On a build with no release signing key pinned, the check still reports the release and `info.error` explains that it cannot be installed.
+- `POST /api/update/apply` → downloads the platform asset (`gwatch-<os>-<arch>[.exe]`), **verifies its signature**, swaps the executable and restarts the service → `{ ok, info, restarting }`.
+
+A signature is mandatory. Each asset is published with a sibling `<asset>.sig` in the `gwatch-sig-v1` format — an ed25519 signature over the SHA-256 digest of the asset — and the downloaded file is only kept if that signature verifies against a public key pinned into the running binary (`internal/update/release_keys.txt`, or the `-X …/internal/update.releaseKeys=ed25519:…` build override). Otherwise the download is deleted and apply fails with:
+
+| Situation | `error` |
+|---|---|
+| this build pins no key | `this build has no release signing key, updates are disabled (see docs)` |
+| no `.sig` asset in the release | `the release is not signed` |
+| signature is malformed or from another key | `signature verification failed` |
+
+The `<asset>.sha256` sidecar is still checked when the release publishes one (`checksum mismatch` aborts the update), but it is only a transit-corruption guard and never substitutes for the signature. See [`RELEASING.md`](RELEASING.md).
 
 ## Settings
 

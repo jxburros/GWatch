@@ -1,7 +1,7 @@
 VERSION ?= dev
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build windows test test-race cover fmt fmt-check vet tidy-check web-check ci run
+.PHONY: build windows test test-race cover fmt fmt-check vet tidy-check web-check ci run keygen sign verify-release
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/gwatch .
@@ -48,3 +48,23 @@ ci: fmt-check vet tidy-check test-race
 
 run:
 	go run . run --data-dir ./data
+
+# Release signing (see docs/RELEASING.md). KEY defaults to release.key; leave it
+# empty to take the key from the GWATCH_SIGNING_KEY environment variable, the
+# way CI does.
+KEY ?= release.key
+KEYARG := $(if $(KEY),-key $(KEY),)
+
+# One-time: generates the signing key and prints the line for release_keys.txt.
+# release.key is secret — keep it offline, never commit it.
+keygen:
+	go run ./cmd/gwatch-sign keygen -out $(KEY)
+
+# Writes dist/<asset>.sig next to every built binary.
+sign:
+	go run ./cmd/gwatch-sign sign $(KEYARG) dist/gwatch-*
+
+# Verifies those signatures with the keys pinned in release_keys.txt, i.e. what
+# an installed GWatch will do before it replaces itself.
+verify-release:
+	go run ./cmd/gwatch-sign verify dist/gwatch-*

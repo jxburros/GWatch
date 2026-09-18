@@ -106,7 +106,11 @@ jobs:
 
   # Tagging v1.2.3 publishes a GitHub release with the binaries the in-app
   # updater (Settings › Updates) looks for: gwatch-<os>-<arch>[.exe] plus a
-  # .sha256 checksum next to each.
+  # .sha256 checksum and an ed25519 .sig signature next to each. The updater
+  # refuses anything it cannot verify against the key pinned in
+  # internal/update/release_keys.txt, so this job signs with the
+  # GWATCH_SIGNING_KEY secret and checks the two agree before publishing
+  # (see docs/RELEASING.md).
   release:
     name: Release
     if: startsWith(github.ref, 'refs/tags/v')
@@ -125,6 +129,23 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # Fail before anything is built if the release could not be signed, or
+      # could be signed with a key the shipped binaries would not trust.
+      - name: Signing key
+        env:
+          GWATCH_SIGNING_KEY: ${{ secrets.GWATCH_SIGNING_KEY }}
+        run: |
+          if [ -z "$GWATCH_SIGNING_KEY" ]; then
+            echo "::error::set the GWATCH_SIGNING_KEY secret (base64 ed25519 seed) — releases must be signed, see docs/RELEASING.md"
+            exit 1
+          fi
+          pub="$(go run ./cmd/gwatch-sign pubkey)"
+          echo "signing with $pub"
+          if ! grep -v '^[[:space:]]*#' internal/update/release_keys.txt | grep -qF "$pub"; then
+            echo "::error::the GWATCH_SIGNING_KEY secret's public key ($pub) is not listed in internal/update/release_keys.txt, so the released binaries would reject their own updates. Add the line and tag again."
+            exit 1
+          fi
+
       - name: Cross-compile
         run: |
           version="${GITHUB_REF_NAME#v}"
@@ -136,6 +157,17 @@ jobs:
             sha256sum "$out" | sed 's#dist/##' > "$out.sha256"
           done
           ls -lh dist
+
+      # Sign every binary, then verify the signatures with the keys pinned into
+      # this checkout — exactly what the updater does on the user's machine.
+      - name: Sign release assets
+        env:
+          GWATCH_SIGNING_KEY: ${{ secrets.GWATCH_SIGNING_KEY }}
+        run: |
+          go run ./cmd/gwatch-sign sign dist/gwatch-*
+          go run ./cmd/gwatch-sign verify dist/gwatch-*
+          ls -lh dist
+
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
