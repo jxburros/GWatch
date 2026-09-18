@@ -1,21 +1,113 @@
-MIT License
+GWatch Community License 1.0
 
-Copyright (c) 2026 Jeffrey
+Copyright (c) 2026 JX Holdings.
+GWatch was developed by Jeffrey Guntly and Garrett Guntly.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This license grants broad rights to use, study, modify, and distribute
+GWatch ("the Software"), with one commercial restriction (Section 2) and
+mandatory attribution terms (Sections 3-4). It is not an OSI-approved
+open-source license because of those two sections; it is a source-available
+license. See TRADEMARKS.md for the separate policy governing the GWatch
+name and logo.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. GRANT OF RIGHTS
+
+Subject to the terms of this license, JX Holdings grants you a worldwide,
+royalty-free, non-exclusive license to use, reproduce, prepare derivative
+works of, publicly display, publicly perform, sublicense, and distribute
+the Software and derivative works of the Software ("Derivative Works"),
+in source or object form, for any purpose, commercial or otherwise,
+except as limited by Section 2.
+
+Each contributor grants you a license to any of that contributor's patent
+claims that are necessarily infringed by their contribution alone or by
+combination with the Software, for making, using, selling, and
+distributing the Software.
+
+2. RESTRICTION: YOU MAY NOT SELL THE SOFTWARE ITSELF
+
+You may not sell, license, or offer as a paid hosted/managed service the
+Software, or any Deployment consisting of the Software without a
+Significant Modification, where the value a customer is paying for is
+substantially the Software's own functionality rather than something you
+added.
+
+For the avoidance of doubt, this license places NO restriction on
+charging money for:
+
+  (a) installing, configuring, hosting, operating, or maintaining the
+      Software for a customer ("deployment and managed services");
+  (b) support, training, consulting, or incident response related to the
+      Software;
+  (c) a product or service that includes the Software but adds a
+      Significant Modification, provided the fee is genuinely for that
+      added value and not a repackaging of the unmodified Software for
+      resale.
+
+"Significant Modification" means a change to the Software's source code
+that is more than cosmetic, configuration, rebranding, or repackaging —
+for example, materially new features, a materially different
+architecture, or substantially rewritten functionality — such that the
+result is a genuinely different product built on GWatch, not GWatch
+resold under another name.
+
+If you are unsure whether your intended use falls under this restriction,
+contact JX Holdings to discuss a commercial license before proceeding.
+
+3. MANDATORY ATTRIBUTION
+
+Every copy of the Software, and every Derivative Work (including one
+containing a Significant Modification), must retain, unmodified, not
+obscured, and reasonably visible to end users:
+
+  (a) the "GWatch" name, identifying the origin of the software;
+  (b) the GWatch logo, displayed at least once in the software's user
+      interface (e.g. an About/credits view) and in any documentation or
+      marketing material distributed with it;
+  (c) the following copyright notice, in the software's About/credits
+      view, its documentation, and its LICENSE file:
+      "Copyright (c) 2026 JX Holdings. Original developers: Jeffrey
+      Guntly and Garrett Guntly."; and
+  (d) this LICENSE file and TRADEMARKS.md, unmodified, alongside the
+      source.
+
+You may not remove, obscure, or replace the above to make a Derivative
+Work appear unrelated to GWatch, JX Holdings, Jeffrey Guntly, or Garrett
+Guntly.
+
+4. NO ENDORSEMENT — MANDATORY NON-OFFICIAL NOTICE
+
+Complying with Section 3 does not make a Derivative Work official,
+reviewed, or endorsed by JX Holdings, Jeffrey Guntly, or Garrett Guntly.
+
+If you distribute the Software with any modification (Significant or
+not), you must additionally display, next to the attribution required by
+Section 3, a clear and conspicuous notice that your version is
+unofficial and not endorsed, for example:
+
+  "This is an independently modified version of GWatch, based on the
+  original project by JX Holdings. It is not an official release and is
+  not endorsed by, sponsored by, or affiliated with JX Holdings, Jeffrey
+  Guntly, or Garrett Guntly."
+
+You may not otherwise use the GWatch name, the GWatch logo, or the JX
+Holdings name in any way that states or implies affiliation, sponsorship,
+official status, or endorsement, beyond what Section 3 requires to
+identify the Software's origin. See TRADEMARKS.md for further limits on
+using these marks in your own product or company name.
+
+5. NO WARRANTY
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL
+JX HOLDINGS, JEFFREY GUNTLY, GARRETT GUNTLY, OR ANY OTHER CONTRIBUTOR BE
+LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH
+THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+6. TERMINATION
+
+Your rights under this license terminate automatically if you violate
+Section 2, 3, or 4 and do not cure the violation within 30 days of
+becoming aware of it.

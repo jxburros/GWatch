@@ -164,4 +164,9 @@ Layout:
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+GWatch is source-available under the [GWatch Community License](LICENSE): free to use,
+modify, and distribute, including commercially for deployment, support, and
+customization work — but the vanilla software itself may not be resold, and every
+copy or derivative must keep the GWatch name, logo, and attribution while making clear
+it isn't an official JX Holdings release. See [TRADEMARKS.md](TRADEMARKS.md) for the
+separate policy on using the GWatch name and logo.
