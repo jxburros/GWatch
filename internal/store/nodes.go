@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jxburros/GWatch/internal/model"
+	"github.com/jxburros/GWatch/internal/secrets"
 )
 
 const nodeCols = `id, name, host, group_name, tags, notes, importance, enabled, depends_on_node_id, template, created_at, updated_at`
@@ -851,10 +852,75 @@ func (s *Store) PutSetting(ctx context.Context, key string, v any) error {
 	return err
 }
 
-// LoadSettings returns the settings document, filling in defaults.
+// sealSettings encrypts the secret fields of a settings document in place so
+// they never reach disk in cleartext.
+func (s *Store) sealSettings(st *model.Settings) error {
+	pw, err := s.secrets.Seal(st.Alerts.SMTP.Password)
+	if err != nil {
+		return fmt.Errorf("seal smtp password: %w", err)
+	}
+	st.Alerts.SMTP.Password = pw
+	ap, err := s.secrets.Seal(st.General.AccessPassword)
+	if err != nil {
+		return fmt.Errorf("seal access password: %w", err)
+	}
+	st.General.AccessPassword = ap
+	return nil
+}
+
+// openSettings decrypts the secret fields of a settings document in place.
+// A value that cannot be decrypted (wrong or missing key file) is emptied
+// rather than failing the whole load; the reason is recorded and reported by
+// SecretsHealthy.
+func (s *Store) openSettings(st *model.Settings) {
+	var firstErr error
+	open := func(field *string, what string) {
+		v, err := s.secrets.Open(*field)
+		if err != nil {
+			*field = ""
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s: %w", what, err)
+			}
+			return
+		}
+		*field = v
+	}
+	open(&st.Alerts.SMTP.Password, "smtp password")
+	open(&st.General.AccessPassword, "access password")
+	s.setSecretsErr(firstErr)
+}
+
+// migrateSecrets re-saves the settings row when it still holds plaintext
+// secrets, so an upgraded install stops keeping cleartext passwords on disk
+// without the user having to touch anything.
+func (s *Store) migrateSecrets(ctx context.Context) error {
+	st := model.DefaultSettings()
+	err := s.GetSetting(ctx, "settings", &st)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		// A settings row we cannot parse is not this migration's problem.
+		return nil
+	}
+	plaintext := func(v string) bool { return v != "" && !secrets.IsSealed(v) }
+	if !plaintext(st.Alerts.SMTP.Password) && !plaintext(st.General.AccessPassword) {
+		return nil
+	}
+	if err := s.sealSettings(&st); err != nil {
+		return err
+	}
+	return s.PutSetting(ctx, "settings", st)
+}
+
+// LoadSettings returns the settings document, filling in defaults. Secret
+// fields are returned decrypted, exactly as callers stored them.
 func (s *Store) LoadSettings(ctx context.Context) (model.Settings, error) {
 	st := model.DefaultSettings()
 	err := s.GetSetting(ctx, "settings", &st)
+	if err == nil {
+		s.openSettings(&st)
+	}
 	if errors.Is(err, ErrNotFound) {
 		return st, nil
 	}
@@ -907,7 +973,11 @@ func (s *Store) LoadSettings(ctx context.Context) (model.Settings, error) {
 	return st, nil
 }
 
-// SaveSettings stores the settings document.
+// SaveSettings stores the settings document. Secret fields (SMTP password,
+// LAN access password) are encrypted before they are written.
 func (s *Store) SaveSettings(ctx context.Context, st model.Settings) error {
+	if err := s.sealSettings(&st); err != nil {
+		return err
+	}
 	return s.PutSetting(ctx, "settings", st)
 }

@@ -112,6 +112,12 @@ so other devices have to authenticate.
   tries unprivileged ping sockets, then a raw socket, then the system `ping` command.
 - Email: any SMTP provider works (STARTTLS on 587, implicit TLS on 465, or none). Use the
   "Send test email" button in Settings › Alerts before enabling alerts.
+- Secrets at rest: the SMTP password and the access password are encrypted in `gwatch.db`
+  with the key file `gwatch.key`, created next to the database on first run (mode 0600).
+  Keep the two together: moving the database to another machine without the key file means
+  those two passwords have to be entered again; everything else still loads. Backups do not
+  need the key file — they carry the settings in the clear inside an archive that is already
+  encrypted with your backup password.
 - Sleep/hibernate: when the computer was asleep the timeline records a "monitoring paused"
   gap so a quiet period is never mistaken for a healthy one.
 

@@ -131,6 +131,7 @@ String fields may contain `{{placeholders}}`: `node.name`, `node.host`, `node.gr
 
 - `GET /api/settings` → `Settings` (SMTP password and access password are returned masked as `"********"` when set).
 - `PUT /api/settings` body `Settings` → saved Settings (a masked password keeps the stored one). `general.theme` is `dark|light|system`, `general.accentColor` a hex colour, `general.remoteAccess` rebinds the listener to all interfaces live, `general.accessPassword` enables basic auth for other devices, `general.updateRepo` is the GitHub repository checked for releases.
+- Both passwords are stored encrypted in the database with the local `gwatch.key` file; the API request and response bodies are unchanged.
 - `POST /api/settings/test-email` body `{ "to": "optional@override" }` → `{ "ok": true, "message": "..." }` or error.
 - `GET /api/retention/status` → `RetentionStatus`. `POST /api/retention/run` → runs rollup+cleanup now → RetentionStatus.
 
