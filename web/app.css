@@ -213,6 +213,13 @@ svg.icon { width: 1em; height: 1em; display: inline-block; vertical-align: -0.15
 .rail:hover, .rail:has(:focus-visible), html.rail-pinned .rail, body.rail-pinned .rail { width: var(--rail-expanded); box-shadow: var(--shadow); }
 html.rail-pinned .rail, body.rail-pinned .rail { box-shadow: none; }
 .rail .label {
+  /* position:relative keeps the label painted above .nav-link::before, the
+     hover/active band. Without it the label only stayed on top while it still
+     carried transform: translateX(-6px) (a transform paints like a positioned
+     box); the moment the rail opened and the transform went back to none, the
+     band drew over the text and the page name vanished on hover and when
+     selected. */
+  position: relative;
   opacity: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   transform: translateX(-6px);
   transition: opacity 0.16s var(--ease), transform 0.22s var(--ease);
