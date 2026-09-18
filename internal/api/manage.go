@@ -265,6 +265,19 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(g.InstanceName) == "" {
 		g.InstanceName = def.General.InstanceName
 	}
+	if g.RequireLoginLocally && !current.General.RequireLoginLocally {
+		// Turning this on with no administrator to sign in as would lock the
+		// owner out of their own monitor.
+		n, err := s.Store.CountAdmins(r.Context())
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		if n == 0 {
+			writeError(w, http.StatusBadRequest, "create an administrator account before requiring a sign-in on this computer")
+			return
+		}
+	}
 	if g.DefaultIntervalSecs < 10 || g.DefaultIntervalSecs > 86400 {
 		writeError(w, http.StatusBadRequest, "default interval must be between 10 seconds and 1 day")
 		return
@@ -406,6 +419,9 @@ func describeSettingsChange(before, after model.Settings) string {
 	if before.General.AccessPassword != after.General.AccessPassword {
 		parts = append(parts, "access password changed")
 	}
+	if before.General.RequireLoginLocally != after.General.RequireLoginLocally {
+		parts = append(parts, "sign-in on this computer "+map[bool]string{true: "required", false: "no longer required"}[after.General.RequireLoginLocally])
+	}
 	if before.General.Theme != after.General.Theme || before.General.AccentColor != after.General.AccentColor {
 		parts = append(parts, "appearance changed")
 	}
@@ -533,7 +549,7 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request, path, password 
 	}
 	sum, err := backup.Restore(r.Context(), s.Store, path, password, includeHistory)
 	if err != nil {
-		s.Engine.RecordEvent(model.Event{Type: model.EventRestore, Title: "Restore failed", Detail: err.Error()})
+		s.recordEvent(r.Context(), model.Event{Type: model.EventRestore, Title: "Restore failed", Detail: err.Error()})
 		s.fail(w, err)
 		return
 	}
@@ -545,7 +561,7 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request, path, password 
 	now := time.Now()
 	status.LastRestoreAt = &now
 	s.Engine.SetBackupStatus(r.Context(), status)
-	s.Engine.RecordEvent(model.Event{Type: model.EventRestore, Title: "Backup restored", Detail: fmt.Sprintf("%d node(s), %d check(s)%s restored from %s.", sum.Nodes, sum.Checks, map[bool]string{true: fmt.Sprintf(", %d results, %d events", sum.Results, sum.Events), false: ""}[sum.History], filepath.Base(path))})
+	s.recordEvent(r.Context(), model.Event{Type: model.EventRestore, Title: "Backup restored", Detail: fmt.Sprintf("%d node(s), %d check(s)%s restored from %s.", sum.Nodes, sum.Checks, map[bool]string{true: fmt.Sprintf(", %d results, %d events", sum.Results, sum.Events), false: ""}[sum.History], filepath.Base(path))})
 	if err := s.Engine.RunRetention(r.Context(), true); err != nil {
 		s.Log.Errorf("retention after restore: %v", err)
 	}

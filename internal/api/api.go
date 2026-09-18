@@ -3,7 +3,6 @@ package api
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jxburros/GWatch/internal/auth"
 	"github.com/jxburros/GWatch/internal/backup"
 	"github.com/jxburros/GWatch/internal/checks"
 	"github.com/jxburros/GWatch/internal/engine"
@@ -37,133 +37,146 @@ type Server struct {
 	Updater *Updater
 	// Network reports how the server is bound (optional).
 	Network NetworkFunc
+
+	// failLimiter counts failed credential attempts per client IP; apiLimiter
+	// is the general ceiling on API-key traffic from off this machine. Both are
+	// created by Handler().
+	failLimiter *auth.Limiter
+	apiLimiter  *auth.Limiter
+
+	// routes records every pattern Handler() registered, so the authorization
+	// tests can prove the router and the policy table describe the same surface.
+	routes []routeSpec
+
+	// remoteAddrOverride replaces r.RemoteAddr when set. It exists so tests can
+	// exercise non-loopback behaviour over a loopback httptest connection, and
+	// is never set outside tests.
+	remoteAddrOverride func(*http.Request) string
 }
 
 // Handler builds the router.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	s.routes = nil
+	if s.failLimiter == nil {
+		s.failLimiter = auth.NewLimiter(failureLimit, failureWindow)
+	}
+	if s.apiLimiter == nil {
+		s.apiLimiter = auth.NewLimiter(remoteRequestLimit, remoteRequestWindow)
+	}
 
-	mux.HandleFunc("GET /api/health", s.handleHealth)
-	mux.HandleFunc("GET /api/status", s.handleStatus)
-	mux.HandleFunc("GET /api/network", s.handleNetwork)
-	mux.HandleFunc("GET /api/version", s.handleVersion)
-	mux.HandleFunc("GET /api/overview", s.handleOverview)
-	mux.HandleFunc("GET /api/wallboard", s.handleWallboard)
-	mux.HandleFunc("GET /api/stream", s.handleStream)
+	s.route(mux, "GET /api/health", s.handleHealth)
+	s.route(mux, "GET /api/status", s.handleStatus)
+	s.route(mux, "GET /api/network", s.handleNetwork)
+	s.route(mux, "GET /api/version", s.handleVersion)
+	s.route(mux, "GET /api/overview", s.handleOverview)
+	s.route(mux, "GET /api/wallboard", s.handleWallboard)
+	s.route(mux, "GET /api/stream", s.handleStream)
 
-	mux.HandleFunc("GET /api/nodes", s.handleListNodes)
-	mux.HandleFunc("POST /api/nodes", s.handleCreateNode)
-	mux.HandleFunc("GET /api/nodes/{id}", s.handleGetNode)
-	mux.HandleFunc("PUT /api/nodes/{id}", s.handleUpdateNode)
-	mux.HandleFunc("DELETE /api/nodes/{id}", s.handleDeleteNode)
-	mux.HandleFunc("POST /api/nodes/{id}/enable", s.handleEnableNode)
-	mux.HandleFunc("POST /api/nodes/{id}/duplicate", s.handleDuplicateNode)
-	mux.HandleFunc("POST /api/nodes/{id}/run", s.handleRunNode)
-	mux.HandleFunc("POST /api/nodes/{id}/silence", s.handleSilenceNode)
-	mux.HandleFunc("GET /api/templates", s.handleTemplates)
-	mux.HandleFunc("GET /api/groups", s.handleGroups)
+	s.route(mux, "GET /api/nodes", s.handleListNodes)
+	s.route(mux, "POST /api/nodes", s.handleCreateNode)
+	s.route(mux, "GET /api/nodes/{id}", s.handleGetNode)
+	s.route(mux, "PUT /api/nodes/{id}", s.handleUpdateNode)
+	s.route(mux, "DELETE /api/nodes/{id}", s.handleDeleteNode)
+	s.route(mux, "POST /api/nodes/{id}/enable", s.handleEnableNode)
+	s.route(mux, "POST /api/nodes/{id}/duplicate", s.handleDuplicateNode)
+	s.route(mux, "POST /api/nodes/{id}/run", s.handleRunNode)
+	s.route(mux, "POST /api/nodes/{id}/silence", s.handleSilenceNode)
+	s.route(mux, "GET /api/templates", s.handleTemplates)
+	s.route(mux, "GET /api/groups", s.handleGroups)
 
-	mux.HandleFunc("POST /api/checks/test", s.handleTestCheck)
-	mux.HandleFunc("POST /api/checks/{id}/run", s.handleRunCheck)
-	mux.HandleFunc("POST /api/checks/{id}/enable", s.handleEnableCheck)
-	mux.HandleFunc("POST /api/checks/{id}/silence", s.handleSilenceCheck)
-	mux.HandleFunc("GET /api/checks/{id}/results", s.handleCheckResults)
-	mux.HandleFunc("GET /api/checks/{id}/state", s.handleCheckState)
+	s.route(mux, "POST /api/checks/test", s.handleTestCheck)
+	s.route(mux, "POST /api/checks/{id}/run", s.handleRunCheck)
+	s.route(mux, "POST /api/checks/{id}/enable", s.handleEnableCheck)
+	s.route(mux, "POST /api/checks/{id}/silence", s.handleSilenceCheck)
+	s.route(mux, "GET /api/checks/{id}/results", s.handleCheckResults)
+	s.route(mux, "GET /api/checks/{id}/state", s.handleCheckState)
 
-	mux.HandleFunc("GET /api/history", s.handleHistory)
-	mux.HandleFunc("GET /api/history/multi", s.handleHistoryMulti)
+	s.route(mux, "GET /api/history", s.handleHistory)
+	s.route(mux, "GET /api/history/multi", s.handleHistoryMulti)
 
-	mux.HandleFunc("GET /api/events", s.handleEvents)
-	mux.HandleFunc("POST /api/events/note", s.handleNote)
+	s.route(mux, "GET /api/events", s.handleEvents)
+	s.route(mux, "POST /api/events/note", s.handleNote)
 
-	mux.HandleFunc("GET /api/maintenance", s.handleListMaintenance)
-	mux.HandleFunc("POST /api/maintenance", s.handleSaveMaintenance)
-	mux.HandleFunc("PUT /api/maintenance/{id}", s.handleSaveMaintenance)
-	mux.HandleFunc("DELETE /api/maintenance/{id}", s.handleDeleteMaintenance)
+	s.route(mux, "GET /api/maintenance", s.handleListMaintenance)
+	s.route(mux, "POST /api/maintenance", s.handleSaveMaintenance)
+	s.route(mux, "PUT /api/maintenance/{id}", s.handleSaveMaintenance)
+	s.route(mux, "DELETE /api/maintenance/{id}", s.handleDeleteMaintenance)
 
-	mux.HandleFunc("GET /api/dashboards", s.handleListDashboards)
-	mux.HandleFunc("POST /api/dashboards", s.handleSaveDashboard)
-	mux.HandleFunc("GET /api/dashboards/{id}", s.handleGetDashboard)
-	mux.HandleFunc("PUT /api/dashboards/{id}", s.handleSaveDashboard)
-	mux.HandleFunc("DELETE /api/dashboards/{id}", s.handleDeleteDashboard)
+	s.route(mux, "GET /api/dashboards", s.handleListDashboards)
+	s.route(mux, "POST /api/dashboards", s.handleSaveDashboard)
+	s.route(mux, "GET /api/dashboards/{id}", s.handleGetDashboard)
+	s.route(mux, "PUT /api/dashboards/{id}", s.handleSaveDashboard)
+	s.route(mux, "DELETE /api/dashboards/{id}", s.handleDeleteDashboard)
 
-	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
-	mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
-	mux.HandleFunc("POST /api/settings/test-email", s.handleTestEmail)
-	mux.HandleFunc("GET /api/retention/status", s.handleRetentionStatus)
-	mux.HandleFunc("POST /api/retention/run", s.handleRetentionRun)
+	s.route(mux, "GET /api/settings", s.handleGetSettings)
+	s.route(mux, "PUT /api/settings", s.handlePutSettings)
+	s.route(mux, "POST /api/settings/test-email", s.handleTestEmail)
+	s.route(mux, "GET /api/retention/status", s.handleRetentionStatus)
+	s.route(mux, "POST /api/retention/run", s.handleRetentionRun)
 
-	mux.HandleFunc("GET /api/backups", s.handleListBackups)
-	mux.HandleFunc("POST /api/backups", s.handleCreateBackup)
-	mux.HandleFunc("GET /api/backups/{name}/download", s.handleDownloadBackup)
-	mux.HandleFunc("DELETE /api/backups/{name}", s.handleDeleteBackup)
-	mux.HandleFunc("POST /api/backups/restore", s.handleRestoreUpload)
-	mux.HandleFunc("POST /api/backups/restore-existing", s.handleRestoreExisting)
+	s.route(mux, "GET /api/backups", s.handleListBackups)
+	s.route(mux, "POST /api/backups", s.handleCreateBackup)
+	s.route(mux, "GET /api/backups/{name}/download", s.handleDownloadBackup)
+	s.route(mux, "DELETE /api/backups/{name}", s.handleDeleteBackup)
+	s.route(mux, "POST /api/backups/restore", s.handleRestoreUpload)
+	s.route(mux, "POST /api/backups/restore-existing", s.handleRestoreExisting)
 
-	mux.HandleFunc("GET /api/export/history.csv", s.handleExportHistory)
-	mux.HandleFunc("GET /api/export/results.csv", s.handleExportResults)
-	mux.HandleFunc("GET /api/export/events.csv", s.handleExportEvents)
-	mux.HandleFunc("GET /api/export/config.json", s.handleExportConfig)
+	s.route(mux, "GET /api/export/history.csv", s.handleExportHistory)
+	s.route(mux, "GET /api/export/results.csv", s.handleExportResults)
+	s.route(mux, "GET /api/export/events.csv", s.handleExportEvents)
+	s.route(mux, "GET /api/export/config.json", s.handleExportConfig)
 
-	mux.HandleFunc("GET /api/export/logs.txt", s.handleExportLogs)
+	s.route(mux, "GET /api/export/logs.txt", s.handleExportLogs)
 
-	mux.HandleFunc("GET /api/triggers", s.handleListTriggers)
-	mux.HandleFunc("POST /api/triggers", s.handleSaveTrigger)
-	mux.HandleFunc("PUT /api/triggers/{id}", s.handleSaveTrigger)
-	mux.HandleFunc("DELETE /api/triggers/{id}", s.handleDeleteTrigger)
-	mux.HandleFunc("POST /api/triggers/{id}/run", s.handleRunTrigger)
-	mux.HandleFunc("POST /api/actions/test", s.handleTestAction)
-	mux.HandleFunc("GET /api/automation/meta", s.handleAutomationMeta)
+	s.route(mux, "GET /api/triggers", s.handleListTriggers)
+	s.route(mux, "POST /api/triggers", s.handleSaveTrigger)
+	s.route(mux, "PUT /api/triggers/{id}", s.handleSaveTrigger)
+	s.route(mux, "DELETE /api/triggers/{id}", s.handleDeleteTrigger)
+	s.route(mux, "POST /api/triggers/{id}/run", s.handleRunTrigger)
+	s.route(mux, "POST /api/actions/test", s.handleTestAction)
+	s.route(mux, "GET /api/automation/meta", s.handleAutomationMeta)
 
-	mux.HandleFunc("GET /api/endpoints", s.handleListEndpoints)
-	mux.HandleFunc("POST /api/endpoints", s.handleSaveEndpoint)
-	mux.HandleFunc("PUT /api/endpoints/{id}", s.handleSaveEndpoint)
-	mux.HandleFunc("DELETE /api/endpoints/{id}", s.handleDeleteEndpoint)
-	mux.HandleFunc("POST /api/endpoints/{id}/run", s.handleRunEndpoint)
-	mux.HandleFunc("/hook/{slug}", s.handleHook)
-	mux.HandleFunc("/hook/{slug}/{rest...}", s.handleHook)
+	s.route(mux, "GET /api/endpoints", s.handleListEndpoints)
+	s.route(mux, "POST /api/endpoints", s.handleSaveEndpoint)
+	s.route(mux, "PUT /api/endpoints/{id}", s.handleSaveEndpoint)
+	s.route(mux, "DELETE /api/endpoints/{id}", s.handleDeleteEndpoint)
+	s.route(mux, "POST /api/endpoints/{id}/run", s.handleRunEndpoint)
+	s.route(mux, "/hook/{slug}", s.handleHook)
+	s.route(mux, "/hook/{slug}/{rest...}", s.handleHook)
 
-	mux.HandleFunc("GET /api/charts", s.handleListCharts)
-	mux.HandleFunc("PUT /api/charts", s.handlePutCharts)
+	s.route(mux, "GET /api/charts", s.handleListCharts)
+	s.route(mux, "PUT /api/charts", s.handlePutCharts)
 
-	mux.HandleFunc("GET /api/update/status", s.handleUpdateStatus)
-	mux.HandleFunc("POST /api/update/check", s.handleUpdateCheck)
-	mux.HandleFunc("POST /api/update/apply", s.handleUpdateApply)
+	s.route(mux, "GET /api/update/status", s.handleUpdateStatus)
+	s.route(mux, "POST /api/update/check", s.handleUpdateCheck)
+	s.route(mux, "POST /api/update/apply", s.handleUpdateApply)
 
-	mux.HandleFunc("GET /api/logs", s.handleLogs)
-	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+	s.route(mux, "GET /api/logs", s.handleLogs)
+
+	s.route(mux, "GET /api/me", s.handleMe)
+	s.route(mux, "GET /api/auth/setup", s.handleAuthSetup)
+	s.route(mux, "POST /api/auth/login", s.handleLogin)
+	s.route(mux, "POST /api/auth/logout", s.handleLogout)
+	s.route(mux, "POST /api/auth/change-password", s.handleChangePassword)
+
+	s.route(mux, "GET /api/users", s.handleListUsers)
+	s.route(mux, "POST /api/users", s.handleCreateUser)
+	s.route(mux, "PUT /api/users/{id}", s.handleUpdateUser)
+	s.route(mux, "DELETE /api/users/{id}", s.handleDeleteUser)
+
+	s.route(mux, "GET /api/apikeys", s.handleListAPIKeys)
+	s.route(mux, "POST /api/apikeys", s.handleCreateAPIKey)
+	s.route(mux, "DELETE /api/apikeys/{id}", s.handleRevokeAPIKey)
+
+	s.route(mux, "/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "unknown API endpoint")
 	})
 
 	if s.Web != nil {
 		mux.Handle("/", s.staticHandler())
 	}
-	return noCache(s.accessControl(mux))
-}
-
-// accessControl enforces the optional access password: clients that are not
-// on this computer (non-loopback) must authenticate with HTTP basic auth when
-// a password is configured. Custom endpoints (/hook/…) rely on their own
-// token instead so that other devices can call them.
-func (s *Server) accessControl(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		pw := s.Engine.Settings().General.AccessPassword
-		if pw == "" || isLoopbackRemote(r.RemoteAddr) || strings.HasPrefix(r.URL.Path, "/hook/") {
-			next.ServeHTTP(w, r)
-			return
-		}
-		_, got, ok := r.BasicAuth()
-		if !ok || subtle.ConstantTimeCompare([]byte(got), []byte(pw)) != 1 {
-			w.Header().Set("WWW-Authenticate", `Basic realm="GWatch", charset="UTF-8"`)
-			if strings.HasPrefix(r.URL.Path, "/api/") {
-				writeError(w, http.StatusUnauthorized, "password required")
-				return
-			}
-			http.Error(w, "GWatch: password required", http.StatusUnauthorized)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+	return versionAlias(noCache(s.accessControl(mux)))
 }
 
 func isLoopbackRemote(addr string) bool {
@@ -305,12 +318,28 @@ func queryInt64Ptr(r *http.Request, name string) *int64 {
 // ---- health / overview ----
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.Engine.Health(r.Context()))
+	h := s.Engine.Health(r.Context())
+	if !auth.FromContext(r.Context()).Authenticated() {
+		// This route is public so that an uptime probe can reach it, so a
+		// caller with no identity gets liveness only. The full document names
+		// the database path, the data directory, recent internal errors and
+		// the backup state — none of it anyone's business before signing in.
+		writeJSON(w, http.StatusOK, map[string]any{
+			"serviceRunning":   h.ServiceRunning,
+			"schedulerRunning": h.SchedulerRunning,
+			"now":              h.Now,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, h)
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
-	h := s.Engine.Health(r.Context())
-	writeJSON(w, http.StatusOK, map[string]string{"version": s.Version, "platform": h.Platform})
+	doc := map[string]any{"version": s.Version, "apiVersion": APIVersion}
+	if auth.FromContext(r.Context()).Authenticated() {
+		doc["platform"] = s.Engine.Health(r.Context()).Platform
+	}
+	writeJSON(w, http.StatusOK, doc)
 }
 
 func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
@@ -567,7 +596,7 @@ func (s *Server) configChanged(ctx context.Context, n *model.Node, title, detail
 		ev.NodeID = &n.ID
 		ev.NodeName = n.Name
 	}
-	s.Engine.RecordEvent(ev)
+	s.recordEvent(ctx, ev)
 }
 
 func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
@@ -1043,5 +1072,5 @@ func (s *Server) handleNote(w http.ResponseWriter, r *http.Request) {
 			ev.Title = "Note on " + n.Name
 		}
 	}
-	writeJSON(w, http.StatusCreated, s.Engine.RecordEvent(ev))
+	writeJSON(w, http.StatusCreated, s.recordEvent(r.Context(), ev))
 }
