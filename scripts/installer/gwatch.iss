@@ -1,9 +1,9 @@
 ; GWatch Windows installer (Inno Setup 6).
 ;
 ; Builds gwatch-setup-<version>.exe from an already-built gwatch.exe. This
-; script does not compile Go code — build the executable first (see
-; scripts/build.ps1 or scripts/installer/README.md), then pass its path and
-; the release version in:
+; script does not compile Go code -- build the executable first (see
+; scripts\build-installer.ps1, which does both steps), or pass the pieces in
+; by hand:
 ;
 ;   iscc /DAppVersion=1.2.3 /DExePath=..\..\dist\gwatch.exe gwatch.iss
 ;
@@ -20,26 +20,26 @@
 #endif
 
 #define AppName "GWatch"
-
-; VersionInfoVersion must be purely numeric (a.b.c.d), so a pre-release or
-; CI suffix such as "1.2.3-rc1" or "0.0.0-ci-abc1234" is cut at the first "-".
-#define VersionCut Pos("-", AppVersion)
-#if VersionCut > 0
-  #define FileVersion Copy(AppVersion, 1, VersionCut - 1)
-#else
-  #define FileVersion AppVersion
-#endif
+#include "brand.iss"
 
 [Setup]
-; Fixed installer AppId (GUID). Do not change between releases — Windows
+; Fixed installer AppId (GUID). Do not change between releases -- Windows
 ; uses it to recognise upgrades vs. a fresh install. The doubled "{{" is
 ; Inno Setup's escape for a literal "{".
 AppId={{E4C1B6A2-8F3D-4B9E-9A7C-2D5F1E6B8C4A}
 AppName={#AppName}
 AppVersion={#AppVersion}
-AppPublisher=JX Holdings
-AppPublisherURL=https://github.com/jxburros/GWatch
+AppVerName={#AppName} {#AppVersion}
+AppPublisher={#Publisher}
+AppPublisherURL={#ProjectURL}
+AppSupportURL={#ProjectURL}/issues
+AppUpdatesURL={#ProjectURL}/releases
+AppCopyright={#CopyrightLine}
 VersionInfoVersion={#FileVersion}
+VersionInfoCompany={#Publisher}
+VersionInfoCopyright={#CopyrightLine}
+VersionInfoDescription={#AppName} -- local network & service monitor
+VersionInfoProductName={#AppName}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
@@ -52,24 +52,51 @@ PrivilegesRequired=admin
 WizardStyle=modern
 OutputDir=Output
 OutputBaseFilename=gwatch-setup-{#AppVersion}
-UninstallDisplayName={#AppName}
+UninstallDisplayName={#AppName} {#AppVersion}
+; gwatch.exe carries its own icon now (see cmd/gwatch-rsrc and the
+; rsrc_windows_*.syso objects), so Add/Remove Programs and the shortcuts
+; can point straight at the executable.
 UninstallDisplayIcon={app}\gwatch.exe
 SetupLogging=yes
-; No custom icon is bundled (web/logo.svg is an .svg, and adding a binary
-; .ico to the repo just for the installer is a follow-up, not done here —
-; see docs/INSTALL.md).
+
+; ---- Branding -------------------------------------------------------------
+; The licence page carries the GWatch Community License verbatim plus a plain
+; digest of the Terms, Privacy Policy and security disclaimer, so nobody has
+; to have read the repository to know what they are agreeing to.
+LicenseFile=license.txt
+SetupIconFile=assets\gwatch.ico
+; Two sizes each: Inno picks by the display's DPI rather than upscaling.
+WizardImageFile=assets\wizard-large.bmp,assets\wizard-large-2x.bmp
+WizardSmallImageFile=assets\wizard-small.bmp,assets\wizard-small-2x.bmp
+WizardImageStretch=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Messages]
+WelcomeLabel1=Install [name]
+WelcomeLabel2=[name/ver] watches the devices, servers and websites on your network and tells you when one stops answering.%n%nIt runs entirely on this computer: your monitoring data stays in a database here, and nothing is sent to {#Publisher}.%n%nDeveloped by {#Developers}.{#BetaNote}
+FinishedHeadingLabel=GWatch is running
+FinishedLabel=GWatch is installed as a Windows service and starts with this computer.%n%nOne thing is worth doing now: GWatch has no access password until you set one. Open Settings > Users & access in the web interface before anyone else can reach this computer.
+
+[CustomMessages]
+NetworkPageCaption=Network access
+NetworkPageDescription=Choose the port GWatch listens on and whether other devices on your network can reach it.
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop icon"; GroupDescription: "Additional icons:"; Flags: unchecked
 
 [Files]
 Source: "{#ExePath}"; DestDir: "{app}"; DestName: "gwatch.exe"; Flags: ignoreversion
+; The licence and the terms digest travel with the install, so they are still
+; readable on a machine that has no way to reach GitHub. The icon does not
+; need shipping separately -- it is inside gwatch.exe.
+Source: "license.txt"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\GWatch Monitor"; Filename: "{app}\gwatch.exe"; Parameters: "open --listen ""{code:GetListenAddr}"""; Comment: "Open the GWatch web interface"
+Name: "{group}\GWatch documentation"; Filename: "{#DocsURL}"; Comment: "Guides, recipes and reference on GitHub"
+Name: "{group}\Licence and terms"; Filename: "{app}\LICENSE.txt"; Comment: "The GWatch Community License and a summary of the terms"
 Name: "{group}\Uninstall GWatch"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\GWatch Monitor"; Filename: "{app}\gwatch.exe"; Parameters: "open --listen ""{code:GetListenAddr}"""; Tasks: desktopicon; Comment: "Open the GWatch web interface"
 
@@ -78,7 +105,7 @@ Name: "{autodesktop}\GWatch Monitor"; Filename: "{app}\gwatch.exe"; Parameters: 
 ; automatically, see main.go's "install" case).
 Filename: "{app}\gwatch.exe"; Parameters: "install --data-dir ""{commonappdata}\GWatch"" --listen ""{code:GetListenAddr}"""; StatusMsg: "Registering the GWatch service..."; Flags: runhidden waituntilterminated; Check: NeedsInstall
 ; Upgrade: the service is already registered (gwatch install would fail),
-; so just start it again — it was stopped in PrepareToInstall below.
+; so just start it again -- it was stopped in PrepareToInstall below.
 Filename: "{app}\gwatch.exe"; Parameters: "start"; StatusMsg: "Starting the GWatch service..."; Flags: runhidden waituntilterminated; Check: NeedsStart
 ; Optional firewall rule for LAN access.
 Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""GWatch"" dir=in action=allow protocol=TCP localport={code:GetPort}"; StatusMsg: "Adding a Windows Firewall rule for GWatch..."; Flags: runhidden; Check: WantLan
@@ -97,15 +124,16 @@ var
   NoteLabel: TNewStaticText;
 
 { ---------------------------------------------------------------------- }
-{ Custom "Network Access" wizard page: port + "allow other devices"      }
+{ Custom "Network access" wizard page: port + "allow other devices"      }
 { checkbox, shown between the install-folder page and the ready page.    }
 { ---------------------------------------------------------------------- }
 procedure InitializeWizard;
 var
   PortLabel: TNewStaticText;
 begin
-  NetworkPage := CreateCustomPage(wpSelectDir, 'Network Access',
-    'Choose the port GWatch listens on and whether other devices on your network can reach it.');
+  NetworkPage := CreateCustomPage(wpSelectDir,
+    ExpandConstant('{cm:NetworkPageCaption}'),
+    ExpandConstant('{cm:NetworkPageDescription}'));
 
   PortLabel := TNewStaticText.Create(NetworkPage);
   PortLabel.Parent := NetworkPage.Surface;
@@ -136,15 +164,17 @@ begin
   NoteLabel.Width := NetworkPage.SurfaceWidth;
   NoteLabel.AutoSize := False;
   NoteLabel.WordWrap := True;
-  NoteLabel.Height := 70;
+  NoteLabel.Height := 84;
   NoteLabel.Caption :=
     'GWatch has no access password by default. After installing, open ' +
     'Settings > Users & access in the web interface and set a password (or ' +
-    'create user accounts) before relying on the checkbox above — anyone ' +
-    'who can reach this port on your network will otherwise see everything.';
+    'create user accounts) before relying on the checkbox above -- anyone ' +
+    'who can reach this port on your network will otherwise see everything.' + #13#10 + #13#10 +
+    'Do not forward this port to the internet. See docs/REMOTE-ACCESS.md for ' +
+    'the safe way to reach GWatch from outside your home.';
 end;
 
-{ Validate the port field before leaving the Network Access page. }
+{ Validate the port field before leaving the Network access page. }
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
   PortNum: Integer;

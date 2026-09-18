@@ -11,8 +11,15 @@
 // listens and GWatch (or anything else with the token) reads from it. That
 // needs an open port on this machine, which is why push is the default.
 //
+// A machine is enrolled either with a token copied from GWatch or with a short
+// pairing code typed into it. The code is the same trade in a friendlier
+// shape: it is worth one enrolment, for a few minutes, and what it buys is the
+// token above, which is then kept on this machine and used from then on.
+//
+//	gwatch-agent pair --server https://gwatch.lan:8080 --code XXXX-XXXX
 //	gwatch-agent run --server https://gwatch.lan:8080 --token gwa_…
 //	gwatch-agent install --server … --token …     install as a background service
+//	gwatch-agent install --server … --code …      pair, then install the service
 //	gwatch-agent once --server … --token …        send one reading and exit
 //	gwatch-agent serve --listen 0.0.0.0:9713 --token …
 package main
@@ -30,7 +37,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -68,6 +77,7 @@ const (
 type config struct {
 	server   string
 	token    string
+	code     string
 	interval time.Duration
 	listen   string
 	insecure bool
@@ -80,6 +90,9 @@ func usage() {
 The agent only ever sends data out. GWatch is never given a way in.
 
 Usage:
+  gwatch-agent pair --server URL --code XXXX-XXXX [--name NAME]
+        exchange a pairing code for this machine's own token, save it and
+        send one reading to prove it works
   gwatch-agent run --server URL --token TOKEN [--interval 60s]
         send a reading every interval until stopped
   gwatch-agent once --server URL --token TOKEN
@@ -90,16 +103,26 @@ Usage:
         expose readings for GWatch to read, instead of pushing them.
         This opens a port on this computer; prefer run unless you need it.
   gwatch-agent install --server URL --token TOKEN [--interval 60s]
-        install and start the background service (run as Administrator on Windows)
+  gwatch-agent install --server URL --code XXXX-XXXX [--name NAME] [--interval 60s]
+        install and start the background service (run as Administrator on
+        Windows). With --code the machine is paired first.
   gwatch-agent uninstall | start | stop | restart | status
   gwatch-agent version
 
-Get a token from GWatch: Settings › Hardware › Register a machine. It is
-shown once, and it can do nothing but submit this machine's readings.
+Get a pairing code or a token from GWatch, under Hardware. A code is short
+enough to type off the screen and is good for one machine for a few minutes;
+a token is the long gwa_… string, shown once. Either way, what this machine
+ends up holding can do one thing only: submit this machine's readings.
 
-Environment: GWATCH_SERVER, GWATCH_AGENT_TOKEN, GWATCH_AGENT_INTERVAL,
-GWATCH_AGENT_LISTEN override the defaults.
-`, version, defaultListen)
+A token obtained with a pairing code is saved to
+  %s
+readable only by the account that paired the machine. run, once and serve use
+it when --token is not given.
+
+Environment: GWATCH_SERVER, GWATCH_AGENT_TOKEN, GWATCH_AGENT_CODE,
+GWATCH_AGENT_INTERVAL, GWATCH_AGENT_LISTEN, GWATCH_AGENT_TOKEN_FILE override
+the defaults.
+`, version, defaultListen, tokenFile())
 }
 
 func main() {
@@ -115,12 +138,26 @@ func main() {
 	cfg := config{}
 	fs.StringVar(&cfg.server, "server", os.Getenv("GWATCH_SERVER"), "base URL of the GWatch server, e.g. https://gwatch.lan:8080")
 	fs.StringVar(&cfg.token, "token", os.Getenv("GWATCH_AGENT_TOKEN"), "agent token from Settings › Hardware")
+	fs.StringVar(&cfg.code, "code", os.Getenv("GWATCH_AGENT_CODE"), "pairing code shown in GWatch (Hardware › Pair a machine), e.g. XXXX-XXXX")
 	fs.DurationVar(&cfg.interval, "interval", envDuration("GWATCH_AGENT_INTERVAL", defaultInterval), "how often to send a reading")
 	fs.StringVar(&cfg.listen, "listen", envOr("GWATCH_AGENT_LISTEN", defaultListen), "serve mode: address to listen on")
 	fs.BoolVar(&cfg.insecure, "insecure", false, "accept an untrusted TLS certificate from the server (use only with a self-signed certificate you recognise)")
 	fs.StringVar(&cfg.name, "name", "", "override the hostname reported to GWatch")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
+	}
+
+	// Naming both is a mistake worth stopping rather than guessing at: the two
+	// would enrol this machine twice, or use a token the person did not mean.
+	if cfg.token != "" && cfg.code != "" {
+		fatal(errors.New("give either --token or --code, not both: a code is exchanged for a token, so naming both leaves it unclear which machine you meant to enrol"))
+	}
+	// A machine paired earlier already has its token on disk, so the commands
+	// that need one should not have to be told it again.
+	if cfg.token == "" && cfg.code == "" {
+		if stored, err := readStoredToken(); err == nil {
+			cfg.token = stored
+		}
 	}
 
 	switch cmd {
@@ -141,6 +178,19 @@ func main() {
 		}
 		fmt.Println("Reading accepted.")
 		return
+	case "pair":
+		if err := pair(&cfg); err != nil {
+			fatal(err)
+		}
+		return
+	}
+
+	// install --code does the pairing first, so that everything after this
+	// point is the ordinary token install and there is only one of it.
+	if cmd == "install" && cfg.code != "" {
+		if err := pair(&cfg); err != nil {
+			fatal(err)
+		}
 	}
 
 	if err := cfg.validate(cmd); err != nil {
@@ -205,7 +255,8 @@ func main() {
 // someone setting it up would use.
 func (c config) validate(cmd string) error {
 	if c.token == "" {
-		return errors.New("a token is required (GWatch: Settings › Hardware › Register a machine)")
+		return fmt.Errorf("a token is required: pair this machine with %s, or pass --token (GWatch: Hardware › Pair a machine)",
+			"gwatch-agent pair --server URL --code XXXX-XXXX")
 	}
 	if cmd == "serve" {
 		if _, _, err := net.SplitHostPort(c.listen); err != nil {
@@ -245,14 +296,19 @@ func (c config) serviceArgs(cmd string) []string {
 	return args
 }
 
-// ingestURL is where readings are posted.
-func (c config) ingestURL() string {
+// baseURL is the server as given, tidied up: a bare host is assumed to be
+// HTTPS, because the one thing that must never be silently downgraded is the
+// connection carrying a credential.
+func (c config) baseURL() string {
 	base := strings.TrimRight(strings.TrimSpace(c.server), "/")
 	if !strings.Contains(base, "://") {
 		base = "https://" + base
 	}
-	return base + "/ingest/metrics"
+	return base
 }
+
+// ingestURL is where readings are posted.
+func (c config) ingestURL() string { return c.baseURL() + "/ingest/metrics" }
 
 // ---- the reporting loop ----
 
@@ -447,6 +503,225 @@ func collect(ctx context.Context, cfg config, collector *sysmetrics.Collector) (
 		metrics.Hostname = name
 	}
 	return metrics, nil
+}
+
+// ---- pairing ----
+
+// pairURL is where a pairing code is exchanged for this machine's own token.
+func (c config) pairURL() string { return c.baseURL() + "/api/agents/pair" }
+
+// pair exchanges the code for a token, keeps the token, and proves it works by
+// sending one reading. On success cfg.token holds the new token, so an install
+// started with --code carries straight on as a token install.
+func pair(cfg *config) error {
+	if strings.TrimSpace(cfg.server) == "" {
+		return errors.New("a server URL is required, e.g. --server https://gwatch.lan:8080")
+	}
+	code := tidyCode(cfg.code)
+	if code == "" {
+		return errors.New("a pairing code is required, e.g. --code XXXX-XXXX (GWatch: Hardware › Pair a machine)")
+	}
+
+	hostname, _ := os.Hostname()
+	if n := strings.TrimSpace(cfg.name); n != "" {
+		hostname = n
+	}
+	body, err := json.Marshal(map[string]string{
+		"code": code, "hostname": hostname, "os": runtime.GOOS, "arch": runtime.GOARCH, "version": version,
+	})
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.pairURL(), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "gwatch-agent/"+version)
+
+	resp, err := newClient(*cfg).Do(req)
+	if err != nil {
+		return fmt.Errorf("cannot reach GWatch at %s: %w", cfg.baseURL(), err)
+	}
+	defer resp.Body.Close()
+	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("pairing failed: %s", serverMessage(resp.StatusCode, payload))
+	}
+
+	var out struct {
+		Token string `json:"token"`
+		Agent struct {
+			Name string `json:"name"`
+		} `json:"agent"`
+	}
+	if err := json.Unmarshal(payload, &out); err != nil || out.Token == "" {
+		return fmt.Errorf("GWatch accepted the code but did not return a token; pair the machine again")
+	}
+
+	path, err := saveToken(out.Token)
+	if err != nil {
+		// The token is real and the code is spent, so losing it here would
+		// mean going back for another code. Print it rather than swallow it.
+		fmt.Fprintf(os.Stderr, "warning: could not save the token to %s: %v\n", tokenFile(), err)
+		fmt.Fprintf(os.Stderr, "the token is %s — keep it somewhere only this machine can read\n", out.Token)
+	}
+	cfg.token = out.Token
+	cfg.code = ""
+
+	name := out.Agent.Name
+	if name == "" {
+		name = hostname
+	}
+	fmt.Printf("Paired with GWatch as %q.\n", name)
+	if path != "" {
+		fmt.Printf("Token saved to %s (readable only by this account).\n", path)
+	}
+
+	// Sending a reading straight away is the difference between "the code was
+	// accepted" and "this works": it exercises the token, the URL and the TLS
+	// settings, here, while the person who typed the code is still watching.
+	if err := runOnce(*cfg); err != nil {
+		return fmt.Errorf("paired, but the first reading did not go through: %w", err)
+	}
+	fmt.Println("First reading accepted. This computer now appears under Hardware in GWatch.")
+	return nil
+}
+
+// tidyCode cleans up a code as somebody typed it — spaces, stray dashes, lower
+// case. GWatch normalises it again and is the one that decides whether it is a
+// code at all; this is only so that a pasted "  abcd efgh " reaches it intact.
+func tidyCode(s string) string {
+	var sb strings.Builder
+	for _, r := range strings.ToUpper(s) {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			sb.WriteRune(r)
+		}
+	}
+	return sb.String()
+}
+
+// serverMessage turns a rejection into the sentence GWatch wrote, falling back
+// to the raw body when the answer is not one of ours.
+func serverMessage(status int, body []byte) string {
+	var out struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &out); err == nil && out.Error != "" {
+		return out.Error
+	}
+	return fmt.Sprintf("the server answered HTTP %d: %s", status, strings.TrimSpace(string(body)))
+}
+
+// ---- the stored token ----
+
+// tokenFile is where a token obtained by pairing is kept, so that the service
+// installed afterwards — which runs with no arguments a person typed — can
+// find it, and so that pairing a machine twice is never necessary.
+//
+// The directory is the agent's half of where GWatch itself keeps its data:
+// %ProgramData%\GWatch on Windows, $XDG_DATA_HOME/gwatch or
+// ~/.local/share/gwatch elsewhere. Anyone looking for GWatch's files on a
+// machine looks there first, which is the whole argument for it.
+func tokenFile() string {
+	if p := strings.TrimSpace(os.Getenv("GWATCH_AGENT_TOKEN_FILE")); p != "" {
+		return p
+	}
+	return filepath.Join(agentDataDir(), "agent-token")
+}
+
+func agentDataDir() string {
+	if runtime.GOOS == "windows" {
+		if pd := os.Getenv("ProgramData"); pd != "" {
+			return filepath.Join(pd, "GWatch")
+		}
+		return `C:\ProgramData\GWatch`
+	}
+	if xdg := strings.TrimSpace(os.Getenv("XDG_DATA_HOME")); xdg != "" {
+		return filepath.Join(xdg, "gwatch")
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".local", "share", "gwatch")
+	}
+	return "."
+}
+
+// saveToken writes the token where run and once will find it, and reports
+// where that was.
+//
+// The file is created 0600 and the directory 0700, so on Linux and macOS only
+// the account that paired the machine — root, for the usual sudo install — can
+// read it. Windows has no mode bits, and a file under %ProgramData%\GWatch
+// would otherwise inherit an ACL every user of that computer can read, so the
+// inherited entries are replaced with SYSTEM and the administrators group:
+// SYSTEM because that is what the installed service runs as, administrators
+// because that is who installed it.
+//
+// Tightening the ACL is best effort. If it does not work the token is still
+// written, because the failure to protect it matters far less than it looks:
+// an agent token submits one machine's readings and can do nothing else at
+// all, and the same token is already on the service's command line where the
+// service manager will show it to anyone who asks.
+func saveToken(token string) (string, error) {
+	path := tokenFile()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", fmt.Errorf("create %s: %w", filepath.Dir(path), err)
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return "", err
+	}
+	if _, err := f.WriteString(token + "\n"); err != nil {
+		f.Close()
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		return "", err
+	}
+	// A file left over from an earlier pairing keeps whatever mode it had, so
+	// the permissions are set again rather than assumed.
+	if err := os.Chmod(path, 0o600); err != nil && runtime.GOOS != "windows" {
+		return "", err
+	}
+	restrictWindowsACL(path)
+	return path, nil
+}
+
+// restrictWindowsACL takes the inherited permissions off the token file and
+// leaves SYSTEM and the administrators group. It does nothing anywhere else,
+// where the mode bits have already said the same thing.
+func restrictWindowsACL(path string) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// The well-known SIDs are used rather than the group names, which are
+	// translated on a localised Windows and would not match.
+	cmd := exec.CommandContext(ctx, "icacls", path, "/inheritance:r",
+		"/grant:r", "*S-1-5-18:(R,W)", "/grant:r", "*S-1-5-32-544:(R,W)")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not restrict permissions on %s: %v: %s\n",
+			path, err, strings.TrimSpace(string(out)))
+	}
+}
+
+// readStoredToken returns the token saved by a previous pairing. A missing
+// file is not an error worth reporting: it only means this machine was set up
+// with --token, or has not been set up at all, and the caller says so better.
+func readStoredToken() (string, error) {
+	b, err := os.ReadFile(tokenFile())
+	if err != nil {
+		return "", err
+	}
+	token := strings.TrimSpace(string(b))
+	if token == "" {
+		return "", errors.New("the stored token file is empty")
+	}
+	return token, nil
 }
 
 // ---- serve mode ----

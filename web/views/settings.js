@@ -4,8 +4,9 @@
 
 import { api, qs } from '../api.js';
 import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, openModal, emptyState, skeleton, banner, eventRow, busy, applyTheme, applyAccent, ACCENT_PRESETS, hexToRgb } from '../components.js';
-import { relTime, dateTime, bytes, num, duration, retentionSpan, toLocalInput, fromLocalInput, weekdayShort, timeShort, plural } from '../fmt.js';
+import { relTime, dateTime, bytes, num, duration, retentionSpan, toLocalInput, fromLocalInput, weekdayShort, timeShort, plural, isBeta } from '../fmt.js';
 import { openEndpointEditor, endpointRow, triggerRow, openTriggerEditor } from './automation.js';
+import { tipsEnabled, setTipsEnabled, resetTips, seenCount, resetOnboarding, TIPS } from '../tips.js';
 
 // `viewer: true` marks the sections an account without the admin role may
 // open. Everything else reads or writes settings, which the server refuses to
@@ -141,7 +142,25 @@ export async function mount(root, ctx) {
         themeWrap),
       h('section', { class: 'card' }, h('h2', null, 'Accent colour'), h('p', { class: 'lead' }, 'Used for buttons, highlights, the active navigation item and the first chart line.'), swatches,
         h('div', { class: 'row', style: { marginTop: '14px', gap: '8px' } }, h('button', { class: 'btn btn-primary', type: 'button' }, 'Primary button'), h('button', { class: 'btn', type: 'button' }, 'Button'), h('span', { class: 'chip active' }, 'Active chip'), h('a', { href: '#/settings/appearance' }, 'A link')),
-        isAdmin ? h('hr', { class: 'divider' }) : null, isAdmin ? saveBar() : null));
+        isAdmin ? h('hr', { class: 'divider' }) : null, isAdmin ? saveBar() : null),
+      guidanceCard());
+  }
+
+  /* Tips and the first-run tour are a property of this browser, not of the
+     monitor, so they sit with the theme rather than in the saved settings and
+     a viewer may change them as freely as an administrator. */
+  function guidanceCard() {
+    const seen = h('p', { class: 'note' });
+    const refresh = () => { seen.textContent = tipsEnabled() ? `${seenCount()} of ${TIPS.length} tips shown so far.` : 'Tips are off. Nothing appears until you turn them on.'; };
+    const tips = toggle({ label: 'Show tips as I go', checked: tipsEnabled(), onChange: (on) => { setTipsEnabled(on); refresh(); } });
+    refresh();
+    return h('section', { class: 'card' }, h('h2', null, 'Guidance'),
+      h('p', { class: 'lead' }, 'Tips are small hints that point at one control and explain what it does. Each one appears once and is then gone. Remembered by this browser only.'),
+      h('div', { class: 'stack-sm' }, tips, seen,
+        h('div', { class: 'btn-group', style: { marginTop: '6px' } },
+          h('button', { class: 'btn', type: 'button', onclick: () => { resetTips(); refresh(); toast('Tips reset', { kind: 'success' }); } }, icon('refresh'), 'Reset tips'),
+          h('button', { class: 'btn', type: 'button', onclick: () => { resetOnboarding(); ctx.navigate('/onboarding'); } }, icon('play'), 'Restart onboarding'),
+          h('a', { class: 'btn', href: '#/help' }, icon('help'), 'Open Help'))));
   }
 
   /* ---------- Network access ---------- */
@@ -928,16 +947,20 @@ export async function mount(root, ctx) {
     const v = state.version || await api.get('/api/version').catch(() => null);
     const versionText = v?.version ? `v${v.version}` : 'unknown';
     const platformText = v?.platform || 'unknown';
+    const beta = isBeta(v?.version) ? h('span', { class: 'beta-tag' }, 'Beta') : null;
     return h('div', { class: 'stack' },
       h('section', { class: 'card' },
         h('div', { style: { display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' } },
           h('img', { src: 'logo.svg', alt: 'GWatch logo', width: '64', height: '64' }),
           h('div', null,
-            h('h2', { style: { marginBottom: '2px' } }, 'GWatch'),
+            h('h2', { style: { marginBottom: '2px' } }, 'GWatch', beta),
             h('p', { class: 'lead', style: { margin: 0 } }, 'A self-hosted monitor for the machines, sites and services on your own network.'),
             h('div', { class: 'muted', style: { marginTop: '4px' } }, `${versionText} · ${platformText}`))),
         h('div', { class: 'health-cards', style: { marginTop: '14px' } },
-          hcard(versionText, 'Installed version'), hcard(platformText, 'Platform'))),
+          hcard(versionText, 'Installed version'), hcard(platformText, 'Platform')),
+        isBeta(v?.version)
+          ? h('p', { class: 'note', style: { marginTop: '12px' } }, 'This is a beta. GWatch is usable and its data is kept safely, but features and the layout can still change between releases, and a bug here is more likely than it will be at 1.0. ', h('a', { href: 'https://github.com/jxburros/GWatch/issues', target: '_blank', rel: 'noopener' }, 'Report anything that looks wrong.'))
+          : null),
       h('section', { class: 'card' },
         h('h2', null, 'Copyright & credit'),
         h('p', null, GWATCH_COPYRIGHT),

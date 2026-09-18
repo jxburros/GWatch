@@ -107,3 +107,102 @@ func LooksLikeAPIKey(s string) bool {
 	return strings.HasPrefix(s, APIKeyPrefix) && !strings.HasPrefix(s, AgentTokenPrefix) &&
 		len(s) > len(APIKeyPrefix)+8
 }
+
+// ---- pairing codes ----
+
+// PairingCodeAlphabet is what a pairing code is drawn from: Crockford base32
+// with every character a person reading one screen and typing on another
+// keyboard confuses taken out — no I, L, O or U, and no 0 or 1 either, so
+// there is nothing left for a misread O or l to be mistaken for. Thirty
+// symbols remain, which is a little under five bits each.
+const PairingCodeAlphabet = "23456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+// PairingCodeLen is how many significant characters a pairing code carries.
+// Eight of them is 30^8, roughly 6.6e11 codes, or just over 39 bits. That is
+// the balance the code exists to strike: it is typed by hand off a screen, so
+// every extra character is a chance to get it wrong, but it also has to be
+// hopeless to guess. It is, comfortably — a code is alive for fifteen minutes
+// and a wrong one costs an attacker from the same per-IP failure budget as a
+// wrong password (ten a minute), so a whole quarter of an hour of guessing
+// covers about 150 of 660 billion possibilities. Fewer characters would start
+// to make that arithmetic worth doing; more would make the code worse to read
+// down a phone line, which is the only reason it is short in the first place.
+const PairingCodeLen = 8
+
+// pairingCodeGroup is how many characters sit between the dashes. Four and
+// four is the shape a person keeps their place in while typing; the dashes are
+// presentation only and are ignored on the way back in.
+const pairingCodeGroup = 4
+
+// NewPairingCode returns a fresh pairing code in its display form, "XXXX-XXXX".
+func NewPairingCode() (string, error) {
+	// 256 is not a multiple of 30, so reducing a random byte with % would
+	// quietly make the first sixteen symbols more likely than the other
+	// fourteen. Bytes at or above the largest multiple of 30 are thrown away
+	// instead, which costs a few extra bytes of randomness and nothing else.
+	const limit = 256 - (256 % len(PairingCodeAlphabet))
+	out := make([]byte, 0, PairingCodeLen)
+	buf := make([]byte, PairingCodeLen)
+	for len(out) < PairingCodeLen {
+		if _, err := rand.Read(buf); err != nil {
+			return "", fmt.Errorf("generate pairing code: %w", err)
+		}
+		for _, v := range buf {
+			if int(v) >= limit {
+				continue
+			}
+			out = append(out, PairingCodeAlphabet[int(v)%len(PairingCodeAlphabet)])
+			if len(out) == PairingCodeLen {
+				break
+			}
+		}
+	}
+	return FormatPairingCode(string(out)), nil
+}
+
+// FormatPairingCode groups significant characters for display. It assumes its
+// input is already normalised; NormalizePairingCode is what produces that.
+func FormatPairingCode(code string) string {
+	var sb strings.Builder
+	for i := 0; i < len(code); i++ {
+		if i > 0 && i%pairingCodeGroup == 0 {
+			sb.WriteByte('-')
+		}
+		sb.WriteByte(code[i])
+	}
+	return sb.String()
+}
+
+// NormalizePairingCode turns a code as somebody typed it into the one
+// canonical form that is hashed and compared, reporting whether it could be a
+// pairing code at all.
+//
+// It is generous about everything that carries no meaning: case, spaces, tabs,
+// and dashes wherever they land or fail to. An installer prompt gets pasted
+// into, read aloud into, and re-typed with the dash in the wrong place, and
+// none of that should be the difference between enrolling a machine and
+// staring at an error. What it will not do is guess: a character outside the
+// alphabet means the person misread something, and the honest answer is that
+// this is not a code rather than a silently different one.
+func NormalizePairingCode(s string) (string, bool) {
+	var sb strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '-' || r == '_' || r == ' ' || r == '\t' || r == '\n' || r == '\r':
+			continue
+		case r >= 'a' && r <= 'z':
+			r -= 'a' - 'A'
+		}
+		if !strings.ContainsRune(PairingCodeAlphabet, r) {
+			return "", false
+		}
+		sb.WriteRune(r)
+		if sb.Len() > PairingCodeLen {
+			return "", false
+		}
+	}
+	if sb.Len() != PairingCodeLen {
+		return "", false
+	}
+	return FormatPairingCode(sb.String()), true
+}

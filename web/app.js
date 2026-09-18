@@ -4,6 +4,7 @@
 import { api, onConnection, connection, subscribeUpdates, debounce, refreshMe, signOut, getAuthSetup, onAuthChallenge, onDenied } from './api.js';
 import { h, icon, clear, toast, closeMenus, replace, applyTheme, applyAccent, onThemeChange } from './components.js';
 import { relTime } from './fmt.js';
+import { notifyRoute as tipsRoute, closeTip, onboardingDone } from './tips.js';
 
 const routes = [
   { pattern: /^\/dashboard(?:\/(\d+))?$/, view: () => import('./views/dashboard.js'), params: ['id'], nav: 'dashboard' },
@@ -19,6 +20,8 @@ const routes = [
   { pattern: /^\/incidents$/, view: () => import('./views/incidents.js'), nav: 'incidents' },
   { pattern: /^\/audit(?:\/([a-z]+))?$/, view: () => import('./views/audit.js'), params: ['tab'], nav: 'audit' },
   { pattern: /^\/settings(?:\/([a-z]+))?$/, view: () => import('./views/settings.js'), params: ['tab'], nav: 'settings' },
+  { pattern: /^\/help$/, view: () => import('./views/help.js'), nav: 'help' },
+  { pattern: /^\/onboarding$/, view: () => import('./views/onboarding.js'), nav: null },
   { pattern: /^\/wallboard$/, view: () => import('./views/wallboard.js'), nav: 'wallboard', wallboard: true },
   { pattern: /^\/login$/, view: () => import('./views/login.js'), nav: null, bare: true },
 ];
@@ -135,6 +138,9 @@ const ctxBase = {
 async function route() {
   const token = ++navToken;
   closeMenus();
+  // A tip points at something in the view that is on its way out, so it goes
+  // with it rather than hanging over whatever arrives next.
+  closeTip({ seen: false });
   const { path, query } = parseHash();
   let match = null; let r = null;
   for (const candidate of routes) {
@@ -152,7 +158,7 @@ async function route() {
   // Same view, only params changed? Let the view handle it if it can.
   if (current && current.route === r && current.instance?.update) {
     const handled = await current.instance.update(params, query);
-    if (handled) { current.path = path; setNav(r.nav); return; }
+    if (handled) { current.path = path; setNav(r.nav); tipsRoute(path); return; }
   }
 
   if (current?.instance?.destroy) { try { current.instance.destroy(); } catch (e) { console.error(e); } }
@@ -178,6 +184,7 @@ async function route() {
     const instance = await mod.mount(viewRoot, ctx);
     if (token !== navToken) { instance?.destroy?.(); return; }
     current = { instance: instance || {}, route: r, path };
+    tipsRoute(path);
   } catch (e) {
     console.error(e);
     replace(viewRoot, h('div', { class: 'card' }, h('h2', null, 'Something went wrong'), h('p', { class: 'muted' }, String(e.message || e))));
@@ -307,6 +314,21 @@ window.addEventListener('unhandledrejection', (e) => {
   toast(msg, { kind: 'error' });
 });
 
+/* ---------- First run ---------- */
+// Nobody has been through the tour yet, so start there rather than on an empty
+// dashboard. Only the default landing page is taken over, so a link to a
+// particular node, chart or the wallboard still arrives where it was aimed,
+// and skipping or finishing the tour sets the flag that stops this happening
+// a second time.
+// Returns true when it took over, in which case the hashchange it just caused
+// does the routing — calling route() as well would mount the tour twice.
+function firstRunRedirect() {
+  if (onboardingDone()) return false;
+  if (parseHash().path !== '/dashboard') return false;
+  navigate('/onboarding');
+  return true;
+}
+
 // Who is looking has to be known before the first view is built: views read
 // ctx.me to decide what they may offer, and the theme travels with it.
-loadAppearance().finally(route);
+loadAppearance().finally(() => { if (!firstRunRedirect()) route(); });
