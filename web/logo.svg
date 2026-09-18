@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="GWatch">
+  <!-- G-shaped magnifier with an eye: navy ring, gold iris, dark pupil -->
+  <g fill="none" stroke="#0d1f3f" stroke-linecap="round">
+    <path d="M100 42 A44 44 0 1 0 100 86" stroke-width="15"/>
+    <path d="M73 64 H105" stroke-width="15"/>
+    <path d="M92 92 L112 112" stroke-width="16"/>
+  </g>
+  <circle cx="58" cy="64" r="21" fill="#d4a017"/>
+  <circle cx="58" cy="64" r="12" fill="#0d1f3f"/>
+  <circle cx="63" cy="59" r="3.6" fill="#ffffff"/>
+</svg>

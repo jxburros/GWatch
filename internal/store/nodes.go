@@ -596,6 +596,8 @@ type EventFilter struct {
 	CheckID  *int64
 	Types    []model.EventType
 	Since    *time.Time
+	Until    *time.Time
+	Query    string // case-insensitive substring of title, detail, node or check name
 }
 
 // ListEvents returns timeline entries newest first.
@@ -626,6 +628,15 @@ func (s *Store) ListEvents(ctx context.Context, f EventFilter) ([]model.Event, e
 	if f.Since != nil {
 		where = append(where, "ts >= ?")
 		args = append(args, f.Since.UnixMilli())
+	}
+	if f.Until != nil {
+		where = append(where, "ts < ?")
+		args = append(args, f.Until.UnixMilli())
+	}
+	if q := strings.TrimSpace(f.Query); q != "" {
+		like := "%" + strings.ToLower(q) + "%"
+		where = append(where, "(lower(title) LIKE ? OR lower(detail) LIKE ? OR lower(node_name) LIKE ? OR lower(check_name) LIKE ? OR lower(type) LIKE ?)")
+		args = append(args, like, like, like, like, like)
 	}
 	q := "SELECT " + eventCols + " FROM events"
 	if len(where) > 0 {
@@ -883,6 +894,15 @@ func (s *Store) LoadSettings(ctx context.Context) (model.Settings, error) {
 	}
 	if st.Retention.RawDays <= 0 {
 		st.Retention.RawDays = def.Retention.RawDays
+	}
+	if st.General.AccentColor == "" {
+		st.General.AccentColor = def.General.AccentColor
+	}
+	if st.General.Theme == "" {
+		st.General.Theme = def.General.Theme
+	}
+	if st.General.UpdateRepo == "" {
+		st.General.UpdateRepo = def.General.UpdateRepo
 	}
 	return st, nil
 }

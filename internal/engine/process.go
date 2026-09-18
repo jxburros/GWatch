@@ -239,6 +239,7 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 	for _, m := range mails {
 		e.sendMail(m)
 	}
+	e.fireTriggers(triggerContext{check: c, node: n, result: stored, state: snapshot, prev: prev, events: events})
 	return stored, nil
 }
 

@@ -2,15 +2,25 @@
 // failure shading, hover tooltip and PNG export; plus sparkline and uptime bar.
 
 import { ms as fmtMs, pct as fmtPct, timeShort, dateTime } from './fmt.js';
-import { h } from './components.js';
+import { h, cssColors, onThemeChange } from './components.js';
 
 export const SERIES_COLORS = ['#7c6cff', '#3ec8b8', '#ff9f6e', '#e879a6', '#5aa9e6', '#c8d84a', '#b18cff', '#6fd3ff'];
-const CSS = {
-  bg: '#14171c', line: '#262b33', lineStrong: '#323844', muted: '#9aa3ad', dim: '#6b7480', text: '#f4f6f8',
-  down: '#ff5c5c', up: '#3dff8f', warn: '#ffc542',
-};
-const FONT = '12px Inter, "Segoe UI", system-ui, -apple-system, sans-serif';
-const MONO = '12px "JetBrains Mono", "Cascadia Mono", "SF Mono", Consolas, "Liberation Mono", Menlo, monospace';
+/** Series palette with the current accent first. */
+export function seriesColors() {
+  const c = cssColors();
+  const out = [c.accent, ...SERIES_COLORS.filter((x) => x.toLowerCase() !== c.accent.toLowerCase())];
+  return out;
+}
+export function seriesColor(i) { const p = seriesColors(); return p[i % p.length]; }
+// Design tokens are read from CSS so charts follow the theme and accent.
+let CSS = cssColors();
+onThemeChange(() => { CSS = cssColors(); });
+export function refreshChartColors() { CSS = cssColors(); }
+const FONT = '11.5px "IBM Plex Sans", Inter, "Segoe UI", system-ui, -apple-system, sans-serif';
+const MONO = '11.5px "IBM Plex Mono", "JetBrains Mono", "Cascadia Mono", "SF Mono", Consolas, "Liberation Mono", Menlo, monospace';
+export const CHART_STYLES = [
+  { value: 'line', label: 'Line' }, { value: 'area', label: 'Area' }, { value: 'step', label: 'Step' }, { value: 'bars', label: 'Bars' }, { value: 'scatter', label: 'Points' },
+];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MIN = 60e3, HOUR = 3600e3, DAY = 86400e3;
@@ -104,13 +114,16 @@ function fmtAxis(v, unit) {
 /* ---------- LineChart ---------- */
 
 /**
- * new LineChart(container, { unit: 'ms'|'%', height, yMin, yMax, legend, shadeFailures, area })
+ * new LineChart(container, { unit: 'ms'|'%', height, yMin, yMax, legend, shadeFailures, area,
+ *   style: 'line'|'area'|'step'|'bars'|'scatter', smooth, points, lineWidth, threshold, thresholdLabel, grid })
  * chart.setData({ series: [{ name, color, points: [{ t, v, avail, min, max }] }], from, to, bucketSeconds })
  */
 export class LineChart {
   constructor(container, opts = {}) {
     this.container = container;
-    this.opts = { unit: 'ms', height: null, yMin: null, yMax: null, legend: true, shadeFailures: true, area: true, minTickPx: 76, ...opts };
+    this.opts = { unit: 'ms', height: null, yMin: null, yMax: null, legend: true, shadeFailures: true, area: true, style: null, smooth: false, points: false, lineWidth: 1.75, threshold: null, thresholdLabel: '', grid: true, minTickPx: 76, ...opts };
+    if (this.opts.style == null) this.opts.style = this.opts.area ? 'area' : 'line';
+    this._themeOff = onThemeChange(() => this.scheduleDraw());
     this.el = h('div', { class: 'chart', style: this.opts.height ? { height: `${this.opts.height}px` } : null });
     this.canvas = h('canvas', { role: 'img', 'aria-label': opts.ariaLabel || 'Chart' });
     this.tooltip = h('div', { class: 'chart-tooltip', hidden: true });
@@ -162,8 +175,17 @@ export class LineChart {
     }
   }
 
+  /** Change display options (style, smoothing, threshold …) and redraw. */
+  setOptions(opts = {}) {
+    Object.assign(this.opts, opts);
+    if (this.opts.height && this.el) this.el.style.height = `${this.opts.height}px`;
+    if (opts.legend != null) { if (opts.legend && !this.legend) { this.legend = h('div', { class: 'chart-legend' }); this.container.append(this.legend); } if (!opts.legend && this.legend) { this.legend.remove(); this.legend = null; } this._renderLegend(); }
+    this.scheduleDraw();
+  }
+
   destroy() {
     this.ro.disconnect();
+    if (this._themeOff) this._themeOff();
     if (this._raf) cancelAnimationFrame(this._raf);
     this.canvas.removeEventListener('mousemove', this._onMove);
     this.canvas.removeEventListener('mouseleave', this._onLeave);
@@ -180,6 +202,7 @@ export class LineChart {
     const { from, to, series } = this.data;
     let vmin = Infinity, vmax = -Infinity;
     for (const s of series) for (const p of s.points) if (p.v != null && isFinite(p.v)) { if (p.v < vmin) vmin = p.v; if (p.v > vmax) vmax = p.v; }
+    if (this.opts.threshold != null && isFinite(this.opts.threshold)) { if (this.opts.threshold > vmax) vmax = this.opts.threshold; if (this.opts.threshold < vmin) vmin = this.opts.threshold; }
     if (!isFinite(vmin)) { vmin = 0; vmax = this.opts.unit === '%' ? 100 : 10; }
     let yMin = this.opts.yMin != null ? this.opts.yMin : Math.min(0, vmin);
     let yMax = this.opts.yMax != null ? this.opts.yMax : vmax;
@@ -245,7 +268,7 @@ export class LineChart {
     for (const v of yt.ticks) {
       if (v < yt.min - 1e-9 || v > yt.max + 1e-9) continue;
       const yy = Math.round(y(v)) + 0.5;
-      ctx.strokeStyle = CSS.line; ctx.beginPath(); ctx.moveTo(L.left, yy); ctx.lineTo(L.left + L.plotW, yy); ctx.stroke();
+      if (this.opts.grid !== false) { ctx.strokeStyle = CSS.line; ctx.beginPath(); ctx.moveTo(L.left, yy); ctx.lineTo(L.left + L.plotW, yy); ctx.stroke(); }
       ctx.fillStyle = CSS.muted; ctx.fillText(fmtAxis(v, this.opts.unit), L.left - 8, yy);
     }
 
@@ -261,42 +284,85 @@ export class LineChart {
     // Series
     ctx.save();
     ctx.beginPath(); ctx.rect(L.left, L.top - 2, L.plotW, L.plotH + 4); ctx.clip();
-    for (const s of series) {
+    const style = this.opts.style || 'area';
+    const lw = Math.max(0.5, Number(this.opts.lineWidth) || 1.75);
+    for (let si = 0; si < series.length; si++) {
+      const s = series[si];
       const pts = s.points;
       if (!pts.length) continue;
       const gapMs = this._gapThreshold(pts, bucketSeconds);
-      // area fill
-      if (this.opts.area) {
-        ctx.fillStyle = hexToRgba(s.color, series.length > 1 ? 0.05 : 0.09);
-        let started = false; let startX = 0; let lastX = 0; let lastT = null;
-        ctx.beginPath();
-        for (const p of pts) {
-          const gap = p.v == null || (lastT != null && p.t - lastT > gapMs);
-          if (gap && started) { ctx.lineTo(lastX, y(yt.min)); ctx.lineTo(startX, y(yt.min)); ctx.closePath(); ctx.fill(); ctx.beginPath(); started = false; }
-          if (p.v == null) { lastT = null; continue; }
-          const px = x(p.t), py = y(p.v);
-          if (!started) { ctx.moveTo(px, py); startX = px; started = true; } else ctx.lineTo(px, py);
-          lastX = px; lastT = p.t;
-        }
-        if (started) { ctx.lineTo(lastX, y(yt.min)); ctx.lineTo(startX, y(yt.min)); ctx.closePath(); ctx.fill(); }
-      }
-      // line
-      ctx.strokeStyle = s.color; ctx.lineWidth = 1.75; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-      ctx.beginPath();
-      let started = false; let lastT = null; let lastPt = null; let runLen = 0;
-      const singles = [];
+      // Split into runs of consecutive valid points.
+      const runs = [];
+      let run = []; let lastT = null;
       for (const p of pts) {
-        if (p.v == null) { if (runLen === 1 && lastPt) singles.push(lastPt); started = false; lastT = null; runLen = 0; continue; }
-        if (lastT != null && p.t - lastT > gapMs) { if (runLen === 1 && lastPt) singles.push(lastPt); started = false; runLen = 0; }
-        const px = x(p.t), py = y(p.v);
-        if (!started) { ctx.moveTo(px, py); started = true; runLen = 1; } else { ctx.lineTo(px, py); runLen++; }
-        lastT = p.t; lastPt = p;
+        if (p.v == null || (lastT != null && p.t - lastT > gapMs)) { if (run.length) runs.push(run); run = []; }
+        if (p.v != null) { run.push(p); lastT = p.t; } else lastT = null;
       }
-      if (runLen === 1 && lastPt) singles.push(lastPt);
-      ctx.stroke();
-      // isolated points get a dot so they are visible
+      if (run.length) runs.push(run);
+
+      if (style === 'bars') {
+        const n = series.length;
+        for (const p of pts) {
+          if (p.v == null) continue;
+          let x0, x1;
+          if (bucketSeconds > 0) { x0 = x(p.t); x1 = x(p.t + bucketSeconds * 1000); }
+          else { const i = pts.indexOf(p); const prev = pts[i - 1]?.t ?? p.t - MIN; const next = pts[i + 1]?.t ?? p.t + MIN; x0 = x(p.t - (p.t - prev) / 2); x1 = x(p.t + (next - p.t) / 2); }
+          const bw = Math.max(1, (x1 - x0 - 1) / n);
+          const bx = x0 + 0.5 + bw * si;
+          ctx.fillStyle = hexToRgba(s.color, 0.85);
+          ctx.fillRect(bx, y(p.v), Math.max(1, bw - (n > 1 ? 0.5 : 0)), y(yt.min) - y(p.v));
+        }
+        continue;
+      }
+      const tracePath = (r) => {
+        if (style === 'step') {
+          ctx.moveTo(x(r[0].t), y(r[0].v));
+          for (let i = 1; i < r.length; i++) { ctx.lineTo(x(r[i].t), y(r[i - 1].v)); ctx.lineTo(x(r[i].t), y(r[i].v)); }
+          if (bucketSeconds > 0) ctx.lineTo(x(r[r.length - 1].t + bucketSeconds * 1000), y(r[r.length - 1].v));
+        } else if (this.opts.smooth && r.length > 2) {
+          ctx.moveTo(x(r[0].t), y(r[0].v));
+          for (let i = 0; i < r.length - 1; i++) {
+            const p0 = r[i - 1] || r[i], p1 = r[i], p2 = r[i + 1], p3 = r[i + 2] || p2;
+            const c1x = x(p1.t) + (x(p2.t) - x(p0.t)) / 6, c1y = y(p1.v) + (y(p2.v) - y(p0.v)) / 6;
+            const c2x = x(p2.t) - (x(p3.t) - x(p1.t)) / 6, c2y = y(p2.v) - (y(p3.v) - y(p1.v)) / 6;
+            ctx.bezierCurveTo(c1x, c1y, c2x, c2y, x(p2.t), y(p2.v));
+          }
+        } else {
+          ctx.moveTo(x(r[0].t), y(r[0].v));
+          for (let i = 1; i < r.length; i++) ctx.lineTo(x(r[i].t), y(r[i].v));
+        }
+      };
+      if (style === 'area') {
+        ctx.fillStyle = hexToRgba(s.color, series.length > 1 ? 0.06 : 0.11);
+        for (const r of runs) {
+          if (r.length < 2) continue;
+          ctx.beginPath(); tracePath(r);
+          const endX = style === 'step' && bucketSeconds > 0 ? x(r[r.length - 1].t + bucketSeconds * 1000) : x(r[r.length - 1].t);
+          ctx.lineTo(endX, y(yt.min)); ctx.lineTo(x(r[0].t), y(yt.min)); ctx.closePath(); ctx.fill();
+        }
+      }
+      if (style !== 'scatter') {
+        ctx.strokeStyle = s.color; ctx.lineWidth = lw; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+        ctx.beginPath();
+        for (const r of runs) { if (r.length >= 2) tracePath(r); }
+        ctx.stroke();
+      }
+      // isolated points always get a dot; every point when requested
       ctx.fillStyle = s.color;
-      for (const p of singles) { ctx.beginPath(); ctx.arc(x(p.t), y(p.v), 2, 0, Math.PI * 2); ctx.fill(); }
+      const dotR = style === 'scatter' ? Math.max(1.5, lw + 0.5) : 2;
+      for (const r of runs) {
+        if (r.length === 1 || style === 'scatter' || this.opts.points) {
+          for (const p of r) { ctx.beginPath(); ctx.arc(x(p.t), y(p.v), dotR, 0, Math.PI * 2); ctx.fill(); }
+        }
+      }
+    }
+    // Threshold line
+    if (this.opts.threshold != null && isFinite(this.opts.threshold)) {
+      const ty = Math.round(y(this.opts.threshold)) + 0.5;
+      ctx.strokeStyle = CSS.warn; ctx.lineWidth = 1; ctx.setLineDash([5, 4]);
+      ctx.beginPath(); ctx.moveTo(L.left, ty); ctx.lineTo(L.left + L.plotW, ty); ctx.stroke(); ctx.setLineDash([]);
+      ctx.font = MONO; ctx.textAlign = 'right'; ctx.textBaseline = 'bottom'; ctx.fillStyle = CSS.warn;
+      ctx.fillText(this.opts.thresholdLabel || fmtAxis(this.opts.threshold, this.opts.unit), L.left + L.plotW - 4, ty - 2);
     }
     ctx.restore();
 
@@ -307,7 +373,7 @@ export class LineChart {
     // Hover
     if (this.hover && !exportMode) {
       const hx = Math.round(x(this.hover.t)) + 0.5;
-      ctx.strokeStyle = 'rgba(244,246,248,0.35)'; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(hx, L.top); ctx.lineTo(hx, L.top + L.plotH); ctx.stroke(); ctx.setLineDash([]);
+      ctx.strokeStyle = hexToRgba(CSS.text, 0.35); ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(hx, L.top); ctx.lineTo(hx, L.top + L.plotH); ctx.stroke(); ctx.setLineDash([]);
       for (const hp of this.hover.values) {
         if (hp.v == null) continue;
         ctx.fillStyle = hp.color; ctx.beginPath(); ctx.arc(x(hp.t), y(hp.v), 3.5, 0, Math.PI * 2); ctx.fill();
@@ -316,7 +382,7 @@ export class LineChart {
     }
 
     if (exportMode && this.opts.title) {
-      ctx.font = 'bold 13px Inter, "Segoe UI", system-ui, sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.fillStyle = CSS.text;
+      ctx.font = 'bold 13px "IBM Plex Sans", Inter, "Segoe UI", system-ui, sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.fillStyle = CSS.text;
       ctx.fillText(this.opts.title, L.left, 2);
     }
   }
@@ -416,8 +482,8 @@ export class LineChart {
   }
 }
 
-function hexToRgba(hex, a) {
-  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+export function hexToRgba(hex, a) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || '');
   if (!m) return hex;
   return `rgba(${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)}, ${a})`;
 }
@@ -444,7 +510,8 @@ export function toSeries(hs, metric = 'avg', color) {
 
 /* ---------- Sparkline ---------- */
 
-export function sparkline(values, { width = 120, height = 28, color = '#7c6cff' } = {}) {
+export function sparkline(values, { width = 120, height = 28, color = null } = {}) {
+  color = color || CSS.accent;
   const canvas = h('canvas', { class: 'sparkline', width, height, 'aria-hidden': 'true' });
   const dpr = window.devicePixelRatio || 1;
   canvas.width = width * dpr; canvas.height = height * dpr;

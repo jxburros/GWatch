@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -16,7 +17,7 @@ import (
 	"github.com/jxburros/GWatch/internal/engine"
 	"github.com/jxburros/GWatch/internal/mailer"
 	"github.com/jxburros/GWatch/internal/model"
-	"github.com/jxburros/GWatch/internal/store"
+	"github.com/jxburros/GWatch/internal/update"
 )
 
 const passwordMask = "********"
@@ -182,8 +183,19 @@ func (s *Server) handleSaveDashboard(w http.ResponseWriter, r *http.Request) {
 		if wd.Height < 1 {
 			wd.Height = 1
 		}
-		if wd.Height > 3 {
-			wd.Height = 3
+		if wd.Height > 6 {
+			wd.Height = 6
+		}
+		if wd.X != nil && (*wd.X < 0 || *wd.X+wd.Width > 4) {
+			x := 4 - wd.Width
+			if *wd.X >= 0 && *wd.X < x {
+				x = *wd.X
+			}
+			wd.X = &x
+		}
+		if wd.Y != nil && *wd.Y < 0 {
+			y := 0
+			wd.Y = &y
 		}
 		if wd.Type == "" {
 			writeError(w, http.StatusBadRequest, "every widget needs a type")
@@ -217,8 +229,13 @@ func maskSettings(st model.Settings) model.Settings {
 	if st.Alerts.SMTP.Password != "" {
 		st.Alerts.SMTP.Password = passwordMask
 	}
+	if st.General.AccessPassword != "" {
+		st.General.AccessPassword = passwordMask
+	}
 	return st
 }
+
+var hexColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, maskSettings(s.Engine.Settings()))
@@ -233,6 +250,9 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if st.Alerts.SMTP.Password == passwordMask {
 		st.Alerts.SMTP.Password = current.Alerts.SMTP.Password
+	}
+	if st.General.AccessPassword == passwordMask {
+		st.General.AccessPassword = current.General.AccessPassword
 	}
 	def := model.DefaultSettings()
 	g := &st.General
@@ -261,7 +281,28 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "warning thresholds must be positive (packet loss up to 100%)")
 		return
 	}
-	g.Theme = "dark"
+	switch g.Theme {
+	case "dark", "light", "system":
+	default:
+		g.Theme = "dark"
+	}
+	g.AccentColor = strings.ToLower(strings.TrimSpace(g.AccentColor))
+	if g.AccentColor == "" {
+		g.AccentColor = def.General.AccentColor
+	}
+	if !hexColor.MatchString(g.AccentColor) {
+		writeError(w, http.StatusBadRequest, "accent colour must be a hex value like #7c6cff")
+		return
+	}
+	g.AccessPassword = strings.TrimSpace(g.AccessPassword)
+	g.UpdateRepo = strings.TrimSpace(g.UpdateRepo)
+	if g.UpdateRepo == "" {
+		g.UpdateRepo = def.General.UpdateRepo
+	}
+	if !update.ValidRepo(g.UpdateRepo) {
+		writeError(w, http.StatusBadRequest, "update repository must look like owner/name")
+		return
+	}
 	a := &st.Alerts
 	if a.FailureThreshold < 1 {
 		a.FailureThreshold = def.Alerts.FailureThreshold
@@ -333,6 +374,15 @@ func describeSettingsChange(before, after model.Settings) string {
 	}
 	if before.Retention != after.Retention {
 		parts = append(parts, "retention policy changed")
+	}
+	if before.General.RemoteAccess != after.General.RemoteAccess {
+		parts = append(parts, "remote access "+map[bool]string{true: "enabled", false: "disabled"}[after.General.RemoteAccess])
+	}
+	if before.General.AccessPassword != after.General.AccessPassword {
+		parts = append(parts, "access password changed")
+	}
+	if before.General.Theme != after.General.Theme || before.General.AccentColor != after.General.AccentColor {
+		parts = append(parts, "appearance changed")
 	}
 	if before.General != after.General {
 		parts = append(parts, "general settings changed")
@@ -609,15 +659,22 @@ func (s *Server) handleExportResults(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleExportEvents(w http.ResponseWriter, r *http.Request) {
-	events, err := s.Store.ListEvents(r.Context(), store.EventFilter{Limit: queryInt(r, "limit", 5000), NodeID: queryInt64Ptr(r, "nodeId"), CheckID: queryInt64Ptr(r, "checkId")})
+	events, err := s.Store.ListEvents(r.Context(), s.eventFilterFromQuery(r, 5000))
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
 	cw := csvWriter(w, "gwatch-events.csv")
-	_ = cw.Write([]string{"timestamp", "type", "node", "check", "title", "detail"})
+	_ = cw.Write([]string{"timestamp", "type", "node", "check", "title", "detail", "node_id", "check_id"})
 	for _, e := range events {
-		_ = cw.Write([]string{e.Timestamp.Format(time.RFC3339), string(e.Type), e.NodeName, e.CheckName, e.Title, e.Detail})
+		nid, cid := "", ""
+		if e.NodeID != nil {
+			nid = strconv.FormatInt(*e.NodeID, 10)
+		}
+		if e.CheckID != nil {
+			cid = strconv.FormatInt(*e.CheckID, 10)
+		}
+		_ = cw.Write([]string{e.Timestamp.Format(time.RFC3339), string(e.Type), e.NodeName, e.CheckName, e.Title, e.Detail, nid, cid})
 	}
 	cw.Flush()
 }

@@ -1,14 +1,18 @@
 // Dashboard: switchable dashboards made of widgets on a 4-column grid.
+// Widgets are dragged by their handle and resized from their edges; the
+// layout (x, y, width, height per widget) is saved with the dashboard.
 
 import { api, getHistoryMulti, getHistoryAuto, qs } from '../api.js';
-import { h, icon, clear, replace, statusPill, statusGlyph, checkChip, toast, confirmDialog, promptDialog, openModal, menuButton, showMenu, field, textInput, numberInput, selectInput, checkbox, checkMultiSelect, emptyState, skeleton, eventRow, rangeChips, statusMeta, uid } from '../components.js';
-import { LineChart, toSeries, uptimeBar, uptimeLegend, SERIES_COLORS } from '../charts.js';
-import { relTime, ms as fmtMs, pct, bytes, plural, dateShort, rangeLabel, duration } from '../fmt.js';
+import { h, icon, clear, replace, statusPill, statusGlyph, checkChip, toast, confirmDialog, promptDialog, openModal, menuButton, field, textInput, numberInput, selectInput, checkbox, emptyState, skeleton, eventRow, rangeChips, statusMeta, uid } from '../components.js';
+import { relTime, bytes, plural, dateShort, duration } from '../fmt.js';
+import { chartConfigEditor, renderConfiguredChart, normalizeChartConfig } from '../chart-config.js';
 
+export const COLS = 4;
 export const WIDGET_TYPES = [
   { type: 'summary', label: 'Overall health', desc: 'Big up / degraded / down / unknown numerals with a headline.', w: 2, h: 1, config: {} },
   { type: 'groups', label: 'Group status', desc: 'One card per group with its worst status.', w: 2, h: 1, config: { groups: [] } },
   { type: 'status_list', label: 'Status list', desc: 'Nodes and their checks, optionally filtered by group, tag or node.', w: 2, h: 2, config: { group: '', tag: '', nodeIds: [] } },
+  { type: 'chart', label: 'Chart', desc: 'Any metric for any checks, styled the way you like (same options as the Charts tab).', w: 2, h: 2, config: { metric: 'avg', range: '24h', style: 'area' } },
   { type: 'latency_chart', label: 'Latency chart', desc: 'Ping / connect latency over time for selected checks.', w: 2, h: 2, config: { checkIds: [], range: '24h', metric: 'avg' } },
   { type: 'response_chart', label: 'Response-time chart', desc: 'HTTP response time over time for selected checks.', w: 2, h: 2, config: { checkIds: [], range: '24h', metric: 'avg' } },
   { type: 'loss_chart', label: 'Packet-loss chart', desc: 'Packet loss % over time for ping checks.', w: 2, h: 2, config: { checkIds: [], range: '24h' } },
@@ -19,7 +23,8 @@ export const WIDGET_TYPES = [
   { type: 'monitor_health', label: 'Monitor health', desc: 'Is the GWatch service itself running and checking?', w: 1, h: 1, config: {} },
   { type: 'table', label: 'Node table', desc: 'A table of nodes for a group or tag.', w: 4, h: 2, config: { group: '', tag: '' } },
 ];
-const CHART_TYPES = new Set(['latency_chart', 'response_chart', 'loss_chart']);
+const LEGACY_CHARTS = { latency_chart: { metric: 'avg', unit: 'ms' }, response_chart: { metric: 'avg', unit: 'ms' }, loss_chart: { metric: 'loss', unit: '%' } };
+const CHART_LIKE = new Set(['chart', 'latency_chart', 'response_chart', 'loss_chart', 'uptime_chart']);
 
 export function widgetConfig(w) {
   let c = w.config;
@@ -28,10 +33,67 @@ export function widgetConfig(w) {
 }
 function widgetMeta(type) { return WIDGET_TYPES.find((x) => x.type === type) || { type, label: type, desc: '', w: 2, h: 1, config: {} }; }
 
+/* ---------- Layout helpers (pure) ---------- */
+export function collides(a, b) { return a !== b && a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y; }
+
+/** Normalise widget geometry into {x,y,w,h} items; auto-places widgets without a position. */
+export function toLayout(widgets) {
+  const items = widgets.map((w) => {
+    const meta = widgetMeta(w.type);
+    const wd = Math.min(COLS, Math.max(1, Number(w.width) || meta.w));
+    const ht = Math.min(6, Math.max(1, Number(w.height) || meta.h));
+    const x = w.x == null ? null : Math.min(COLS - wd, Math.max(0, Number(w.x)));
+    const y = w.y == null ? null : Math.max(0, Number(w.y));
+    return { id: w.id, x, y, w: wd, h: ht };
+  });
+  const placed = items.filter((i) => i.x != null && i.y != null);
+  for (const it of items) {
+    if (it.x != null && it.y != null) continue;
+    // first free slot scanning rows then columns
+    outer: for (let y = 0; ; y++) {
+      for (let x = 0; x + it.w <= COLS; x++) {
+        const test = { ...it, x, y };
+        if (!placed.some((p) => collides(test, p))) { it.x = x; it.y = y; placed.push(it); break outer; }
+      }
+    }
+  }
+  return compact(items, null);
+}
+
+/** Gravity: every item (except pinned) floats up as far as it can, in reading order. */
+export function compact(items, pinned) {
+  const done = pinned ? [pinned] : [];
+  const order = items.filter((i) => i !== pinned).sort((a, b) => a.y - b.y || a.x - b.x);
+  for (const it of order) {
+    let y = 0;
+    while (done.some((p) => collides({ ...it, y }, p))) y++;
+    it.y = y;
+    done.push(it);
+  }
+  return items;
+}
+
+/** Place `moved` at its new position and push overlapping widgets down, then compact. */
+export function resolve(items, moved) {
+  moved.x = Math.min(COLS - moved.w, Math.max(0, moved.x));
+  moved.y = Math.max(0, moved.y);
+  let changed = true; let guard = 0;
+  while (changed && guard++ < 200) {
+    changed = false;
+    for (const it of items.filter((i) => i !== moved).sort((a, b) => a.y - b.y)) {
+      if (collides(it, moved)) { it.y = moved.y + moved.h; changed = true; }
+    }
+    // pushed items may now overlap each other
+    const order = items.filter((i) => i !== moved).sort((a, b) => a.y - b.y || a.x - b.x);
+    for (let i = 0; i < order.length; i++) for (let j = 0; j < i; j++) if (collides(order[i], order[j])) { order[i].y = order[j].y + order[j].h; changed = true; }
+  }
+  return compact(items, moved);
+}
+
 export async function mount(root, ctx) {
   const state = {
     dashboards: [], current: null, overview: null, health: null, nodes: [], groups: { groups: [], tags: [] },
-    editing: false, draft: null, chartHosts: new Map(), charts: new Map(), historyCache: new Map(), destroyed: false,
+    chartViews: new Map(), historyCache: new Map(), destroyed: false, layout: [], interacting: false,
   };
   const now = () => Date.now();
 
@@ -51,10 +113,12 @@ export async function mount(root, ctx) {
   function pickCurrent(id) {
     const list = state.dashboards;
     state.current = (id && list.find((d) => String(d.id) === String(id))) || list[0] || null;
+    state.layout = state.current ? toLayout(state.current.widgets || []) : [];
   }
   async function refreshData() {
+    if (state.interacting) return;
     const [overview, health] = await Promise.all([api.get('/api/overview'), api.get('/api/health').catch(() => state.health)]);
-    if (state.destroyed) return;
+    if (state.destroyed || state.interacting) return;
     state.overview = overview; state.health = health;
     state.historyCache.clear();
     renderWidgets();
@@ -64,19 +128,13 @@ export async function mount(root, ctx) {
   function setTitle() {
     const d = state.current;
     const actions = [];
-    if (state.editing) {
+    if (d) {
       actions.push(
-        h('button', { class: 'btn', type: 'button', onclick: () => addWidget() }, icon('plus'), 'Add widget'),
-        h('button', { class: 'btn btn-ghost', type: 'button', onclick: () => cancelEdit() }, 'Cancel'),
-        h('button', { class: 'btn btn-primary', type: 'button', onclick: () => saveEdit() }, icon('check'), 'Done'),
-      );
-    } else if (d) {
-      actions.push(
-        h('button', { class: 'btn', type: 'button', onclick: () => addWidget() }, icon('plus'), 'Add widget'),
-        h('button', { class: 'btn btn-primary', type: 'button', onclick: () => startEdit() }, icon('edit'), 'Edit layout'),
+        h('button', { class: 'btn btn-primary', type: 'button', onclick: () => addWidget() }, icon('plus'), 'Add widget'),
         menuButton(() => [
           { label: 'Rename dashboard', icon: 'edit', onClick: renameDashboard },
           { label: 'New dashboard', icon: 'plus', onClick: newDashboard },
+          { label: 'Tidy layout', icon: 'layout', onClick: tidy },
           { sep: true },
           { label: 'Delete dashboard', icon: 'trash', danger: true, onClick: deleteDashboard, disabled: state.dashboards.length <= 1 },
         ], { label: 'Dashboard options' }),
@@ -84,7 +142,7 @@ export async function mount(root, ctx) {
     } else {
       actions.push(h('button', { class: 'btn btn-primary', type: 'button', onclick: newDashboard }, icon('plus'), 'New dashboard'));
     }
-    ctx.setTitle(d ? d.name : 'Dashboard', { subtitle: state.editing ? 'Editing layout — use the arrows to reorder, then press Done' : null, actions });
+    ctx.setTitle(d ? d.name : 'Dashboard', { subtitle: d ? 'Drag widgets by their handle, resize from the edges' : null, actions });
   }
 
   function renderTabs() {
@@ -101,7 +159,7 @@ export async function mount(root, ctx) {
     const name = await promptDialog({ title: 'New dashboard', label: 'Name', placeholder: 'e.g. Servers, Internet, Critical', confirmLabel: 'Create' });
     if (!name) return;
     try {
-      const created = await api.post('/api/dashboards', { name: name.trim(), widgets: [{ id: uid('w'), type: 'summary', title: 'Overall health', width: 2, height: 1, config: {} }, { id: uid('w'), type: 'attention', title: 'Needs attention', width: 2, height: 1, config: {} }] });
+      const created = await api.post('/api/dashboards', { name: name.trim(), widgets: [{ id: uid('w'), type: 'summary', title: 'Overall health', x: 0, y: 0, width: 2, height: 1, config: {} }, { id: uid('w'), type: 'attention', title: 'Needs attention', x: 2, y: 0, width: 2, height: 1, config: {} }] });
       toast(`Dashboard "${created.name}" created`, { kind: 'success' });
       state.dashboards.push(created);
       ctx.navigate(`/dashboard/${created.id}`);
@@ -128,61 +186,49 @@ export async function mount(root, ctx) {
       if (!state.dashboards[0]) { state.current = null; render(); }
     } catch (e) { toast(e.message, { kind: 'error' }); }
   }
-  async function persistWidgets(widgets, { silent = false } = {}) {
+  /** Save the current widget list (with layout) to the server. */
+  async function persist({ silent = true } = {}) {
     const d = state.current; if (!d) return;
+    const widgets = (d.widgets || []).map((w) => { const l = state.layout.find((x) => x.id === w.id); return l ? { ...w, x: l.x, y: l.y, width: l.w, height: l.h } : w; });
     try {
       const saved = await api.put(`/api/dashboards/${d.id}`, { ...d, widgets });
       Object.assign(d, saved);
+      state.layout = toLayout(d.widgets || []);
       if (!silent) toast('Layout saved', { kind: 'success' });
     } catch (e) { toast(e.message, { kind: 'error' }); throw e; }
   }
+  function tidy() { state.layout = compact(state.layout.map((l) => ({ ...l })), null); persist().catch(() => {}); renderWidgets(); }
 
-  /* ---------- Edit mode ---------- */
-  function widgetsList() { return state.editing ? state.draft : (state.current?.widgets || []); }
-  function startEdit() { state.editing = true; state.draft = (state.current?.widgets || []).map((w) => ({ ...w, config: { ...widgetConfig(w) } })); setTitle(); renderWidgets(); }
-  function cancelEdit() { state.editing = false; state.draft = null; setTitle(); renderWidgets(); }
-  async function saveEdit() {
-    const widgets = state.draft;
-    state.editing = false; state.draft = null;
-    setTitle();
-    await persistWidgets(widgets).catch(() => {});
-    renderWidgets();
-  }
-  function moveWidget(i, dir) {
-    const list = widgetsList(); const j = i + dir;
-    if (j < 0 || j >= list.length) return;
-    [list[i], list[j]] = [list[j], list[i]];
-    if (!state.editing) persistWidgets(list, { silent: true }).catch(() => {});
-    renderWidgets();
-  }
-  async function removeWidget(i) {
-    const list = widgetsList();
-    const w = list[i];
-    if (!state.editing) {
-      const ok = await confirmDialog({ title: `Remove "${w.title || widgetMeta(w.type).label}"?`, confirmLabel: 'Remove', danger: true });
-      if (!ok) return;
-    }
-    list.splice(i, 1);
+  /* ---------- Widget CRUD ---------- */
+  function widgetsList() { return state.current?.widgets || []; }
+  async function removeWidget(w) {
+    const ok = await confirmDialog({ title: `Remove "${w.title || widgetMeta(w.type).label}"?`, confirmLabel: 'Remove', danger: true });
+    if (!ok) return;
+    state.current.widgets = widgetsList().filter((x) => x.id !== w.id);
+    state.layout = compact(state.layout.filter((l) => l.id !== w.id), null);
     disposeChart(w.id);
-    if (!state.editing) await persistWidgets(list, { silent: true }).catch(() => {});
+    await persist().catch(() => {});
     renderWidgets();
   }
-  async function editWidget(i) {
-    const list = widgetsList();
-    const edited = await openWidgetEditor(list[i], state);
+  async function editWidget(w) {
+    const edited = await openWidgetEditor(w, state);
     if (!edited) return;
+    const list = widgetsList();
+    const i = list.findIndex((x) => x.id === w.id);
     list[i] = edited;
+    const l = state.layout.find((x) => x.id === w.id);
+    if (l && (l.w !== edited.width || l.h !== edited.height)) { l.w = Math.min(COLS, edited.width); l.h = edited.height; l.x = Math.min(l.x, COLS - l.w); resolve(state.layout, l); }
     disposeChart(edited.id);
-    if (!state.editing) await persistWidgets(list, { silent: true }).catch(() => {});
+    await persist().catch(() => {});
     renderWidgets();
   }
   async function addWidget() {
     if (!state.current) { await newDashboard(); return; }
     const created = await openWidgetEditor(null, state);
     if (!created) return;
-    const list = state.editing ? state.draft : [...(state.current.widgets || [])];
-    list.push(created);
-    if (!state.editing) { await persistWidgets(list, { silent: true }).catch(() => {}); }
+    widgetsList().push(created);
+    state.layout = toLayout(widgetsList().map((w) => (w.id === created.id ? { ...w, x: null, y: null } : { ...w, ...(state.layout.find((l) => l.id === w.id) ? { x: state.layout.find((l) => l.id === w.id).x, y: state.layout.find((l) => l.id === w.id).y } : {}) })));
+    await persist().catch(() => {});
     renderWidgets();
     toast('Widget added', { kind: 'success' });
   }
@@ -190,18 +236,15 @@ export async function mount(root, ctx) {
     const cfg = widgetConfig(w);
     cfg.range = range; w.config = cfg;
     disposeChart(w.id);
-    if (!state.editing) await persistWidgets(widgetsList(), { silent: true }).catch(() => {});
+    await persist().catch(() => {});
     renderWidgets();
   }
 
   /* ---------- Rendering ---------- */
-  function render() {
-    setTitle();
-    renderTabs();
-    renderWidgets();
-  }
+  function render() { setTitle(); renderTabs(); renderWidgets(); }
 
   function renderWidgets() {
+    if (state.interacting) return;
     clear(grid);
     if (!state.current) {
       grid.append(h('div', { class: 'card', style: { gridColumn: 'span 4' } }, emptyState({ icon: 'grid', title: 'No dashboards yet', text: 'Create a dashboard and add widgets for the groups you care about.', actions: h('button', { class: 'btn btn-primary', type: 'button', onclick: newDashboard }, icon('plus'), 'New dashboard') })));
@@ -209,63 +252,184 @@ export async function mount(root, ctx) {
     }
     const list = widgetsList();
     if (!list.length) {
-      grid.append(h('div', { class: 'card', style: { gridColumn: 'span 4' } }, emptyState({ icon: 'grid', title: 'This dashboard is empty', text: 'Add an overall health summary, a status list or a latency chart to get started.', actions: h('button', { class: 'btn btn-primary', type: 'button', onclick: addWidget }, icon('plus'), 'Add widget') })));
+      grid.append(h('div', { class: 'card', style: { gridColumn: 'span 4' } }, emptyState({ icon: 'grid', title: 'This dashboard is empty', text: 'Add an overall health summary, a status list or a chart to get started.', actions: h('button', { class: 'btn btn-primary', type: 'button', onclick: addWidget }, icon('plus'), 'Add widget') })));
       return;
     }
-    list.forEach((w, i) => grid.append(renderWidget(w, i, list.length)));
+    const ordered = [...state.layout].sort((a, b) => a.y - b.y || a.x - b.x);
+    for (const l of ordered) {
+      const w = list.find((x) => x.id === l.id);
+      if (w) grid.append(renderWidget(w, l));
+    }
   }
 
-  function renderWidget(w, i, n) {
+  function applyGeometry(el, l) {
+    el.style.gridColumn = `${l.x + 1} / span ${l.w}`;
+    el.style.gridRow = `${l.y + 1} / span ${l.h}`;
+    el.dataset.w = l.w; el.dataset.h = l.h;
+  }
+
+  function renderWidget(w, l) {
     const meta = widgetMeta(w.type);
     const cfg = widgetConfig(w);
-    const width = Math.min(4, Math.max(1, w.width || meta.w)); const height = Math.min(3, Math.max(1, w.height || meta.h));
-    const card = h('section', { class: `card widget ${state.editing ? 'editing' : ''}`, style: { gridColumn: `span ${width}`, gridRow: `span ${height}` }, 'data-w': width, 'data-h': height, 'aria-label': w.title || meta.label });
-    const head = h('div', { class: 'widget-head' }, h('h2', { class: 'card-title' }, w.title || meta.label));
+    const card = h('section', { class: 'card widget', 'aria-label': w.title || meta.label });
+    applyGeometry(card, l);
+    const dragHandle = h('button', { class: 'widget-drag', type: 'button', 'aria-label': `Move ${w.title || meta.label}`, title: 'Drag to move' }, icon('grip'));
+    const head = h('div', { class: 'widget-head' }, h('h2', { class: 'card-title' }, dragHandle, h('span', { class: 'truncate' }, w.title || meta.label)));
     const actions = h('div', { class: 'widget-edit-bar' });
-    if (state.editing) {
-      actions.append(
-        h('button', { class: 'btn btn-sm icon-btn', type: 'button', 'aria-label': 'Move up', disabled: i === 0, onclick: () => moveWidget(i, -1) }, icon('arrowUp')),
-        h('button', { class: 'btn btn-sm icon-btn', type: 'button', 'aria-label': 'Move down', disabled: i === n - 1, onclick: () => moveWidget(i, 1) }, icon('arrowDown')),
-        h('button', { class: 'btn btn-sm icon-btn', type: 'button', 'aria-label': 'Edit widget', onclick: () => editWidget(i) }, icon('edit')),
-        h('button', { class: 'btn btn-sm icon-btn btn-danger', type: 'button', 'aria-label': 'Remove widget', onclick: () => removeWidget(i) }, icon('x')),
-      );
-    } else if (CHART_TYPES.has(w.type) || w.type === 'uptime_chart') {
-      actions.append(rangeChips(cfg.range || '24h', (r) => setWidgetRange(w, r)));
-      actions.append(menuButton(() => chartMenu(w, i), { label: 'Chart options', small: true }));
+    if (CHART_LIKE.has(w.type)) {
+      actions.append(rangeChips(cfg.range || (w.type === 'uptime_chart' ? '7d' : '24h'), (r) => setWidgetRange(w, r)));
+      actions.append(menuButton(() => chartMenu(w), { label: 'Chart options', small: true }));
     } else {
       actions.append(menuButton(() => [
-        { label: 'Edit widget', icon: 'edit', onClick: () => editWidget(i) },
-        { label: 'Move up', icon: 'arrowUp', onClick: () => moveWidget(i, -1), disabled: i === 0 },
-        { label: 'Move down', icon: 'arrowDown', onClick: () => moveWidget(i, 1), disabled: i === n - 1 },
+        { label: 'Edit widget', icon: 'edit', onClick: () => editWidget(w) },
         { sep: true },
-        { label: 'Remove', icon: 'trash', danger: true, onClick: () => removeWidget(i) },
+        { label: 'Remove', icon: 'trash', danger: true, onClick: () => removeWidget(w) },
       ], { label: 'Widget options', small: true }));
     }
     head.append(actions);
     const body = h('div', { class: 'widget-body' });
     card.append(head, body);
-    try { renderWidgetBody(w, cfg, body, i); } catch (e) { console.error(e); body.append(h('div', { class: 'note' }, 'Could not render this widget.')); }
+    try { renderWidgetBody(w, cfg, body); } catch (e) { console.error(e); body.append(h('div', { class: 'note' }, 'Could not render this widget.')); }
+    // resize handles
+    for (const dir of ['e', 's', 'se']) {
+      const hnd = h('div', { class: `rs rs-${dir}`, title: 'Drag to resize', 'aria-hidden': 'true' });
+      hnd.addEventListener('pointerdown', (e) => startResize(e, w, card, dir));
+      card.append(hnd);
+    }
+    dragHandle.addEventListener('pointerdown', (e) => startDrag(e, w, card));
     return card;
   }
 
-  function chartMenu(w, i) {
+  /* ---------- Drag & resize ---------- */
+  function cellSize() {
+    const rect = grid.getBoundingClientRect();
+    const cs = getComputedStyle(grid);
+    const gap = parseFloat(cs.columnGap) || 1;
+    const padding = parseFloat(cs.paddingLeft) || 0;
+    const cellW = (rect.width - padding * 2 - gap * (COLS - 1)) / COLS;
+    const rowH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--row-h')) || 168;
+    return { rect, gap, padding, cellW, rowH };
+  }
+  function layoutOf(w) { return state.layout.find((l) => l.id === w.id); }
+
+  function startDrag(e, w, card) {
+    if (e.button !== 0 || window.innerWidth < 900) return;
+    e.preventDefault();
+    const l = layoutOf(w); if (!l) return;
+    const { rect, gap, padding, cellW, rowH } = cellSize();
+    const cardRect = card.getBoundingClientRect();
+    const offX = e.clientX - cardRect.left, offY = e.clientY - cardRect.top;
+    const placeholder = h('div', { class: 'widget-placeholder' });
+    applyGeometry(placeholder, l);
+    const ghost = { ...l };
+    let moved = false;
+    state.interacting = true; grid.classList.add('interacting');
+    const onMove = (ev) => {
+      if (!moved) {
+        moved = true;
+        grid.insertBefore(placeholder, card);
+        card.classList.add('dragging');
+        card.style.setProperty('--drag-w', `${cardRect.width}px`); card.style.setProperty('--drag-h', `${cardRect.height}px`);
+        card.style.gridColumn = ''; card.style.gridRow = '';
+      }
+      const gx = ev.clientX - rect.left - padding - offX, gy = ev.clientY - rect.top - padding - offY + grid.scrollTop;
+      card.style.left = `${gx}px`; card.style.top = `${gy}px`;
+      const nx = Math.round(gx / (cellW + gap)), ny = Math.round(gy / (rowH + gap));
+      const tx = Math.min(COLS - ghost.w, Math.max(0, nx)), ty = Math.max(0, ny);
+      if (tx !== ghost.x || ty !== ghost.y) {
+        ghost.x = tx; ghost.y = ty;
+        // preview the layout with the ghost pinned
+        const preview = state.layout.map((it) => (it.id === l.id ? ghost : { ...it }));
+        resolve(preview, ghost);
+        for (const it of preview) { if (it.id === l.id) continue; const el = grid.querySelector(`[data-wid="${it.id}"]`); if (el) applyGeometry(el, it); }
+        applyGeometry(placeholder, ghost);
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); window.removeEventListener('pointercancel', onUp);
+      state.interacting = false; grid.classList.remove('interacting');
+      card.classList.remove('dragging'); card.style.left = ''; card.style.top = '';
+      placeholder.remove();
+      if (moved && (ghost.x !== l.x || ghost.y !== l.y)) {
+        l.x = ghost.x; l.y = ghost.y;
+        resolve(state.layout, l);
+        persist().catch(() => {});
+      }
+      renderWidgets();
+    };
+    window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp); window.addEventListener('pointercancel', onUp);
+  }
+
+  function startResize(e, w, card, dir) {
+    if (e.button !== 0 || window.innerWidth < 900) return;
+    e.preventDefault(); e.stopPropagation();
+    const l = layoutOf(w); if (!l) return;
+    const { gap, cellW, rowH } = cellSize();
+    const startX = e.clientX, startY = e.clientY;
+    const start = { w: l.w, h: l.h };
+    const ghost = { ...l };
+    state.interacting = true; grid.classList.add('interacting'); card.classList.add('resizing');
+    const onMove = (ev) => {
+      let nw = start.w, nh = start.h;
+      if (dir === 'e' || dir === 'se') nw = Math.round((start.w * (cellW + gap) + (ev.clientX - startX)) / (cellW + gap));
+      if (dir === 's' || dir === 'se') nh = Math.round((start.h * (rowH + gap) + (ev.clientY - startY)) / (rowH + gap));
+      nw = Math.min(COLS - l.x, Math.max(1, nw)); nh = Math.min(6, Math.max(1, nh));
+      if (nw !== ghost.w || nh !== ghost.h) {
+        ghost.w = nw; ghost.h = nh;
+        const preview = state.layout.map((it) => (it.id === l.id ? ghost : { ...it }));
+        resolve(preview, ghost);
+        for (const it of preview) { const el = it.id === l.id ? card : grid.querySelector(`[data-wid="${it.id}"]`); if (el) applyGeometry(el, it); }
+        card.querySelectorAll('canvas').length && window.dispatchEvent(new Event('resize'));
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); window.removeEventListener('pointercancel', onUp);
+      state.interacting = false; grid.classList.remove('interacting'); card.classList.remove('resizing');
+      if (ghost.w !== l.w || ghost.h !== l.h) {
+        l.w = ghost.w; l.h = ghost.h;
+        const wd = widgetsList().find((x) => x.id === w.id); if (wd) { wd.width = l.w; wd.height = l.h; }
+        resolve(state.layout, l);
+        disposeChart(w.id);
+        persist().catch(() => {});
+      }
+      renderWidgets();
+    };
+    window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp); window.addEventListener('pointercancel', onUp);
+  }
+
+  function chartMenu(w) {
     const cfg = widgetConfig(w);
-    const chart = state.charts.get(w.id);
-    const ids = cfg.checkIds || [];
+    const view = state.chartViews.get(w.id);
+    const ids = (cfg.checkIds || []).map(Number).filter(Boolean);
     const csvItems = ids.map((id) => {
       const c = findCheck(id);
       return { label: `Export CSV — ${c ? `${c.node.name} › ${c.check.name}` : `check ${id}`}`, icon: 'download', href: `/api/export/history.csv${qs({ checkId: id, range: cfg.range || '24h' })}`, download: `history-${id}-${cfg.range || '24h'}.csv` };
     });
     return [
-      chart ? { label: 'Export chart as image', icon: 'image', onClick: () => chart.exportPNG(`${(w.title || w.type).replace(/[^\w-]+/g, '-').toLowerCase()}-${cfg.range || '24h'}.png`) } : null,
+      view ? { label: 'Export chart as image', icon: 'image', onClick: () => view.exportPNG(`${(w.title || w.type).replace(/[^\w-]+/g, '-').toLowerCase()}-${cfg.range || '24h'}.png`) } : null,
       ...csvItems,
+      { label: 'Open in Charts', icon: 'chart', onClick: () => openInCharts(w) },
       { sep: true },
-      { label: 'Edit widget', icon: 'edit', onClick: () => editWidget(i) },
-      { label: 'Move up', icon: 'arrowUp', onClick: () => moveWidget(i, -1), disabled: i === 0 },
-      { label: 'Move down', icon: 'arrowDown', onClick: () => moveWidget(i, 1), disabled: i === widgetsList().length - 1 },
+      { label: 'Edit widget', icon: 'edit', onClick: () => editWidget(w) },
       { sep: true },
-      { label: 'Remove', icon: 'trash', danger: true, onClick: () => removeWidget(i) },
+      { label: 'Remove', icon: 'trash', danger: true, onClick: () => removeWidget(w) },
     ];
+  }
+  async function openInCharts(w) {
+    const cfg = chartConfigFor(w);
+    try {
+      const saved = await api.get('/api/charts');
+      const entry = { id: uid('chart'), name: w.title || widgetMeta(w.type).label, config: cfg };
+      const list = await api.put('/api/charts', [...(saved || []), entry]);
+      const created = list[list.length - 1];
+      ctx.navigate(`/charts/${created.id}`);
+    } catch (e) { toast(e.message, { kind: 'error' }); }
+  }
+  function chartConfigFor(w) {
+    const cfg = widgetConfig(w);
+    if (w.type === 'chart') return normalizeChartConfig(cfg);
+    const legacy = LEGACY_CHARTS[w.type] || {};
+    return normalizeChartConfig({ checkIds: cfg.checkIds || [], range: cfg.range || '24h', metric: w.type === 'loss_chart' ? 'loss' : (cfg.metric || legacy.metric || 'avg'), style: 'area' });
   }
 
   function findCheck(id) {
@@ -284,17 +448,19 @@ export async function mount(root, ctx) {
     });
   }
 
-  function renderWidgetBody(w, cfg, body, index) {
+  function renderWidgetBody(w, cfg, body) {
     const ov = state.overview;
+    body.closest('.widget').dataset.wid = w.id;
     if (!ov) { body.append(skeleton({ lines: 3 })); return; }
     switch (w.type) {
       case 'summary': return renderSummary(body, ov);
       case 'groups': return renderGroups(body, ov, cfg);
       case 'status_list': return renderStatusList(body, cfg);
+      case 'chart':
       case 'latency_chart':
-      case 'response_chart': return renderChart(w, cfg, body, { unit: 'ms', metric: cfg.metric || 'avg' });
-      case 'loss_chart': return renderChart(w, cfg, body, { unit: '%', metric: 'loss', yMin: 0, yMax: 100 });
-      case 'uptime_chart': return renderUptime(w, cfg, body);
+      case 'response_chart':
+      case 'loss_chart': return renderChart(w, body);
+      case 'uptime_chart': return renderUptime(w, body);
       case 'incidents': return renderIncidents(body, ov, cfg);
       case 'cert_warnings': return renderCerts(body, ov);
       case 'attention': return renderAttention(body, ov);
@@ -357,7 +523,7 @@ export async function mount(root, ctx) {
       for (const c of r.checks || []) chips.append(checkChip(c.check, c.state));
       list.append(h('div', { class: 'status-row' },
         statusPill(r.status),
-        h('div', { class: 'name' }, h('a', { href: `#/nodes/${n.id}` }, n.name), r.affectedBy ? h('span', { class: 'sub affected-note' }, icon('link'), `affected by ${r.affectedBy}`) : h('span', { class: 'sub' }, n.host)),
+        h('div', { class: 'name' }, h('a', { href: `#/nodes/${n.id}` }, n.name), r.affectedBy ? h('span', { class: 'sub affected-note' }, icon('link'), `affected by ${r.affectedBy}`) : h('span', { class: 'sub' }, n.host || '')),
         chips));
     }
     body.append(list);
@@ -369,7 +535,7 @@ export async function mount(root, ctx) {
     if (!items.length) { body.append(h('div', { class: 'all-good' }, icon('check'), h('strong', null, 'No open incidents'), h('span', null, 'Everything has been quiet.'))); return; }
     const list = h('div', { class: 'event-rows' });
     for (const ev of items) list.append(eventRow(ev, { now: now() }));
-    body.append(list, h('div', { style: { marginTop: '10px' } }, h('a', { class: 'small', href: '#/incidents' }, 'Open the incident timeline →')));
+    body.append(list, h('div', { style: { marginTop: '8px' } }, h('a', { class: 'small', href: '#/incidents' }, 'Open the incident timeline →')));
   }
 
   function renderCerts(body, ov) {
@@ -377,7 +543,7 @@ export async function mount(root, ctx) {
     if (!items.length) { body.append(h('div', { class: 'all-good' }, icon('shield'), h('strong', null, 'No certificate warnings'), h('span', null, 'All monitored certificates are valid.'))); return; }
     const list = h('div', { class: 'cert-rows' });
     for (const c of items) {
-      const cls = c.daysRemaining <= 0 ? 'text-down' : c.daysRemaining <= 7 ? 'text-down' : 'text-degraded';
+      const cls = c.daysRemaining <= 7 ? 'text-down' : 'text-degraded';
       list.append(h('div', { class: 'cert-row' },
         h('div', { class: `days ${cls}` }, c.daysRemaining <= 0 ? 'now' : String(c.daysRemaining), h('small', null, c.daysRemaining <= 0 ? 'expired' : 'days left')),
         h('div', { class: 'grow', style: { minWidth: 0, flex: 1 } }, h('div', { class: 'strong' }, h('a', { href: `#/nodes/${c.nodeId}`, style: { color: 'inherit' } }, c.nodeName), ` › ${c.checkName}`), h('div', { class: 'small muted truncate' }, `${c.subject || ''}${c.notAfter ? ' · expires ' + dateShort(c.notAfter) : ''}`)),
@@ -407,7 +573,7 @@ export async function mount(root, ctx) {
     const hl = state.health;
     if (!hl) { body.append(h('div', { class: 'note' }, 'Service health unavailable.')); return; }
     const okGlyph = (ok, yes, no) => h('span', { class: `status-glyph ${ok ? 'text-up' : 'text-down'}` }, icon(ok ? 'check' : 'x'), ok ? yes : no);
-    const grid = h('div', { class: 'health-grid' },
+    const gridEl = h('div', { class: 'health-grid' },
       h('div', { class: 'health-item' }, h('div', { class: 'hv' }, okGlyph(hl.serviceRunning, 'Running', 'Stopped')), h('div', { class: 'hl' }, `Service (${hl.serviceMode || '—'})`)),
       h('div', { class: 'health-item' }, h('div', { class: 'hv' }, okGlyph(hl.schedulerRunning, 'Running', 'Stopped')), h('div', { class: 'hl' }, 'Scheduler')),
       h('div', { class: 'health-item' }, h('div', { class: 'hv' }, relTime(hl.lastCheckAt, now())), h('div', { class: 'hl' }, 'Last check')),
@@ -415,9 +581,9 @@ export async function mount(root, ctx) {
       h('div', { class: 'health-item' }, h('div', { class: 'hv' }, bytes(hl.databaseBytes)), h('div', { class: 'hl' }, 'Database')),
       h('div', { class: 'health-item' }, h('div', { class: 'hv' }, hl.backup?.lastBackupAt ? h('span', { class: `status-glyph ${hl.backup.lastBackupOk ? 'text-up' : 'text-down'}` }, icon(hl.backup.lastBackupOk ? 'check' : 'x'), relTime(hl.backup.lastBackupAt, now())) : h('span', { class: 'muted' }, 'never')), h('div', { class: 'hl' }, 'Last backup')),
     );
-    body.append(grid);
-    if (hl.lastGap && Date.now() - new Date(hl.lastGap.to).getTime() < 86400e3) body.append(h('div', { class: 'note', style: { marginTop: '10px' } }, icon('moon'), ` Monitoring gap of ${duration(hl.lastGap.seconds)} ended ${relTime(hl.lastGap.to, now())}`));
-    body.append(h('div', { style: { marginTop: 'auto', paddingTop: '10px' } }, h('a', { class: 'small', href: '#/settings/health' }, 'Open Monitor Health →')));
+    body.append(gridEl);
+    if (hl.lastGap && Date.now() - new Date(hl.lastGap.to).getTime() < 86400e3) body.append(h('div', { class: 'note', style: { marginTop: '8px' } }, icon('moon'), ` Monitoring gap of ${duration(hl.lastGap.seconds)} ended ${relTime(hl.lastGap.to, now())}`));
+    body.append(h('div', { style: { marginTop: 'auto', paddingTop: '8px' } }, h('a', { class: 'small', href: '#/settings/health' }, 'Open Monitor Health →')));
   }
 
   function renderTable(body, cfg) {
@@ -433,7 +599,7 @@ export async function mount(root, ctx) {
       tb.append(h('tr', null,
         h('td', null, h('a', { href: `#/nodes/${n.id}`, class: 'strong', style: { color: 'inherit' } }, n.name), r.affectedBy ? h('div', { class: 'affected-note' }, icon('link'), `affected by ${r.affectedBy}`) : null),
         h('td', null, statusPill(r.status)),
-        h('td', { class: 'mono' }, n.host),
+        h('td', { class: 'mono' }, n.host || ''),
         h('td', null, n.group || h('span', { class: 'dim' }, '—')),
         h('td', null, chips),
         h('td', { class: 'muted nowrap' }, last ? relTime(last, now()) : '—')));
@@ -444,40 +610,28 @@ export async function mount(root, ctx) {
 
   /* ---------- Charts ---------- */
   function disposeChart(id) {
-    const c = state.charts.get(id);
-    if (c) { c.destroy(); state.charts.delete(id); }
-    state.chartHosts.delete(id);
+    const v = state.chartViews.get(id);
+    if (v) { v.destroy(); state.chartViews.delete(id); }
   }
-  async function fetchHistory(ids, range) {
+  function fetchHistory(ids, range) {
     const key = `${ids.join(',')}|${range}`;
     if (!state.historyCache.has(key)) state.historyCache.set(key, ids.length ? getHistoryMulti(ids, range) : getHistoryAuto(range));
     return state.historyCache.get(key);
   }
-
-  function renderChart(w, cfg, body, { unit, metric, yMin, yMax }) {
-    // No explicit selection: the service picks the most important checks
-    // (critical/high nodes, ping and HTTP first) so a fresh dashboard shows data.
-    const ids = (cfg.checkIds || []).map(Number).filter(Boolean);
-    let host = state.chartHosts.get(w.id);
-    if (!host) {
-      host = h('div', { class: 'chart-host', style: { flex: '1', minHeight: '0', display: 'flex', flexDirection: 'column' } });
-      state.chartHosts.set(w.id, host);
-      const chart = new LineChart(host, { unit, yMin: yMin ?? null, yMax: yMax ?? null, title: w.title || widgetMeta(w.type).label, ariaLabel: `${w.title || widgetMeta(w.type).label} chart` });
-      state.charts.set(w.id, chart);
-    }
+  function renderChart(w, body) {
+    disposeChart(w.id);
+    const host = h('div', { style: { flex: '1', minHeight: '0', display: 'flex', flexDirection: 'column' } });
     body.append(host);
-    const chart = state.charts.get(w.id);
-    const range = cfg.range || '24h';
-    fetchHistory(ids, range).then((series) => {
-      if (state.destroyed || !state.charts.has(w.id)) return;
-      const list = Array.isArray(series) ? series : [series];
-      if (!list.length) { replace(body, emptyState({ icon: 'activity', title: 'Nothing to chart yet', text: 'Add a node with a ping or HTTP check, or edit this widget to pick checks.', compact: true })); state.charts.delete(w.id); state.chartHosts.delete(w.id); return; }
-      const from = list[0]?.from, to = list[0]?.to;
-      chart.setData({ series: list.map((hs, i) => toSeries(hs, metric, SERIES_COLORS[i % SERIES_COLORS.length])), from, to, bucketSeconds: list[0]?.bucketSeconds || 0 });
-    }).catch((e) => { console.warn(e); body.append(h('div', { class: 'note' }, 'Could not load history: ' + e.message)); });
+    const cfg = chartConfigFor(w);
+    // widget space is limited: legend only when the widget is tall enough
+    const l = layoutOf(w);
+    if (l && l.h < 2) cfg.legend = false;
+    const view = renderConfiguredChart(host, cfg, { title: w.title || widgetMeta(w.type).label, fetch: fetchHistory, fill: true });
+    state.chartViews.set(w.id, view);
   }
 
-  function renderUptime(w, cfg, body) {
+  function renderUptime(w, body) {
+    const cfg = widgetConfig(w);
     const ids = (cfg.checkIds || []).map(Number).filter(Boolean);
     const range = cfg.range || '7d';
     const list = h('div', null, h('div', { class: 'widget-loading' }, 'Loading…'));
@@ -485,15 +639,21 @@ export async function mount(root, ctx) {
     fetchHistory(ids, range).then((series) => {
       if (state.destroyed) return;
       clear(list);
-      for (const hs of (Array.isArray(series) ? series : [series])) {
-        const avail = hs.summary?.availability;
-        const cls = avail == null ? '' : avail >= 99.9 ? 'text-up' : avail >= 95 ? 'text-degraded' : 'text-down';
-        list.append(h('div', { class: 'uptime-row' },
-          h('div', { class: 'uptime-name truncate' }, h('a', { href: `#/nodes/${findCheck(hs.checkId)?.node.id ?? ''}`, style: { color: 'inherit' } }, hs.nodeName || ''), h('div', { class: 'sub' }, hs.checkName)),
-          uptimeBar(hs.points, { bucketSeconds: hs.bucketSeconds, from: hs.from, to: hs.to }),
-          h('div', { class: `uptime-pct ${cls}` }, pct(avail, 2))));
-      }
-      list.append(uptimeLegend());
+      const arr = Array.isArray(series) ? series : [series];
+      if (!arr.length) { list.append(emptyState({ icon: 'activity', title: 'Nothing to show yet', compact: true })); return; }
+      import('../charts.js').then(({ uptimeBar, uptimeLegend }) => {
+        import('../fmt.js').then(({ pct }) => {
+          for (const hs of arr) {
+            const avail = hs.summary?.availability;
+            const cls = avail == null ? '' : avail >= 99.9 ? 'text-up' : avail >= 95 ? 'text-degraded' : 'text-down';
+            list.append(h('div', { class: 'uptime-row' },
+              h('div', { class: 'uptime-name truncate' }, h('a', { href: `#/nodes/${findCheck(hs.checkId)?.node.id ?? ''}`, style: { color: 'inherit' } }, hs.nodeName || ''), h('div', { class: 'sub' }, hs.checkName)),
+              uptimeBar(hs.points, { bucketSeconds: hs.bucketSeconds, from: hs.from, to: hs.to }),
+              h('div', { class: `uptime-pct ${cls}` }, pct(avail, 2))));
+          }
+          list.append(uptimeLegend());
+        });
+      });
     }).catch((e) => replace(list, h('div', { class: 'note' }, 'Could not load history: ' + e.message)));
   }
 
@@ -509,17 +669,18 @@ export async function mount(root, ctx) {
 
   return {
     refresh: refreshData,
+    themeChanged() { state.chartViews.forEach((v) => v.refresh()); },
     async update(params) {
-      if (state.editing) return false;
+      if (state.interacting) return false;
       pickCurrent(params.id);
-      state.charts.forEach((c) => c.destroy()); state.charts.clear(); state.chartHosts.clear(); state.historyCache.clear();
+      state.chartViews.forEach((v) => v.destroy()); state.chartViews.clear(); state.historyCache.clear();
       render();
       return true;
     },
     destroy() {
       state.destroyed = true;
-      state.charts.forEach((c) => c.destroy());
-      state.charts.clear();
+      state.chartViews.forEach((v) => v.destroy());
+      state.chartViews.clear();
     },
   };
 }
@@ -538,9 +699,10 @@ export function openWidgetEditor(existing, state) {
     const picker = h('div', { class: 'widget-picker', role: 'radiogroup', 'aria-label': 'Widget type' });
     const titleInput = textInput({ value: w.title || '', placeholder: widgetMeta(w.type).label });
     const widthSel = selectInput({ options: [1, 2, 3, 4].map((n) => ({ value: n, label: `${n} column${n > 1 ? 's' : ''}` })), value: w.width || 2 });
-    const heightSel = selectInput({ options: [1, 2, 3].map((n) => ({ value: n, label: `${n} row${n > 1 ? 's' : ''}` })), value: w.height || 1 });
+    const heightSel = selectInput({ options: [1, 2, 3, 4, 5, 6].map((n) => ({ value: n, label: `${n} row${n > 1 ? 's' : ''}` })), value: w.height || 1 });
     const cfgArea = h('div', { class: 'stack-sm' });
     let cfgControls = {};
+    let chartEditor = null;
 
     function renderPicker() {
       clear(picker);
@@ -550,11 +712,10 @@ export function openWidgetEditor(existing, state) {
       }
     }
     function renderCfg() {
-      clear(cfgArea); cfgControls = {};
+      clear(cfgArea); cfgControls = {}; chartEditor = null;
       const cfg = w.config;
       const groupSel = () => selectInput({ options: [{ value: '', label: 'All groups' }, ...groups.map((g) => ({ value: g.name, label: g.name }))], value: cfg.group || '' });
       const tagSel = () => selectInput({ options: [{ value: '', label: 'Any tag' }, ...tags.map((t) => ({ value: t.name, label: t.name }))], value: cfg.tag || '' });
-      const rangeSel = (def) => selectInput({ options: ['1h', '24h', '7d', '30d', '1y'].map((r) => ({ value: r, label: rangeLabel(r) })), value: cfg.range || def });
       switch (w.type) {
         case 'groups': {
           const list = h('div', { class: 'check-list' });
@@ -578,19 +739,21 @@ export function openWidgetEditor(existing, state) {
           }
           break;
         }
-        case 'latency_chart': case 'response_chart': case 'loss_chart': case 'uptime_chart': {
-          const filter = w.type === 'loss_chart' ? (c) => c.type === 'ping' : w.type === 'response_chart' ? (c) => ['http', 'keyword', 'json'].includes(c.type) : null;
-          const ms = checkMultiSelect(nodes, cfg.checkIds || [], { filterType: filter });
-          cfgControls.checkIds = () => ms.value;
-          const r = rangeSel(w.type === 'uptime_chart' ? '7d' : '24h');
+        case 'chart': case 'latency_chart': case 'response_chart': case 'loss_chart': {
+          const seed = w.type === 'chart' ? cfg : { checkIds: cfg.checkIds || [], range: cfg.range || '24h', metric: w.type === 'loss_chart' ? 'loss' : (cfg.metric || 'avg'), style: 'area' };
+          chartEditor = chartConfigEditor(seed, { nodes, compact: true });
+          cfgArea.append(chartEditor);
+          if (w.type !== 'chart') cfgArea.append(h('p', { class: 'note' }, 'Saving converts this widget to the general "Chart" type with the options above.'));
+          break;
+        }
+        case 'uptime_chart': {
+          const sel = new Set((cfg.checkIds || []).map(Number));
+          const list = h('div', { class: 'check-list' });
+          for (const n of nodes) for (const c of n.checks || []) list.append(checkbox({ label: `${n.name} › ${c.name}`, checked: sel.has(Number(c.id)), onChange: (v) => { if (v) sel.add(Number(c.id)); else sel.delete(Number(c.id)); } }));
+          cfgControls.checkIds = () => [...sel];
+          const r = selectInput({ options: ['1h', '24h', '7d', '30d', '1y'], value: cfg.range || '7d' });
           cfgControls.range = () => r.value;
-          const row = h('div', { class: 'form-grid' }, field({ label: 'Time range', input: r }));
-          if (w.type === 'latency_chart' || w.type === 'response_chart') {
-            const m = selectInput({ options: [{ value: 'avg', label: 'Average' }, { value: 'min', label: 'Minimum' }, { value: 'max', label: 'Maximum' }, { value: 'jitter', label: 'Jitter' }], value: cfg.metric || 'avg' });
-            cfgControls.metric = () => m.value;
-            row.append(field({ label: 'Metric', input: m }));
-          }
-          cfgArea.append(row, field({ label: 'Checks', input: ms, help: w.type === 'loss_chart' ? 'Only ping checks report packet loss.' : 'Pick one or more checks. Each becomes a line.' }));
+          cfgArea.append(field({ label: 'Time range', input: r }), field({ label: 'Checks', input: list, help: 'Leave all unticked to let GWatch pick important checks.' }));
           break;
         }
         case 'incidents': {
@@ -611,9 +774,11 @@ export function openWidgetEditor(existing, state) {
       h('div', null, h('div', { class: 'section-title' }, 'Options'), cfgArea),
     );
     function submit() {
-      const cfg = {};
-      for (const [k, get] of Object.entries(cfgControls)) cfg[k] = get();
-      result = { id: w.id, type: w.type, title: titleInput.value.trim(), width: Number(widthSel.value), height: Number(heightSel.value), config: cfg };
+      let cfg = {};
+      let type = w.type;
+      if (chartEditor) { cfg = chartEditor.value; type = 'chart'; }
+      else for (const [k, get] of Object.entries(cfgControls)) cfg[k] = get();
+      result = { id: w.id, type, title: titleInput.value.trim(), x: existing?.x ?? null, y: existing?.y ?? null, width: Number(widthSel.value), height: Number(heightSel.value), config: cfg };
       m.close();
     }
     const m = openModal({

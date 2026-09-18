@@ -2,14 +2,15 @@
 
 [![CI](https://github.com/jxburros/GWatch/actions/workflows/ci.yml/badge.svg)](https://github.com/jxburros/GWatch/actions/workflows/ci.yml)
 
-GWatch is a calm, local-only monitor for a home network and its services. It runs as a
-Windows background service (or a plain console program on Linux/macOS), checks your
-router, servers, websites and APIs on a schedule, keeps long-term history in an embedded
-SQLite database, sends email alerts that do not spam, and shows everything in a dark,
-minimal web interface served on `http://127.0.0.1:8080`.
+GWatch is a calm monitor for a home network and its services. It runs as a Windows
+background service (or a plain console program on Linux/macOS), checks your router,
+servers, websites and APIs on a schedule, keeps long-term history in an embedded SQLite
+database, sends email alerts that do not spam, can run webhooks / git commands / scripts
+when something changes, and shows everything in a compact dark or light web interface
+served on `http://127.0.0.1:8080` (optionally to the rest of your LAN).
 
-No cloud account, no public exposure, no AI features. The product brief that defines the
-scope lives in [`local-network-monitoring-product-brief.md`](local-network-monitoring-product-brief.md).
+No cloud account, no AI features, never exposed to the internet by itself. The product
+brief that defines the scope lives in [`local-network-monitoring-product-brief.md`](local-network-monitoring-product-brief.md).
 
 ## What it does
 
@@ -35,10 +36,30 @@ scope lives in [`local-network-monitoring-product-brief.md`](local-network-monit
   The database never grows without bound and the retention page explains exactly what is
   kept, rolled up and deleted.
 - **Dashboards**: as many as you like, each with its own widgets (health summary, group
-  cards, status list, latency / response-time / packet-loss / uptime charts, incidents,
-  certificate warnings, needs-attention list, monitor health, filtered table).
+  cards, status list, charts, incidents, certificate warnings, needs-attention list,
+  monitor health, filtered table). Widgets are dragged by their handle and resized from
+  their edges on a 4-column grid; the layout is saved per dashboard.
+- **Charts tab**: explore any metric (latency avg/min/max, jitter, packet loss,
+  availability) for any checks over any range, with line / area / step / bar / point styles,
+  smoothing, thresholds, fixed axes, per-line colours and one-chart-per-check. Save named
+  charts, export PNG/CSV, or pin a chart to a dashboard.
+- **Audit tab**: the complete event log with text search, type / node / time filters and
+  CSV export; the service log with level filter and download; one page for every export.
+- **Automation**: per-node **triggers** run an action when the node goes down, recovers,
+  becomes degraded, changes status, exceeds a latency, and so on — an HTTP request
+  (webhook), a git command in a repository, custom code (sh, bash, PowerShell, cmd,
+  Python, Node or any command) or "run another node's checks now". **Custom endpoints**
+  expose the same actions at `/hook/<name>` (optionally token-protected) so a router, a
+  CI job or Home Assistant can poke GWatch. Placeholders such as `{{node.name}}`,
+  `{{status}}` and `{{message}}` are expanded; every run is recorded with its output.
 - **Wallboard**: a read-only full-screen status view for a spare monitor or tablet.
-- **Exports**: chart as PNG, history and results as CSV, incidents as CSV, configuration as JSON.
+- **Appearance**: dark, light or system theme and a user-chosen accent colour.
+- **Remote access**: opt in to serving the interface on the whole LAN, with an optional
+  access password for other devices (this computer is never challenged).
+- **Updates**: check GitHub releases from Settings › Updates and install the new
+  executable in place (the previous one is kept as `.old`); the service restarts itself.
+- **Exports**: chart as PNG, history and results as CSV, events as CSV, service log,
+  configuration as JSON.
 - **Backups**: one-click, password-encrypted (Argon2id + AES-256-GCM) archives of the
   configuration and optionally the whole history; restore on a new computer in one step.
 - **Monitor health**: service status, scheduler, last/next check, sleep/offline gaps,
@@ -76,13 +97,17 @@ go run . run --data-dir ./data
 Then open <http://127.0.0.1:8080>. Monitoring only runs while this process runs.
 
 Options: `--data-dir DIR` (or `GWATCH_DATA_DIR`), `--listen 127.0.0.1:8080` (or
-`GWATCH_LISTEN`). The listen address must be a loopback address: the interface is never
-reachable from other computers.
+`GWATCH_LISTEN`). The default binds this computer only. Use `--listen 0.0.0.0:8080`, or
+turn on **Settings › Network access**, to reach the interface from other devices on your
+network (the listener is rebound live, no restart needed); set an access password there
+so other devices have to authenticate.
 
 ## Notes for home networks
 
 - HTTP, TCP, DNS and ping checks may target private addresses such as `192.168.1.1`; that is
-  the point of the product. Only the web interface is restricted to localhost.
+  the point of the product. The web interface stays on localhost unless you open it.
+- Triggers and endpoints run on the computer that runs GWatch with its permissions. Give
+  endpoints a token and set an access password before enabling remote access.
 - ICMP ping uses a raw socket on Windows (fine under the service account). On Linux it
   tries unprivileged ping sockets, then a raw socket, then the system `ping` command.
 - Email: any SMTP provider works (STARTTLS on 587, implicit TLS on 465, or none). Use the
@@ -106,15 +131,19 @@ from fixtures, so the tests are deterministic on a CI runner.
 ### Continuous integration
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push and pull
-request:
+request as a single job on a Windows runner (Linux runners are switched off for now):
 
-| Job | What it guards |
+| Step | What it guards |
 |---|---|
-| `lint` | `gofmt`, `go vet`, `go mod tidy` is a no-op, `go mod verify` |
-| `test` | Builds and runs the suite on Linux (with `-race` and coverage) and on Windows, the platform GWatch installs as a service on |
-| `web` | `node --check` on every file under `web/` — the UI is embedded with `//go:embed`, so the Go compiler never sees a syntax error there |
-| `build` | Cross-compiles `linux/amd64`, `linux/arm64`, `windows/amd64` and `darwin/arm64` with `CGO_ENABLED=0` and uploads the binaries |
-| `scripts` | Parses `scripts/*.ps1` with the PowerShell parser, since those scripts are the Windows install path |
+| lint | `gofmt`, `go vet`, `go mod tidy` is a no-op, `go mod verify` |
+| build + test | `go build ./...` and the whole test suite on Windows, the platform GWatch installs as a service on |
+| web assets | `node --check` on every file under `web/` — the UI is embedded with `//go:embed`, so the Go compiler never sees a syntax error there |
+| PowerShell | Parses `scripts/*.ps1`, since those scripts are the Windows install path |
+| artefact | Uploads `gwatch-windows-amd64.exe` |
+
+Pushing a tag such as `v1.2.0` additionally runs the `release` job, which cross-compiles
+`gwatch-<os>-<arch>[.exe]` for Windows, Linux and macOS with `.sha256` checksums and
+publishes a GitHub release. Those asset names are what **Settings › Updates** looks for.
 
 Layout:
 
@@ -124,11 +153,13 @@ Layout:
 | `internal/model` | Shared data types and JSON wire format |
 | `internal/store` | SQLite (modernc, pure Go) schema, single queued writer, rollups, history queries |
 | `internal/checks` | Check runners: ping, http, cert, tcp, dns, keyword, json; node templates |
-| `internal/engine` | Scheduler, result processing, alert rules, dependencies, maintenance, retention, health |
+| `internal/engine` | Scheduler, result processing, alert rules, dependencies, maintenance, retention, health, triggers |
+| `internal/actions` | Automation actions: HTTP requests, git commands, custom scripts, run-node |
+| `internal/update` | GitHub release check, download, checksum and executable swap |
 | `internal/mailer` | SMTP delivery and alert email rendering |
 | `internal/backup` | Encrypted backup archives and restore |
 | `internal/api` | JSON API (see `docs/API.md`) and static UI serving |
-| `web/` | The browser interface (vanilla HTML/CSS/JS, no build step, embedded into the binary) |
+| `web/` | The browser interface (vanilla HTML/CSS/JS, no build step, embedded into the binary; open with `?mock=1` for an in-browser demo backend) |
 | `scripts/` | Windows build / install / uninstall PowerShell scripts |
 
 ## License

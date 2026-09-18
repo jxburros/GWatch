@@ -326,6 +326,9 @@ const (
 	EventRestore            EventType = "restore"
 	EventRetention          EventType = "retention"
 	EventNote               EventType = "note"
+	EventTriggerFired       EventType = "trigger_fired"   // an automation trigger ran an action
+	EventEndpointCalled     EventType = "endpoint_called" // a custom endpoint was invoked
+	EventUpdate             EventType = "update"          // application update checked / applied
 )
 
 // Event is one entry in the incident/event timeline.
@@ -412,8 +415,10 @@ type Widget struct {
 	ID     string          `json:"id"`
 	Type   string          `json:"type"` // see docs/API.md for the widget catalogue
 	Title  string          `json:"title"`
+	X      *int            `json:"x"`      // grid column (0-based); nil = place automatically
+	Y      *int            `json:"y"`      // grid row (0-based); nil = place automatically
 	Width  int             `json:"width"`  // grid columns (1..4)
-	Height int             `json:"height"` // grid rows (1..3)
+	Height int             `json:"height"` // grid rows (1..6)
 	Config json.RawMessage `json:"config"`
 }
 
@@ -458,7 +463,11 @@ type GeneralSettings struct {
 	WallboardRefreshSecs int     `json:"wallboardRefreshSeconds"`
 	LatencyWarnMS        float64 `json:"latencyWarnMs"`     // global default; 0 = off
 	PacketLossWarnPct    float64 `json:"packetLossWarnPct"` // global default; 0 = off
-	Theme                string  `json:"theme"`             // "dark" only for now
+	Theme                string  `json:"theme"`             // "dark" | "light" | "system"
+	AccentColor          string  `json:"accentColor"`       // hex colour used for the accent, e.g. "#7c6cff"
+	RemoteAccess         bool    `json:"remoteAccess"`      // listen on every interface so other devices on the LAN can open the UI
+	AccessPassword       string  `json:"accessPassword"`    // optional password required from non-loopback clients (HTTP basic auth)
+	UpdateRepo           string  `json:"updateRepo"`        // GitHub "owner/repo" checked for new releases
 }
 
 // Settings is the complete settings document.
@@ -481,6 +490,8 @@ func DefaultSettings() Settings {
 			LatencyWarnMS:        0,
 			PacketLossWarnPct:    0,
 			Theme:                "dark",
+			AccentColor:          "#7c6cff",
+			UpdateRepo:           "jxburros/GWatch",
 		},
 		Alerts: AlertSettings{
 			Enabled:          false,
@@ -635,4 +646,160 @@ type GapInfo struct {
 	From    time.Time `json:"from"`
 	To      time.Time `json:"to"`
 	Seconds int64     `json:"seconds"`
+}
+
+// ---- automation: triggers, endpoints and the actions they run ----
+
+// ActionType selects what an automation does when it fires.
+type ActionType string
+
+const (
+	ActionHTTP    ActionType = "http"     // send an HTTP request (webhook)
+	ActionGit     ActionType = "git"      // run a git command in a repository
+	ActionScript  ActionType = "script"   // run custom code with an interpreter
+	ActionRunNode ActionType = "run_node" // run every check of a node right now
+)
+
+// Valid reports whether the action type is known.
+func (t ActionType) Valid() bool {
+	switch t {
+	case ActionHTTP, ActionGit, ActionScript, ActionRunNode:
+		return true
+	}
+	return false
+}
+
+// Action describes one thing to execute. String fields may contain
+// {{placeholders}} (node.name, check.name, status, message, event, latencyMs,
+// ts, node.host, target, body, query.<name>) that are expanded at run time.
+type Action struct {
+	Type ActionType `json:"type"`
+
+	// http
+	Method          string            `json:"method,omitempty"`
+	URL             string            `json:"url,omitempty"`
+	Headers         map[string]string `json:"headers,omitempty"`
+	Body            string            `json:"body,omitempty"`
+	IgnoreTLSErrors bool              `json:"ignoreTlsErrors,omitempty"`
+	ExpectedStatus  string            `json:"expectedStatus,omitempty"` // default 200-399
+
+	// git
+	Repo    string `json:"repo,omitempty"`    // working directory of the repository
+	GitArgs string `json:"gitArgs,omitempty"` // e.g. "pull --ff-only" or "commit -am {{message}}"
+
+	// script (custom code)
+	Interpreter string `json:"interpreter,omitempty"` // sh | bash | powershell | cmd | python | node | custom
+	Command     string `json:"command,omitempty"`     // custom interpreter command line; {{file}} is the script path
+	Code        string `json:"code,omitempty"`
+	WorkDir     string `json:"workDir,omitempty"`
+
+	// run_node
+	NodeID *int64 `json:"nodeId,omitempty"`
+
+	TimeoutSeconds int `json:"timeoutSeconds,omitempty"` // default 30
+}
+
+// ActionResult is the outcome of executing an action.
+type ActionResult struct {
+	OK         bool      `json:"ok"`
+	Output     string    `json:"output"`
+	Error      string    `json:"error,omitempty"`
+	StatusCode int       `json:"statusCode,omitempty"`
+	StartedAt  time.Time `json:"startedAt"`
+	DurationMS int64     `json:"durationMs"`
+}
+
+// TriggerConditions lists the conditions a trigger can react to.
+var TriggerConditions = []string{
+	"down", "recovered", "degraded", "warning_cleared", "cert_warning", "content_changed",
+	"affected_by_parent", "status_change", "any_failure", "any_success", "latency_over",
+}
+
+// Trigger runs an action when something happens on a node.
+type Trigger struct {
+	ID              int64      `json:"id"`
+	NodeID          int64      `json:"nodeId"`
+	Name            string     `json:"name"`
+	Description     string     `json:"description"`
+	Enabled         bool       `json:"enabled"`
+	On              []string   `json:"on"`                      // conditions, see TriggerConditions
+	CheckID         *int64     `json:"checkId"`                 // optional: only this check
+	LatencyOverMS   float64    `json:"latencyOverMs,omitempty"` // for the latency_over condition
+	Action          Action     `json:"action"`
+	CooldownMinutes int        `json:"cooldownMinutes"`
+	LastRunAt       *time.Time `json:"lastRunAt"`
+	LastStatus      string     `json:"lastStatus"` // "" | ok | failed
+	LastOutput      string     `json:"lastOutput"`
+	RunCount        int        `json:"runCount"`
+	CreatedAt       time.Time  `json:"createdAt"`
+	UpdatedAt       time.Time  `json:"updatedAt"`
+}
+
+// Endpoint is a user-defined HTTP endpoint served at /hook/{slug} that runs
+// an action when called.
+type Endpoint struct {
+	ID           int64      `json:"id"`
+	Name         string     `json:"name"`
+	Slug         string     `json:"slug"`
+	Description  string     `json:"description"`
+	Enabled      bool       `json:"enabled"`
+	Method       string     `json:"method"` // GET | POST | ANY
+	Token        string     `json:"token"`  // optional shared secret (X-GWatch-Token header or ?token=)
+	Action       Action     `json:"action"`
+	LastCalledAt *time.Time `json:"lastCalledAt"`
+	LastStatus   string     `json:"lastStatus"`
+	LastOutput   string     `json:"lastOutput"`
+	CallCount    int        `json:"callCount"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	UpdatedAt    time.Time  `json:"updatedAt"`
+}
+
+// SavedChart is a chart configuration kept on the Charts page. Config is
+// interpreted by the web UI.
+type SavedChart struct {
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Config    json.RawMessage `json:"config"`
+	UpdatedAt time.Time       `json:"updatedAt"`
+}
+
+// UpdateInfo describes the result of a GitHub release check.
+type UpdateInfo struct {
+	Repo            string     `json:"repo"`
+	CurrentVersion  string     `json:"currentVersion"`
+	LatestVersion   string     `json:"latestVersion"`
+	UpdateAvailable bool       `json:"updateAvailable"`
+	CurrentIsDev    bool       `json:"currentIsDev"`
+	ReleaseURL      string     `json:"releaseUrl"`
+	ReleaseNotes    string     `json:"releaseNotes"`
+	PublishedAt     *time.Time `json:"publishedAt"`
+	AssetName       string     `json:"assetName"`
+	AssetURL        string     `json:"assetUrl"`
+	AssetSize       int64      `json:"assetSize"`
+	CheckedAt       time.Time  `json:"checkedAt"`
+	Error           string     `json:"error,omitempty"`
+}
+
+// UpdateStatus is the state of the self-updater.
+type UpdateStatus struct {
+	Last        *UpdateInfo `json:"last"`
+	Applying    bool        `json:"applying"`
+	Applied     bool        `json:"applied"`    // the new executable is in place; a restart is pending / happened
+	Restarting  bool        `json:"restarting"` // the service is about to restart
+	LastApplyAt *time.Time  `json:"lastApplyAt"`
+	LastError   string      `json:"lastError,omitempty"`
+	Executable  string      `json:"executable"`
+	CanApply    bool        `json:"canApply"` // the executable directory is writable
+}
+
+// NetworkInfo tells the UI how the interface is reachable.
+type NetworkInfo struct {
+	ListenAddress string   `json:"listenAddress"` // effective bind address
+	RemoteAccess  bool     `json:"remoteAccess"`  // reachable from other devices
+	PasswordSet   bool     `json:"passwordSet"`   // basic auth is required from other devices
+	Port          int      `json:"port"`
+	LocalURL      string   `json:"localUrl"`
+	LANURLs       []string `json:"lanUrls"` // one per non-loopback interface address
+	Hostname      string   `json:"hostname"`
+	RestartNeeded bool     `json:"restartNeeded"` // listen change could not be applied live
 }
