@@ -153,14 +153,11 @@ func runHTTPCheck(ctx context.Context, target string) (checkResult, error) {
 	}
 
 	client := &http.Client{
-		Transport: &http.Transport{
-			DialContext: safeDialContext,
-		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return errors.New("stopped after too many redirects")
 			}
-			return validateHTTPHost(req.Context(), req.URL.Hostname())
+			return validateHTTPHost(ctx, req.URL.Hostname())
 		},
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -200,46 +197,18 @@ func validateHTTPHost(ctx context.Context, host string) error {
 	if err != nil {
 		return err
 	}
+	hasAllowed := false
 	for _, ipAddr := range addrs {
-		if isDisallowedIP(ipAddr.IP) {
-			return fmt.Errorf("private or local IP targets are not allowed for HTTP checks")
+		if !isDisallowedIP(ipAddr.IP) {
+			hasAllowed = true
+			break
 		}
+	}
+	if !hasAllowed {
+		return fmt.Errorf("private or local IP targets are not allowed for HTTP checks")
 	}
 
 	return nil
-}
-
-func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	if allowPrivateHTTPTargets() {
-		return (&net.Dialer{}).DialContext(ctx, network, addr)
-	}
-
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, err
-	}
-
-	if ip := net.ParseIP(host); ip != nil {
-		if isDisallowedIP(ip) {
-			return nil, fmt.Errorf("private or local IP targets are not allowed for HTTP checks")
-		}
-		return (&net.Dialer{}).DialContext(ctx, network, addr)
-	}
-
-	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-
-	dialer := &net.Dialer{}
-	for _, ipAddr := range addrs {
-		if isDisallowedIP(ipAddr.IP) {
-			continue
-		}
-		return dialer.DialContext(ctx, network, net.JoinHostPort(ipAddr.IP.String(), port))
-	}
-
-	return nil, fmt.Errorf("private or local IP targets are not allowed for HTTP checks")
 }
 
 func isDisallowedIP(ip net.IP) bool {

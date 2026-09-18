@@ -115,6 +115,9 @@ func TestCheckHandlerRejectsUnknownFields(t *testing.T) {
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rr.Code)
 	}
+	if !strings.Contains(rr.Body.String(), "invalid JSON body") {
+		t.Fatalf("expected invalid JSON error body, got %q", rr.Body.String())
+	}
 }
 
 func TestCheckHandlerRejectsTrailingJSON(t *testing.T) {
@@ -125,6 +128,9 @@ func TestCheckHandlerRejectsTrailingJSON(t *testing.T) {
 	checkHandler(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "invalid JSON body") {
+		t.Fatalf("expected invalid JSON error body, got %q", rr.Body.String())
 	}
 }
 

@@ -36,7 +36,7 @@
     <button type="submit">Run Check</button>
   </form>
 
-  <pre id="result" aria-live="polite"></pre>
+  <pre id="result" role="status" aria-live="polite" aria-busy="false"></pre>
 
   <script>
     const form = document.getElementById('check-form');
@@ -45,6 +45,7 @@
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
       result.textContent = 'Running...';
+      result.setAttribute('aria-busy', 'true');
 
       const payload = {
         type: document.getElementById('type').value,
@@ -67,11 +68,14 @@
             error: `Request failed (${response.status})`,
             response: data
           }, null, 2);
+          result.setAttribute('aria-busy', 'false');
           return;
         }
         result.textContent = JSON.stringify(data, null, 2);
+        result.setAttribute('aria-busy', 'false');
       } catch (error) {
         result.textContent = String(error);
+        result.setAttribute('aria-busy', 'false');
       }
     });
   </script>
