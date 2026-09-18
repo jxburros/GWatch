@@ -107,6 +107,8 @@ func runOnce(ctx context.Context, check model.Check, opts Options) (res model.Re
 		return runTCPCheck(ctx, check, target)
 	case model.CheckDNS:
 		return runDNSCheck(ctx, check, target)
+	case model.CheckCustom:
+		return runCustomCheck(ctx, check, target)
 	}
 	return failResult(fmt.Sprintf("unsupported check type %q", check.Type))
 }
@@ -250,6 +252,10 @@ func Validate(check model.Check, nodeHost string) error {
 			}
 		}
 		if _, err := hostOnly(target); err != nil {
+			return err
+		}
+	case model.CheckCustom:
+		if err := validateCustomCheck(cfg); err != nil {
 			return err
 		}
 	}

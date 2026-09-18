@@ -609,5 +609,6 @@ export const CHECK_TYPES = [
   { value: 'dns', label: 'DNS', desc: 'Does the hostname resolve, optionally to the addresses you expect?' },
   { value: 'keyword', label: 'Keyword', desc: 'Load a page and check that some text is present (or absent).' },
   { value: 'json', label: 'JSON', desc: 'Call an API and check that a value at a path matches what you expect.' },
+  { value: 'custom', label: 'Custom script', desc: 'Run your own command on schedule and parse its status from the output.' },
 ];
 export function checkTypeLabel(t) { return (CHECK_TYPES.find((x) => x.value === t) || { label: t }).label; }
