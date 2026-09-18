@@ -127,6 +127,14 @@ jobs:
           }
           if ($failed) { exit 1 }
 
+      # ISCC only runs on Windows and stops at the first error, so a mistake in
+      # a .iss costs a full CI round trip to find. This catches the cheap ones
+      # first, plus the one a clean compile will not catch at all: a non-ASCII
+      # character in a BOM-less .iss reaches the wizard as mojibake.
+      - name: Inno Setup scripts lint
+        shell: pwsh
+        run: pwsh -File scripts/installer/lint.ps1
+
       - name: Build Windows executable
         run: |
           mkdir -p dist

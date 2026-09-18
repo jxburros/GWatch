@@ -1,6 +1,6 @@
 ; GWatch Agent Windows installer (Inno Setup 6).
 ;
-; The agent is the small program that goes on the OTHER machines — the ones
+; The agent is the small program that goes on the OTHER machines -- the ones
 ; you want GWatch to report the health of. It is a separate setup program from
 ; gwatch.iss on purpose: this is what you carry to a file server or a spare
 ; laptop, and it must not drag the monitor, its database or its web interface
@@ -42,7 +42,7 @@ AppCopyright={#CopyrightLine}
 VersionInfoVersion={#FileVersion}
 VersionInfoCompany={#Publisher}
 VersionInfoCopyright={#CopyrightLine}
-VersionInfoDescription={#AppName} — reports this computer's hardware health
+VersionInfoDescription={#AppName} -- reports this computer's hardware health
 VersionInfoProductName={#AppName}
 DefaultDirName={autopf}\GWatch Agent
 DefaultGroupName={#AppName}
@@ -104,7 +104,7 @@ var
   InsecureCheck: TNewCheckBox;
 
 { The alphabet a pairing code is drawn from. Kept in step with
-  auth.PairingCodeAlphabet in internal/auth/token.go — no I, L, O, U, 0 or 1,
+  auth.PairingCodeAlphabet in internal/auth/token.go -- no I, L, O, U, 0 or 1,
   so nothing a person types can be a misread of something else. }
 const
   CodeAlphabet = '23456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -171,7 +171,7 @@ begin
   Note.Caption :=
     'A pairing code is good for one machine and expires after about fifteen ' +
     'minutes. It is exchanged during installation for a token that can only ' +
-    'submit this machine''s readings — it grants no other access to GWatch, ' +
+    'submit this machine''s readings -- it grants no other access to GWatch, ' +
     'and GWatch is given no way back into this computer.');
   Note.AutoSize := False;
   Note.WordWrap := True;
@@ -279,8 +279,8 @@ begin
 end;
 
 { Pairing happens here rather than in [Run] because it is the one step that
-  can fail for a reason the person can fix — a mistyped code, a code that has
-  already been used, a server that is not answering — and a [Run] entry would
+  can fail for a reason the person can fix -- a mistyped code, a code that has
+  already been used, a server that is not answering -- and a [Run] entry would
   swallow the exit status and leave a service installed that never reports. }
 procedure CurStepChanged(CurStep: TSetupStep);
 var
@@ -312,8 +312,7 @@ begin
       'The usual causes are a pairing code that has expired or already been ' +
       'used, a server address this computer cannot reach, or GWatch not ' +
       'running. The files have been installed, so you can finish the pairing ' +
-      'from an Administrator command prompt once you have a fresh code:' +
-      #13#10 + #13#10 +
+      'from an Administrator command prompt once you have a fresh code:' + #13#10 + #13#10 +
       '  "' + Exe + '" install --server <address> --code <code>',
       mbError, MB_OK, IDOK);
 end;

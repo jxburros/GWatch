@@ -1,4 +1,4 @@
-; Shared GWatch installer branding — included by gwatch.iss and
+; Shared GWatch installer branding -- included by gwatch.iss and
 ; gwatch-agent.iss so the two setup programs cannot drift apart.
 ;
 ; The look is the app's own "Signal" skin (see web/app.css): warm graphite,

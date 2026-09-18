@@ -1,7 +1,7 @@
 ; GWatch Windows installer (Inno Setup 6).
 ;
 ; Builds gwatch-setup-<version>.exe from an already-built gwatch.exe. This
-; script does not compile Go code — build the executable first (see
+; script does not compile Go code -- build the executable first (see
 ; scripts\build-installer.ps1, which does both steps), or pass the pieces in
 ; by hand:
 ;
@@ -23,7 +23,7 @@
 #include "brand.iss"
 
 [Setup]
-; Fixed installer AppId (GUID). Do not change between releases — Windows
+; Fixed installer AppId (GUID). Do not change between releases -- Windows
 ; uses it to recognise upgrades vs. a fresh install. The doubled "{{" is
 ; Inno Setup's escape for a literal "{".
 AppId={{E4C1B6A2-8F3D-4B9E-9A7C-2D5F1E6B8C4A}
@@ -38,7 +38,7 @@ AppCopyright={#CopyrightLine}
 VersionInfoVersion={#FileVersion}
 VersionInfoCompany={#Publisher}
 VersionInfoCopyright={#CopyrightLine}
-VersionInfoDescription={#AppName} — local network & service monitor
+VersionInfoDescription={#AppName} -- local network & service monitor
 VersionInfoProductName={#AppName}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
@@ -105,7 +105,7 @@ Name: "{autodesktop}\GWatch Monitor"; Filename: "{app}\gwatch.exe"; Parameters: 
 ; automatically, see main.go's "install" case).
 Filename: "{app}\gwatch.exe"; Parameters: "install --data-dir ""{commonappdata}\GWatch"" --listen ""{code:GetListenAddr}"""; StatusMsg: "Registering the GWatch service..."; Flags: runhidden waituntilterminated; Check: NeedsInstall
 ; Upgrade: the service is already registered (gwatch install would fail),
-; so just start it again — it was stopped in PrepareToInstall below.
+; so just start it again -- it was stopped in PrepareToInstall below.
 Filename: "{app}\gwatch.exe"; Parameters: "start"; StatusMsg: "Starting the GWatch service..."; Flags: runhidden waituntilterminated; Check: NeedsStart
 ; Optional firewall rule for LAN access.
 Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""GWatch"" dir=in action=allow protocol=TCP localport={code:GetPort}"; StatusMsg: "Adding a Windows Firewall rule for GWatch..."; Flags: runhidden; Check: WantLan
@@ -168,9 +168,8 @@ begin
   NoteLabel.Caption :=
     'GWatch has no access password by default. After installing, open ' +
     'Settings > Users & access in the web interface and set a password (or ' +
-    'create user accounts) before relying on the checkbox above — anyone ' +
-    'who can reach this port on your network will otherwise see everything.' +
-    #13#10 + #13#10 +
+    'create user accounts) before relying on the checkbox above -- anyone ' +
+    'who can reach this port on your network will otherwise see everything.' + #13#10 + #13#10 +
     'Do not forward this port to the internet. See docs/REMOTE-ACCESS.md for ' +
     'the safe way to reach GWatch from outside your home.';
 end;
