@@ -45,8 +45,21 @@ function setRailPinned(pinned, persist = true) {
 }
 setRailPinned(document.documentElement.classList.contains('rail-pinned'), false);
 railPin.addEventListener('click', () => setRailPinned(!document.documentElement.classList.contains('rail-pinned')));
-// Collapse the hover-expanded rail after a navigation click so it does not cover the page.
-rail.addEventListener('click', (e) => { if (e.target.closest('a')) rail.blur(); });
+
+// A mouse click leaves focus on the link or button inside the rail, and a
+// focused child keeps the rail expanded even after the pointer has left. Drop
+// that focus so the rail collapses as soon as the mouse moves away. Keyboard
+// focus is kept: the CSS expands on :focus-visible, which a click does not set.
+function dropRailFocus() {
+  const active = document.activeElement;
+  if (active && active !== document.body && rail.contains(active)) active.blur();
+}
+rail.addEventListener('pointerup', (e) => {
+  if (e.pointerType === 'mouse' && e.target.closest('a, button')) requestAnimationFrame(dropRailFocus);
+});
+// A click that navigates elsewhere (or a menu opening over the rail) should not
+// leave the rail hanging open either.
+rail.addEventListener('mouseleave', dropRailFocus);
 
 /* ---------- Theme / accent from settings ---------- */
 let themeSettings = null;
@@ -73,6 +86,11 @@ export function navigate(path) { location.hash = path.startsWith('#') ? path : `
 const ctxBase = {
   navigate,
   setTitle(title, { subtitle, actions } = {}) {
+    if (titleEl.textContent !== title) {
+      titleEl.classList.remove('title-enter');
+      void titleEl.offsetWidth;
+      titleEl.classList.add('title-enter');
+    }
     titleEl.textContent = title;
     document.title = title === 'Dashboard' ? 'GWatch' : `${title} — GWatch`;
     subtitleEl.hidden = !subtitle;
@@ -118,6 +136,7 @@ async function route() {
   }
   if (token !== navToken) return;
   clear(viewRoot);
+  enterView();
   const ctx = { ...ctxBase, params, query, root: viewRoot };
   try {
     const instance = await mod.mount(viewRoot, ctx);
@@ -128,6 +147,19 @@ async function route() {
     replace(viewRoot, h('div', { class: 'card' }, h('h2', null, 'Something went wrong'), h('p', { class: 'muted' }, String(e.message || e))));
   }
   window.scrollTo(0, 0);
+}
+
+/** Replay the view's enter animation. Forcing a reflow between removing and
+ *  re-adding the class restarts it. The class is dropped again shortly after so
+ *  that content re-rendered by a live update does not animate in a second time;
+ *  by then the animation has finished and the elements are at their end state. */
+let enterTimer = 0;
+function enterView() {
+  viewRoot.classList.remove('view-enter');
+  void viewRoot.offsetWidth;
+  viewRoot.classList.add('view-enter');
+  clearTimeout(enterTimer);
+  enterTimer = setTimeout(() => viewRoot.classList.remove('view-enter'), 900);
 }
 
 function setNav(name) {

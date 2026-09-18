@@ -1,7 +1,7 @@
 // Wallboard: read-only, large-type status screen for a spare display.
 
 import { api } from '../api.js';
-import { h, icon, clear, replace, statusPill, statusMeta, emptyState } from '../components.js';
+import { h, icon, clear, replace, statusPill, statusOrb, statusMeta, emptyState } from '../components.js';
 import { relTime, ms as fmtMs, plural, dateShort, timeShort } from '../fmt.js';
 import { LineChart, toSeries, seriesColor } from '../charts.js';
 
@@ -33,14 +33,15 @@ export async function mount(root, ctx) {
     state.charts.forEach((c) => c.destroy()); state.charts = [];
     clear(wall);
 
-    // Headline
-    let headline, sub, color;
+    // Headline. `tone` is a status key so the big circle can be lit from the
+    // same colour as the rest of the status circles in the app.
+    let headline, sub, tone;
     const problems = (s.down || 0) + (s.degraded || 0);
-    if (s.down > 0) { headline = `${plural(s.down, 'node')} down`; sub = s.degraded ? `${s.degraded} more degraded` : 'Everything else is healthy'; color = 'var(--down)'; }
-    else if (s.degraded > 0) { headline = `${plural(s.degraded, 'node')} degraded`; sub = 'No outages'; color = 'var(--warn)'; }
-    else if ((s.total || 0) === 0) { headline = 'Nothing monitored yet'; sub = 'Add nodes to see them here'; color = 'var(--unknown)'; }
-    else if (!s.up && s.unknown) { headline = 'Waiting for results'; sub = 'First checks are running'; color = 'var(--unknown)'; }
-    else { headline = 'All systems healthy'; sub = `${plural(s.up, 'node')} up${s.maintenance ? ` · ${s.maintenance} in maintenance` : ''}${s.paused ? ` · ${s.paused} paused` : ''}`; color = 'var(--up)'; }
+    if (s.down > 0) { headline = `${plural(s.down, 'node')} down`; sub = s.degraded ? `${s.degraded} more degraded` : 'Everything else is healthy'; tone = 'down'; }
+    else if (s.degraded > 0) { headline = `${plural(s.degraded, 'node')} degraded`; sub = 'No outages'; tone = 'degraded'; }
+    else if ((s.total || 0) === 0) { headline = 'Nothing monitored yet'; sub = 'Add nodes to see them here'; tone = 'unknown'; }
+    else if (!s.up && s.unknown) { headline = 'Waiting for results'; sub = 'First checks are running'; tone = 'unknown'; }
+    else { headline = 'All systems healthy'; sub = `${plural(s.up, 'node')} up${s.maintenance ? ` · ${s.maintenance} in maintenance` : ''}${s.paused ? ` · ${s.paused} paused` : ''}`; tone = 'up'; }
 
     const counts = h('div', { class: 'wall-counts' });
     for (const [k, label] of [['up', 'Up'], ['degraded', 'Degraded'], ['down', 'Down'], ['unknown', 'Unknown']]) {
@@ -48,7 +49,7 @@ export async function mount(root, ctx) {
       counts.append(h('div', { class: 'wall-count' }, h('div', { class: 'n', style: { color: n ? m.color : 'var(--dim)' } }, String(n)), h('div', { class: 'l' }, icon(m.icon), label)));
     }
     wall.append(h('div', { class: 'wall-top' },
-      h('div', { class: 'wall-headline' }, h('span', { class: 'big-dot', style: { background: color } }), h('div', null, h('h1', null, headline), h('div', { class: 'sub' }, sub))),
+      h('div', { class: 'wall-headline' }, statusOrb(tone, { size: 'lg', label: headline }), h('div', null, h('h1', null, headline), h('div', { class: 'sub' }, sub))),
       counts,
       h('div', { class: 'wall-clock' }, clockTime, clockDate)));
 
@@ -79,7 +80,7 @@ export async function mount(root, ctx) {
       for (const gr of groups) {
         const parts = [];
         if (gr.up) parts.push(`${gr.up} up`); if (gr.degraded) parts.push(`${gr.degraded} degraded`); if (gr.down) parts.push(`${gr.down} down`); if (gr.unknown) parts.push(`${gr.unknown} unknown`); if (gr.maintenance) parts.push(`${gr.maintenance} maint.`); if (gr.paused) parts.push(`${gr.paused} paused`);
-        g.append(h('div', { class: 'wall-group' }, h('div', { class: 'row-between' }, h('span', { class: 'g-name' }, gr.name), statusPill(gr.status)), h('div', { class: 'g-sub' }, parts.join(' · '))));
+        g.append(h('div', { class: 'wall-group' }, h('div', { class: 'g-head' }, statusOrb(gr.status, { size: 'lg' }), h('span', { class: 'g-name' }, gr.name)), h('div', { class: 'g-sub' }, parts.join(' · '))));
       }
       left.append(h('section', { class: 'card wall-card' }, h('div', { class: 'card-title' }, 'Groups'), g));
     }
