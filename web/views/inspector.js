@@ -135,6 +135,10 @@ export function resultInspector(result, check, { compact = false } = {}) {
   // Certificate
   if (d.cert) right.push(certBlock(d.cert));
 
+  // Custom script output
+  if (d.output) left.push(h('div', null, h('div', { class: 'section-title' }, 'Output'),
+    h('pre', { class: 'log-box', style: { maxHeight: '260px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' } }, d.output)));
+
   const grid = h('div', { class: 'inspector-grid' }, h('div', { class: 'stack' }, left), h('div', { class: 'stack' }, right));
   if (!left.length && !right.length) grid.append(h('p', { class: 'muted' }, 'No further details were recorded for this result.'));
   wrap.append(grid);

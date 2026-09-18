@@ -45,6 +45,30 @@ Static UI: `GET /` serves `web/index.html`; `/app.js`, `/app.css` etc. are serve
 - `GET /api/groups` → `{ "groups": [{"name":"...","count":3}], "tags": [{"name":"...","count":2}] }`.
 
 - `POST /api/checks/test` body: `{ "check": Check, "nodeHost": "..." }` → `Result` (not recorded; for validating unsaved config).
+- The `custom` check type (`Check.type == "custom"`) runs a user-supplied command on the
+  check's schedule instead of one of the built-in check types. Its config
+  (`Check.config`): `command` (required — a command line, split on whitespace honouring
+  single/double quotes; **no shell is used**, so pipes, globbing and `$VAR` expansion do
+  nothing unless the command itself is `sh -c '...'` or, on Windows, `cmd /C ...`),
+  `workDir` (optional working directory), `env` (optional map of extra environment
+  variables, names matching `^[A-Za-z_][A-Za-z0-9_]*$`), plus the usual `target` (passed
+  to the command as the `GWATCH_TARGET` environment variable, and substituted for the
+  literal `{{target}}` inside any single argument that contains it — a target with spaces
+  stays one argument, it is never re-split). The check's `timeoutSeconds` bounds each
+  attempt; the process is killed and the result reported `"timed out"` if it runs over.
+  **The command runs on the machine hosting GWatch with the service's own permissions —
+  only trusted administrators should be able to create or edit a custom check.**
+
+  Exit code 0 → up, 2 → degraded, anything else → down. Stdout may additionally contain
+  lines of the form `key=value` (case-insensitive keys), one per line:
+  - `status=up|degraded|down` — overrides the exit-code-derived status.
+  - `message=...` — shown as `Result.message`.
+  - `latency_ms=<number>` — sets `Result.latencyMs` so it appears on charts.
+  - `error=...` — sets `Result.error` (used as the message too, when `message=` is absent
+    and the check failed).
+
+  Every other line of stdout and stderr (i.e. not recognised as one of the control lines
+  above) is combined and kept, capped at 8 KiB, as `Result.details.output`.
 - `POST /api/checks/{id}/run` → `Result` (recorded and processed through alerting).
 - `POST /api/checks/{id}/enable` body `{ "enabled": bool }` → Check.
 - `POST /api/checks/{id}/silence` body `{ "minutes": 60 }` (0 = unsilence) → CheckState.

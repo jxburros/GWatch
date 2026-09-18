@@ -16,7 +16,9 @@ brief that defines the scope lives in [`local-network-monitoring-product-brief.m
 
 - **Check types**: Ping (latency, min/max, jitter, packet loss), HTTP/S (status expectations,
   redirects, DNS/connect/TLS/first-byte timing, final URL), HTTPS certificate (issuer,
-  expiry, days remaining, validity), TCP port, DNS (with expected values), Keyword, JSON.
+  expiry, days remaining, validity), TCP port, DNS (with expected values), Keyword, JSON,
+  and Custom script (run your own command and parse a simple status/metric contract from
+  its output — see "Custom checks" below).
 - **Nodes** group several checks (a Plex node with Ping + TCP 32400 + HTTP). Templates
   prefill sensible defaults for a website, home server, router, API endpoint, TCP service
   or DNS name. Everything stays editable. Nodes carry groups, tags, notes, importance,
@@ -103,6 +105,28 @@ Options: `--data-dir DIR` (or `GWATCH_DATA_DIR`), `--listen 127.0.0.1:8080` (or
 turn on **Settings › Network access**, to reach the interface from other devices on your
 network (the listener is rebound live, no restart needed); set an access password there
 so other devices have to authenticate.
+
+### Custom checks
+
+The **Custom script** check type lets you monitor anything GWatch doesn't have a
+built-in check for: run your own command on the check's schedule and let GWatch parse a
+small status/metric contract from its output. No shell is used on any platform — the
+command line is split on whitespace (quote with `'` or `"` to keep a value together);
+use `sh -c '...'` (or `cmd /C ...` on Windows) explicitly if you need pipes, globbing or
+`$VAR` expansion. The target (the node host, or the check's own target override) is
+passed as the `GWATCH_TARGET` environment variable and substituted for a literal
+`{{target}}` in any single argument that contains it.
+
+Exit code 0 means up, 2 means degraded, anything else means down. Stdout may also contain
+`key=value` lines: `status=up|degraded|down` overrides the exit code, `message=...` is
+shown as the result, `latency_ms=<number>` feeds the charts, and `error=...` sets the
+error text. Everything else the command prints (stdout and stderr, up to 8 KiB) is kept
+and shown alongside the result. The check is killed and reported "timed out" if it runs
+past its configured timeout.
+
+**The command runs on this machine with the permissions of the GWatch service itself.**
+Only administrators you trust should be able to create or edit a custom check — anyone
+who can do so can run arbitrary code as GWatch.
 
 ## Notes for home networks
 

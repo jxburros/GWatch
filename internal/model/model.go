@@ -22,10 +22,11 @@ const (
 	CheckDNS     CheckType = "dns"     // hostname resolves (optionally to expected values)
 	CheckKeyword CheckType = "keyword" // HTTP/S response contains / does not contain text
 	CheckJSON    CheckType = "json"    // HTTP/S JSON response has expected value at a path
+	CheckCustom  CheckType = "custom"  // user-supplied command/script, output parsed for status/metrics
 )
 
 // AllCheckTypes lists the supported check types in display order.
-var AllCheckTypes = []CheckType{CheckPing, CheckHTTP, CheckCert, CheckTCP, CheckDNS, CheckKeyword, CheckJSON}
+var AllCheckTypes = []CheckType{CheckPing, CheckHTTP, CheckCert, CheckTCP, CheckDNS, CheckKeyword, CheckJSON, CheckCustom}
 
 // Valid reports whether the type is one the engine can run.
 func (t CheckType) Valid() bool {
@@ -54,6 +55,8 @@ func (t CheckType) Label() string {
 		return "Keyword"
 	case CheckJSON:
 		return "JSON"
+	case CheckCustom:
+		return "Custom script"
 	}
 	return string(t)
 }
@@ -191,6 +194,12 @@ type CheckConfig struct {
 	// Warning thresholds (0 = disabled)
 	LatencyWarnMS     float64 `json:"latencyWarnMs,omitempty"`
 	PacketLossWarnPct float64 `json:"packetLossWarnPct,omitempty"`
+
+	// Custom: a command/script GWatch runs on schedule. See docs/API.md for
+	// the output contract (status=/message=/latency_ms=/error= lines).
+	Command string            `json:"command,omitempty"`
+	WorkDir string            `json:"workDir,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
 }
 
 // AlertOverride lets a check override global alert defaults. Nil pointers
@@ -258,6 +267,10 @@ type ResultDetails struct {
 
 	// TCP
 	RemoteAddr string `json:"remoteAddr,omitempty"`
+
+	// Custom: combined stdout/stderr of the command (after stripping the
+	// key=value control lines), capped at 8 KiB.
+	Output string `json:"output,omitempty"`
 }
 
 // CertInfo describes the leaf certificate presented by a TLS server.
