@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jxburros/GWatch/internal/model"
@@ -42,6 +43,7 @@ CREATE TABLE IF NOT EXISTS endpoints (
   enabled INTEGER NOT NULL DEFAULT 1,
   method TEXT NOT NULL DEFAULT 'ANY',
   token TEXT NOT NULL DEFAULT '',
+  allow_no_token INTEGER NOT NULL DEFAULT 0,
   action TEXT NOT NULL DEFAULT '{}',
   last_called_at TEXT,
   last_status TEXT NOT NULL DEFAULT '',
@@ -165,17 +167,73 @@ func (s *Store) DeleteTrigger(ctx context.Context, id int64) error {
 
 // ---- endpoints ----
 
-const endpointCols = `id, name, slug, description, enabled, method, token, action, last_called_at, last_status, last_output, call_count, created_at, updated_at`
+// endpointColumns are added to existing databases when missing. The endpoints
+// table is created with CREATE TABLE IF NOT EXISTS, so a database created by an
+// older build keeps its old column set; ALTER TABLE ... ADD COLUMN fails when
+// the column is already there, so it cannot simply live in automationSchema.
+//
+// ensureEndpointColumns performs the check lazily, at most once per process per
+// database, and every endpoint function calls it before touching the table.
+// TODO: move this into Store.migrate() in store.go, where the rest of the
+// schema is applied; it lives here to keep this change to one file.
+var endpointColumns = []struct{ name, ddl string }{
+	{"allow_no_token", "ALTER TABLE endpoints ADD COLUMN allow_no_token INTEGER NOT NULL DEFAULT 0"},
+}
+
+var endpointColumnsDone sync.Map // database path → struct{}
+
+func (s *Store) ensureEndpointColumns(ctx context.Context) error {
+	if _, ok := endpointColumnsDone.Load(s.path); ok {
+		return nil
+	}
+	have := map[string]bool{}
+	rows, err := s.reader.QueryContext(ctx, "PRAGMA table_info(endpoints)")
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		have[name] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(have) == 0 { // the table does not exist yet; migrate() will create it
+		return nil
+	}
+	for _, c := range endpointColumns {
+		if have[c.name] {
+			continue
+		}
+		if _, err := s.Exec(ctx, c.ddl); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
+	endpointColumnsDone.Store(s.path, struct{}{})
+	return nil
+}
+
+const endpointCols = `id, name, slug, description, enabled, method, token, allow_no_token, action, last_called_at, last_status, last_output, call_count, created_at, updated_at`
 
 func scanEndpoint(sc interface{ Scan(...any) error }) (model.Endpoint, error) {
 	var e model.Endpoint
-	var enabled int
+	var enabled, allowNoToken int
 	var action, created, updated string
 	var lastCalled sql.NullString
-	if err := sc.Scan(&e.ID, &e.Name, &e.Slug, &e.Description, &enabled, &e.Method, &e.Token, &action, &lastCalled, &e.LastStatus, &e.LastOutput, &e.CallCount, &created, &updated); err != nil {
+	if err := sc.Scan(&e.ID, &e.Name, &e.Slug, &e.Description, &enabled, &e.Method, &e.Token, &allowNoToken, &action, &lastCalled, &e.LastStatus, &e.LastOutput, &e.CallCount, &created, &updated); err != nil {
 		return e, err
 	}
 	e.Enabled = enabled == 1
+	e.AllowNoToken = allowNoToken == 1
 	_ = json.Unmarshal([]byte(action), &e.Action)
 	e.LastCalledAt = parseTime(lastCalled)
 	e.CreatedAt, e.UpdatedAt = mustTime(created), mustTime(updated)
@@ -184,6 +242,9 @@ func scanEndpoint(sc interface{ Scan(...any) error }) (model.Endpoint, error) {
 
 // ListEndpoints returns every custom endpoint.
 func (s *Store) ListEndpoints(ctx context.Context) ([]model.Endpoint, error) {
+	if err := s.ensureEndpointColumns(ctx); err != nil {
+		return nil, err
+	}
 	rows, err := s.reader.QueryContext(ctx, "SELECT "+endpointCols+" FROM endpoints ORDER BY name COLLATE NOCASE, id")
 	if err != nil {
 		return nil, err
@@ -202,6 +263,9 @@ func (s *Store) ListEndpoints(ctx context.Context) ([]model.Endpoint, error) {
 
 // GetEndpoint returns one endpoint by id.
 func (s *Store) GetEndpoint(ctx context.Context, id int64) (model.Endpoint, error) {
+	if err := s.ensureEndpointColumns(ctx); err != nil {
+		return model.Endpoint{}, err
+	}
 	row := s.reader.QueryRowContext(ctx, "SELECT "+endpointCols+" FROM endpoints WHERE id = ?", id)
 	e, err := scanEndpoint(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -212,6 +276,9 @@ func (s *Store) GetEndpoint(ctx context.Context, id int64) (model.Endpoint, erro
 
 // GetEndpointBySlug returns one endpoint by its URL slug.
 func (s *Store) GetEndpointBySlug(ctx context.Context, slug string) (model.Endpoint, error) {
+	if err := s.ensureEndpointColumns(ctx); err != nil {
+		return model.Endpoint{}, err
+	}
 	row := s.reader.QueryRowContext(ctx, "SELECT "+endpointCols+" FROM endpoints WHERE slug = ?", slug)
 	e, err := scanEndpoint(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -222,12 +289,15 @@ func (s *Store) GetEndpointBySlug(ctx context.Context, slug string) (model.Endpo
 
 // SaveEndpoint inserts (ID == 0) or updates an endpoint.
 func (s *Store) SaveEndpoint(ctx context.Context, e model.Endpoint) (model.Endpoint, error) {
+	if err := s.ensureEndpointColumns(ctx); err != nil {
+		return e, err
+	}
 	now := time.Now()
 	e.UpdatedAt = now
 	if e.ID == 0 {
 		e.CreatedAt = now
-		res, err := s.Exec(ctx, `INSERT INTO endpoints(name, slug, description, enabled, method, token, action, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-			e.Name, e.Slug, e.Description, boolInt(e.Enabled), e.Method, e.Token, jsonString(e.Action), fmtTime(now), fmtTime(now))
+		res, err := s.Exec(ctx, `INSERT INTO endpoints(name, slug, description, enabled, method, token, allow_no_token, action, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			e.Name, e.Slug, e.Description, boolInt(e.Enabled), e.Method, e.Token, boolInt(e.AllowNoToken), jsonString(e.Action), fmtTime(now), fmtTime(now))
 		if err != nil {
 			if strings.Contains(err.Error(), "UNIQUE") {
 				return e, fmt.Errorf("an endpoint with the slug %q already exists", e.Slug)
@@ -237,8 +307,8 @@ func (s *Store) SaveEndpoint(ctx context.Context, e model.Endpoint) (model.Endpo
 		e.ID, _ = res.LastInsertId()
 		return e, nil
 	}
-	res, err := s.Exec(ctx, `UPDATE endpoints SET name=?, slug=?, description=?, enabled=?, method=?, token=?, action=?, updated_at=? WHERE id=?`,
-		e.Name, e.Slug, e.Description, boolInt(e.Enabled), e.Method, e.Token, jsonString(e.Action), fmtTime(now), e.ID)
+	res, err := s.Exec(ctx, `UPDATE endpoints SET name=?, slug=?, description=?, enabled=?, method=?, token=?, allow_no_token=?, action=?, updated_at=? WHERE id=?`,
+		e.Name, e.Slug, e.Description, boolInt(e.Enabled), e.Method, e.Token, boolInt(e.AllowNoToken), jsonString(e.Action), fmtTime(now), e.ID)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			return e, fmt.Errorf("an endpoint with the slug %q already exists", e.Slug)

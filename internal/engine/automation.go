@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jxburros/GWatch/internal/actions"
@@ -48,7 +49,37 @@ func (e *Engine) loadTriggers(ctx context.Context) error {
 		}
 	}
 	e.mu.Unlock()
+	e.lintEndpoints(ctx)
 	return nil
+}
+
+// endpointLintOnce keeps the tokenless-endpoint notice to one event per process
+// start: loadTriggers runs again on every configuration reload, and an existing
+// install should be told once, not every time something is saved. It lives here
+// rather than on Engine because the struct is defined in engine.go.
+var endpointLintOnce sync.Once
+
+// lintEndpoints records a one-time notice listing custom endpoints that can be
+// called by anyone who can reach the port. /hook/ is exempt from the LAN access
+// password, so a tokenless endpoint is fully open.
+func (e *Engine) lintEndpoints(ctx context.Context) {
+	endpointLintOnce.Do(func() {
+		list, err := e.store.ListEndpoints(ctx)
+		if err != nil {
+			return
+		}
+		var open []string
+		for _, ep := range list {
+			if strings.TrimSpace(ep.Token) == "" {
+				open = append(open, "/hook/"+ep.Slug)
+			}
+		}
+		if len(open) == 0 {
+			return
+		}
+		e.recordEvent(model.Event{Type: model.EventConfigChanged, Title: "Custom endpoints without a token",
+			Detail: fmt.Sprintf("%s can be called by anyone who can reach this port: they are not covered by the access password. Open Settings → Automation and give each one a token.", strings.Join(open, ", "))})
+	})
 }
 
 // triggerContext describes what just happened on a check.
