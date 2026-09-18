@@ -7,8 +7,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -206,6 +208,48 @@ func TestHTTPSSelfSignedCertificate(t *testing.T) {
 	res = run(t, httpCheck(model.CheckHTTP, srv.URL, model.CheckConfig{IgnoreTLSErrors: true, CertCheck: &off, CertWarnDays: 100000}), Options{})
 	if res.Details.Cert != nil || res.Status != model.StatusUp {
 		t.Errorf("CertCheck=false should skip cert: %+v", res)
+	}
+}
+
+// TestNetErrorLabel covers the wording on every platform, including the
+// Winsock numbers that only a Windows machine produces. Windows reports
+// different, localized text for these conditions, so matching the message
+// instead of the error number would leave Windows users reading raw
+// "No connection could be made because..." strings.
+func TestNetErrorLabel(t *testing.T) {
+	cases := []struct {
+		name  string
+		errno syscall.Errno
+		want  string
+	}{
+		{"posix refused", syscall.ECONNREFUSED, "connection refused"},
+		{"posix host unreachable", syscall.EHOSTUNREACH, "no route to host"},
+		{"posix network unreachable", syscall.ENETUNREACH, "network is unreachable"},
+		{"posix reset", syscall.ECONNRESET, "connection reset by peer"},
+		{"winsock refused", wsaeConnRefused, "connection refused"},
+		{"winsock host unreachable", wsaeHostUnreach, "no route to host"},
+		{"winsock network unreachable", wsaeNetUnreach, "network is unreachable"},
+		{"winsock reset", wsaeConnReset, "connection reset by peer"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := netErrorLabel(c.errno); got != c.want {
+				t.Errorf("netErrorLabel(%v) = %q, want %q", c.errno, got, c.want)
+			}
+			// The errno is normally buried under *net.OpError and
+			// *os.SyscallError, so unwrapping must work too.
+			wrapped := &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", c.errno)}
+			if got := describeNetError(wrapped, time.Second); got != c.want {
+				t.Errorf("describeNetError(wrapped %v) = %q, want %q", c.errno, got, c.want)
+			}
+		})
+	}
+
+	if got := netErrorLabel(errors.New("boom")); got != "" {
+		t.Errorf("non-syscall error = %q, want empty", got)
+	}
+	if got := netErrorLabel(syscall.Errno(0)); got != "" {
+		t.Errorf("zero errno = %q, want empty", got)
 	}
 }
 
