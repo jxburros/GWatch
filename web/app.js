@@ -12,6 +12,10 @@ const routes = [
   { pattern: /^\/nodes\/(\d+)\/edit$/, view: () => import('./views/node-editor.js'), params: ['id'], nav: 'nodes' },
   { pattern: /^\/nodes\/(\d+)$/, view: () => import('./views/node-detail.js'), params: ['id'], nav: 'nodes' },
   { pattern: /^\/charts(?:\/([\w-]+))?$/, view: () => import('./views/charts.js'), params: ['id'], nav: 'charts' },
+  { pattern: /^\/hardware$/, view: () => import('./views/hosts.js'), nav: 'hardware' },
+  // A host key contains a colon ("agent:3"), so it is matched loosely here and
+  // decoded by the view rather than being pinned to one shape.
+  { pattern: /^\/hardware\/(.+)$/, view: () => import('./views/hosts.js'), params: ['key'], nav: 'hardware' },
   { pattern: /^\/incidents$/, view: () => import('./views/incidents.js'), nav: 'incidents' },
   { pattern: /^\/audit(?:\/([a-z]+))?$/, view: () => import('./views/audit.js'), params: ['tab'], nav: 'audit' },
   { pattern: /^\/settings(?:\/([a-z]+))?$/, view: () => import('./views/settings.js'), params: ['tab'], nav: 'settings' },

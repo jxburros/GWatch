@@ -13,7 +13,8 @@ import { openEndpointEditor, endpointRow, triggerRow, openTriggerEditor } from '
 const TABS = [
   { id: 'general', label: 'General' }, { id: 'appearance', label: 'Appearance', viewer: true }, { id: 'users', label: 'Users & access' },
   { id: 'network', label: 'Network access' }, { id: 'alerts', label: 'Alerts' },
-  { id: 'automation', label: 'Automation' }, { id: 'retention', label: 'Retention' }, { id: 'maintenance', label: 'Maintenance' },
+  { id: 'automation', label: 'Automation' }, { id: 'hardware', label: 'Hardware' },
+  { id: 'retention', label: 'Retention' }, { id: 'maintenance', label: 'Maintenance' },
   { id: 'backups', label: 'Backups' }, { id: 'updates', label: 'Updates' }, { id: 'health', label: 'Monitor health', viewer: true },
   { id: 'about', label: 'About', viewer: true },
 ];
@@ -64,7 +65,7 @@ export async function mount(root, ctx) {
     replace(panel, skeleton({ lines: 5 }));
     state.panelRefresh = null;
     try {
-      const fn = { general: tabGeneral, appearance: tabAppearance, users: tabUsers, network: tabNetwork, alerts: tabAlerts, automation: tabAutomation, retention: tabRetention, maintenance: tabMaintenance, backups: tabBackups, updates: tabUpdates, health: tabHealth, about: tabAbout }[state.tab];
+      const fn = { general: tabGeneral, appearance: tabAppearance, users: tabUsers, network: tabNetwork, alerts: tabAlerts, automation: tabAutomation, hardware: tabHardware, retention: tabRetention, maintenance: tabMaintenance, backups: tabBackups, updates: tabUpdates, health: tabHealth, about: tabAbout }[state.tab];
       const el = await fn();
       if (state.destroyed) return;
       replace(panel, isAdmin ? el : h('div', { class: 'stack' }, readOnlyNotice(), el));
@@ -297,6 +298,132 @@ export async function mount(root, ctx) {
   }
 
   /* ---------- Retention ---------- */
+  /* ---------- Hardware ---------- */
+  async function tabHardware() {
+    const wrap = h('section', { class: 'card' });
+    let nodes = [];
+
+    async function reload() {
+      const [agents, nodeList] = await Promise.all([
+        api.get('/api/agents'),
+        api.get('/api/nodes').catch(() => []),
+      ]);
+      nodes = nodeList || [];
+      replace(wrap,
+        h('div', { class: 'card-head' }, h('h2', null, 'Machines'),
+          h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => registerAgent(reload) }, icon('plus'), 'Register a machine')),
+        h('p', { class: 'lead' }, 'GWatch reads this computer by itself. To see another machine\u2019s hardware, register it here and install gwatch-agent on it — the agent only sends readings out, so registering a machine gives GWatch no way into it.'),
+        agents.length
+          ? h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
+              h('thead', null, h('tr', null, h('th', null, 'Name'), h('th', null, 'Token'), h('th', null, 'Reporting'), h('th', null, 'Last seen'), h('th', null, 'Node'), h('th', null, ''))),
+              h('tbody', null, ...agents.map((a) => agentRow(a, reload)))))
+          : emptyState({ icon: 'cpu', title: 'No machines registered', text: 'Register one to watch another computer\u2019s processor, memory, disk and network.', compact: true }));
+    }
+
+    function agentRow(a, reloadFn) {
+      const revoked = !!a.revokedAt;
+      const state_ = revoked ? 'revoked' : a.enabled ? (a.lastSeenAt ? 'reporting' : 'waiting for first reading') : 'paused';
+      return h('tr', null,
+        h('td', null, h('div', null, h('b', null, a.name)),
+          a.hostname ? h('div', { class: 'muted', style: { fontSize: '12px' } }, `${a.hostname}${a.os ? ` · ${a.os}/${a.arch}` : ''}`) : null),
+        h('td', { class: 'mono' }, `${a.prefix}\u2026`),
+        h('td', null, h('span', { class: revoked ? 'muted' : '' }, state_),
+          a.lastVersion ? h('div', { class: 'muted', style: { fontSize: '12px' } }, `agent ${a.lastVersion}`) : null),
+        h('td', null, a.lastSeenAt ? relTime(a.lastSeenAt) : h('span', { class: 'muted' }, 'never')),
+        h('td', null, nodes.find((n) => n.id === a.nodeId)?.name || h('span', { class: 'muted' }, '—')),
+        h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },
+          a.lastSeenAt ? h('a', { class: 'btn btn-sm', href: `#/hardware/agent:${a.id}` }, 'Readings') : null,
+          revoked
+            ? h('button', { class: 'btn btn-sm btn-danger', type: 'button', onclick: () => purgeAgent(a, reloadFn) }, 'Delete')
+            : h('button', { class: 'btn btn-sm', type: 'button', onclick: () => revokeAgent(a, reloadFn) }, 'Revoke')));
+    }
+
+    await reload();
+    state.panelRefresh = () => reload().catch(() => {});
+    return h('div', { class: 'stack' }, wrap, agentExplainerCard());
+  }
+
+  async function registerAgent(reload) {
+    const name = textInput({ autocomplete: 'off', placeholder: 'e.g. Living room NAS' });
+    const nodes = await api.get('/api/nodes').catch(() => []);
+    const nodeSel = selectInput({
+      options: [{ value: '', label: 'Not attached to a node' }, ...nodes.map((n) => ({ value: String(n.id), label: n.name }))],
+      value: '',
+    });
+    const ok = await confirmDialog({
+      title: 'Register a machine',
+      body: h('div', { class: 'stack' },
+        field({ label: 'Name', input: name, help: 'How this machine appears under Hardware.' }),
+        field({ label: 'Node', input: nodeSel, help: 'Optional. Attaching it lets a hardware check on that node watch this machine.' })),
+      confirmLabel: 'Register and get a token',
+    });
+    if (!ok) return;
+    try {
+      const res = await api.post('/api/agents', {
+        name: name.value.trim(),
+        nodeId: nodeSel.value ? Number(nodeSel.value) : null,
+      });
+      await reload();
+      showAgentToken(res.token);
+    } catch (e) { toast(e.message, { kind: 'error' }); }
+  }
+
+  // The token is shown here and nowhere else, so the install command is shown
+  // with it: copying one line is the whole setup on the other machine.
+  function showAgentToken(token) {
+    const base = `${location.protocol}//${location.host}`;
+    const command = `gwatch-agent install --server ${base} --token ${token}`;
+    const copy = h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
+      try { await navigator.clipboard.writeText(command); toast('Install command copied', { kind: 'success' }); }
+      catch { toast('Could not copy — select the command and copy it by hand.', { kind: 'error' }); }
+    } }, icon('copy'), 'Copy install command');
+    openModal({
+      title: 'Install the agent on that machine',
+      wide: true,
+      body: h('div', { class: 'stack' },
+        h('p', { class: 'lead' }, 'Run this on the machine you want to watch. GWatch keeps only a fingerprint of the token, so it cannot be shown again — if you lose it, revoke this machine and register it afresh.'),
+        h('code', { class: 'agent-setup' }, command),
+        h('p', { class: 'note' }, 'The token is good for exactly one thing: submitting that machine\u2019s hardware readings. It cannot read or change anything in GWatch, and GWatch never connects back to the machine.'),
+        h('p', { class: 'note' }, 'Without ', h('code', null, 'install'), ' the agent runs in the foreground, which is the quickest way to see that it works. ',
+          h('code', null, 'gwatch-agent once --server … --token …'), ' sends a single reading and exits.'),
+        h('p', { class: 'note' }, 'If this GWatch is reached over HTTPS with a self-signed certificate, add ', h('code', null, '--insecure'), ' — the agent still uses TLS, it just stops checking the certificate.')),
+      footer: copy,
+    });
+  }
+
+  async function revokeAgent(a, reload) {
+    const ok = await confirmDialog({
+      title: `Revoke ${a.name}?`,
+      message: 'The agent on that machine stops being accepted immediately. Its past readings are kept, and you can delete them separately afterwards.',
+      confirmLabel: 'Revoke token', danger: true,
+    });
+    if (!ok) return;
+    try { await api.del(`/api/agents/${a.id}`); toast('Machine revoked', { kind: 'success' }); await reload(); }
+    catch (e) { toast(e.message, { kind: 'error' }); }
+  }
+
+  async function purgeAgent(a, reload) {
+    const ok = await confirmDialog({
+      title: `Delete ${a.name} and its readings?`,
+      message: 'Every hardware reading this machine sent is deleted with it. This cannot be undone.',
+      confirmLabel: 'Delete machine and readings', danger: true,
+    });
+    if (!ok) return;
+    try { await api.del(`/api/agents/${a.id}?purge=1`); toast('Machine deleted', { kind: 'success' }); await reload(); }
+    catch (e) { toast(e.message, { kind: 'error' }); }
+  }
+
+  function agentExplainerCard() {
+    const item = (t, d) => h('div', null, h('b', null, t), h('div', { class: 'muted', style: { fontSize: '13px' } }, d));
+    return h('section', { class: 'card' }, h('h2', null, 'How another machine reports in'),
+      h('div', { class: 'stack-sm', style: { marginTop: '8px' } },
+        item('The agent connects to GWatch, never the other way round', 'It posts a reading every minute and hangs up. Nothing needs to be opened on that machine, and GWatch holds no credential for it.'),
+        item('A token can do one thing', 'Submit that one machine\u2019s readings. It cannot read your nodes, your settings or anyone else\u2019s readings, and it is not an API key.'),
+        item('Losing a token is small', 'Someone holding it could send false readings for that machine. Revoke it here and it stops working on the next request.'),
+        item('If you would rather GWatch did the asking', 'Run the agent with `serve` instead, and add a hardware check with its source set to a metrics URL. That opens a port on the machine, which is why pushing is the default.')),
+      h('p', { class: 'note' }, 'Full details, including how to build the agent for another platform, are in ', h('code', null, 'docs/HARDWARE.md'), '.'));
+  }
+
   async function tabRetention() {
     const s = state.settings || await loadSettings();
     const r = s.retention;
@@ -327,7 +454,8 @@ export async function mount(root, ctx) {
       h('section', { class: 'card' }, h('h2', null, 'History retention'), h('p', { class: 'lead' }, 'Recent data stays detailed; older data is summarised so the database never grows without limit. 0 = keep forever.'),
         summary,
         h('div', { class: 'form-grid-3', style: { marginTop: '14px' } },
-          f('rawDays', 'Keep every result for'), f('fiveMinDays', 'Keep 5-minute summaries for'), f('hourlyDays', 'Keep hourly summaries for'), f('dailyDays', 'Keep daily summaries for'), f('eventDays', 'Keep events for')),
+          f('rawDays', 'Keep every result for'), f('fiveMinDays', 'Keep 5-minute summaries for'), f('hourlyDays', 'Keep hourly summaries for'), f('dailyDays', 'Keep daily summaries for'), f('eventDays', 'Keep events for'),
+          f('hostDays', 'Keep hardware readings for', 'Each reading is a whole snapshot of a machine rather than a single number, so these are kept for less time than check results.')),
         h('hr', { class: 'divider' }), saveBar()),
       h('section', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', null, 'Current storage'), runBtn), statusBox));
   }

@@ -200,6 +200,15 @@ export async function mount(root, ctx) {
     return h('div', { class: 'table-wrap' }, table);
   }
 
+  // hostKeyFor maps a hardware check to the machine whose readings it reads.
+  // It mirrors model.AgentHostKey and model.URLHostKey on the server.
+  function hostKeyFor(c) {
+    const cfg = c.config || {};
+    if (cfg.hostSource === 'agent' && cfg.agentId) return `agent:${cfg.agentId}`;
+    if (cfg.hostSource === 'url') return `url:${c.id}`;
+    return 'local';
+  }
+
   /* ---------- Charts ---------- */
   async function loadHistory() {
     const n = state.node;
@@ -221,12 +230,22 @@ export async function mount(root, ctx) {
     const from = list[0]?.from, to = list[0]?.to, bucket = list[0]?.bucketSeconds || 0;
     const latencySeries = list.filter((hs) => (hs.points || []).some((p) => p.avgMs != null));
 
-    // Latency / response time chart
-    const latHost = h('div', null);
-    const latChart = new LineChart(latHost, { unit: 'ms', height: 240, ariaLabel: 'Latency history', title: `${n.name} — latency (${state.range})` });
-    state.charts.push(latChart);
-    latChart.setData({ series: latencySeries.map((hs, i) => ({ ...toSeries(hs, 'avg', SERIES_COLORS[i % SERIES_COLORS.length]), name: hs.checkName })), from, to, bucketSeconds: bucket });
-    body.append(chartSection('Latency / response time', latHost, () => latChart.exportPNG(`${slug(n.name)}-latency-${state.range}.png`), ids));
+    // Latency / response time chart. A hardware check measures a machine
+    // rather than a round trip, so a node made only of those gets a link to
+    // its readings instead of an empty latency chart.
+    const timed = ids.filter((id) => checks.find((c) => c.id === id)?.type !== 'system');
+    if (timed.length) {
+      const latHost = h('div', null);
+      const latChart = new LineChart(latHost, { unit: 'ms', height: 240, ariaLabel: 'Latency history', title: `${n.name} — latency (${state.range})` });
+      state.charts.push(latChart);
+      latChart.setData({ series: latencySeries.map((hs, i) => ({ ...toSeries(hs, 'avg', SERIES_COLORS[i % SERIES_COLORS.length]), name: hs.checkName })), from, to, bucketSeconds: bucket });
+      body.append(chartSection('Latency / response time', latHost, () => latChart.exportPNG(`${slug(n.name)}-latency-${state.range}.png`), timed));
+    }
+    for (const c of checks.filter((x) => x.type === 'system')) {
+      body.append(h('p', { class: 'note' },
+        'Processor, memory, disk and throughput history for this machine is on its ',
+        h('a', { href: `#/hardware/${encodeURIComponent(hostKeyFor(c))}` }, 'hardware page'), '.'));
+    }
 
     // Packet loss for ping checks
     const pings = list.filter((hs) => hs.checkType === 'ping');

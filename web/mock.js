@@ -608,6 +608,129 @@
   on('GET', /^\/api\/update\/status$/, () => ({ status: clone(updateStatus), repo: settings.general.updateRepo || 'jxburros/GWatch', version: '0.4.1' }));
   on('POST', /^\/api\/update\/check$/, () => { updateStatus.last = { repo: 'jxburros/GWatch', currentVersion: '0.4.1', latestVersion: '0.5.0', updateAvailable: true, currentIsDev: false, releaseUrl: 'https://github.com/jxburros/GWatch/releases', releaseNotes: '- Charts tab\n- Audit tab\n- Triggers and endpoints', publishedAt: ago(2 * DAY), assetName: 'gwatch-windows-amd64.exe', assetUrl: '', assetSize: 12_000_000, checkedAt: iso(Date.now()) }; addEvent('update', { title: 'Checked for updates', detail: 'Current 0.4.1, latest 0.5.0 — update available' }); return clone(updateStatus.last); });
   on('POST', /^\/api\/update\/apply$/, () => { updateStatus.applied = true; updateStatus.restarting = true; updateStatus.lastApplyAt = iso(Date.now()); addEvent('update', { title: 'Update installed: 0.5.0' }); return { ok: true, info: updateStatus.last, restarting: true }; });
+  /* ---------- Hardware ---------- */
+  // Two machines: the computer "GWatch" is pretending to run on, and one that
+  // reports through an agent. Readings are generated from the same clock as
+  // everything else so the charts line up with the rest of the mock.
+  const agents = [
+    { id: 1, name: 'Living room NAS', nodeId: null, prefix: 'gwa_k3m9vq2x', enabled: true, createdBy: 'local', createdAt: ago(21 * DAY), revokedAt: null, lastSeenAt: ago(40e3), lastAddr: '192.168.1.24:52104', lastVersion: '0.5.0', hostname: 'nas.lan', os: 'linux', arch: 'arm64' },
+  ];
+
+  function mockReading(key, hostname, seed, at = Date.now()) {
+    const r = rng(seed + Math.floor(at / MIN));
+    const wave = (period, phase) => 0.5 + 0.5 * Math.sin((at / period) + phase);
+    const totalMem = key === 'local' ? 34359738368 : 8589934592;
+    const usedMem = Math.round(totalMem * (0.34 + 0.18 * wave(37 * MIN, 1.1)));
+    const rootTotal = key === 'local' ? 1000204886016 : 3998639460352;
+    const rootUsed = Math.round(rootTotal * (key === 'local' ? 0.41 : 0.87));
+    return {
+      key, hostname,
+      os: key === 'local' ? 'windows' : 'linux',
+      arch: key === 'local' ? 'amd64' : 'arm64',
+      platform: key === 'local' ? 'Windows 11 Pro 24H2' : 'Debian GNU/Linux 12 (bookworm)',
+      kernel: key === 'local' ? '26100' : '6.1.0-18-arm64',
+      agentVersion: key === 'local' ? '' : '0.5.0',
+      ts: iso(at),
+      bootTime: ago(key === 'local' ? 6 * DAY : 63 * DAY),
+      uptimeSeconds: (key === 'local' ? 6 * DAY : 63 * DAY) / 1000,
+      cpu: {
+        cores: key === 'local' ? 12 : 4,
+        model: key === 'local' ? 'AMD Ryzen 5 7600X 6-Core Processor' : 'ARM Cortex-A72',
+        usagePct: Math.round((8 + 34 * wave(23 * MIN, 0.4) + r() * 6) * 10) / 10,
+        userPct: Math.round(18 * wave(23 * MIN, 0.4) * 10) / 10,
+        systemPct: Math.round(6 * wave(19 * MIN, 2.2) * 10) / 10,
+        ioWaitPct: key === 'local' ? 0 : Math.round(3 * r() * 10) / 10,
+        load1: key === 'local' ? null : Math.round((0.4 + 1.6 * wave(29 * MIN, 0.9)) * 100) / 100,
+        load5: key === 'local' ? null : 0.72,
+        load15: key === 'local' ? null : 0.58,
+        loadPerCore: key === 'local' ? null : Math.round((0.1 + 0.4 * wave(29 * MIN, 0.9)) * 100) / 100,
+      },
+      memory: {
+        totalBytes: totalMem, usedBytes: usedMem, availableBytes: totalMem - usedMem,
+        usedPct: Math.round((usedMem / totalMem) * 1000) / 10,
+        cachedBytes: Math.round(totalMem * 0.22),
+        swapTotalBytes: key === 'local' ? 4294967296 : 1073741824,
+        swapUsedBytes: key === 'local' ? 402653184 : 0,
+        swapUsedPct: key === 'local' ? 9.4 : 0,
+      },
+      filesystems: key === 'local'
+        ? [{ mount: 'C:', device: 'C:', fsType: 'NTFS', totalBytes: rootTotal, usedBytes: rootUsed, freeBytes: rootTotal - rootUsed, usedPct: Math.round((rootUsed / rootTotal) * 1000) / 10 }]
+        : [
+          { mount: '/', device: '/dev/mmcblk0p2', fsType: 'ext4', totalBytes: 62914560000, usedBytes: 24159191040, freeBytes: 38755368960, usedPct: 38.4 },
+          { mount: '/srv/media', device: '/dev/sda1', fsType: 'ext4', totalBytes: rootTotal, usedBytes: rootUsed, freeBytes: rootTotal - rootUsed, usedPct: Math.round((rootUsed / rootTotal) * 1000) / 10 },
+        ],
+      interfaces: [{
+        name: key === 'local' ? 'Ethernet' : 'eth0', up: true, speedMbit: 1000,
+        addresses: [key === 'local' ? '192.168.1.10/24' : '192.168.1.24/24'],
+        rxBytes: 84 * 1024 * 1024 * 1024, txBytes: 12 * 1024 * 1024 * 1024,
+        rxBytesPerSec: Math.round(40e3 + 9e6 * wave(17 * MIN, 0.2)),
+        txBytesPerSec: Math.round(18e3 + 1.4e6 * wave(13 * MIN, 1.7)),
+        rxErrors: 0, txErrors: 0, rxDropped: 0, txDropped: 0,
+      }],
+      disks: [{
+        name: key === 'local' ? 'PhysicalDrive0' : 'sda',
+        readBytes: 4 * 1024 * 1024 * 1024 * 1024, writeBytes: 2 * 1024 * 1024 * 1024 * 1024,
+        readBytesPerSec: Math.round(120e3 + 24e6 * wave(11 * MIN, 2.4)),
+        writeBytesPerSec: Math.round(90e3 + 6e6 * wave(31 * MIN, 0.7)),
+        readOpsPerSec: Math.round(4 + 90 * wave(11 * MIN, 2.4)),
+        writeOpsPerSec: Math.round(2 + 40 * wave(31 * MIN, 0.7)),
+        busyPct: Math.round(60 * wave(11 * MIN, 2.4) * 10) / 10,
+      }],
+      warnings: key === 'local' ? [] : [],
+    };
+  }
+
+  const hostSummaries = () => ([
+    { key: 'local', name: settings.general.instanceName || 'This computer', source: 'local', status: 'up', stale: false, metrics: mockReading('local', 'studio-pc', 11) },
+    { key: 'agent:1', name: agents[0].name, source: 'agent', agent: clone(agents[0]), nodeId: null, status: 'up', stale: false, metrics: mockReading('agent:1', 'nas.lan', 29) },
+  ]);
+
+  on('GET', /^\/api\/hosts$/, () => hostSummaries());
+  on('GET', /^\/api\/hosts\/([^/]+)$/, (m) => {
+    const key = decodeURIComponent(m[1]);
+    const found = hostSummaries().find((x) => x.key === key);
+    if (!found) throw err(404, 'no such machine');
+    return found;
+  });
+  on('GET', /^\/api\/hosts\/([^/]+)\/history$/, (m, body, u) => {
+    const key = decodeURIComponent(m[1]);
+    const span = { '1h': HOUR, '24h': DAY, '7d': 7 * DAY, '30d': 30 * DAY, '1y': 365 * DAY }[u.searchParams.get('range') || '24h'] || DAY;
+    const points = 240;
+    const step = span / points;
+    const samples = [];
+    for (let i = points; i >= 0; i--) {
+      const at = NOW - i * step;
+      const reading = mockReading(key, key === 'local' ? 'studio-pc' : 'nas.lan', key === 'local' ? 11 : 29, at);
+      samples.push({
+        key, ts: iso(at),
+        cpuPct: reading.cpu.usagePct,
+        memPct: reading.memory.usedPct,
+        swapPct: reading.memory.swapUsedPct,
+        diskPct: Math.max(...reading.filesystems.map((f) => f.usedPct)),
+        loadPerCore: reading.cpu.loadPerCore,
+        netRxBytesPerSec: reading.interfaces[0].rxBytesPerSec,
+        netTxBytesPerSec: reading.interfaces[0].txBytesPerSec,
+        diskReadBytesPerSec: reading.disks[0].readBytesPerSec,
+        diskWriteBytesPerSec: reading.disks[0].writeBytesPerSec,
+      });
+    }
+    return { key, range: u.searchParams.get('range') || '24h', from: iso(NOW - span), to: iso(NOW), samples };
+  });
+  on('GET', /^\/api\/agents$/, () => clone(agents));
+  on('POST', /^\/api\/agents$/, (m, body) => {
+    if (!body?.name) throw err(400, 'give the machine a name so you can recognise it later');
+    const a = { id: Math.max(0, ...agents.map((x) => x.id)) + 1, name: body.name, nodeId: body.nodeId ?? null, prefix: 'gwa_mockmock', enabled: true, createdBy: 'local', createdAt: iso(Date.now()), revokedAt: null, lastSeenAt: null, lastAddr: '', lastVersion: '', hostname: '', os: '', arch: '' };
+    agents.push(a);
+    return { token: 'gwa_mockmocktokenqwertyuiopasdfghjklzxcvbnm23', agent: clone(a) };
+  });
+  on('PUT', /^\/api\/agents\/(\d+)$/, (m, body) => { const a = agents.find((x) => x.id === Number(m[1])); if (!a) throw err(404, 'not found'); Object.assign(a, { name: body.name ?? a.name, nodeId: body.nodeId ?? a.nodeId, enabled: body.enabled ?? a.enabled }); return clone(a); });
+  on('DELETE', /^\/api\/agents\/(\d+)$/, (m, body, u) => {
+    const i = agents.findIndex((x) => x.id === Number(m[1])); if (i < 0) throw err(404, 'not found');
+    if (u.searchParams.get('purge') === '1') agents.splice(i, 1);
+    else agents[i].revokedAt = iso(Date.now());
+    return { ok: true };
+  });
+
   on('GET', /^\/api\/export\/logs\.txt$/, () => ({ __csv: logLines.join('\n') }));
 
   const realFetch = window.fetch.bind(window);

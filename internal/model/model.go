@@ -23,10 +23,11 @@ const (
 	CheckKeyword CheckType = "keyword" // HTTP/S response contains / does not contain text
 	CheckJSON    CheckType = "json"    // HTTP/S JSON response has expected value at a path
 	CheckCustom  CheckType = "custom"  // user-supplied command/script, output parsed for status/metrics
+	CheckSystem  CheckType = "system"  // hardware health of a machine: processor, memory, disk space, throughput
 )
 
 // AllCheckTypes lists the supported check types in display order.
-var AllCheckTypes = []CheckType{CheckPing, CheckHTTP, CheckCert, CheckTCP, CheckDNS, CheckKeyword, CheckJSON, CheckCustom}
+var AllCheckTypes = []CheckType{CheckPing, CheckHTTP, CheckCert, CheckTCP, CheckDNS, CheckKeyword, CheckJSON, CheckCustom, CheckSystem}
 
 // Valid reports whether the type is one the engine can run.
 func (t CheckType) Valid() bool {
@@ -57,6 +58,8 @@ func (t CheckType) Label() string {
 		return "JSON"
 	case CheckCustom:
 		return "Custom script"
+	case CheckSystem:
+		return "Hardware health"
 	}
 	return string(t)
 }
@@ -200,6 +203,54 @@ type CheckConfig struct {
 	Command string            `json:"command,omitempty"`
 	WorkDir string            `json:"workDir,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
+
+	// System (hardware health). HostSource says which machine to read; see
+	// HostSource for what each one means.
+	HostSource   HostSource `json:"hostSource,omitempty"`
+	AgentID      int64      `json:"agentId,omitempty"`      // HostSourceAgent: which registered machine
+	MetricsURL   string     `json:"metricsUrl,omitempty"`   // HostSourceURL: the endpoint to read
+	MetricsToken string     `json:"metricsToken,omitempty"` // HostSourceURL: bearer token for that endpoint
+
+	// Hardware thresholds, all percentages except LoadWarnPerCore. A warning
+	// threshold makes the check degraded, a critical one makes it down; 0
+	// turns that threshold off. Thresholds is what the check is for, so a new
+	// system check is created with SystemDefaults rather than with none.
+	CPUWarnPct      float64  `json:"cpuWarnPct,omitempty"`
+	CPUCritPct      float64  `json:"cpuCritPct,omitempty"`
+	MemWarnPct      float64  `json:"memWarnPct,omitempty"`
+	MemCritPct      float64  `json:"memCritPct,omitempty"`
+	SwapWarnPct     float64  `json:"swapWarnPct,omitempty"`
+	DiskWarnPct     float64  `json:"diskWarnPct,omitempty"`
+	DiskCritPct     float64  `json:"diskCritPct,omitempty"`
+	DiskMounts      []string `json:"diskMounts,omitempty"` // only these mount points; empty means every one
+	LoadWarnPerCore float64  `json:"loadWarnPerCore,omitempty"`
+	LoadCritPerCore float64  `json:"loadCritPerCore,omitempty"`
+	// StaleAfterSeconds is how old a reading may be before the check reports
+	// the machine as down. 0 means three times the check interval.
+	StaleAfterSeconds int `json:"staleAfterSeconds,omitempty"`
+}
+
+// SystemDefaults are the thresholds a new hardware check starts with. They are
+// written into the check's configuration rather than applied at run time, so
+// what the check does is what the edit screen shows.
+func SystemDefaults() CheckConfig {
+	return CheckConfig{
+		CPUWarnPct:      90,
+		MemWarnPct:      90,
+		MemCritPct:      97,
+		SwapWarnPct:     50,
+		DiskWarnPct:     85,
+		DiskCritPct:     95,
+		LoadWarnPerCore: 2,
+	}
+}
+
+// HasSystemThresholds reports whether any hardware threshold is set. A check
+// with none would never alert, so the API fills in SystemDefaults instead.
+func (c CheckConfig) HasSystemThresholds() bool {
+	return c.CPUWarnPct > 0 || c.CPUCritPct > 0 || c.MemWarnPct > 0 || c.MemCritPct > 0 ||
+		c.SwapWarnPct > 0 || c.DiskWarnPct > 0 || c.DiskCritPct > 0 ||
+		c.LoadWarnPerCore > 0 || c.LoadCritPerCore > 0
 }
 
 // AlertOverride lets a check override global alert defaults. Nil pointers
@@ -271,6 +322,10 @@ type ResultDetails struct {
 	// Custom: combined stdout/stderr of the command (after stripping the
 	// key=value control lines), capped at 8 KiB.
 	Output string `json:"output,omitempty"`
+
+	// System: the hardware reading the check evaluated, and how old it was.
+	Host       *HostMetrics `json:"host,omitempty"`
+	HostAgeSec *float64     `json:"hostAgeSeconds,omitempty"`
 }
 
 // CertInfo describes the leaf certificate presented by a TLS server.
@@ -511,6 +566,11 @@ type RetentionSettings struct {
 	HourlyDays  int `json:"hourlyDays"`  // default 730
 	DailyDays   int `json:"dailyDays"`   // default 0 (forever)
 	EventDays   int `json:"eventDays"`   // default 730
+	// HostDays bounds the hardware readings. They are kept for less time than
+	// check results by default: a reading is a whole snapshot rather than a
+	// single latency number, and a year of them at one a minute is a lot of
+	// database for a question nobody asks about last March's disk usage.
+	HostDays int `json:"hostDays"` // default 90
 }
 
 // GeneralSettings are miscellaneous application settings.
@@ -584,6 +644,7 @@ func DefaultSettings() Settings {
 			HourlyDays:  730,
 			DailyDays:   0,
 			EventDays:   730,
+			HostDays:    90,
 		},
 		Backups: BackupSettings{
 			Enabled:        false,

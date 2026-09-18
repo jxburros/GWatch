@@ -20,6 +20,7 @@ function defaultCheck(type, settings) {
     case 'keyword': base.config = { method: 'GET', keyword: '', followRedirects: true }; break;
     case 'json': base.config = { method: 'GET', jsonPath: '', jsonExpected: '' }; break;
     case 'custom': base.config = { command: '', workDir: '', env: {} }; base.name = 'Custom script'; break;
+    case 'system': base.config = { ...SYSTEM_DEFAULTS, hostSource: 'local' }; base.name = 'Hardware health'; break;
   }
   return base;
 }
@@ -48,6 +49,24 @@ function cleanCheck(c) {
   }
   return out;
 }
+
+// The hardware thresholds a new check starts with. They mirror
+// model.SystemDefaults on the server, which is what a check saved without
+// thresholds is given; keeping them here too means the editor shows the
+// numbers the check will use rather than a row of zeros.
+const SYSTEM_DEFAULTS = {
+  cpuWarnPct: 90, memWarnPct: 90, memCritPct: 97, swapWarnPct: 50,
+  diskWarnPct: 85, diskCritPct: 95, loadWarnPerCore: 2,
+};
+
+// Warning/critical pairs, for the rule that a critical threshold cannot sit
+// below the warning it is supposed to escalate.
+const THRESHOLD_PAIRS = [
+  ['cpuWarnPct', 'cpuCritPct', 'processor'],
+  ['memWarnPct', 'memCritPct', 'memory'],
+  ['diskWarnPct', 'diskCritPct', 'disk'],
+  ['loadWarnPerCore', 'loadCritPerCore', 'load per core'],
+];
 
 export async function mount(root, ctx) {
   const isNew = !ctx.params.id;
@@ -317,8 +336,129 @@ export async function mount(root, ctx) {
             )),
         );
       }
+      case 'system': return systemFields(c, err);
       default: return h('p', { class: 'note' }, 'No settings for this type.');
     }
+  }
+
+  /* ---------- Hardware health ---------- */
+
+  function systemFields(c, err) {
+    const cfg = c.config;
+    const wrap = h('div', { class: 'stack' });
+
+    const source = selectInput({
+      options: [
+        { value: 'local', label: 'This computer — the machine GWatch runs on' },
+        { value: 'agent', label: 'A registered machine — it pushes its readings to GWatch' },
+        { value: 'url', label: 'A metrics endpoint — GWatch reads it' },
+      ],
+      value: cfg.hostSource || 'local',
+      onchange: () => { cfg.hostSource = source.value; renderSource(); },
+    });
+
+    const agentSel = selectInput({
+      options: [{ value: '', label: 'Loading machines…' }],
+      value: String(cfg.agentId || ''),
+      onchange: () => { cfg.agentId = Number(agentSel.value) || 0; },
+    });
+    const agentRow = field({
+      label: 'Machine', input: agentSel, error: err.agentId,
+      help: 'Register machines under Settings › Hardware. The agent on that machine connects out to GWatch; GWatch never connects to it.',
+    });
+    loadAgents(agentSel, cfg);
+
+    const urlIn = textInput({
+      value: cfg.metricsUrl || '', placeholder: 'https://nas.lan:9713/metrics',
+      oninput: () => { cfg.metricsUrl = urlIn.value; },
+    });
+    const tokenIn = textInput({
+      type: 'password', value: cfg.metricsToken || '', placeholder: 'Bearer token for that endpoint', autocomplete: 'off',
+      oninput: () => { cfg.metricsToken = tokenIn.value; },
+    });
+    const urlRow = h('div', { class: 'form-grid' },
+      field({ label: 'Metrics URL', input: urlIn, error: err.metricsUrl, help: 'Where gwatch-agent is listening, when it is run with `serve` instead of pushing.' }),
+      field({ label: 'Token', input: tokenIn, help: 'Sent as an Authorization header. It is stored in this check\u2019s configuration.' }));
+
+    const sourceWrap = h('div');
+    function renderSource() {
+      clear(sourceWrap);
+      const mode = cfg.hostSource || 'local';
+      if (mode === 'agent') sourceWrap.append(agentRow);
+      else if (mode === 'url') sourceWrap.append(urlRow);
+      else sourceWrap.append(h('p', { class: 'note' }, 'Nothing to configure: GWatch already reads this computer every minute.'));
+    }
+    renderSource();
+
+    const stale = numberInput({
+      value: cfg.staleAfterSeconds || '', min: 0,
+      placeholder: `Default (3 \u00d7 the interval, at least 60 s)`,
+      oninput: () => { cfg.staleAfterSeconds = Number(stale.value) || 0; },
+    });
+
+    const mounts = chipInput({
+      values: cfg.diskMounts || [], placeholder: 'e.g. / or C:',
+      onChange: (v) => { cfg.diskMounts = v; },
+    });
+
+    wrap.append(
+      h('div', { class: 'form-grid' },
+        field({ label: 'Read hardware from', input: source }),
+        field({ label: 'Report down after no reading for', input: stale, help: 'A machine that stops reporting is the signal an agent exists to give.' })),
+      sourceWrap,
+      h('div', { class: 'section-title', style: { marginTop: '4px' } }, 'Thresholds'),
+      h('p', { class: 'note' }, 'Crossing a warning threshold makes this check degraded; crossing the critical one makes it down. Leave a threshold at 0 to ignore that reading entirely.'),
+      h('div', { class: 'form-grid-3' },
+        pctField(cfg, 'cpuWarnPct', 'Processor warning'),
+        pctField(cfg, 'cpuCritPct', 'Processor critical', err.cpuCritPct),
+        pctField(cfg, 'swapWarnPct', 'Swap warning'),
+        pctField(cfg, 'memWarnPct', 'Memory warning'),
+        pctField(cfg, 'memCritPct', 'Memory critical', err.memCritPct),
+        h('div'),
+        pctField(cfg, 'diskWarnPct', 'Disk warning'),
+        pctField(cfg, 'diskCritPct', 'Disk critical', err.diskCritPct),
+        field({ label: 'Watch only these mount points', input: mounts, help: 'Leave empty to watch every filesystem.' })),
+      h('details', { class: 'collapsible' },
+        h('summary', null, icon('chevronRight'), 'Load average'),
+        h('div', { class: 'stack-sm', style: { paddingTop: '8px' } },
+          h('p', { class: 'note' }, 'Load per core is processor demand divided by the number of cores, so it means the same thing on a 2-core box and a 64-core one. On macOS, where processor utilisation is not readable without a native extension, this is what the check watches instead.'),
+          h('div', { class: 'form-grid-3' },
+            loadField(cfg, 'loadWarnPerCore', 'Load warning (per core)'),
+            loadField(cfg, 'loadCritPerCore', 'Load critical (per core)', err.loadCritPerCore)))),
+    );
+    return wrap;
+  }
+
+  function pctField(cfg, key, label, error) {
+    const input = numberInput({ value: cfg[key] ?? '', min: 0, max: 100, step: 1, oninput: () => { cfg[key] = Number(input.value) || 0; } });
+    return field({ label, input: h('div', { class: 'input-with-unit' }, input, h('span', { class: 'unit' }, '%')), error });
+  }
+
+  function loadField(cfg, key, label, error) {
+    const input = numberInput({ value: cfg[key] ?? '', min: 0, step: 0.1, oninput: () => { cfg[key] = Number(input.value) || 0; } });
+    return field({ label, input, error });
+  }
+
+  // The machine list comes from the server, so a check cannot be pointed at a
+  // machine that was never registered.
+  async function loadAgents(select, cfg) {
+    let agents = [];
+    try { agents = await api.get('/api/agents'); } catch { agents = null; }
+    clear(select);
+    if (agents === null) {
+      select.append(h('option', { value: '' }, 'Could not load the machine list'));
+      return;
+    }
+    const usable = agents.filter((a) => !a.revokedAt);
+    if (!usable.length) {
+      select.append(h('option', { value: '' }, 'No machines registered yet — add one under Settings \u203a Hardware'));
+      return;
+    }
+    select.append(h('option', { value: '' }, 'Choose a machine\u2026'));
+    for (const a of usable) {
+      select.append(h('option', { value: String(a.id) }, a.lastSeenAt ? `${a.name} (${a.hostname || 'reporting'})` : `${a.name} (not reporting yet)`));
+    }
+    select.value = String(cfg.agentId || '');
   }
 
   function alertOverrides(c) {
@@ -355,8 +495,11 @@ export async function mount(root, ctx) {
     const errors = { checks: {} };
     let count = 0;
     if (!d.name.trim()) { errors.name = 'Give the node a name.'; count++; }
-    const allHaveTarget = d.checks.length && d.checks.every((c) => (c.config.target || '').trim());
-    if (!d.host.trim() && !allHaveTarget) { errors.host = 'Enter a host, IP or URL (or set a target on every check).'; count++; }
+    // A hardware check names a machine rather than an address, so a node made
+    // only of those needs no host at all.
+    const needsHost = d.checks.filter((c) => c.type !== 'system');
+    const allHaveTarget = needsHost.length && needsHost.every((c) => (c.config.target || '').trim());
+    if (needsHost.length && !d.host.trim() && !allHaveTarget) { errors.host = 'Enter a host, IP or URL (or set a target on every check).'; count++; }
     const minInt = state.settings?.general?.minIntervalSeconds || 10;
     for (const c of d.checks) {
       const e = {};
@@ -368,6 +511,15 @@ export async function mount(root, ctx) {
       if (c.type === 'keyword' && !(c.config.keyword || '').trim()) e.keyword = 'Enter the text to look for.';
       if (c.type === 'json' && !(c.config.jsonPath || '').trim()) e.jsonPath = 'Enter a JSON path.';
       if (c.type === 'custom' && !(c.config.command || '').trim()) e.command = 'Enter a command to run.';
+      if (c.type === 'system') {
+        if (c.config.hostSource === 'agent' && !c.config.agentId) e.agentId = 'Choose which registered machine this check reads.';
+        if (c.config.hostSource === 'url' && !(c.config.metricsUrl || '').trim()) e.metricsUrl = 'Enter the metrics URL to read.';
+        for (const [warnKey, critKey, label] of THRESHOLD_PAIRS) {
+          const warn = Number(c.config[warnKey]) || 0;
+          const crit = Number(c.config[critKey]) || 0;
+          if (warn > 0 && crit > 0 && crit < warn) e[critKey] = `The ${label} critical threshold must be at or above its warning threshold.`;
+        }
+      }
       if (['http', 'keyword', 'json'].includes(c.type) && c.config.target && !/^(https?:\/\/)?[^\s/]+/.test(c.config.target.trim())) e.target = 'Enter a valid URL.';
       if (Object.keys(e).length) { errors.checks[c._key] = e; count += Object.keys(e).length; }
     }

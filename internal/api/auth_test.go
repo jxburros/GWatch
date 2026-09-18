@@ -744,7 +744,9 @@ func TestEveryRouteHasAPolicyAndEveryPolicyHasARoute(t *testing.T) {
 	}
 	for _, r := range routes {
 		if !strings.HasPrefix(r.Pattern, "/api/") {
-			continue // /hook/… is guarded by its own endpoint token
+			// /hook/… carries its own endpoint token and /ingest/… its own
+			// agent token; neither goes through the policy table.
+			continue
 		}
 		if !declared[r.Method+" "+r.Pattern] {
 			t.Errorf("route %s has no entry in the policy table", r)

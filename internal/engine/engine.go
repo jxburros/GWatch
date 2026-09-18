@@ -15,6 +15,7 @@ import (
 
 	"github.com/jxburros/GWatch/internal/actions"
 	"github.com/jxburros/GWatch/internal/checks"
+	"github.com/jxburros/GWatch/internal/hostmon"
 	"github.com/jxburros/GWatch/internal/logging"
 	"github.com/jxburros/GWatch/internal/mailer"
 	"github.com/jxburros/GWatch/internal/model"
@@ -63,6 +64,10 @@ type Engine struct {
 	triggerLast map[int64]time.Time       // last run per trigger (cooldowns)
 	runner      *actions.Runner
 
+	// hosts samples this computer's hardware and holds the newest reading
+	// from every machine that reports in.
+	hosts *hostmon.Monitor
+
 	sem      chan struct{}
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -110,8 +115,15 @@ func New(st *store.Store, log *logging.Logger, opts Options) *Engine {
 		triggers:    map[int64][]model.Trigger{},
 		triggerLast: map[int64]time.Time{},
 	}
+	e.hosts = hostmon.New(st)
+	e.hosts.OnSample = func(key string) { e.broadcast(Update{Kind: "host"}) }
+	e.hosts.OnError = func(err error) { e.RecordError("hardware readings", err) }
 	return e
 }
+
+// Hosts exposes the hardware monitor, which the API uses to accept readings
+// pushed by agents and to answer the hardware views.
+func (e *Engine) Hosts() *hostmon.Monitor { return e.hosts }
 
 // Store exposes the underlying store.
 func (e *Engine) Store() *store.Store { return e.store }
@@ -142,11 +154,12 @@ func (e *Engine) Start(parent context.Context) error {
 	e.mu.Lock()
 	e.log.Printf("engine started: %d node(s), %d check(s), max %d concurrent", len(e.nodes), len(e.checks), cap(e.sem))
 	e.mu.Unlock()
-	e.wg.Add(4)
+	e.wg.Add(5)
 	go e.schedulerLoop()
 	go e.maintenanceLoop()
 	go e.retentionLoop()
 	go e.backupLoop()
+	go e.hostSampleLoop()
 	return nil
 }
 
@@ -371,6 +384,7 @@ func (e *Engine) runAndProcess(ctx context.Context, checkID int64, depth int) (m
 		DefaultCertWarn:   e.settings.Alerts.CertWarnDays,
 		LatencyWarnMS:     e.settings.General.LatencyWarnMS,
 		PacketLossWarnPct: e.settings.General.PacketLossWarnPct,
+		Hosts:             e.hosts,
 	}
 	if st != nil {
 		opts.PreviousHash = st.LastContentHash
@@ -388,6 +402,7 @@ func (e *Engine) runAndProcess(ctx context.Context, checkID int64, depth int) (m
 	if result.Timestamp.IsZero() {
 		result.Timestamp = time.Now()
 	}
+	e.recordScrapedHost(ctx, result)
 	stored, err := e.process(ctx, c, n, result, depth)
 	e.mu.Lock()
 	delete(e.running, checkID)

@@ -18,10 +18,19 @@ brief that defines the scope lives in [`local-network-monitoring-product-brief.m
   redirects, DNS/connect/TLS/first-byte timing, final URL), HTTPS certificate (issuer,
   expiry, days remaining, validity), TCP port, DNS (with expected values), Keyword, JSON,
   and Custom script (run your own command and parse a simple status/metric contract from
-  its output — see "Custom checks" below).
+  its output — see "Custom checks" below), and Hardware health (see below).
+- **Hardware health** of the computer GWatch runs on and of any other machine you install
+  the agent on: processor, memory and swap, filesystem space, network throughput and disk
+  throughput, with warning and critical thresholds so "the disk is filling" and "the disk
+  is full" are different events. The **Hardware** tab lists every machine with its current
+  state and keeps a history of each. The agent connects outwards to GWatch and hands over
+  a reading; GWatch never connects back and holds no credential for the machine, and the
+  agent's token can do exactly one thing — submit that one machine's readings. A machine
+  that goes quiet is reported as down, which is the whole point. See
+  [`docs/HARDWARE.md`](docs/HARDWARE.md).
 - **Nodes** group several checks (a Plex node with Ping + TCP 32400 + HTTP). Templates
-  prefill sensible defaults for a website, home server, router, API endpoint, TCP service
-  or DNS name. Everything stays editable. Nodes carry groups, tags, notes, importance,
+  prefill sensible defaults for a website, home server, router, API endpoint, TCP service,
+  DNS name, this computer's hardware or a machine running the agent. Everything stays editable. Nodes carry groups, tags, notes, importance,
   enable/disable, duplicate, and a dependency ("Plex depends on Gateway").
 - **Run now / test** any check and inspect the full result (timings, status code, final
   URL, certificate details, resolved addresses, packets).
@@ -215,6 +224,8 @@ make test                         # go vet + unit and integration tests
 make ci                           # everything CI runs: gofmt, vet, go mod tidy, race tests
 make cover                        # race tests plus a per-function coverage report
 make windows                      # cross-compile dist/gwatch.exe from Linux/macOS
+make agent                        # build dist/gwatch-agent for this platform
+make agent-all                    # build it for Windows, Linux and macOS, amd64/arm64/arm
 ```
 
 The test suite needs no external network: HTTP, TLS and DNS checks are exercised against
