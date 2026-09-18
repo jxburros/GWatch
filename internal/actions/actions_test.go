@@ -5,7 +5,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
@@ -201,5 +203,163 @@ func TestRunNodeAction(t *testing.T) {
 	res = (&Runner{}).Run(context.Background(), model.Action{Type: model.ActionRunNode, NodeID: &id}, nil)
 	if res.OK {
 		t.Fatal("run_node without callback should fail")
+	}
+}
+
+// hostileValue contains every metacharacter that matters to a shell, Python or
+// JavaScript, plus a command substitution whose side effect the tests check for.
+func hostileValue(marker string) string {
+	return "a`touch " + marker + "`b$(touch " + marker + ")c; touch " + marker + " | touch " + marker + " 'q' \"d\" \\e"
+}
+
+func scriptOutput(t *testing.T, interp, code string, vars Vars) model.ActionResult {
+	t.Helper()
+	r := &Runner{TempDir: t.TempDir()}
+	return r.Run(context.Background(), model.Action{Type: model.ActionScript, Interpreter: interp, Code: code}, vars)
+}
+
+// TestScriptPlaceholdersCannotInjectCommands feeds shell metacharacters through
+// {{body}} and {{message}} into every built-in interpreter and asserts the value
+// arrives as literal text and that its command substitution never ran.
+func TestScriptPlaceholdersCannotInjectCommands(t *testing.T) {
+	cases := []struct {
+		interp string
+		bin    []string
+		code   string
+	}{
+		{"sh", []string{"sh"}, "printf '%s' {{body}}\n"},
+		{"bash", []string{"bash"}, "printf '%s' {{body}}\n"},
+		{"python", []string{"python3", "python"}, "import sys\nsys.stdout.write({{body}})\n"},
+		{"node", []string{"node"}, "process.stdout.write({{body}});\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.interp, func(t *testing.T) {
+			if runtime.GOOS == "windows" && (c.interp == "sh" || c.interp == "bash") {
+				t.Skip("posix shells only")
+			}
+			found := false
+			for _, b := range c.bin {
+				if _, err := exec.LookPath(b); err == nil {
+					found = true
+				}
+			}
+			if !found {
+				t.Skipf("%s not available", c.interp)
+			}
+			dir := t.TempDir()
+			marker := filepath.Join(dir, "pwned")
+			value := hostileValue(marker)
+			res := scriptOutput(t, c.interp, c.code, Vars{"body": value})
+			if !res.OK {
+				t.Fatalf("script failed: %+v", res)
+			}
+			if res.Output != value {
+				t.Fatalf("value was not passed through literally:\n got %q\nwant %q", res.Output, value)
+			}
+			if _, err := os.Stat(marker); err == nil {
+				t.Fatal("the placeholder value executed a command")
+			}
+		})
+	}
+}
+
+// TestScriptPlaceholdersAreReferencesNotText checks the substituted text itself,
+// so the guarantee holds on platforms where the interpreter is not installed.
+func TestScriptPlaceholdersAreReferencesNotText(t *testing.T) {
+	vars := Vars{"message": "x\"; rm -rf /\n", "node.name": "gw"}
+	cases := map[string]string{
+		"sh":         `echo "${GWATCH_MESSAGE}"`,
+		"bash":       `echo "${GWATCH_MESSAGE}"`,
+		"powershell": `echo ${env:GWATCH_MESSAGE}`,
+		"python":     `echo "x\"; rm -rf /\n"`,
+		"node":       `echo "x\"; rm -rf /\n"`,
+	}
+	for interp, want := range cases {
+		if got := expandScriptCode("echo {{message}}", vars, interp); got != want {
+			t.Errorf("%s: got %q want %q", interp, got, want)
+		}
+	}
+	// cmd has no safe reference, so the value is stripped of what cmd re-parses
+	if got := expandScriptCode("@echo {{message}}", Vars{"message": `a&b|c<d>e^f%g!h"i`}, "cmd"); got != "@echo abcdefghi" {
+		t.Errorf("cmd: got %q", got)
+	}
+	// unknown names become an empty literal, never a dangling reference
+	for _, interp := range []string{"sh", "bash", "powershell", "python", "node"} {
+		if got := expandScriptCode("echo {{nope}}", vars, interp); got != `echo ""` {
+			t.Errorf("%s unknown placeholder: got %q", interp, got)
+		}
+	}
+}
+
+// TestCustomInterpreterRequiresAcknowledgement covers the case where GWatch
+// cannot know how to quote a value: the language is whatever the user typed.
+func TestCustomInterpreterRequiresAcknowledgement(t *testing.T) {
+	a := model.Action{Type: model.ActionScript, Interpreter: "custom", Command: "cat", Code: "print({{body}})"}
+	if err := Validate(a); err == nil || !strings.Contains(err.Error(), "GWATCH_") {
+		t.Fatalf("expected the placeholder to be rejected, got %v", err)
+	}
+	a.AllowUntrustedInput = true
+	if err := Validate(a); err != nil {
+		t.Fatalf("acknowledged action should validate: %v", err)
+	}
+	a.AllowUntrustedInput = false
+	a.Code = "print(os.environ['GWATCH_BODY'])"
+	if err := Validate(a); err != nil {
+		t.Fatalf("code without placeholders should validate: %v", err)
+	}
+	if _, err := exec.LookPath("cat"); err != nil {
+		return
+	}
+	// with the acknowledgement the value is spliced in raw, as chosen
+	r := &Runner{TempDir: t.TempDir()}
+	res := r.Run(context.Background(), model.Action{Type: model.ActionScript, Interpreter: "custom", Command: "cat", Code: "{{body}}", AllowUntrustedInput: true}, Vars{"body": "raw $(x)"})
+	if !res.OK || res.Output != "raw $(x)" {
+		t.Fatalf("custom interpreter: %+v", res)
+	}
+}
+
+// TestBuildGitArgs makes sure a placeholder value stays one argument and cannot
+// turn into an option.
+func TestBuildGitArgs(t *testing.T) {
+	vars := Vars{"message": `oops" --upload-pack=touch /tmp/pwned "`, "branch": "main", "opt": "--exec=evil"}
+	got, err := buildGitArgs(`git commit -am "{{message}}"`, vars)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"commit", "-am", vars["message"]}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("args = %q want %q", got, want)
+	}
+	if got, err := buildGitArgs("push origin {{branch}}", vars); err != nil || !reflect.DeepEqual(got, []string{"push", "origin", "main"}) {
+		t.Fatalf("args = %q err = %v", got, err)
+	}
+	if _, err := buildGitArgs("status {{opt}}", vars); err == nil || !strings.Contains(err.Error(), "git option") {
+		t.Fatalf("expected an option to be refused, got %v", err)
+	}
+	if got, err := buildGitArgs("status --short {{missing}}", vars); err != nil || !reflect.DeepEqual(got, []string{"status", "--short", ""}) {
+		t.Fatalf("args = %q err = %v", got, err)
+	}
+}
+
+// TestHeaderValuesCannotInjectHeaders covers the HTTP action: header values are
+// data, but must not be able to start a new header line.
+func TestHeaderValuesCannotInjectHeaders(t *testing.T) {
+	var got http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		io.WriteString(w, "ok")
+	}))
+	defer srv.Close()
+	r := &Runner{}
+	res := r.Run(context.Background(), model.Action{Type: model.ActionHTTP, URL: srv.URL, Headers: map[string]string{"X-Note": "{{message}}"}},
+		Vars{"message": "hi\r\nX-Injected: yes"})
+	if !res.OK {
+		t.Fatalf("http action: %+v", res)
+	}
+	if got.Get("X-Injected") != "" {
+		t.Fatal("a header value injected another header")
+	}
+	if got.Get("X-Note") != "hiX-Injected: yes" {
+		t.Fatalf("X-Note = %q", got.Get("X-Note"))
 	}
 }

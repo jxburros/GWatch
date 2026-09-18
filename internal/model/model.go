@@ -722,6 +722,11 @@ type Action struct {
 	Command     string `json:"command,omitempty"`     // custom interpreter command line; {{file}} is the script path
 	Code        string `json:"code,omitempty"`
 	WorkDir     string `json:"workDir,omitempty"`
+	// AllowUntrustedInput acknowledges that placeholder values may contain
+	// anything the caller chooses. It is only consulted for the "custom"
+	// interpreter, where GWatch cannot know how to quote a value safely and
+	// therefore refuses to splice placeholders into the code without it.
+	AllowUntrustedInput bool `json:"allowUntrustedInput,omitempty"`
 
 	// run_node
 	NodeID *int64 `json:"nodeId,omitempty"`
@@ -768,13 +773,17 @@ type Trigger struct {
 // Endpoint is a user-defined HTTP endpoint served at /hook/{slug} that runs
 // an action when called.
 type Endpoint struct {
-	ID           int64      `json:"id"`
-	Name         string     `json:"name"`
-	Slug         string     `json:"slug"`
-	Description  string     `json:"description"`
-	Enabled      bool       `json:"enabled"`
-	Method       string     `json:"method"` // GET | POST | ANY
-	Token        string     `json:"token"`  // optional shared secret (X-GWatch-Token header or ?token=)
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Slug        string `json:"slug"`
+	Description string `json:"description"`
+	Enabled     bool   `json:"enabled"`
+	Method      string `json:"method"` // GET | POST | ANY
+	Token       string `json:"token"`  // shared secret (X-GWatch-Token header, ?token= or Bearer)
+	// AllowNoToken is the explicit acknowledgement that this endpoint may be
+	// called by anyone who can reach the port. Without it an empty token is
+	// rejected when saving and refused when called.
+	AllowNoToken bool       `json:"allowNoToken"`
 	Action       Action     `json:"action"`
 	LastCalledAt *time.Time `json:"lastCalledAt"`
 	LastStatus   string     `json:"lastStatus"`

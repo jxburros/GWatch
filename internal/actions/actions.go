@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -67,6 +68,72 @@ func Expand(s string, vars Vars) string {
 	})
 }
 
+// hasPlaceholder reports whether s contains a {{placeholder}}.
+func hasPlaceholder(s string) bool {
+	return strings.Contains(s, "{{") && placeholder.MatchString(s)
+}
+
+// cmdUnsafe are the characters cmd.exe re-parses; they are dropped from values
+// spliced into a cmd script (see expandScriptCode).
+var cmdUnsafe = strings.NewReplacer("&", "", "|", "", "<", "", ">", "", "^", "", "%", "", "!", "", "\"", "", "\r", "", "\n", " ")
+
+// expandScriptCode substitutes {{placeholders}} inside the code of a script
+// action. Unlike Expand it never splices the raw value into the code: a value
+// can be anything an HTTP caller or a monitored device sent, so it is replaced
+// by a reference or a literal the interpreter cannot re-parse as code.
+//
+//	sh, bash     "${GWATCH_NODE_NAME}"   (a double-quoted expansion is never re-parsed)
+//	powershell   ${env:GWATCH_NODE_NAME}
+//	python       a Python string literal (strconv.Quote emits only escapes Python shares)
+//	node         a JavaScript string literal (json.Marshal)
+//	cmd          a sanitized literal - cmd.exe re-parses %VAR% and !VAR! expansions,
+//	             so there is no safe reference to use; & | < > ^ % ! " are dropped
+//	             from the value and newlines become spaces.
+//
+// Unknown names expand to an empty literal of the right kind. Note that a
+// placeholder the author wrapped in their own quotes ("{{message}}") yields
+// ""${GWATCH_MESSAGE}"" in sh: still a single expansion that is never re-parsed
+// as code, but subject to word splitting. Write {{message}} without quotes.
+func expandScriptCode(code string, vars Vars, interp string) string {
+	if !strings.Contains(code, "{{") {
+		return code
+	}
+	return placeholder.ReplaceAllStringFunc(code, func(m string) string {
+		key := strings.TrimSpace(m[2 : len(m)-2])
+		val, known := vars[key]
+		switch interp {
+		case "sh", "bash":
+			if !known {
+				return `""`
+			}
+			return "\"${" + EnvName(key) + "}\""
+		case "powershell":
+			if !known {
+				return `""`
+			}
+			return "${env:" + EnvName(key) + "}"
+		case "cmd":
+			return cmdUnsafe.Replace(val)
+		case "python":
+			return strconv.Quote(val)
+		case "node":
+			b, err := json.Marshal(val)
+			if err != nil {
+				return `""`
+			}
+			return string(b)
+		}
+		return val
+	})
+}
+
+// EnvName is the environment variable a placeholder name is exported as
+// (node.name → GWATCH_NODE_NAME). The placeholder syntax only allows letters,
+// digits, dots and dashes, so the result is always a valid variable name.
+func EnvName(key string) string {
+	return "GWATCH_" + strings.ToUpper(strings.NewReplacer(".", "_", "-", "_").Replace(key))
+}
+
 // Env converts vars into GWATCH_* environment variables (node.name → GWATCH_NODE_NAME).
 func Env(vars Vars) []string {
 	keys := make([]string, 0, len(vars))
@@ -76,8 +143,7 @@ func Env(vars Vars) []string {
 	sort.Strings(keys)
 	out := make([]string, 0, len(keys))
 	for _, k := range keys {
-		name := strings.ToUpper(strings.NewReplacer(".", "_", "-", "_").Replace(k))
-		out = append(out, "GWATCH_"+name+"="+vars[k])
+		out = append(out, EnvName(k)+"="+vars[k])
 	}
 	return out
 }
@@ -109,6 +175,9 @@ func Validate(a model.Action) error {
 		}
 		if a.Interpreter == "custom" && strings.TrimSpace(a.Command) == "" {
 			return errors.New("a command line is required for a custom interpreter")
+		}
+		if a.Interpreter == "custom" && !a.AllowUntrustedInput && hasPlaceholder(a.Code) {
+			return errors.New("with a custom interpreter GWatch cannot quote placeholder values safely: use the GWATCH_* environment variables instead of {{placeholders}} in the code, or tick \"this script may run untrusted input\" to expand them as raw text")
 		}
 		if _, ok := interpreters[a.Interpreter]; !ok && a.Interpreter != "custom" && a.Interpreter != "" {
 			return fmt.Errorf("unknown interpreter %q", a.Interpreter)
@@ -224,7 +293,9 @@ func (r *Runner) runHTTP(ctx context.Context, a model.Action, vars Vars, res mod
 	}
 	for k, v := range a.Headers {
 		if k = strings.TrimSpace(k); k != "" {
-			req.Header.Set(k, Expand(v, vars))
+			// Header values are data, but an expanded placeholder must not be
+			// able to inject extra header lines.
+			req.Header.Set(k, headerSafe(Expand(v, vars)))
 		}
 	}
 	resp, err := r.client(a).Do(req)
@@ -247,6 +318,9 @@ func (r *Runner) runHTTP(ctx context.Context, a model.Action, vars Vars, res mod
 	res.OK = true
 	return res
 }
+
+// headerSafe strips CR and LF from an expanded header value.
+func headerSafe(v string) string { return strings.NewReplacer("\r", "", "\n", "").Replace(v) }
 
 // statusMatches implements "200", "200-299", "200,301,302" and combinations.
 func statusMatches(code int, spec string) bool {
@@ -278,13 +352,14 @@ func (r *Runner) runGit(ctx context.Context, a model.Action, vars Vars, res mode
 		res.Error = fmt.Sprintf("repository directory %q does not exist", dir)
 		return res
 	}
-	args := SplitArgs(Expand(a.GitArgs, vars))
+	args, err := buildGitArgs(a.GitArgs, vars)
+	if err != nil {
+		res.Error = err.Error()
+		return res
+	}
 	if len(args) == 0 {
 		res.Error = "no git arguments"
 		return res
-	}
-	if strings.EqualFold(args[0], "git") {
-		args = args[1:]
 	}
 	git, err := exec.LookPath("git")
 	if err != nil {
@@ -302,6 +377,26 @@ func (r *Runner) runGit(ctx context.Context, a model.Action, vars Vars, res mode
 	}
 	res.OK = true
 	return res
+}
+
+// buildGitArgs splits the configured arguments first and expands placeholders
+// per argument afterwards, so a value containing spaces or quotes can never add
+// arguments of its own. A value that turns a plain argument into an option is
+// refused rather than passed on.
+func buildGitArgs(gitArgs string, vars Vars) ([]string, error) {
+	raw := SplitArgs(gitArgs)
+	out := make([]string, 0, len(raw))
+	for _, arg := range raw {
+		ex := Expand(arg, vars)
+		if ex != arg && strings.HasPrefix(ex, "-") && !strings.HasPrefix(arg, "-") {
+			return nil, errors.New("placeholder value would be interpreted as a git option: " + ex)
+		}
+		out = append(out, ex)
+	}
+	if len(out) > 0 && strings.EqualFold(out[0], "git") {
+		out = out[1:]
+	}
+	return out, nil
 }
 
 // SplitArgs splits a command line into arguments honouring single and double quotes.
@@ -402,7 +497,17 @@ func (r *Runner) runScript(ctx context.Context, a model.Action, vars Vars, res m
 	}
 	path := f.Name()
 	defer os.Remove(path)
-	code := Expand(a.Code, vars)
+	code := a.Code
+	if name == "custom" {
+		// The language is unknown, so no quoting rule applies. Raw expansion is
+		// only reached when the author explicitly acknowledged that the script
+		// may run untrusted input (Validate rejects placeholders otherwise).
+		if a.AllowUntrustedInput {
+			code = Expand(code, vars)
+		}
+	} else {
+		code = expandScriptCode(code, vars, name)
+	}
 	if runtime.GOOS == "windows" && (ext == ".cmd" || ext == ".ps1") {
 		code = strings.ReplaceAll(strings.ReplaceAll(code, "\r\n", "\n"), "\n", "\r\n")
 	}
