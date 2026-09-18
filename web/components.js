@@ -106,6 +106,9 @@ const ICONS = {
   layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/>',
   hash: '<path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/>',
   lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
+  key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 8.3-8.3 3 3-2 2-2-2-2 2 2 2-3 3z"/>',
   home: '<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/>',
   tv: '<rect x="2" y="7" width="20" height="15" rx="2"/><path d="m17 2-5 5-5-5"/>',
   filter: '<path d="M22 3H2l8 9.5V19l4 2v-8.5z"/>',
@@ -343,14 +346,16 @@ export function closeMenus() { if (openMenu) { openMenu.remove(); openMenu = nul
 function onDocDown(e) { if (openMenu && !openMenu.contains(e.target)) closeMenus(); }
 function onDocKey(e) { if (e.key === 'Escape') closeMenus(); }
 
-/** items: [{label, icon, onClick, danger, href, download, sep}] */
+/** items: [{label, icon, onClick, danger, href, download, sep, adminOnly}]
+ *  An `adminOnly` item is hidden from an account without the admin role. The
+ *  menu is appended to <body>, so the `body.viewer` rule still reaches it. */
 export function showMenu(anchor, items) {
   closeMenus();
   const menu = h('div', { class: 'menu', role: 'menu' });
   for (const it of items) {
     if (!it) continue;
-    if (it.sep) { menu.append(h('div', { class: 'menu-sep', role: 'separator' })); continue; }
-    const cls = `menu-item ${it.danger ? 'danger' : ''}`;
+    if (it.sep) { menu.append(h('div', { class: `menu-sep ${it.adminOnly ? 'admin-only' : ''}`, role: 'separator' })); continue; }
+    const cls = `menu-item ${it.danger ? 'danger' : ''} ${it.adminOnly ? 'admin-only' : ''}`;
     const el = it.href
       ? h('a', { class: cls, role: 'menuitem', href: it.href, download: it.download || null, target: it.target || null, onclick: () => closeMenus() }, it.icon ? icon(it.icon) : null, it.label)
       : h('button', { class: cls, role: 'menuitem', type: 'button', disabled: !!it.disabled, onclick: () => { closeMenus(); it.onClick && it.onClick(); } }, it.icon ? icon(it.icon) : null, it.label);
@@ -552,6 +557,7 @@ export const EVENT_META = {
   trigger_fired: { label: 'Trigger', icon: 'zap', cls: 'ev-info' },
   endpoint_called: { label: 'Endpoint', icon: 'webhook', cls: 'ev-info' },
   update: { label: 'Update', icon: 'rocket', cls: 'ev-info' },
+  auth: { label: 'Sign-in & accounts', icon: 'user', cls: 'ev-info' },
 };
 export function eventMeta(type) { return EVENT_META[type] || { label: type, icon: 'info', cls: 'ev-neutral' }; }
 
@@ -567,9 +573,14 @@ export function eventRow(ev, { showNode = true, now = Date.now() } = {}) {
   const title = h('div', { class: 'ev-title' });
   if (showNode && ev.nodeName) title.append(link ? h('a', { href: link, style: { color: 'inherit' } }, ev.nodeName) : ev.nodeName, ev.checkName ? ` › ${ev.checkName}` : '', ' — ');
   title.append(ev.title || m.label);
+  // Who caused it. The monitoring engine leaves this empty, so the line only
+  // appears for things a person or an integration did.
+  const detail = h('div', { class: 'ev-detail' });
+  if (ev.detail) detail.append(ev.detail);
+  if (ev.actor) detail.append(h('span', { class: 'ev-actor', title: 'Who made this change' }, icon('user'), ev.actor));
   return h('div', { class: 'event-row' },
     eventIcon(ev.type),
-    h('div', { class: 'ev-body' }, title, ev.detail ? h('div', { class: 'ev-detail' }, ev.detail) : null),
+    h('div', { class: 'ev-body' }, title, detail.childNodes.length ? detail : null),
     h('div', { class: 'ev-time', title: new Date(ev.ts).toLocaleString() }, relTime(ev.ts, now)),
   );
 }

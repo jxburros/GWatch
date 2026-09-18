@@ -342,6 +342,7 @@ const (
 	EventTriggerFired       EventType = "trigger_fired"   // an automation trigger ran an action
 	EventEndpointCalled     EventType = "endpoint_called" // a custom endpoint was invoked
 	EventUpdate             EventType = "update"          // application update checked / applied
+	EventAuth               EventType = "auth"            // sign-in, sign-out, account or API-key change
 )
 
 // Event is one entry in the incident/event timeline.
@@ -356,6 +357,52 @@ type Event struct {
 	Title     string          `json:"title"`
 	Detail    string          `json:"detail"`
 	Meta      json.RawMessage `json:"meta,omitempty"`
+	// Actor names who caused the event, e.g. "local", "pat (admin)" or
+	// "api key Home Assistant (read-write)". It is empty for events the
+	// monitoring engine produces by itself (check results, the scheduler).
+	Actor string `json:"actor,omitempty"`
+}
+
+// User is a GWatch account. The password hash never leaves the store.
+type User struct {
+	ID          int64      `json:"id"`
+	Username    string     `json:"username"`
+	Role        string     `json:"role"` // "admin" | "viewer"
+	CreatedAt   time.Time  `json:"createdAt"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
+	LastLoginAt *time.Time `json:"lastLoginAt,omitempty"`
+}
+
+// APIKey is a minted API key. The secret itself is shown once, at creation,
+// and only its sha256 digest is stored.
+type APIKey struct {
+	ID         int64      `json:"id"`
+	Name       string     `json:"name"`
+	Prefix     string     `json:"prefix"` // first characters of the key, for display
+	Scope      string     `json:"scope"`  // "read" | "readwrite"
+	CreatedBy  string     `json:"createdBy"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+	RevokedAt  *time.Time `json:"revokedAt,omitempty"`
+}
+
+// Revoked reports whether the key can no longer be used.
+func (k APIKey) Revoked() bool { return k.RevokedAt != nil }
+
+// Principal is the JSON shape of the identity behind the current request,
+// served by GET /api/me. It mirrors internal/auth.Principal plus the few
+// display fields the web interface needs before it can load settings.
+type Principal struct {
+	Kind        string `json:"kind"` // "" | "local" | "user" | "apikey" | "password"
+	Name        string `json:"name,omitempty"`
+	Role        string `json:"role,omitempty"`
+	Scope       string `json:"scope,omitempty"`
+	UserID      int64  `json:"userId,omitempty"`
+	IsAdmin     bool   `json:"isAdmin"`
+	CanWrite    bool   `json:"canWrite"`
+	SignedIn    bool   `json:"signedIn"`
+	Theme       string `json:"theme,omitempty"`
+	AccentColor string `json:"accentColor,omitempty"`
 }
 
 // MaintenanceWindow silences alerts for a node, a group or everything.
@@ -479,8 +526,12 @@ type GeneralSettings struct {
 	Theme                string  `json:"theme"`             // "dark" | "light" | "system"
 	AccentColor          string  `json:"accentColor"`       // hex colour used for the accent, e.g. "#7c6cff"
 	RemoteAccess         bool    `json:"remoteAccess"`      // listen on every interface so other devices on the LAN can open the UI
-	AccessPassword       string  `json:"accessPassword"`    // optional password required from non-loopback clients (HTTP basic auth)
+	AccessPassword       string  `json:"accessPassword"`    // legacy: password required from non-loopback clients (HTTP basic auth)
 	UpdateRepo           string  `json:"updateRepo"`        // GitHub "owner/repo" checked for new releases
+	// RequireLoginLocally makes a browser on this computer sign in like every
+	// other client. It only takes effect once at least one account exists, so
+	// it can never lock the owner out of a fresh install.
+	RequireLoginLocally bool `json:"requireLoginLocally"`
 }
 
 // BackupSettings controls scheduled, unattended backups. Backups are always

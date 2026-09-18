@@ -304,10 +304,11 @@ func TestChartsStatusEventsAndAccessPassword(t *testing.T) {
 	if code := call(t, ts, "GET", "/api/health", nil, nil); code != 200 {
 		t.Fatalf("loopback should pass: %d", code)
 	}
-	// a non-loopback client must authenticate
+	// a non-loopback client must authenticate for anything but the public
+	// liveness and sign-in routes
 	h := srv.Handler()
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/health", nil)
+	req := httptest.NewRequest("GET", "/api/nodes", nil)
 	req.RemoteAddr = "192.168.1.20:5555"
 	h.ServeHTTP(rr, req)
 	if rr.Code != 401 || rr.Header().Get("WWW-Authenticate") == "" {
@@ -318,6 +319,14 @@ func TestChartsStatusEventsAndAccessPassword(t *testing.T) {
 	h.ServeHTTP(rr, req)
 	if rr.Code != 200 {
 		t.Fatalf("expected 200 with password, got %d", rr.Code)
+	}
+	// /api/health stays reachable without credentials, but only as liveness.
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/health", nil)
+	req.RemoteAddr = "192.168.1.20:5555"
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 || strings.Contains(rr.Body.String(), "databasePath") {
+		t.Fatalf("public health should be minimal: %d %s", rr.Code, rr.Body.String())
 	}
 	rr = httptest.NewRecorder()
 	req = httptest.NewRequest("GET", "/hook/none", nil)

@@ -130,19 +130,20 @@ export async function mount(root, ctx) {
     const actions = [];
     if (d) {
       actions.push(
-        h('button', { class: 'btn btn-primary', type: 'button', onclick: () => addWidget() }, icon('plus'), 'Add widget'),
+        h('button', { class: 'btn btn-primary admin-only', type: 'button', onclick: () => addWidget() }, icon('plus'), 'Add widget'),
         menuButton(() => [
-          { label: 'Rename dashboard', icon: 'edit', onClick: renameDashboard },
-          { label: 'New dashboard', icon: 'plus', onClick: newDashboard },
-          { label: 'Tidy layout', icon: 'layout', onClick: tidy },
-          { sep: true },
-          { label: 'Delete dashboard', icon: 'trash', danger: true, onClick: deleteDashboard, disabled: state.dashboards.length <= 1 },
-        ], { label: 'Dashboard options' }),
+          { label: 'Rename dashboard', icon: 'edit', onClick: renameDashboard, adminOnly: true },
+          { label: 'New dashboard', icon: 'plus', onClick: newDashboard, adminOnly: true },
+          { label: 'Tidy layout', icon: 'layout', onClick: tidy, adminOnly: true },
+          { sep: true, adminOnly: true },
+          { label: 'Delete dashboard', icon: 'trash', danger: true, onClick: deleteDashboard, disabled: state.dashboards.length <= 1, adminOnly: true },
+        ], { label: 'Dashboard options', cls: 'admin-only' }),
       );
     } else {
-      actions.push(h('button', { class: 'btn btn-primary', type: 'button', onclick: newDashboard }, icon('plus'), 'New dashboard'));
+      actions.push(h('button', { class: 'btn btn-primary admin-only', type: 'button', onclick: newDashboard }, icon('plus'), 'New dashboard'));
     }
-    ctx.setTitle(d ? d.name : 'Dashboard', { subtitle: d ? 'Drag widgets by their handle, resize from the edges' : null, actions });
+    // A viewer cannot save a layout, so the hint about dragging is misleading.
+    ctx.setTitle(d ? d.name : 'Dashboard', { subtitle: d && ctx.me?.isAdmin ? 'Drag widgets by their handle, resize from the edges' : null, actions });
   }
 
   function renderTabs() {
@@ -247,12 +248,12 @@ export async function mount(root, ctx) {
     if (state.interacting) return;
     clear(grid);
     if (!state.current) {
-      grid.append(h('div', { class: 'card', style: { gridColumn: 'span 4' } }, emptyState({ icon: 'grid', title: 'No dashboards yet', text: 'Create a dashboard and add widgets for the groups you care about.', actions: h('button', { class: 'btn btn-primary', type: 'button', onclick: newDashboard }, icon('plus'), 'New dashboard') })));
+      grid.append(h('div', { class: 'card', style: { gridColumn: 'span 4' } }, emptyState({ icon: 'grid', title: 'No dashboards yet', text: 'Create a dashboard and add widgets for the groups you care about.', actions: h('button', { class: 'btn btn-primary admin-only', type: 'button', onclick: newDashboard }, icon('plus'), 'New dashboard') })));
       return;
     }
     const list = widgetsList();
     if (!list.length) {
-      grid.append(h('div', { class: 'card', style: { gridColumn: 'span 4' } }, emptyState({ icon: 'grid', title: 'This dashboard is empty', text: 'Add an overall health summary, a status list or a chart to get started.', actions: h('button', { class: 'btn btn-primary', type: 'button', onclick: addWidget }, icon('plus'), 'Add widget') })));
+      grid.append(h('div', { class: 'card', style: { gridColumn: 'span 4' } }, emptyState({ icon: 'grid', title: 'This dashboard is empty', text: 'Add an overall health summary, a status list or a chart to get started.', actions: h('button', { class: 'btn btn-primary admin-only', type: 'button', onclick: addWidget }, icon('plus'), 'Add widget') })));
       return;
     }
     const ordered = [...state.layout].sort((a, b) => a.y - b.y || a.x - b.x);
@@ -273,18 +274,18 @@ export async function mount(root, ctx) {
     const cfg = widgetConfig(w);
     const card = h('section', { class: 'card widget', 'aria-label': w.title || meta.label });
     applyGeometry(card, l);
-    const dragHandle = h('button', { class: 'widget-drag', type: 'button', 'aria-label': `Move ${w.title || meta.label}`, title: 'Drag to move' }, icon('grip'));
+    const dragHandle = h('button', { class: 'widget-drag admin-only', type: 'button', 'aria-label': `Move ${w.title || meta.label}`, title: 'Drag to move' }, icon('grip'));
     const head = h('div', { class: 'widget-head' }, h('h2', { class: 'card-title' }, dragHandle, h('span', { class: 'truncate' }, w.title || meta.label)));
     const actions = h('div', { class: 'widget-edit-bar' });
     if (CHART_LIKE.has(w.type)) {
       actions.append(rangeChips(cfg.range || (w.type === 'uptime_chart' ? '7d' : '24h'), (r) => setWidgetRange(w, r)));
-      actions.append(menuButton(() => chartMenu(w), { label: 'Chart options', small: true }));
+      actions.append(menuButton(() => chartMenu(w), { label: 'Chart options', small: true, cls: 'admin-only' }));
     } else {
       actions.append(menuButton(() => [
         { label: 'Edit widget', icon: 'edit', onClick: () => editWidget(w) },
         { sep: true },
         { label: 'Remove', icon: 'trash', danger: true, onClick: () => removeWidget(w) },
-      ], { label: 'Widget options', small: true }));
+      ], { label: 'Widget options', small: true, cls: 'admin-only' }));
     }
     head.append(actions);
     const body = h('div', { class: 'widget-body' });
@@ -292,7 +293,7 @@ export async function mount(root, ctx) {
     try { renderWidgetBody(w, cfg, body); } catch (e) { console.error(e); body.append(h('div', { class: 'note' }, 'Could not render this widget.')); }
     // resize handles
     for (const dir of ['e', 's', 'se']) {
-      const hnd = h('div', { class: `rs rs-${dir}`, title: 'Drag to resize', 'aria-hidden': 'true' });
+      const hnd = h('div', { class: `rs rs-${dir} admin-only`, title: 'Drag to resize', 'aria-hidden': 'true' });
       hnd.addEventListener('pointerdown', (e) => startResize(e, w, card, dir));
       card.append(hnd);
     }

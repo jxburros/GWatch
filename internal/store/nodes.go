@@ -553,14 +553,14 @@ func (s *Store) ResultsBetween(ctx context.Context, checkID int64, from, to time
 
 // ---- events ----
 
-const eventCols = `id, ts, type, node_id, check_id, node_name, check_name, title, detail, meta`
+const eventCols = `id, ts, type, node_id, check_id, node_name, check_name, title, detail, meta, actor`
 
 func scanEvent(sc interface{ Scan(...any) error }) (model.Event, error) {
 	var e model.Event
 	var ts int64
 	var node, check sql.NullInt64
 	var meta sql.NullString
-	if err := sc.Scan(&e.ID, &ts, &e.Type, &node, &check, &e.NodeName, &e.CheckName, &e.Title, &e.Detail, &meta); err != nil {
+	if err := sc.Scan(&e.ID, &ts, &e.Type, &node, &check, &e.NodeName, &e.CheckName, &e.Title, &e.Detail, &meta, &e.Actor); err != nil {
 		return e, err
 	}
 	e.Timestamp = time.UnixMilli(ts).Local()
@@ -580,8 +580,8 @@ func (s *Store) InsertEvent(ctx context.Context, e model.Event) (model.Event, er
 	if len(e.Meta) > 0 {
 		meta = string(e.Meta)
 	}
-	res, err := s.Exec(ctx, `INSERT INTO events(ts, type, node_id, check_id, node_name, check_name, title, detail, meta) VALUES (?,?,?,?,?,?,?,?,?)`,
-		e.Timestamp.UnixMilli(), string(e.Type), nullInt64(e.NodeID), nullInt64(e.CheckID), e.NodeName, e.CheckName, e.Title, e.Detail, meta)
+	res, err := s.Exec(ctx, `INSERT INTO events(ts, type, node_id, check_id, node_name, check_name, title, detail, meta, actor) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		e.Timestamp.UnixMilli(), string(e.Type), nullInt64(e.NodeID), nullInt64(e.CheckID), e.NodeName, e.CheckName, e.Title, e.Detail, meta, e.Actor)
 	if err != nil {
 		return e, err
 	}

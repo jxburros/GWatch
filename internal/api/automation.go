@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jxburros/GWatch/internal/actions"
+	"github.com/jxburros/GWatch/internal/auth"
 	"github.com/jxburros/GWatch/internal/model"
 	"github.com/jxburros/GWatch/internal/store"
 	"github.com/jxburros/GWatch/internal/update"
@@ -242,13 +243,33 @@ func slugify(s string) string {
 	return strings.Trim(b.String(), "-")
 }
 
+// endpointDoc is an endpoint as the API returns it. The token is the only
+// thing guarding a /hook/ URL, so it is replaced by a flag for anyone who is
+// not an administrator; hasToken still lets the UI show whether one is set.
+type endpointDoc struct {
+	model.Endpoint
+	HasToken bool `json:"hasToken"`
+}
+
+func endpointDocs(list []model.Endpoint, redact bool) []endpointDoc {
+	out := make([]endpointDoc, 0, len(list))
+	for _, e := range list {
+		d := endpointDoc{Endpoint: e, HasToken: e.Token != ""}
+		if redact {
+			d.Token = ""
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
 func (s *Server) handleListEndpoints(w http.ResponseWriter, r *http.Request) {
 	list, err := s.Store.ListEndpoints(r.Context())
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, list)
+	writeJSON(w, http.StatusOK, endpointDocs(list, !auth.FromContext(r.Context()).IsAdmin()))
 }
 
 func (s *Server) handleSaveEndpoint(w http.ResponseWriter, r *http.Request) {
@@ -687,7 +708,7 @@ func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "info": info})
 		return
 	}
-	s.Engine.RecordEvent(model.Event{Type: model.EventUpdate, Title: "Checked for updates", Detail: fmt.Sprintf("Current %s, latest release %s%s.", info.CurrentVersion, info.LatestVersion, map[bool]string{true: " — update available", false: ""}[info.UpdateAvailable])})
+	s.recordEvent(r.Context(), model.Event{Type: model.EventUpdate, Title: "Checked for updates", Detail: fmt.Sprintf("Current %s, latest release %s%s.", info.CurrentVersion, info.LatestVersion, map[bool]string{true: " — update available", false: ""}[info.UpdateAvailable])})
 	writeJSON(w, http.StatusOK, info)
 }
 
@@ -700,11 +721,11 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	info, err := s.Updater.Apply(ctx, s.updateRepo())
 	if err != nil {
-		s.Engine.RecordEvent(model.Event{Type: model.EventUpdate, Title: "Update failed", Detail: err.Error()})
+		s.recordEvent(r.Context(), model.Event{Type: model.EventUpdate, Title: "Update failed", Detail: err.Error()})
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "info": info})
 		return
 	}
-	s.Engine.RecordEvent(model.Event{Type: model.EventUpdate, Title: "Update installed: " + info.LatestVersion, Detail: fmt.Sprintf("Downloaded %s from %s. The service restarts to finish the update.", info.AssetName, info.Repo)})
+	s.recordEvent(r.Context(), model.Event{Type: model.EventUpdate, Title: "Update installed: " + info.LatestVersion, Detail: fmt.Sprintf("Downloaded %s from %s. The service restarts to finish the update.", info.AssetName, info.Repo)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "info": info, "restarting": s.Updater.Status().Restarting})
 }
 

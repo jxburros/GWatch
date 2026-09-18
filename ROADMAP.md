@@ -111,10 +111,12 @@ done, and don't let scope creep pull any item toward the non-goals at the bottom
 - This is the first time GWatch data is designed to leave the LAN, so scope it tightly:
   its own dedicated token/API-key type (reuse the scoping from 2.2), rate limiting, and
   explicitly no access to triggers, custom endpoints, backups, or settings.
-- Consider whether this is a lightweight hosted relay/tunnel helper or purely
-  "user sets up their own remote access (VPN/reverse proxy) and GWatch just needs a
-  proper read-only scope to point it at" — the latter is far less work and keeps
-  GWatch itself from becoming an internet-facing service.
+- **Decided: no relay, no tunnel helper.** GWatch does not become an internet-facing
+  service. The user brings their own remote access — Tailscale/WireGuard, or a reverse
+  proxy with TLS — and points it at GWatch with a read-only API key or a viewer
+  account. A service that runs commands, holds an SMTP password and can restore from an
+  uploaded archive should not be published to the open internet, and shipping a tunnel
+  would make doing so by accident easy. See [`docs/REMOTE-ACCESS.md`](docs/REMOTE-ACCESS.md).
 - **Done when**: a read-only token can view dashboards/history from outside the LAN and
   is rejected on every write/trigger/settings endpoint.
 

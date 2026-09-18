@@ -59,8 +59,9 @@ brief that defines the scope lives in [`local-network-monitoring-product-brief.m
   Discord/Slack, ntfy/Pushover, Docker restarts, git pulls, custom inbound hooks).
 - **Wallboard**: a read-only full-screen status view for a spare monitor or tablet.
 - **Appearance**: dark, light or system theme and a user-chosen accent colour.
-- **Remote access**: opt in to serving the interface on the whole LAN, with an optional
-  access password for other devices (this computer is never challenged).
+- **Remote access**: opt in to serving the interface on the whole LAN.
+- **Accounts and API keys**: user accounts with two roles — administrator and viewer —
+  and API keys scoped read-only or read-write.
 - **Updates**: check GitHub releases from Settings › Updates and install the new
   executable in place (the previous one is kept as `.old`); the service restarts itself.
   An update is only installed if its ed25519 signature verifies against a release key
@@ -122,8 +123,31 @@ Then open <http://127.0.0.1:8080>. Monitoring only runs while this process runs.
 Options: `--data-dir DIR` (or `GWATCH_DATA_DIR`), `--listen 127.0.0.1:8080` (or
 `GWATCH_LISTEN`). The default binds this computer only. Use `--listen 0.0.0.0:8080`, or
 turn on **Settings › Network access**, to reach the interface from other devices on your
-network (the listener is rebound live, no restart needed); set an access password there
-so other devices have to authenticate.
+network (the listener is rebound live, no restart needed); create an account under
+**Settings › Users & access** so other devices have to sign in.
+
+## Accounts and API keys
+
+A browser on the computer GWatch runs on is an administrator without signing in, so a
+fresh install needs no setup at all. Once you want to reach GWatch from elsewhere,
+create accounts under **Settings › Users & access**: an **administrator** can change
+anything, a **viewer** can see dashboards, charts, history, incidents and the audit log
+and is refused — with an explanation, not a silent failure — on every change. Every
+change is recorded in the audit log with the name of whoever made it. Turning on
+"Require sign-in on this computer too" makes even a local browser sign in.
+
+The same page mints **API keys** for scripts and home-automation systems, scoped
+`read` or `readwrite`. A key is shown once and stored only as a fingerprint. No key of
+either scope can reach settings, backups, updates, accounts, the service log or
+anything that runs a trigger or an endpoint on the machine.
+
+The older shared access password still works, so nothing breaks on upgrade, but
+accounts replace it: they give each person their own password, a role, and a name in
+the audit log.
+
+Reaching GWatch from outside your own network — a read-only credential plus Tailscale
+or a reverse proxy with TLS, and why you should never port-forward the raw HTTP port —
+is covered in [`docs/REMOTE-ACCESS.md`](docs/REMOTE-ACCESS.md).
 
 ### Custom checks
 
@@ -152,12 +176,14 @@ who can do so can run arbitrary code as GWatch.
 - HTTP, TCP, DNS and ping checks may target private addresses such as `192.168.1.1`; that is
   the point of the product. The web interface stays on localhost unless you open it.
 - Triggers and endpoints run on the computer that runs GWatch with its permissions. Give
-  endpoints a token and set an access password before enabling remote access.
+  endpoints a token and create an administrator account before enabling remote access.
 - ICMP ping uses a raw socket on Windows (fine under the service account). On Linux it
   tries unprivileged ping sockets, then a raw socket, then the system `ping` command.
 - Email: any SMTP provider works (STARTTLS on 587, implicit TLS on 465, or none). Use the
   "Send test email" button in Settings › Alerts before enabling alerts.
-- Secrets at rest: the SMTP password and the access password are encrypted in `gwatch.db`
+- Secrets at rest: account passwords are stored as argon2id hashes, and session tokens
+  and API keys only as sha256 digests — none of them can be read back out of the
+  database. The SMTP password and the legacy access password are encrypted in `gwatch.db`
   with the key file `gwatch.key`, created next to the database on first run (mode 0600).
   Keep the two together: moving the database to another machine without the key file means
   those two passwords have to be entered again; everything else still loads. Backups do not
