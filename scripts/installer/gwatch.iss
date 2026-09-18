@@ -21,6 +21,15 @@
 
 #define AppName "GWatch"
 
+; VersionInfoVersion must be purely numeric (a.b.c.d), so a pre-release or
+; CI suffix such as "1.2.3-rc1" or "0.0.0-ci-abc1234" is cut at the first "-".
+#define VersionCut Pos("-", AppVersion)
+#if VersionCut > 0
+  #define FileVersion Copy(AppVersion, 1, VersionCut - 1)
+#else
+  #define FileVersion AppVersion
+#endif
+
 [Setup]
 ; Fixed installer AppId (GUID). Do not change between releases — Windows
 ; uses it to recognise upgrades vs. a fresh install. The doubled "{{" is
@@ -30,7 +39,7 @@ AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher=JX Holdings
 AppPublisherURL=https://github.com/jxburros/GWatch
-VersionInfoVersion={#AppVersion}
+VersionInfoVersion={#FileVersion}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
