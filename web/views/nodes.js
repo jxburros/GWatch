@@ -1,7 +1,7 @@
 // Nodes list: searchable, filterable list of everything being monitored.
 
 import { api } from '../api.js';
-import { h, icon, clear, replace, statusPill, checkChip, importanceBadge, tagList, toggle, menuButton, toast, confirmDialog, openModal, emptyState, skeleton } from '../components.js';
+import { h, icon, clear, replace, statusSpine, statusWord, checkChip, importanceBadge, tagList, toggle, menuButton, toast, confirmDialog, openModal, emptyState, skeleton } from '../components.js';
 import { relTime } from '../fmt.js';
 
 const STATUS_ORDER = ['down', 'degraded', 'unknown', 'maintenance', 'up', 'paused'];
@@ -13,10 +13,13 @@ export async function mount(root, ctx) {
 
   const searchInput = h('input', { type: 'search', placeholder: 'Search name, host, group or tag…', value: state.q, 'aria-label': 'Search nodes', oninput: () => { state.q = searchInput.value; renderList(); } });
   const countEl = h('span', { class: 'filter-count' });
-  const toolbar = h('div', { class: 'toolbar' }, h('div', { class: 'search' }, icon('search'), searchInput), countEl);
+  const toolbar = h('div', { class: 'toolbar' }, h('div', { class: 'search' }, icon('search'), searchInput));
   const filters = h('div', { class: 'filters' });
-  // Search and filters belong to the same control: one panel above the list.
-  const controls = h('section', { class: 'filter-bar', 'aria-label': 'Filter nodes' }, toolbar, filters);
+  // Search and filters belong to the same control: one panel above the list,
+  // wearing the same label band as every other panel. The match count rides in
+  // the band, where it reads as a readout of the filters rather than a control.
+  const band = h('div', { class: 'card-head' }, h('h2', { class: 'card-title' }, 'Filters'), countEl);
+  const controls = h('section', { class: 'filter-bar', 'aria-label': 'Filter nodes' }, band, toolbar, filters);
   const listEl = h('div', { class: 'node-list' }, skeleton({ lines: 4 }));
   root.append(controls, listEl);
 
@@ -98,7 +101,8 @@ export async function mount(root, ctx) {
     // but not operable, since the server would refuse the change anyway.
     const enabledToggle = toggle({ checked: n.enabled !== false, ariaLabel: `${n.name} enabled`, disabled: !ctx.me?.isAdmin, onChange: (v) => setEnabled(n, v) });
     const row = h('article', { class: `node-row ${n.enabled === false ? 'disabled' : ''}`, 'aria-label': n.name },
-      h('div', null, statusPill(n.status || 'unknown'), n.inMaintenance && n.status !== 'maintenance' ? h('div', { class: 'tiny text-maintenance', style: { marginTop: '4px' } }, 'in maintenance') : null),
+      statusSpine(n.status || 'unknown', { key: `node:${n.id}` }),
+      h('div', null, statusWord(n.status || 'unknown'), n.inMaintenance && n.status !== 'maintenance' ? h('div', { class: 'tiny text-maintenance', style: { marginTop: '4px' } }, 'in maintenance') : null),
       h('div', { class: 'n-name' }, h('a', { href: `#/nodes/${n.id}` }, n.name || 'Unnamed node'), n.host ? h('span', { class: 'n-host' }, n.host) : h('span', { class: 'n-host dim' }, 'targets set per check'), tagList(n.tags || [])),
       chips,
       h('div', { class: 'n-meta' }, h('span', null, last ? `Checked ${relTime(last)}` : 'Not checked yet'), importanceBadge(n.importance)),

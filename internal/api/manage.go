@@ -310,7 +310,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		g.AccentColor = def.General.AccentColor
 	}
 	if !hexColor.MatchString(g.AccentColor) {
-		writeError(w, http.StatusBadRequest, "accent colour must be a hex value like #7c6cff")
+		writeError(w, http.StatusBadRequest, "accent colour must be a hex value like #43c9c0")
 		return
 	}
 	g.AccessPassword = strings.TrimSpace(g.AccessPassword)

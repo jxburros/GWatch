@@ -1,7 +1,7 @@
 // Wallboard: read-only, large-type status screen for a spare display.
 
 import { api } from '../api.js';
-import { h, icon, clear, replace, statusPill, statusOrb, statusMeta, emptyState } from '../components.js';
+import { h, icon, clear, replace, statusPill, statusSpine, statusWord, statusOrb, statusMeta, emptyState } from '../components.js';
 import { relTime, ms as fmtMs, plural, dateShort, timeShort } from '../fmt.js';
 import { LineChart, toSeries, seriesColor } from '../charts.js';
 
@@ -64,7 +64,7 @@ export async function mount(root, ctx) {
     else {
       const list = h('div', { class: 'wall-incidents' });
       for (const a of att.slice(0, 6)) {
-        list.append(h('div', { class: 'wall-incident' }, statusPill(a.status, { large: true }),
+        list.append(h('div', { class: 'wall-incident' }, statusSpine(a.status, { key: `wall:${a.nodeId}:${a.checkName}` }), statusWord(a.status),
           h('div', { class: 'i-body' }, h('div', { class: 'i-title' }, `${a.nodeName} › ${a.checkName}`), h('div', { class: 'i-sub' }, a.affectedBy ? `Unavailable because ${a.affectedBy} is down` : (a.message || ''))),
           h('div', { class: 'i-since' }, a.since ? `since ${relTime(a.since).replace(' ago', '')}` : '')));
       }

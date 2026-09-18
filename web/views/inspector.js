@@ -23,7 +23,7 @@ export function timingBar(d) {
   const ttfb = d.firstByteMs != null ? Math.max(0, d.firstByteMs - dns - connect - tls) : 0;
   const total = d.totalMs != null ? d.totalMs : dns + connect + tls + ttfb;
   const download = Math.max(0, total - dns - connect - tls - ttfb);
-  const parts = [['dns', 'DNS', dns, '#5aa9e6'], ['connect', 'Connect', connect, '#3ec8b8'], ['tls', 'TLS', tls, '#7c6cff'], ['ttfb', 'First byte', ttfb, '#e879a6'], ['download', 'Download', download, '#ff9f6e']];
+  const parts = [['dns', 'DNS', dns, '#6ea0ff'], ['connect', 'Connect', connect, '#3ec8b8'], ['tls', 'TLS', tls, 'var(--accent)'], ['ttfb', 'First byte', ttfb, '#e879a6'], ['download', 'Download', download, '#ff9f6e']];
   const sum = parts.reduce((a, p) => a + p[2], 0) || 1;
   const bar = h('div', { class: 'timing-bar', role: 'img', 'aria-label': `Timing breakdown, total ${fmtMs(total)}` });
   for (const [cls, , v] of parts) if (v > 0) bar.append(h('span', { class: `seg ${cls}`, style: { width: `${(v / sum) * 100}%` } }));

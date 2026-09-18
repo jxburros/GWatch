@@ -3,13 +3,13 @@
 // layout (x, y, width, height per widget) is saved with the dashboard.
 
 import { api, getHistoryMulti, getHistoryAuto, qs } from '../api.js';
-import { h, icon, clear, replace, statusPill, statusGlyph, checkChip, statusOrb, toast, confirmDialog, promptDialog, openModal, menuButton, field, textInput, numberInput, selectInput, checkbox, emptyState, skeleton, eventRow, rangeChips, statusMeta, uid } from '../components.js';
+import { h, icon, clear, replace, statusPill, statusSpine, statusWord, statusGlyph, checkChip, statusOrb, toast, confirmDialog, promptDialog, openModal, menuButton, field, textInput, numberInput, selectInput, checkbox, emptyState, skeleton, eventRow, rangeChips, statusMeta, uid } from '../components.js';
 import { relTime, bytes, plural, dateShort, duration } from '../fmt.js';
 import { chartConfigEditor, renderConfiguredChart, normalizeChartConfig } from '../chart-config.js';
 
 export const COLS = 4;
 export const WIDGET_TYPES = [
-  { type: 'summary', label: 'Overall health', desc: 'Big up / degraded / down / unknown numerals with a headline.', w: 2, h: 1, config: {} },
+  { type: 'summary', label: 'Overall health', desc: 'Big up / degraded / down / unknown numerals with a headline.', w: 2, h: 2, config: {} },
   { type: 'groups', label: 'Group status', desc: 'One card per group with its worst status.', w: 2, h: 1, config: { groups: [] } },
   { type: 'status_list', label: 'Status list', desc: 'Nodes and their checks, optionally filtered by group, tag or node.', w: 2, h: 2, config: { group: '', tag: '', nodeIds: [] } },
   { type: 'chart', label: 'Chart', desc: 'Any metric for any checks, styled the way you like (same options as the Charts tab).', w: 2, h: 2, config: { metric: 'avg', range: '24h', style: 'area' } },
@@ -484,7 +484,11 @@ export async function mount(root, ctx) {
     const counts = h('div', { class: 'summary-counts' });
     for (const [key, label] of [['up', 'Up'], ['degraded', 'Degraded'], ['down', 'Down'], ['unknown', 'Unknown']]) {
       const n = s[key] || 0; const m = statusMeta(key);
-      counts.append(h('div', { class: `summary-count ${n === 0 ? 'zero' : ''}` }, h('div', { class: `n ${n > 0 ? 'text-' + key : ''}` }, String(n)), h('div', { class: 'l' }, icon(m.icon), label)));
+      const cls = n > 0 ? `text-${key}` : '';
+      counts.append(h('div', { class: `summary-count ${n === 0 ? 'zero' : ''}` },
+        h('div', { class: `n ${cls}` }, String(n)),
+        h('div', { class: `rule ${cls}` }),
+        h('div', { class: 'l' }, icon(m.icon), label)));
     }
     body.append(counts);
     const foot = [];
@@ -507,8 +511,10 @@ export async function mount(root, ctx) {
       if (g.unknown) parts.push(`${g.unknown} unknown`);
       if (g.maintenance) parts.push(`${g.maintenance} maintenance`);
       if (g.paused) parts.push(`${g.paused} paused`);
+      const gm = statusMeta(g.status);
       wrap.append(h('a', { class: 'group-card', href: `#/nodes?group=${encodeURIComponent(g.name)}` },
-        h('div', { class: 'g-head' }, statusOrb(g.status), h('span', { class: 'g-name' }, g.name)),
+        statusSpine(g.status, { key: `group:${g.name}` }),
+        h('div', { class: 'g-head' }, h('span', { class: 'g-name' }, g.name), h('span', { class: 'sr-only' }, gm.label)),
         h('div', { class: 'g-count' }, parts.join(' · ') || `${g.total} nodes`)));
     }
     body.append(wrap);
@@ -523,7 +529,8 @@ export async function mount(root, ctx) {
       const chips = h('div', { class: 'check-chips' });
       for (const c of r.checks || []) chips.append(checkChip(c.check, c.state));
       list.append(h('div', { class: 'status-row' },
-        statusPill(r.status),
+        statusSpine(r.status, { key: `node:${n.id}` }),
+        statusWord(r.status),
         h('div', { class: 'name' }, h('a', { href: `#/nodes/${n.id}` }, n.name), r.affectedBy ? h('span', { class: 'sub affected-note' }, icon('link'), `affected by ${r.affectedBy}`) : h('span', { class: 'sub' }, n.host || '')),
         chips));
     }
@@ -559,7 +566,8 @@ export async function mount(root, ctx) {
     const list = h('div', null);
     for (const a of items) {
       list.append(h('div', { class: 'attention-row' },
-        statusPill(a.status),
+        statusSpine(a.status, { key: `att:${a.nodeId}:${a.checkName}` }),
+        statusWord(a.status),
         h('div', { class: 'a-body' },
           h('div', { class: 'a-title' }, h('a', { href: `#/nodes/${a.nodeId}`, style: { color: 'inherit' } }, a.nodeName), ` › ${a.checkName}`),
           h('div', { class: 'a-msg' }, a.message || ''),
@@ -691,7 +699,10 @@ export async function mount(root, ctx) {
 export function openWidgetEditor(existing, state) {
   return new Promise((resolve) => {
     const isNew = !existing;
-    const w = existing ? { ...existing, config: { ...widgetConfig(existing) } } : { id: uid('w'), type: 'summary', title: '', width: 2, height: 1, config: {} };
+    // A new widget starts at whatever size its type asks for, the same as
+    // picking that type in the list does.
+    const firstType = WIDGET_TYPES[0];
+    const w = existing ? { ...existing, config: { ...widgetConfig(existing) } } : { id: uid('w'), type: firstType.type, title: '', width: firstType.w, height: firstType.h, config: { ...firstType.config } };
     let result = null;
     const nodes = state.nodes || [];
     const groups = state.groups?.groups || [];

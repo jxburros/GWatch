@@ -524,7 +524,7 @@ type GeneralSettings struct {
 	LatencyWarnMS        float64 `json:"latencyWarnMs"`     // global default; 0 = off
 	PacketLossWarnPct    float64 `json:"packetLossWarnPct"` // global default; 0 = off
 	Theme                string  `json:"theme"`             // "dark" | "light" | "system"
-	AccentColor          string  `json:"accentColor"`       // hex colour used for the accent, e.g. "#7c6cff"
+	AccentColor          string  `json:"accentColor"`       // hex colour used for the accent, e.g. "#43c9c0"
 	RemoteAccess         bool    `json:"remoteAccess"`      // listen on every interface so other devices on the LAN can open the UI
 	AccessPassword       string  `json:"accessPassword"`    // legacy: password required from non-loopback clients (HTTP basic auth)
 	UpdateRepo           string  `json:"updateRepo"`        // GitHub "owner/repo" checked for new releases
@@ -565,7 +565,7 @@ func DefaultSettings() Settings {
 			LatencyWarnMS:        0,
 			PacketLossWarnPct:    0,
 			Theme:                "dark",
-			AccentColor:          "#7c6cff",
+			AccentColor:          "#43c9c0",
 			UpdateRepo:           "jxburros/GWatch",
 		},
 		Alerts: AlertSettings{

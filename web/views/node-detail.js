@@ -122,9 +122,15 @@ export async function mount(root, ctx) {
     const target = c.config?.target || n.host;
     const runBtn = h('button', { class: 'btn btn-sm', type: 'button', onclick: () => runCheck(c, runBtn) }, icon('play'), 'Run now');
     const detailBtn = h('button', { class: 'btn btn-sm', type: 'button', 'aria-expanded': expanded ? 'true' : 'false', onclick: () => { if (state.expanded.has(c.id)) state.expanded.delete(c.id); else state.expanded.add(c.id); renderChecks(); } }, icon(expanded ? 'chevronDown' : 'chevronRight'), expanded ? 'Hide details' : 'Inspect last result');
+    // The band carries the facts that do not change while you read the card:
+    // what kind of check this is, how often it runs and what it points at.
+    card.append(h('div', { class: 'check-band' },
+      h('span', null, checkTypeLabel(c.type)),
+      h('span', { class: 'b-meta' },
+        h('span', null, 'every ', interval(c.intervalSeconds)),
+        c.config?.target ? h('span', { class: 'target', title: c.config.target }, c.config.target) : null)));
     card.append(h('div', { class: 'check-card-head' },
       h('div', { class: 'c-title' },
-        h('div', { class: 'c-type' }, checkTypeLabel(c.type), ' · every ', interval(c.intervalSeconds), c.config?.target ? ` · ${c.config.target}` : ''),
         h('h3', null, statusPill(status), c.name),
         h('div', { class: 'c-msg' }, st.lastMessage || last?.message || (c.enabled === false ? 'Paused — this check is disabled.' : 'Waiting for the first result.')),
         st.affectedByNodeName ? h('div', { class: 'affected-note' }, icon('link'), `affected by ${st.affectedByNodeName}`) : null,

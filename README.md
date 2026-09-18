@@ -265,6 +265,7 @@ Layout:
 | `internal/backup` | Encrypted backup archives and restore |
 | `internal/api` | JSON API (see `docs/API.md`) and static UI serving |
 | `web/` | The browser interface (vanilla HTML/CSS/JS, no build step, embedded into the binary; open with `?mock=1` for an in-browser demo backend) |
+| `web/fonts/` | Barlow and Kode Mono, latin subsets, self-hosted so the UI still requests nothing from the internet ([SIL OFL 1.1](web/fonts/OFL.txt)) |
 | `scripts/` | Windows build / install / uninstall PowerShell scripts |
 
 ## License
@@ -277,3 +278,7 @@ on using the GWatch name and logo.
 
 **Attribution**: forks and derivatives must keep the GWatch name, logo, and copyright
 line visible.
+
+The two typefaces shipped in `web/fonts/` — Barlow and Kode Mono — are third-party and
+carry their own licence, the [SIL Open Font License 1.1](web/fonts/OFL.txt), which
+travels with them.

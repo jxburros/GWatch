@@ -72,9 +72,9 @@ export async function mount(root, ctx) {
       list.append(h('button', { type: 'button', class: `saved-item ${c.id === state.currentId ? 'active' : ''}`, onclick: () => ctx.navigate(`/charts/${c.id}`) },
         icon('chart'), h('span', { style: { minWidth: 0, flex: 1 } }, h('div', { class: 'truncate' }, c.name), h('div', { class: 'sub truncate' }, describeChartConfig(parseCfg(c.config))))));
     }
-    side.append(h('section', { class: 'card', style: { padding: '8px 6px' } }, h('div', { class: 'card-title', style: { padding: '2px 8px 6px' } }, 'Saved charts'), list));
+    side.append(h('section', { class: 'card saved-card' }, h('div', { class: 'card-title' }, 'Saved charts'), list));
     state.editor = chartConfigEditor(state.cfg, { nodes: state.nodes, onChange: onEdit });
-    side.append(h('section', { class: 'card' }, h('div', { class: 'card-title', style: { marginBottom: '10px' } }, 'Configure'), state.editor));
+    side.append(h('section', { class: 'card' }, h('div', { class: 'card-title' }, 'Configure'), state.editor));
   }
   const rerender = debounce(() => renderMain(), 250);
   function onEdit(cfg) {
