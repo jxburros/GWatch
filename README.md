@@ -52,6 +52,8 @@ brief that defines the scope lives in [`local-network-monitoring-product-brief.m
   expose the same actions at `/hook/<name>` (optionally token-protected) so a router, a
   CI job or Home Assistant can poke GWatch. Placeholders such as `{{node.name}}`,
   `{{status}}` and `{{message}}` are expanded; every run is recorded with its output.
+  See [`docs/RECIPES.md`](docs/RECIPES.md) for ready-made trigger recipes (Home Assistant,
+  Discord/Slack, ntfy/Pushover, Docker restarts, git pulls, custom inbound hooks).
 - **Wallboard**: a read-only full-screen status view for a spare monitor or tablet.
 - **Appearance**: dark, light or system theme and a user-chosen accent colour.
 - **Remote access**: opt in to serving the interface on the whole LAN, with an optional
