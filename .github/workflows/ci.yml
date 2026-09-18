@@ -65,6 +65,27 @@ jobs:
           go build ./...
           go test -count=1 ./...
 
+      # The MCP companion (ROADMAP 3.1/3.2) is its own Go module with its own
+      # go.mod and its own version. It is not covered by the root ./... above —
+      # a nested module is invisible to the parent's package patterns — so it
+      # gets its own gofmt/vet/test/build here. It must keep building against
+      # the Go version in the root go.mod: the pinned SDK release is chosen for
+      # that, and GOTOOLCHAIN=local means a newer requirement would fail rather
+      # than silently download a toolchain.
+      - name: MCP companion — gofmt, go vet, go test
+        working-directory: mcp
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::These files in mcp/ are not gofmt'd:"; echo "$unformatted"; gofmt -d .; exit 1
+          fi
+          go mod verify
+          go vet ./...
+          go test -count=1 ./...
+      - name: MCP companion — build
+        working-directory: mcp
+        run: go build ./...
+
       # The web UI is embedded with //go:embed, so a syntax error in an asset
       # is invisible to the Go compiler and only shows up as a blank page.
       - name: Web assets
@@ -176,6 +197,26 @@ jobs:
             sha256sum "$out" | sed 's#dist/##' > "$out.sha256"
           done
           ls -lh dist
+
+      # The MCP companion ships beside the core binaries but versions on its
+      # own, so its version string comes from mcp/VERSION rather than the tag.
+      # The gwatch-mcp-<goos>-<goarch>[.exe] naming puts it inside the
+      # dist/gwatch-* glob the signing step uses, so it is signed and
+      # checksummed like everything else. It stays invisible to the in-app
+      # updater: internal/update.pickAsset matches the exact names
+      # gwatch-<goos>-<goarch>[.exe], and "gwatch-mcp-linux-amd64" is not one
+      # of them.
+      - name: Cross-compile the MCP companion
+        working-directory: mcp
+        run: |
+          version="$(tr -d ' \t\r\n' < VERSION)"
+          for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
+            goos="${target%/*}"; goarch="${target#*/}"
+            out="../dist/gwatch-mcp-${goos}-${goarch}"; [ "$goos" = "windows" ] && out="$out.exe"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags "-s -w -X main.version=${version}" -o "$out" ./cmd/gwatch-mcp
+            sha256sum "$out" | sed 's#../dist/##' > "$out.sha256"
+          done
+          ls -lh ../dist
 
       # Sign every binary, then verify the signatures with the keys pinned into
       # this checkout — exactly what the updater does on the user's machine.

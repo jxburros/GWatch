@@ -5,9 +5,14 @@ data/
 *.db-shm
 *.gwbackup
 *.log
-GWatch
-gwatch
-gwatch.exe
+# The built binaries, at the repository root only. These are anchored with a
+# leading slash: unanchored, "gwatch" also matches any directory of that name,
+# which silently hid mcp/internal/gwatch from git.
+/GWatch
+/gwatch
+/gwatch.exe
+/gwatch-mcp
+/gwatch-mcp.exe
 coverage.out
 coverage.txt
 .claude/

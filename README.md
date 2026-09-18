@@ -171,6 +171,22 @@ past its configured timeout.
 Only administrators you trust should be able to create or edit a custom check — anyone
 who can do so can run arbitrary code as GWatch.
 
+## AI assistants (MCP)
+
+`gwatch-mcp` is an optional, separate program that lets an AI assistant (Claude Desktop,
+Claude Code, or any Model Context Protocol client) read what GWatch is monitoring and —
+only if you explicitly allow it — manage nodes and checks. It ships and versions on its
+own, never imports GWatch's code, and talks to a running GWatch over the JSON API with an
+API key, so the monitoring service itself is unchanged and nothing is on by default.
+
+It is read-only unless you both start it with `--allow-write` and give it a `readwrite`
+key, and GWatch enforces that boundary itself: a `read` key gets a 403 on every write
+whatever the assistant tries. Settings, backups, the service log, triggers, endpoints,
+accounts and API keys are off-limits to any API key, so there are no tools for them.
+
+Install, configuration snippets for each client, the trust model and the full tool list are
+in [`mcp/README.md`](mcp/README.md).
+
 ## Notes for home networks
 
 - HTTP, TCP, DNS and ping checks may target private addresses such as `192.168.1.1`; that is

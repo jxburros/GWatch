@@ -1,7 +1,7 @@
 VERSION ?= dev
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build windows test test-race cover fmt fmt-check vet tidy-check web-check ci run keygen sign verify-release
+.PHONY: build windows test test-race cover fmt fmt-check vet tidy-check web-check ci run keygen sign verify-release mcp-build mcp-test mcp-fmt
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/gwatch .
@@ -44,7 +44,22 @@ tidy-check:
 web-check:
 	@find web -name '*.js' -type f | sort | xargs -n1 node --check
 
-ci: fmt-check vet tidy-check test-race
+# The MCP companion (mcp/) is a separate Go module with its own go.mod and its
+# own version, so the root `./...` above never sees it — these targets are how
+# it gets built and tested. It talks to GWatch over the JSON API with an API
+# key and imports nothing from this module; see mcp/README.md.
+MCP_VERSION := $(shell tr -d ' \t\r\n' < mcp/VERSION)
+
+mcp-build:
+	cd mcp && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$(MCP_VERSION)" -o ../dist/gwatch-mcp ./cmd/gwatch-mcp
+
+mcp-test:
+	cd mcp && go vet ./... && go test ./...
+
+mcp-fmt:
+	cd mcp && gofmt -w .
+
+ci: fmt-check vet tidy-check test-race mcp-test mcp-build
 
 run:
 	go run . run --data-dir ./data

@@ -66,8 +66,8 @@ everything under `/api/endpoints` (including `GET`), `POST /api/actions/test`,
 `POST /api/auth/change-password`.
 
 That list is deliberate and tested: a key is for reading a monitor from elsewhere, not
-for administering the machine it runs on. It is the same boundary the planned MCP
-companion runs into.
+for administering the machine it runs on. It is the same boundary `gwatch-mcp`, the Model
+Context Protocol companion in [`../mcp/`](../mcp/README.md), runs into.
 
 **Status codes.** `401` with `{"error":"sign in required"}` means no valid credential
 was presented; `WWW-Authenticate: Basic` is only sent when the install still uses the
@@ -108,7 +108,9 @@ route is closed until it is opened on purpose.
 - `DELETE /api/apikeys/{id}` → `{ok:true}`, revoking it immediately.
 
 Reaching GWatch from outside your own network is covered in
-[`REMOTE-ACCESS.md`](REMOTE-ACCESS.md).
+[`REMOTE-ACCESS.md`](REMOTE-ACCESS.md). `gwatch-mcp`, the optional Model Context Protocol
+companion that lets an AI assistant use this API with a key, is documented in
+[`../mcp/README.md`](../mcp/README.md).
 
 ## Health & overview
 
