@@ -1,16 +1,21 @@
-// Settings: general, alerts, retention, maintenance, backups, health, logs.
+// Settings: general, appearance, network access, alerts, automation
+// (endpoints + all triggers), retention, maintenance, backups, updates,
+// monitor health. Logs moved to the Audit tab.
 
 import { api, qs } from '../api.js';
-import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, promptDialog, openModal, emptyState, skeleton, banner, eventRow, busy } from '../components.js';
+import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, openModal, emptyState, skeleton, banner, eventRow, busy, applyTheme, applyAccent, ACCENT_PRESETS, hexToRgb } from '../components.js';
 import { relTime, dateTime, bytes, num, duration, retentionSpan, toLocalInput, fromLocalInput, weekdayShort, timeShort, plural } from '../fmt.js';
+import { openEndpointEditor, endpointRow, triggerRow, openTriggerEditor } from './automation.js';
 
 const TABS = [
-  { id: 'general', label: 'General' }, { id: 'alerts', label: 'Alerts' }, { id: 'retention', label: 'Retention' }, { id: 'maintenance', label: 'Maintenance' },
-  { id: 'backups', label: 'Backups' }, { id: 'health', label: 'Monitor health' }, { id: 'logs', label: 'Logs' },
+  { id: 'general', label: 'General' }, { id: 'appearance', label: 'Appearance' }, { id: 'network', label: 'Network access' }, { id: 'alerts', label: 'Alerts' },
+  { id: 'automation', label: 'Automation' }, { id: 'retention', label: 'Retention' }, { id: 'maintenance', label: 'Maintenance' },
+  { id: 'backups', label: 'Backups' }, { id: 'updates', label: 'Updates' }, { id: 'health', label: 'Monitor health' },
 ];
 
 export async function mount(root, ctx) {
   const state = { tab: TABS.some((t) => t.id === ctx.params.tab) ? ctx.params.tab : 'general', settings: null, version: null, destroyed: false, panelRefresh: null };
+  if (ctx.params.tab === 'logs') { ctx.navigate('/audit/log'); return { destroy() {} }; }
   const nav = h('nav', { class: 'settings-nav', 'aria-label': 'Settings sections' });
   const panel = h('div', { class: 'settings-panel' });
   const versionEl = h('div', { class: 'version-line' });
@@ -29,6 +34,7 @@ export async function mount(root, ctx) {
     try { state.settings = await api.put('/api/settings', state.settings); toast('Settings saved', { kind: 'success' }); }
     catch (e) { toast(e.message, { kind: 'error' }); }
     done();
+    return state.settings;
   }
 
   async function renderTab() {
@@ -38,7 +44,7 @@ export async function mount(root, ctx) {
     replace(panel, skeleton({ lines: 5 }));
     state.panelRefresh = null;
     try {
-      const fn = { general: tabGeneral, alerts: tabAlerts, retention: tabRetention, maintenance: tabMaintenance, backups: tabBackups, health: tabHealth, logs: tabLogs }[state.tab];
+      const fn = { general: tabGeneral, appearance: tabAppearance, network: tabNetwork, alerts: tabAlerts, automation: tabAutomation, retention: tabRetention, maintenance: tabMaintenance, backups: tabBackups, updates: tabUpdates, health: tabHealth }[state.tab];
       const el = await fn();
       if (!state.destroyed) replace(panel, el);
     } catch (e) { replace(panel, h('div', { class: 'card' }, emptyState({ icon: 'alert', title: 'Could not load settings', text: e.message }))); }
@@ -71,6 +77,81 @@ export async function mount(root, ctx) {
         h('hr', { class: 'divider' }), saveBar()));
   }
 
+  /* ---------- Appearance ---------- */
+  async function tabAppearance() {
+    const s = state.settings || await loadSettings();
+    const g = s.general;
+    const themes = [
+      { value: 'dark', label: 'Dark', desc: 'Low-glare, for wall displays and night owls.', bg: '#0a0c10', card: '#10131a', fg: '#e9edf2' },
+      { value: 'light', label: 'Light', desc: 'Bright, high contrast on white.', bg: '#eef1f5', card: '#ffffff', fg: '#10151d' },
+      { value: 'system', label: 'System', desc: 'Follow the operating system preference.', bg: 'linear-gradient(90deg, #0a0c10 50%, #eef1f5 50%)', card: 'linear-gradient(90deg, #10131a 50%, #ffffff 50%)', fg: '#98a2b3' },
+    ];
+    const themeWrap = h('div', { class: 'theme-options', role: 'radiogroup', 'aria-label': 'Theme' });
+    const renderThemes = () => {
+      clear(themeWrap);
+      for (const t of themes) {
+        themeWrap.append(h('button', { type: 'button', role: 'radio', class: `theme-option ${g.theme === t.value ? 'active' : ''}`, 'aria-checked': g.theme === t.value ? 'true' : 'false', onclick: () => { g.theme = t.value; applyTheme(t.value); renderThemes(); } },
+          h('div', { class: 'preview', style: { background: t.bg } }, h('i', { style: { background: t.card } }), h('i', { style: { background: t.card, margin: '8px', boxShadow: `inset 0 3px 0 rgb(var(--accent-rgb))` } })),
+          h('b', null, t.label), h('span', null, t.desc)));
+      }
+    };
+    renderThemes();
+    const swatches = h('div', { class: 'swatches', role: 'radiogroup', 'aria-label': 'Accent colour' });
+    const custom = h('input', { type: 'color', value: g.accentColor || '#7c6cff', 'aria-label': 'Custom accent colour', oninput: () => { g.accentColor = custom.value; applyAccent(custom.value); renderSwatches(); } });
+    const hex = textInput({ value: g.accentColor || '#7c6cff', class: 'mono', style: { maxWidth: '110px' }, 'aria-label': 'Accent hex', oninput: () => { if (hexToRgb(hex.value)) { g.accentColor = hex.value.toLowerCase(); custom.value = g.accentColor; applyAccent(g.accentColor); renderSwatches(); } } });
+    const renderSwatches = () => {
+      clear(swatches);
+      for (const p of ACCENT_PRESETS) swatches.append(h('button', { type: 'button', role: 'radio', class: `swatch ${(g.accentColor || '').toLowerCase() === p.hex ? 'active' : ''}`, 'aria-checked': (g.accentColor || '').toLowerCase() === p.hex ? 'true' : 'false', title: p.name, style: { background: p.hex }, onclick: () => { g.accentColor = p.hex; custom.value = p.hex; hex.value = p.hex; applyAccent(p.hex); renderSwatches(); } }));
+      swatches.append(custom, hex);
+    };
+    renderSwatches();
+    return h('form', { class: 'stack', onsubmit: (e) => { e.preventDefault(); saveSettings(); } },
+      h('section', { class: 'card' }, h('h2', null, 'Theme'), h('p', { class: 'lead' }, 'Changes apply immediately; press Save to keep them for every browser that opens this GWatch.'), themeWrap),
+      h('section', { class: 'card' }, h('h2', null, 'Accent colour'), h('p', { class: 'lead' }, 'Used for buttons, highlights, the active navigation item and the first chart line.'), swatches,
+        h('div', { class: 'row', style: { marginTop: '14px', gap: '8px' } }, h('button', { class: 'btn btn-primary', type: 'button' }, 'Primary button'), h('button', { class: 'btn', type: 'button' }, 'Button'), h('span', { class: 'chip active' }, 'Active chip'), h('a', { href: '#/settings/appearance' }, 'A link')),
+        h('hr', { class: 'divider' }), saveBar()));
+  }
+
+  /* ---------- Network access ---------- */
+  async function tabNetwork() {
+    const s = state.settings || await loadSettings();
+    const g = s.general;
+    const info = await api.get('/api/network').catch(() => null);
+    const remote = toggle({ label: 'Allow access from other devices on my network', checked: !!g.remoteAccess, onChange: (v) => { g.remoteAccess = v; } });
+    const pw = h('input', { type: 'password', value: g.accessPassword || '', autocomplete: 'new-password', placeholder: info?.passwordSet ? '(unchanged)' : 'Optional but recommended', oninput: () => { g.accessPassword = pw.value; } });
+    const clearPw = h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { pw.value = ''; g.accessPassword = ''; toast('Password will be removed when you save', { kind: 'info' }); } }, 'Remove password');
+    const urls = h('div', { class: 'url-list' });
+    const renderUrls = (ni) => {
+      clear(urls);
+      if (!ni) { urls.append(h('span', { class: 'muted' }, 'Network information unavailable.')); return; }
+      urls.append(h('a', { href: ni.localUrl, target: '_blank', rel: 'noopener' }, icon('home'), ni.localUrl, h('span', { class: 'dim' }, ' — this computer')));
+      if (ni.remoteAccess) {
+        if (!ni.lanUrls?.length) urls.append(h('span', { class: 'muted' }, 'No network addresses found on this computer.'));
+        for (const u of ni.lanUrls || []) urls.append(h('a', { href: u, target: '_blank', rel: 'noopener' }, icon('wifi'), u));
+      } else {
+        urls.append(h('span', { class: 'muted' }, icon('lock'), 'Only reachable from this computer right now.'));
+      }
+    };
+    renderUrls(info);
+    const saveBtn = h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
+      if (g.remoteAccess && !g.accessPassword && !(info?.passwordSet && pw.value === '')) {
+        const ok = await confirmDialog({ title: 'Open without a password?', message: 'Anyone on your network will be able to see and change everything, including triggers that run commands on this computer. Setting a password is strongly recommended.', confirmLabel: 'Open anyway', danger: true });
+        if (!ok) return;
+      }
+      await saveSettings(saveBtn);
+      setTimeout(async () => { const ni = await api.get('/api/network').catch(() => null); renderUrls(ni); if (ni?.restartNeeded) toast('Could not rebind the port; restart GWatch to apply the change.', { kind: 'error' }); }, 800);
+    } }, icon('save'), 'Save changes');
+    return h('form', { class: 'stack', onsubmit: (e) => { e.preventDefault(); saveBtn.click(); } },
+      h('section', { class: 'card' }, h('h2', null, 'Remote access'), h('p', { class: 'lead' }, 'By default the interface is only served on this computer. Turn this on to open it from a phone, tablet or another PC on the same network. GWatch is never exposed to the internet by itself.'),
+        h('div', { class: 'stack' }, remote,
+          h('div', { class: 'form-grid' }, field({ label: 'Access password', input: h('div', { class: 'input-with-unit' }, pw, clearPw), help: 'Other devices are asked for it (any user name). This computer never is.' })),
+          info?.listenAddress ? h('p', { class: 'note' }, 'Listening on ', h('code', null, info.listenAddress), info.remoteAccess ? ' — reachable from the network.' : ' — this computer only.', info.restartNeeded ? h('span', { class: 'text-down' }, ' Rebinding failed; a restart is needed.') : null) : null,
+        ),
+        h('hr', { class: 'divider' }), h('div', { class: 'form-actions' }, saveBtn)),
+      h('section', { class: 'card' }, h('h2', null, 'Open GWatch from another device'), h('p', { class: 'lead' }, 'Use one of these addresses. A firewall on this computer may need to allow the port.'), urls),
+      h('section', { class: 'card' }, h('h2', null, 'Command-line alternative'), h('p', { class: 'note' }, 'You can also start the service with ', h('code', null, '--listen 0.0.0.0:8080'), ' (or set ', h('code', null, 'GWATCH_LISTEN'), ') to bind every interface regardless of this setting.')));
+  }
+
   /* ---------- Alerts ---------- */
   async function tabAlerts() {
     const s = state.settings || await loadSettings();
@@ -95,7 +176,7 @@ export async function mount(root, ctx) {
       done();
     } }, icon('mail'), 'Send test email');
     return h('form', { class: 'stack', onsubmit: (e) => { e.preventDefault(); saveSettings(); } },
-      h('section', { class: 'card' }, h('h2', null, 'Alerts'), h('p', { class: 'lead' }, 'Alerts are meant to be quiet and explainable: one email when something breaks, one when it recovers.'),
+      h('section', { class: 'card' }, h('h2', null, 'Alerts'), h('p', { class: 'lead' }, 'Alerts are meant to be quiet and explainable: one email when something breaks, one when it recovers. For webhooks, scripts or git commands see Automation.'),
         h('div', { class: 'stack' },
           enabled,
           field({ label: 'Recipients', input: recipients }),
@@ -116,10 +197,56 @@ export async function mount(root, ctx) {
         testMsg,
         h('hr', { class: 'divider' }), saveBar()),
       h('section', { class: 'card' }, h('h2', null, 'How suppression works'),
-        h('div', { class: 'stack-sm', style: { marginTop: '10px' } },
-          h('p', { class: 'note' }, h('b', null, 'Dependencies: '), 'when a node "depends on" another (say Plex depends on Gateway) and the parent is down, failures on the child are recorded as "affected by Gateway" and no separate email is sent for it. You get one email about the gateway instead of twenty about everything behind it.'),
+        h('div', { class: 'stack-sm', style: { marginTop: '8px' } },
+          h('p', { class: 'note' }, h('b', null, 'Dependencies: '), 'when a node "depends on" another (say Plex depends on Gateway) and the parent is down, failures on the child are recorded as "affected by Gateway" and no separate email is sent for it.'),
           h('p', { class: 'note' }, h('b', null, 'Cooldown: '), 'after an alert is sent for a check, further alerts for that same check are held back for the cooldown period. A recovery email is still sent as soon as it comes back.'),
           h('p', { class: 'note' }, h('b', null, 'Maintenance and silences: '), 'checks keep running and history is kept, but alerts are suppressed and shown as such in the incident timeline.'))));
+  }
+
+  /* ---------- Automation: endpoints + all triggers ---------- */
+  async function tabAutomation() {
+    const wrap = h('div', { class: 'stack' });
+    let nodes = [];
+    const load = async () => {
+      const [eps, trs, ns] = await Promise.all([api.get('/api/endpoints').catch(() => []), api.get('/api/triggers').catch(() => []), api.get('/api/nodes').catch(() => [])]);
+      if (state.destroyed) return;
+      nodes = ns || [];
+      render(eps || [], trs || []);
+    };
+    const render = (eps, trs) => {
+      clear(wrap);
+      const epCard = h('section', { class: 'card' },
+        h('div', { class: 'card-head' }, h('div', null, h('h2', null, 'Custom endpoints'), h('p', { class: 'lead', style: { marginBottom: 0 } }, 'URLs other systems can call to make GWatch do something: run a node\'s checks after a reboot, run a script, call a webhook or pull a git repository. Each lives at ', h('code', null, '/hook/<name>'), '.')),
+          h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => { const saved = await openEndpointEditor(null, { nodes }); if (saved) load(); } }, icon('plus'), 'New endpoint')));
+      if (!eps.length) epCard.append(emptyState({ icon: 'webhook', title: 'No endpoints yet', text: 'Create one and call its URL from a script, a router, Home Assistant, a CI job — anything that can make an HTTP request.', compact: true }));
+      for (const e of eps) epCard.append(endpointRow(e, { nodes, onChange: load }));
+      const trCard = h('section', { class: 'card' },
+        h('div', { class: 'card-head' }, h('div', null, h('h2', null, 'Triggers on nodes'), h('p', { class: 'lead', style: { marginBottom: 0 } }, 'Triggers run an action when something happens on a node. They are created on each node\'s page; this is the overview.')),
+          nodes.length ? h('button', { class: 'btn', type: 'button', onclick: async () => {
+            const sel = h('select', null, nodes.map((n) => h('option', { value: n.id }, n.name)));
+            const ok = await confirmDialog({ title: 'New trigger', message: 'Which node should it watch?', confirmLabel: 'Continue', body: h('div', { class: 'field' }, sel) });
+            if (!ok) return;
+            const node = nodes.find((n) => String(n.id) === sel.value);
+            const saved = await openTriggerEditor(null, { node, nodes });
+            if (saved) load();
+          } }, icon('plus'), 'New trigger') : null));
+      if (!trs.length) trCard.append(emptyState({ icon: 'zap', title: 'No triggers yet', text: 'Open a node and add a trigger, e.g. "when Plex goes down, restart its container", "when the gateway recovers, post to Discord".', compact: true }));
+      for (const t of trs) {
+        const node = nodes.find((n) => n.id === t.nodeId) || { id: t.nodeId, name: `node ${t.nodeId}`, checks: [] };
+        const row = triggerRow(t, { node, nodes, onChange: load });
+        row.querySelector('.t-name')?.prepend(h('a', { href: `#/nodes/${t.nodeId}`, class: 'tag tag-group' }, node.name), ' ');
+        trCard.append(row);
+      }
+      wrap.append(epCard, trCard,
+        h('section', { class: 'card' }, h('h2', null, 'Notes'),
+          h('div', { class: 'stack-sm', style: { marginTop: '8px' } },
+            h('p', { class: 'note' }, h('b', null, 'Placeholders: '), 'URL, body, headers, git arguments and script code may contain {{node.name}}, {{status}}, {{message}}, {{latencyMs}} and more. Scripts also get GWATCH_* environment variables.'),
+            h('p', { class: 'note' }, h('b', null, 'Security: '), 'actions run on the computer that runs GWatch with its permissions. Protect endpoints with a token and set an access password before enabling remote access.'),
+            h('p', { class: 'note' }, h('b', null, 'History: '), 'every run is recorded in the Audit tab (event types "Trigger" and "Endpoint") together with its output.'))));
+    };
+    await load();
+    state.panelRefresh = load;
+    return wrap;
   }
 
   /* ---------- Retention ---------- */
@@ -144,15 +271,15 @@ export async function mount(root, ctx) {
           hcard(num(st.rawRows), 'Raw results', st.oldestRaw ? `oldest ${relTime(st.oldestRaw)}` : ''),
           hcard(num(st.rollupRows5m), '5-minute rollups'), hcard(num(st.rollupRows1h), 'Hourly rollups'), hcard(num(st.rollupRows1d), 'Daily rollups'), hcard(num(st.eventRows), 'Events'),
           hcard(st.lastRunAt ? relTime(st.lastRunAt) : 'never', 'Last run', st.lastRunAt ? `${duration(st.lastDurationMs / 1000)} · removed ${num(st.deletedLastRun)} rows` : '')),
-        st.lastError ? h('div', { style: { marginTop: '12px' } }, banner('down', `Last run failed: ${st.lastError}`)) : null,
-        st.plan?.length ? h('ul', { class: 'note', style: { marginTop: '14px', paddingLeft: '18px' } }, st.plan.map((p) => h('li', null, p))) : null);
+        st.lastError ? h('div', { style: { marginTop: '10px' } }, banner('down', `Last run failed: ${st.lastError}`)) : null,
+        st.plan?.length ? h('ul', { class: 'note', style: { marginTop: '12px', paddingLeft: '18px' } }, st.plan.map((p) => h('li', null, p))) : null);
     };
     api.get('/api/retention/status').then(renderStatus).catch((e) => replace(statusBox, h('p', { class: 'note' }, e.message)));
     state.panelRefresh = () => api.get('/api/retention/status').then(renderStatus).catch(() => {});
     return h('form', { class: 'stack', onsubmit: (e) => { e.preventDefault(); saveSettings(); } },
       h('section', { class: 'card' }, h('h2', null, 'History retention'), h('p', { class: 'lead' }, 'Recent data stays detailed; older data is summarised so the database never grows without limit. 0 = keep forever.'),
         summary,
-        h('div', { class: 'form-grid-3', style: { marginTop: '20px' } },
+        h('div', { class: 'form-grid-3', style: { marginTop: '14px' } },
           f('rawDays', 'Keep every result for'), f('fiveMinDays', 'Keep 5-minute summaries for'), f('hourlyDays', 'Keep hourly summaries for'), f('dailyDays', 'Keep daily summaries for'), f('eventDays', 'Keep events for')),
         h('hr', { class: 'divider' }), saveBar()),
       h('section', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', null, 'Current storage'), runBtn), statusBox));
@@ -224,9 +351,9 @@ export async function mount(root, ctx) {
           payload.weekdays = [...days.querySelectorAll('input:checked')].map((i) => Number(i.value));
           if (!payload.weekdays.length) { toast('Pick at least one weekday', { kind: 'error' }); return; }
           const [hh, mm] = (startTime.value || '03:00').split(':').map(Number);
-          const s = new Date(); s.setHours(hh, mm, 0, 0);
-          payload.startAt = s.toISOString(); payload.durationMinutes = Number(durationIn.value) || 60;
-          payload.endAt = new Date(s.getTime() + payload.durationMinutes * 60e3).toISOString();
+          const sd = new Date(); sd.setHours(hh, mm, 0, 0);
+          payload.startAt = sd.toISOString(); payload.durationMinutes = Number(durationIn.value) || 60;
+          payload.endAt = new Date(sd.getTime() + payload.durationMinutes * 60e3).toISOString();
         }
         delete payload.active;
         try {
@@ -265,8 +392,6 @@ export async function mount(root, ctx) {
             h('button', { class: 'btn btn-sm btn-danger', type: 'button', onclick: async () => { if (await confirmDialog({ title: `Delete ${b.fileName}?`, confirmLabel: 'Delete', danger: true })) { try { await api.del(`/api/backups/${encodeURIComponent(b.fileName)}`); toast('Backup deleted', { kind: 'success' }); load(); } catch (e) { toast(e.message, { kind: 'error' }); } } } }, icon('trash')))));
       }
     };
-
-    // Create form
     const pw = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'Choose a password' });
     const pw2 = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'Repeat the password' });
     const inclHist = checkbox({ label: 'Include performance history and events (bigger archive)', checked: true });
@@ -279,11 +404,9 @@ export async function mount(root, ctx) {
       catch (e) { replace(createResult, banner('down', `Backup failed: ${e.message}`)); }
       done();
     } }, icon('save'), 'Create backup');
-    const createCard = h('section', { class: 'card' }, h('h2', null, 'Create a backup'), h('p', { class: 'lead' }, 'The archive is encrypted with the password you choose. Keep it somewhere safe — without it the backup cannot be restored.'),
+    const createCard = h('section', { class: 'card' }, h('h2', null, 'Create a backup'), h('p', { class: 'lead' }, 'The archive is encrypted with the password you choose and includes nodes, dashboards, saved charts, triggers and endpoints. Keep the password somewhere safe.'),
       h('div', { class: 'form-grid' }, field({ label: 'Password', input: pw }), field({ label: 'Confirm password', input: pw2 }), h('div', { class: 'span-2' }, inclHist)),
-      h('div', { class: 'form-actions', style: { marginTop: '16px' } }, createBtn), createResult);
-
-    // Restore from file
+      h('div', { class: 'form-actions', style: { marginTop: '12px' } }, createBtn), createResult);
     const file = h('input', { type: 'file', accept: '.gwbackup,.zip,.bin,*/*' });
     const rpw = h('input', { type: 'password', autocomplete: 'off', placeholder: 'Backup password' });
     const rHist = checkbox({ label: 'Also restore history and events', checked: true });
@@ -291,7 +414,7 @@ export async function mount(root, ctx) {
     const restoreBtn = h('button', { class: 'btn btn-danger', type: 'button', onclick: async () => {
       if (!file.files?.[0]) { toast('Choose a backup file first', { kind: 'error' }); return; }
       if (!rpw.value) { toast('Enter the backup password', { kind: 'error' }); rpw.focus(); return; }
-      const ok = await confirmDialog({ title: 'Restore from file?', message: 'This replaces the current configuration (nodes, checks, dashboards, maintenance windows and settings) with the contents of the backup. History is replaced too if you chose to include it.', confirmLabel: 'Restore', danger: true });
+      const ok = await confirmDialog({ title: 'Restore from file?', message: 'This replaces the current configuration (nodes, checks, dashboards, maintenance windows, automation and settings) with the contents of the backup. History is replaced too if you chose to include it.', confirmLabel: 'Restore', danger: true });
       if (!ok) return;
       const fd = new FormData(); fd.append('file', file.files[0]); fd.append('password', rpw.value); fd.append('includeHistory', rHist.input.checked ? 'true' : 'false');
       const done = busy(restoreBtn, 'Restoring…');
@@ -301,21 +424,67 @@ export async function mount(root, ctx) {
     } }, icon('upload'), 'Restore from file');
     const restoreCard = h('section', { class: 'card' }, h('h2', null, 'Restore from a file'), h('p', { class: 'lead' }, 'Moving to a new computer? Install GWatch, then restore the archive you downloaded from the old one.'),
       h('div', { class: 'form-grid' }, field({ label: 'Backup file', input: file }), field({ label: 'Password', input: rpw }), h('div', { class: 'span-2' }, rHist)),
-      h('div', { class: 'form-actions', style: { marginTop: '16px' } }, restoreBtn), restoreResult);
-
+      h('div', { class: 'form-actions', style: { marginTop: '12px' } }, restoreBtn), restoreResult);
     async function restoreExisting(b) {
       const pwIn = h('input', { type: 'password', autocomplete: 'off', placeholder: 'Backup password' });
       const hist = checkbox({ label: 'Also restore history and events', checked: b.includeHistory, disabled: !b.includeHistory });
-      const ok = await confirmDialog({ title: `Restore ${b.fileName}?`, confirmLabel: 'Restore', danger: true, body: h('div', { class: 'stack-sm' }, banner('warn', 'This replaces the current configuration. Nodes, checks, dashboards, maintenance windows and settings will be overwritten.'), field({ label: 'Password', input: pwIn }), hist) });
+      const ok = await confirmDialog({ title: `Restore ${b.fileName}?`, confirmLabel: 'Restore', danger: true, body: h('div', { class: 'stack-sm' }, banner('warn', 'This replaces the current configuration. Nodes, checks, dashboards, maintenance windows, automation and settings will be overwritten.'), field({ label: 'Password', input: pwIn }), hist) });
       if (!ok) return;
       if (!pwIn.value) { toast('The backup password is required', { kind: 'error' }); return; }
       try { const r = await api.post('/api/backups/restore-existing', { fileName: b.fileName, password: pwIn.value, includeHistory: hist.input.checked }); toast(`Restored ${plural(r.nodes ?? 0, 'node')} and ${plural(r.checks ?? 0, 'check')}`, { kind: 'success' }); load(); }
       catch (e) { toast(`Restore failed: ${e.message}`, { kind: 'error' }); }
     }
-
     await load();
     state.panelRefresh = load;
     return h('div', { class: 'stack' }, statusLine, createCard, listCard, restoreCard);
+  }
+
+  /* ---------- Updates ---------- */
+  async function tabUpdates() {
+    const s = state.settings || await loadSettings();
+    const g = s.general;
+    const box = h('div', { class: 'update-box' });
+    const repo = textInput({ value: g.updateRepo || 'jxburros/GWatch', class: 'mono', placeholder: 'owner/repository', oninput: () => { g.updateRepo = repo.value; } });
+    const render = (doc) => {
+      clear(box);
+      const st = doc?.status || {};
+      const last = st.last;
+      box.append(h('div', { class: 'health-cards' },
+        hcard(doc?.version || '?', 'Installed version', st.executable || ''),
+        hcard(last ? (last.latestVersion || '—') : '—', 'Latest release', last?.publishedAt ? `published ${relTime(last.publishedAt)}` : (last ? 'no release found' : 'not checked yet')),
+        hcard(last ? (last.error ? h('span', { class: 'text-down' }, 'Check failed') : last.updateAvailable ? h('span', { class: 'text-degraded' }, 'Update available') : h('span', { class: 'text-up' }, 'Up to date')) : h('span', { class: 'muted' }, 'Unknown'), 'Status', last?.checkedAt ? `checked ${relTime(last.checkedAt)}` : '')));
+      if (last?.error) box.append(banner('down', last.error));
+      if (st.lastError) box.append(banner('down', `Last update attempt failed: ${st.lastError}`));
+      if (st.applied) box.append(banner('up', `A new version was installed ${relTime(st.lastApplyAt)}. ${st.restarting ? 'The service is restarting — reload this page in a few seconds.' : 'Restart the service to run it.'}`));
+      if (last?.updateAvailable && !last.error) {
+        box.append(banner('info', h('span', null, h('b', null, `GWatch ${last.latestVersion} is available`), last.currentIsDev ? ' (you are running a development build).' : '.', last.assetName ? ` The release includes ${last.assetName} for this platform.` : ' The release has no executable for this platform; build from source or use the installer script.')));
+        if (last.releaseNotes) box.append(h('details', { class: 'collapsible' }, h('summary', null, icon('chevronRight'), 'Release notes'), h('div', { class: 'update-notes' }, last.releaseNotes)));
+      }
+      if (!st.canApply && st.executable) box.append(h('p', { class: 'note' }, icon('lock'), ' The executable directory is not writable by the service, so updates cannot be installed from here. Re-run the installer script with the new build instead.'));
+    };
+    const load = async () => { try { render(await api.get('/api/update/status')); } catch (e) { replace(box, banner('down', e.message)); } };
+    const checkBtn = h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
+      const done = busy(checkBtn, 'Checking…');
+      try { const info = await api.post('/api/update/check'); toast(info.updateAvailable ? `Update available: ${info.latestVersion}` : `Up to date (${info.latestVersion})`, { kind: info.updateAvailable ? 'info' : 'success' }); }
+      catch (e) { toast(e.message, { kind: 'error' }); }
+      await load(); done();
+    } }, icon('refresh'), 'Check for updates');
+    const applyBtn = h('button', { class: 'btn btn-danger', type: 'button', onclick: async () => {
+      const ok = await confirmDialog({ title: 'Install the update now?', message: 'GWatch downloads the release executable, replaces the current one (the previous version is kept as .old) and restarts. Monitoring pauses for a few seconds.', confirmLabel: 'Install and restart', danger: true });
+      if (!ok) return;
+      const done = busy(applyBtn, 'Installing…');
+      try { const r = await api.post('/api/update/apply'); toast(`Installed ${r.info?.latestVersion || 'update'}; restarting…`, { kind: 'success', timeout: 8000 }); }
+      catch (e) { toast(e.message, { kind: 'error', timeout: 8000 }); }
+      await load(); done();
+    } }, icon('rocket'), 'Download and install');
+    await load();
+    state.panelRefresh = load;
+    return h('div', { class: 'stack' },
+      h('section', { class: 'card' }, h('h2', null, 'Application updates'), h('p', { class: 'lead' }, 'Checks the GitHub releases of the repository below. Nothing is contacted automatically; only when you press the button.'),
+        box, h('div', { class: 'btn-group', style: { marginTop: '12px' } }, checkBtn, applyBtn),
+        h('div', { class: 'stack-sm', style: { marginTop: '12px' } }, h('a', { href: `https://github.com/${g.updateRepo || 'jxburros/GWatch'}/releases`, target: '_blank', rel: 'noopener', class: 'small' }, icon('external'), ' Open the releases page'))),
+      h('form', { class: 'card', onsubmit: (e) => { e.preventDefault(); saveSettings(); } }, h('h2', null, 'Source repository'), h('p', { class: 'lead' }, 'Release assets are expected to be named gwatch-<os>-<arch>[.exe], which is what the CI release job publishes.'),
+        h('div', { class: 'form-grid' }, field({ label: 'GitHub repository', input: repo })), h('hr', { class: 'divider' }), saveBar()));
   }
 
   /* ---------- Health ---------- */
@@ -333,21 +502,21 @@ export async function mount(root, ctx) {
             hcard(hl.lastCheckAt ? relTime(hl.lastCheckAt) : 'never', 'Last check completed', hl.lastSuccessAt ? `last success ${relTime(hl.lastSuccessAt)}` : ''),
             hcard(hl.nextCheckAt ? relTime(hl.nextCheckAt) : '—', 'Next scheduled check', hl.nextCheckAt ? dateTime(hl.nextCheckAt) : ''),
             hcard(gap ? duration(gap.seconds) : 'None detected', 'Last sleep / offline gap', gap ? `${dateTime(gap.from, { seconds: false })} → ${timeShort(gap.to)}` : 'The monitoring computer has not been asleep or offline recently.'),
-            hcard(h('span', { class: 'mono', style: { fontSize: '15px' } }, hl.listenAddress || '—'), 'Listening on', `${hl.platform || ''} · v${hl.version || '?'}`))),
+            hcard(h('span', { class: 'mono', style: { fontSize: '14px' } }, hl.listenAddress || '—'), 'Listening on', `${hl.platform || ''} · v${hl.version || '?'}`))),
         h('section', { class: 'card' }, h('h2', null, 'Storage and retention'),
-          h('div', { class: 'health-cards', style: { marginTop: '14px' } },
+          h('div', { class: 'health-cards', style: { marginTop: '10px' } },
             hcard(bytes(hl.databaseBytes), 'Database size', h('span', { class: 'mono' }, hl.databasePath || '')),
             hcard(hl.retention?.lastRunAt ? relTime(hl.retention.lastRunAt) : 'never', 'Last retention run', hl.retention?.lastError ? h('span', { class: 'text-down' }, hl.retention.lastError) : `${num(hl.retention?.rawRows)} raw · ${num(hl.retention?.rollupRows5m)} 5-min · ${num(hl.retention?.rollupRows1h)} hourly · ${num(hl.retention?.rollupRows1d)} daily`),
             hcard(hl.backup?.lastBackupAt ? ok(hl.backup.lastBackupOk, relTime(hl.backup.lastBackupAt), `failed ${relTime(hl.backup.lastBackupAt)}`) : h('span', { class: 'muted' }, 'never'), 'Last backup', hl.backup?.lastBackupFile || hl.backup?.lastError || '')),
-          h('div', { class: 'btn-group', style: { marginTop: '16px' } }, h('a', { class: 'btn btn-sm', href: '#/settings/retention' }, 'Retention settings'), h('a', { class: 'btn btn-sm', href: '#/settings/backups' }, 'Backups'))),
+          h('div', { class: 'btn-group', style: { marginTop: '12px' } }, h('a', { class: 'btn btn-sm', href: '#/settings/retention' }, 'Retention settings'), h('a', { class: 'btn btn-sm', href: '#/settings/backups' }, 'Backups'))),
         h('section', { class: 'card' }, h('h2', null, 'Alerting'),
-          h('div', { class: 'health-cards', style: { marginTop: '14px' } },
+          h('div', { class: 'health-cards', style: { marginTop: '10px' } },
             hcard(ok(hl.alertsEnabled, 'Enabled', 'Disabled'), 'Email alerts'),
             hcard(ok(hl.smtpConfigured, 'Configured', 'Not configured'), 'SMTP'),
             hcard(hl.lastAlertAt ? relTime(hl.lastAlertAt) : 'never', 'Last alert sent', hl.lastAlertError ? h('span', { class: 'text-down' }, hl.lastAlertError) : '')),
-          h('div', { class: 'btn-group', style: { marginTop: '16px' } }, h('a', { class: 'btn btn-sm', href: '#/settings/alerts' }, 'Alert settings'))),
-        h('section', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', null, 'Recent internal errors'), h('a', { class: 'btn btn-sm', href: '#/settings/logs' }, 'Open logs')),
-          hl.recentErrors?.length ? h('div', { class: 'event-rows' }, hl.recentErrors.map((e) => eventRow(e))) : h('div', { class: 'all-good', style: { padding: '12px' } }, icon('check'), h('strong', null, 'No internal errors recorded'))),
+          h('div', { class: 'btn-group', style: { marginTop: '12px' } }, h('a', { class: 'btn btn-sm', href: '#/settings/alerts' }, 'Alert settings'))),
+        h('section', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', null, 'Recent internal errors'), h('a', { class: 'btn btn-sm', href: '#/audit/log' }, 'Open service log')),
+          hl.recentErrors?.length ? h('div', { class: 'event-rows' }, hl.recentErrors.map((e) => eventRow(e))) : h('div', { class: 'all-good', style: { padding: '10px' } }, icon('check'), h('strong', null, 'No internal errors recorded'))),
       );
     };
     const load = () => api.get('/api/health').then(render);
@@ -356,32 +525,12 @@ export async function mount(root, ctx) {
     return wrap;
   }
 
-  /* ---------- Logs ---------- */
-  async function tabLogs() {
-    const box = h('pre', { class: 'log-box', tabindex: 0, 'aria-label': 'Log output' });
-    const limit = selectInput({ options: [100, 200, 500, 1000].map((n) => ({ value: n, label: `Last ${n} lines` })), value: 200 });
-    const fileEl = h('span', { class: 'mono small muted' });
-    const load = async () => {
-      const data = await api.get(`/api/logs${qs({ limit: limit.value })}`);
-      clear(box);
-      fileEl.textContent = data.file || '';
-      for (const line of data.lines || []) {
-        const cls = /\b(ERROR|error|panic)\b/.test(line) ? 'lvl-error' : /\b(WARN|warning)\b/i.test(line) ? 'lvl-warn' : '';
-        box.append(h('span', { class: cls }, line + '\n'));
-      }
-      if (!(data.lines || []).length) box.textContent = '(log is empty)';
-      box.scrollTop = box.scrollHeight;
-    };
-    limit.addEventListener('change', load);
-    const refreshBtn = h('button', { class: 'btn btn-sm', type: 'button', onclick: load }, icon('refresh'), 'Refresh');
-    await load();
-    return h('section', { class: 'card' }, h('div', { class: 'card-head' }, h('div', null, h('h2', null, 'Service log'), fileEl), h('div', { class: 'card-actions' }, limit, refreshBtn)), box);
-  }
-
   await renderTab();
   return {
     refresh: () => state.panelRefresh && state.panelRefresh(),
-    async update(params) { const tab = TABS.some((t) => t.id === params.tab) ? params.tab : 'general'; if (tab !== state.tab) { state.tab = tab; await renderTab(); } return true; },
+    async update(params) { const tab = TABS.some((t) => t.id === params.tab) ? params.tab : (params.tab === 'logs' ? 'health' : 'general'); if (tab !== state.tab) { state.tab = tab; await renderTab(); } return true; },
     destroy() { state.destroyed = true; },
   };
 }
+
+export { qs };

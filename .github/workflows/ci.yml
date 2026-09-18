@@ -1,8 +1,14 @@
 name: CI
 
+# One job does everything GWatch needs on the platform it ships on: lint,
+# build, test, web-asset checks and PowerShell script parsing. Linux/macOS
+# runners are intentionally not used for now (see the `release` job for the
+# cross-compiled artefacts).
+
 on:
   push:
     branches: ['**']
+    tags: ['v*']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -18,180 +24,62 @@ env:
   GOTOOLCHAIN: local
 
 jobs:
-  # Formatting, vetting and module hygiene. Fast, so it fails first.
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
+  ci:
+    name: Lint, build, test (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     steps:
+      # Windows git defaults to CRLF conversion, which makes gofmt and the
+      # go.mod diff report every file as changed.
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
-
-      - name: gofmt
-        run: |
-          unformatted="$(gofmt -l .)"
-          if [ -n "$unformatted" ]; then
-            echo "::error::These files are not gofmt'd:"
-            echo "$unformatted"
-            gofmt -d .
-            exit 1
-          fi
-
-      - name: go vet
-        run: go vet ./...
-
-      - name: go mod tidy is up to date
-        run: |
-          cp go.mod go.mod.orig
-          cp go.sum go.sum.orig
-          go mod tidy
-          if ! diff -q go.mod go.mod.orig >/dev/null || ! diff -q go.sum go.sum.orig >/dev/null; then
-            echo "::error::go.mod/go.sum are out of date. Run 'go mod tidy' and commit the result."
-            diff -u go.mod.orig go.mod || true
-            diff -u go.sum.orig go.sum || true
-            exit 1
-          fi
-
-      - name: Modules verify
-        run: go mod verify
-
-  # The test suite runs on both platforms GWatch ships on: it installs as a
-  # Windows service and as a plain binary on Linux.
-  test:
-    name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Build
-        run: go build ./...
-
-      # The race detector needs cgo, which is only reliably available on the
-      # Linux runner; Windows runs the same suite without it.
-      - name: Test (race + coverage)
-        if: runner.os == 'Linux'
-        run: go test -race -covermode=atomic -coverprofile=coverage.out -count=1 ./...
-
-      - name: Test
-        if: runner.os != 'Linux'
-        run: go test -count=1 ./...
-
-      - name: Coverage summary
-        if: runner.os == 'Linux'
-        run: |
-          go tool cover -func=coverage.out | tee coverage.txt
-          {
-            echo '### Coverage'
-            echo '```'
-            tail -n 20 coverage.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload coverage
-        if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage
-          path: |
-            coverage.out
-            coverage.txt
-          if-no-files-found: error
-
-  # The web UI is embedded into the binary with //go:embed, so a syntax error
-  # in an asset is invisible to the Go compiler and only shows up as a blank
-  # page at runtime.
-  web:
-    name: Web assets
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
 
-      - name: JavaScript syntax check
+      - name: gofmt, go vet, go mod tidy, go mod verify
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::These files are not gofmt'd:"; echo "$unformatted"; gofmt -d .; exit 1
+          fi
+          go vet ./...
+          cp go.mod go.mod.orig && cp go.sum go.sum.orig
+          go mod tidy
+          if ! diff -q go.mod go.mod.orig >/dev/null || ! diff -q go.sum go.sum.orig >/dev/null; then
+            echo "::error::go.mod/go.sum are out of date. Run 'go mod tidy' and commit the result."
+            diff -u go.mod.orig go.mod || true; diff -u go.sum.orig go.sum || true; exit 1
+          fi
+          rm -f go.mod.orig go.sum.orig
+          go mod verify
+
+      - name: Build and test
+        run: |
+          go build ./...
+          go test -count=1 ./...
+
+      # The web UI is embedded with //go:embed, so a syntax error in an asset
+      # is invisible to the Go compiler and only shows up as a blank page.
+      - name: Web assets
         run: |
           status=0
           while IFS= read -r f; do
-            if ! node --check "$f"; then
-              echo "::error file=$f::JavaScript syntax error"
-              status=1
-            fi
+            if ! node --check "$f"; then echo "::error file=$f::JavaScript syntax error"; status=1; fi
           done < <(find web -name '*.js' -type f | sort)
-          exit $status
-
-      - name: Entry points exist
-        run: |
-          status=0
-          for f in web/index.html web/app.js web/app.css web/api.js web/components.js; do
-            if [ ! -s "$f" ]; then
-              echo "::error::missing or empty web asset: $f"
-              status=1
-            fi
+          for f in web/index.html web/app.js web/app.css web/api.js web/components.js web/logo.svg; do
+            if [ ! -s "$f" ]; then echo "::error::missing or empty web asset: $f"; status=1; fi
           done
           exit $status
 
-  # The release artefacts must keep cross-compiling, including the CGO-free
-  # SQLite build used for the single-file Windows executable.
-  build:
-    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
-    runs-on: ubuntu-latest
-    needs: [lint]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - goos: linux
-            goarch: amd64
-          - goos: linux
-            goarch: arm64
-          - goos: windows
-            goarch: amd64
-          - goos: darwin
-            goarch: arm64
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Cross-compile
-        env:
-          CGO_ENABLED: '0'
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-        run: |
-          out="dist/gwatch-${GOOS}-${GOARCH}"
-          if [ "$GOOS" = "windows" ]; then out="$out.exe"; fi
-          go build -trimpath -ldflags "-s -w -X main.version=ci-${GITHUB_SHA::7}" -o "$out" .
-          ls -lh "$out"
-
-      - name: Upload binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: gwatch-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/*
-          if-no-files-found: error
-
-  # install.ps1 / uninstall.ps1 are how GWatch gets onto a Windows machine, so
-  # a syntax error there breaks setup even when the binary is fine.
-  scripts:
-    name: PowerShell scripts
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Parse scripts
+      # install.ps1 / uninstall.ps1 are how GWatch gets onto a Windows machine.
+      - name: PowerShell scripts parse
         shell: pwsh
         run: |
           $failed = $false
@@ -200,11 +88,55 @@ jobs:
             [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$errors) | Out-Null
             if ($errors -and $errors.Count -gt 0) {
               $failed = $true
-              foreach ($e in $errors) {
-                Write-Host "::error file=$($file.FullName)::$($e.Message)"
-              }
-            } else {
-              Write-Host "ok $($file.Name)"
-            }
+              foreach ($e in $errors) { Write-Host "::error file=$($file.FullName)::$($e.Message)" }
+            } else { Write-Host "ok $($file.Name)" }
           }
           if ($failed) { exit 1 }
+
+      - name: Build Windows executable
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=ci-${GITHUB_SHA::7}" -o dist/gwatch-windows-amd64.exe .
+          ls -lh dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gwatch-windows-amd64
+          path: dist/gwatch-windows-amd64.exe
+          if-no-files-found: error
+
+  # Tagging v1.2.3 publishes a GitHub release with the binaries the in-app
+  # updater (Settings › Updates) looks for: gwatch-<os>-<arch>[.exe] plus a
+  # .sha256 checksum next to each.
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [ci]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Cross-compile
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
+            goos="${target%/*}"; goarch="${target#*/}"
+            out="dist/gwatch-${goos}-${goarch}"; [ "$goos" = "windows" ] && out="$out.exe"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags "-s -w -X main.version=${version}" -o "$out" .
+            sha256sum "$out" | sed 's#dist/##' > "$out.sha256"
+          done
+          ls -lh dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

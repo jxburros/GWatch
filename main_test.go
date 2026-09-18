@@ -6,52 +6,43 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/jxburros/GWatch/internal/model"
 )
 
-func TestValidateListenAcceptsLoopback(t *testing.T) {
-	ok := []string{
-		"127.0.0.1:8080",
-		"localhost:8080",
-		"LocalHost:9000",
-		"127.5.6.7:1",
-		"[::1]:8080",
-		":8080", // empty host binds every interface, but the server still only serves locally
-	}
+func TestValidateListen(t *testing.T) {
+	ok := []string{"127.0.0.1:8080", "localhost:8080", "LocalHost:9000", "[::1]:8080", ":8080", "0.0.0.0:8080", "192.168.1.10:8080", "[::]:8080"}
 	for _, addr := range ok {
 		if err := validateListen(addr); err != nil {
 			t.Errorf("validateListen(%q) = %v, want nil", addr, err)
 		}
 	}
-}
-
-func TestValidateListenRejectsRemote(t *testing.T) {
-	// GWatch is local-only; binding to a routable address would expose the
-	// unauthenticated API to the network.
-	bad := []string{
-		"0.0.0.0:8080",
-		"192.168.1.10:8080",
-		"10.0.0.1:8080",
-		"[::]:8080",
-		"example.com:8080",
-	}
-	for _, addr := range bad {
-		err := validateListen(addr)
-		if err == nil {
-			t.Errorf("validateListen(%q) = nil, want a local-only error", addr)
-			continue
-		}
-		if !strings.Contains(err.Error(), "local-only") {
-			t.Errorf("validateListen(%q) = %v, want a local-only error", addr, err)
+	for _, addr := range []string{"", "127.0.0.1", "not an address", "example.com:8080"} {
+		if err := validateListen(addr); err == nil {
+			t.Errorf("validateListen(%q) = nil, want an error", addr)
 		}
 	}
 }
 
-func TestValidateListenRejectsMalformed(t *testing.T) {
-	for _, addr := range []string{"", "127.0.0.1", "not an address"} {
-		err := validateListen(addr)
-		if err == nil || !strings.Contains(err.Error(), "host:port") {
-			t.Errorf("validateListen(%q) = %v, want a host:port error", addr, err)
+func TestEffectiveListen(t *testing.T) {
+	cases := []struct {
+		base   string
+		remote bool
+		want   string
+	}{
+		{"127.0.0.1:8080", false, "127.0.0.1:8080"},
+		{"127.0.0.1:8080", true, ":8080"},
+		{"localhost:9000", true, ":9000"},
+		{"0.0.0.0:8080", false, "0.0.0.0:8080"}, // an explicit LAN bind is kept
+		{"192.168.1.5:8080", true, "192.168.1.5:8080"},
+	}
+	for _, c := range cases {
+		if got := effectiveListen(c.base, model.GeneralSettings{RemoteAccess: c.remote}); got != c.want {
+			t.Errorf("effectiveListen(%q, remote=%v) = %q, want %q", c.base, c.remote, got, c.want)
 		}
+	}
+	if !isLoopbackHost("localhost") || !isLoopbackHost("127.0.0.1") || isLoopbackHost("") || isLoopbackHost("0.0.0.0") {
+		t.Error("isLoopbackHost misclassifies")
 	}
 }
 
@@ -118,6 +109,10 @@ func TestEmbeddedWebAssets(t *testing.T) {
 		"web/views/incidents.js",
 		"web/views/settings.js",
 		"web/views/wallboard.js",
+		"web/views/charts.js",
+		"web/views/audit.js",
+		"web/views/automation.js",
+		"web/logo.svg",
 	} {
 		b, err := fs.ReadFile(webFiles, name)
 		if err != nil {

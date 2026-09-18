@@ -33,10 +33,17 @@ export function append(el, children) {
     if (c == null || c === false || c === true) continue;
     if (Array.isArray(c)) { append(el, c); continue; }
     if (c instanceof Node) el.appendChild(c);
-    else el.appendChild(document.createTextNode(String(c)));
+    else {
+      const text = typeof c === 'number' ? String(c) : String(c);
+      if (text === 'null' || text === 'undefined') continue;
+      el.appendChild(document.createTextNode(text));
+    }
   }
   return el;
 }
+
+/** Text that is safe to interpolate: null/undefined become "". */
+export function text(v, fallback = '') { return v == null ? fallback : String(v); }
 
 export function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); return el; }
 export function replace(el, ...children) { clear(el); append(el, children); return el; }
@@ -107,6 +114,19 @@ const ICONS = {
   sleep: '<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/>',
   gitCommit: '<circle cx="12" cy="12" r="4"/><path d="M1.05 12H7M17 12h5.95"/>',
   cpu: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/>',
+  chart: '<path d="M3 3v18h18"/><path d="m7 15 4-5 3 3 6-8"/>',
+  audit: '<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/>',
+  pin: '<path d="M12 17v5M5 17h14l-2-6V4h1V2H6v2h1v7z"/>',
+  grip: '<circle cx="9" cy="6" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="6" r="1.4" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="9" cy="18" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="18" r="1.4" fill="currentColor" stroke="none"/>',
+  code: '<path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/>',
+  terminal: '<path d="m4 17 6-6-6-6M12 19h8"/>',
+  git: '<circle cx="12" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M12 8.5v3a3 3 0 0 1-3 3H9a3 3 0 0 0-3 1.5M12 8.5v3a3 3 0 0 0 3 3h0a3 3 0 0 1 3 1.5"/>',
+  webhook: '<path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17c.01-.7.2-1.4.57-2"/><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06"/><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8"/>',
+  palette: '<circle cx="13.5" cy="6.5" r="1.2" fill="currentColor"/><circle cx="17.5" cy="10.5" r="1.2" fill="currentColor"/><circle cx="8.5" cy="7.5" r="1.2" fill="currentColor"/><circle cx="6.5" cy="12.5" r="1.2" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.5-.7 1.5-1.5 0-.4-.2-.8-.4-1-.3-.3-.4-.6-.4-1 0-.8.7-1.5 1.5-1.5H16c3.3 0 6-2.7 6-6 0-5-4.5-9-10-9z"/>',
+  wifi: '<path d="M5 12.6a11 11 0 0 1 14 0M8.5 16a6 6 0 0 1 7 0M2 8.8a15.5 15.5 0 0 1 20 0M12 20h.01"/>',
+  rocket: '<path d="M4.5 16.5c-1.5 1.3-2 5-2 5s3.7-.5 5-2c.7-.8.7-2 0-2.8-.8-.7-2-.7-2.8 0z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.9 12.9 0 0 1 22 2c0 2.7-.9 7.5-6 11a22 22 0 0 1-4 2z"/><path d="M9 12H4s.5-3 2-4 4 0 4 0M12 15v5s3-.5 4-2 0-4 0-4"/>',
+  layout: '<rect x="3" y="3" width="18" height="18" rx="1"/><path d="M3 9h18M9 21V9"/>',
+  sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
 };
 
 export function icon(name, cls = '') {
@@ -118,6 +138,58 @@ export function icon(name, cls = '') {
   return svg;
 }
 export function iconInto(el, name) { el.appendChild(icon(name)); return el; }
+
+/* ---------- Theme / accent ---------- */
+
+const themeListeners = new Set();
+export function onThemeChange(fn) { themeListeners.add(fn); return () => themeListeners.delete(fn); }
+function notifyTheme() { for (const fn of themeListeners) { try { fn(); } catch (e) { console.error(e); } } }
+
+let systemMedia = null;
+/** Apply "dark" | "light" | "system" to the document and remember it locally. */
+export function applyTheme(theme) {
+  const t = ['dark', 'light', 'system'].includes(theme) ? theme : 'dark';
+  try { localStorage.setItem('gw.theme', t); } catch { /* ignore */ }
+  const resolve = () => (t === 'system' ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : t);
+  const before = document.documentElement.getAttribute('data-theme');
+  document.documentElement.setAttribute('data-theme', resolve());
+  if (systemMedia) { systemMedia.onchange = null; systemMedia = null; }
+  if (t === 'system' && window.matchMedia) {
+    systemMedia = window.matchMedia('(prefers-color-scheme: light)');
+    systemMedia.onchange = () => { document.documentElement.setAttribute('data-theme', resolve()); notifyTheme(); };
+  }
+  if (before !== document.documentElement.getAttribute('data-theme')) notifyTheme();
+}
+export function currentTheme() { return document.documentElement.getAttribute('data-theme') || 'dark'; }
+
+export function hexToRgb(hex) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || '');
+  return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : null;
+}
+/** Apply an accent colour (hex) to the document. */
+export function applyAccent(hex) {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return;
+  document.documentElement.style.setProperty('--accent-rgb', rgb.join(', '));
+  try { localStorage.setItem('gw.accent', hex.toLowerCase()); } catch { /* ignore */ }
+  notifyTheme();
+}
+export const ACCENT_PRESETS = [
+  { name: 'Violet', hex: '#7c6cff' }, { name: 'Blue', hex: '#3b82f6' }, { name: 'Cyan', hex: '#06b6d4' }, { name: 'Teal', hex: '#14b8a6' },
+  { name: 'Green', hex: '#22c55e' }, { name: 'Lime', hex: '#a3e635' }, { name: 'Amber', hex: '#f59e0b' }, { name: 'Orange', hex: '#f97316' },
+  { name: 'Red', hex: '#ef4444' }, { name: 'Pink', hex: '#ec4899' }, { name: 'Gold', hex: '#d4a017' }, { name: 'Navy', hex: '#3556a8' },
+];
+/** Read the current values of the design tokens used by canvas charts. */
+export function cssColors() {
+  const cs = getComputedStyle(document.documentElement);
+  const v = (name, fb) => (cs.getPropertyValue(name) || fb).trim();
+  const rgb = v('--accent-rgb', '124, 108, 255').split(',').map((x) => Number(x.trim()));
+  const hex = '#' + rgb.map((n) => Math.max(0, Math.min(255, n || 0)).toString(16).padStart(2, '0')).join('');
+  return {
+    bg: v('--card', '#10131a'), line: v('--line', '#232833'), lineStrong: v('--line-strong', '#303744'), muted: v('--muted', '#98a2b3'), dim: v('--dim', '#66707f'), text: v('--text', '#e9edf2'),
+    down: v('--down', '#ff5c5c'), up: v('--up', '#35e07f'), warn: v('--warn', '#ffc542'), accent: hex, accentRgb: rgb,
+  };
+}
 
 /* ---------- Status ---------- */
 
@@ -148,10 +220,10 @@ export function statusGlyph(status, { text = true } = {}) {
 export function checkChip(check, state, { href } = {}) {
   const status = state?.status || (check.enabled === false ? 'paused' : 'unknown');
   const m = statusMeta(status);
-  const chip = h(href ? 'a' : 'span', { class: 'check-chip', href, title: `${check.name}: ${m.label}${state?.lastMessage ? ' — ' + state.lastMessage : ''}` },
+  const chip = h(href ? 'a' : 'span', { class: 'check-chip', href, title: `${check.name || 'Check'}: ${m.label}${state?.lastMessage ? ' — ' + state.lastMessage : ''}` },
     h('span', { class: `text-${status}`, style: { display: 'inline-flex' } }, icon(m.icon)),
     h('span', { class: 'sr-only' }, m.label + ' '),
-    check.name,
+    check.name || 'Check',
   );
   if (state?.lastLatencyMs != null && status !== 'paused') chip.append(h('span', { class: 'lat' }, fmtMs(state.lastLatencyMs)));
   return chip;
@@ -467,6 +539,9 @@ export const EVENT_META = {
   restore: { label: 'Restore', icon: 'upload', cls: 'ev-info' },
   retention: { label: 'Retention', icon: 'database', cls: 'ev-neutral' },
   note: { label: 'Note', icon: 'note', cls: 'ev-info' },
+  trigger_fired: { label: 'Trigger', icon: 'zap', cls: 'ev-info' },
+  endpoint_called: { label: 'Endpoint', icon: 'webhook', cls: 'ev-info' },
+  update: { label: 'Update', icon: 'rocket', cls: 'ev-info' },
 };
 export function eventMeta(type) { return EVENT_META[type] || { label: type, icon: 'info', cls: 'ev-neutral' }; }
 

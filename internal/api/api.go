@@ -3,11 +3,13 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"path"
 	"sort"
@@ -31,6 +33,10 @@ type Server struct {
 	Web       fs.FS
 	BackupDir string
 	Version   string
+	// Updater performs GitHub release checks and self-updates (optional).
+	Updater *Updater
+	// Network reports how the server is bound (optional).
+	Network NetworkFunc
 }
 
 // Handler builds the router.
@@ -38,6 +44,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/health", s.handleHealth)
+	mux.HandleFunc("GET /api/status", s.handleStatus)
+	mux.HandleFunc("GET /api/network", s.handleNetwork)
 	mux.HandleFunc("GET /api/version", s.handleVersion)
 	mux.HandleFunc("GET /api/overview", s.handleOverview)
 	mux.HandleFunc("GET /api/wallboard", s.handleWallboard)
@@ -97,6 +105,31 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/export/events.csv", s.handleExportEvents)
 	mux.HandleFunc("GET /api/export/config.json", s.handleExportConfig)
 
+	mux.HandleFunc("GET /api/export/logs.txt", s.handleExportLogs)
+
+	mux.HandleFunc("GET /api/triggers", s.handleListTriggers)
+	mux.HandleFunc("POST /api/triggers", s.handleSaveTrigger)
+	mux.HandleFunc("PUT /api/triggers/{id}", s.handleSaveTrigger)
+	mux.HandleFunc("DELETE /api/triggers/{id}", s.handleDeleteTrigger)
+	mux.HandleFunc("POST /api/triggers/{id}/run", s.handleRunTrigger)
+	mux.HandleFunc("POST /api/actions/test", s.handleTestAction)
+	mux.HandleFunc("GET /api/automation/meta", s.handleAutomationMeta)
+
+	mux.HandleFunc("GET /api/endpoints", s.handleListEndpoints)
+	mux.HandleFunc("POST /api/endpoints", s.handleSaveEndpoint)
+	mux.HandleFunc("PUT /api/endpoints/{id}", s.handleSaveEndpoint)
+	mux.HandleFunc("DELETE /api/endpoints/{id}", s.handleDeleteEndpoint)
+	mux.HandleFunc("POST /api/endpoints/{id}/run", s.handleRunEndpoint)
+	mux.HandleFunc("/hook/{slug}", s.handleHook)
+	mux.HandleFunc("/hook/{slug}/{rest...}", s.handleHook)
+
+	mux.HandleFunc("GET /api/charts", s.handleListCharts)
+	mux.HandleFunc("PUT /api/charts", s.handlePutCharts)
+
+	mux.HandleFunc("GET /api/update/status", s.handleUpdateStatus)
+	mux.HandleFunc("POST /api/update/check", s.handleUpdateCheck)
+	mux.HandleFunc("POST /api/update/apply", s.handleUpdateApply)
+
 	mux.HandleFunc("GET /api/logs", s.handleLogs)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "unknown API endpoint")
@@ -105,7 +138,41 @@ func (s *Server) Handler() http.Handler {
 	if s.Web != nil {
 		mux.Handle("/", s.staticHandler())
 	}
-	return noCache(mux)
+	return noCache(s.accessControl(mux))
+}
+
+// accessControl enforces the optional access password: clients that are not
+// on this computer (non-loopback) must authenticate with HTTP basic auth when
+// a password is configured. Custom endpoints (/hook/…) rely on their own
+// token instead so that other devices can call them.
+func (s *Server) accessControl(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pw := s.Engine.Settings().General.AccessPassword
+		if pw == "" || isLoopbackRemote(r.RemoteAddr) || strings.HasPrefix(r.URL.Path, "/hook/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		_, got, ok := r.BasicAuth()
+		if !ok || subtle.ConstantTimeCompare([]byte(got), []byte(pw)) != 1 {
+			w.Header().Set("WWW-Authenticate", `Basic realm="GWatch", charset="UTF-8"`)
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				writeError(w, http.StatusUnauthorized, "password required")
+				return
+			}
+			http.Error(w, "GWatch: password required", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func isLoopbackRemote(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func noCache(next http.Handler) http.Handler {
@@ -946,35 +1013,7 @@ func (s *Server) handleHistoryMulti(w http.ResponseWriter, r *http.Request) {
 // ---- events ----
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	f := store.EventFilter{Limit: queryInt(r, "limit", 100), BeforeID: int64(queryInt(r, "before", 0)), NodeID: queryInt64Ptr(r, "nodeId"), CheckID: queryInt64Ptr(r, "checkId")}
-	// A filter on a "began" type also shows its counterpart so the timeline
-	// stays readable (warning + warning_cleared, silenced + unsilenced ...).
-	counterparts := map[model.EventType]model.EventType{
-		model.EventWarning:          model.EventWarningCleared,
-		model.EventCertWarning:      model.EventCertWarningCleared,
-		model.EventSilenced:         model.EventUnsilenced,
-		model.EventMaintenanceBegan: model.EventMaintenanceEnded,
-		model.EventDown:             model.EventRecovered,
-		model.EventAlertSent:        model.EventAlertFailed,
-		model.EventServiceStarted:   model.EventServiceStopped,
-	}
-	for _, t := range r.URL.Query()["type"] {
-		for _, part := range strings.Split(t, ",") {
-			if part = strings.TrimSpace(part); part != "" {
-				et := model.EventType(part)
-				f.Types = append(f.Types, et)
-				if c, ok := counterparts[et]; ok {
-					f.Types = append(f.Types, c)
-				}
-			}
-		}
-	}
-	if since := r.URL.Query().Get("since"); since != "" {
-		if t, err := time.Parse(time.RFC3339, since); err == nil {
-			f.Since = &t
-		}
-	}
-	events, err := s.Store.ListEvents(r.Context(), f)
+	events, err := s.Store.ListEvents(r.Context(), s.eventFilterFromQuery(r, 100))
 	if err != nil {
 		s.fail(w, err)
 		return

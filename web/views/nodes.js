@@ -49,7 +49,7 @@ export async function mount(root, ctx) {
     if (state.tag && !(n.tags || []).includes(state.tag)) return false;
     if (state.q) {
       const q = state.q.toLowerCase();
-      const hay = [n.name, n.host, n.group, ...(n.tags || []), ...(n.checks || []).map((c) => c.name)].join(' ').toLowerCase();
+      const hay = [n.name, n.host, n.group, ...(n.tags || []), ...(n.checks || []).map((c) => c.name)].filter((x) => x != null).join(' ').toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -86,11 +86,11 @@ export async function mount(root, ctx) {
     const chips = h('div', { class: 'check-chips' });
     for (const c of n.checks || []) chips.append(checkChip(c, states[c.id], { href: `#/nodes/${n.id}` }));
     if (!(n.checks || []).length) chips.append(h('span', { class: 'dim small' }, 'No checks'));
-    const last = Object.values(states).map((s) => s.lastRunAt).filter(Boolean).sort().pop();
+    const last = Object.values(states).map((s) => s?.lastRunAt).filter(Boolean).sort().pop();
     const enabledToggle = toggle({ checked: n.enabled !== false, ariaLabel: `${n.name} enabled`, onChange: (v) => setEnabled(n, v) });
     const row = h('article', { class: `node-row ${n.enabled === false ? 'disabled' : ''}`, 'aria-label': n.name },
       h('div', null, statusPill(n.status || 'unknown'), n.inMaintenance && n.status !== 'maintenance' ? h('div', { class: 'tiny text-maintenance', style: { marginTop: '4px' } }, 'in maintenance') : null),
-      h('div', { class: 'n-name' }, h('a', { href: `#/nodes/${n.id}` }, n.name), h('span', { class: 'n-host' }, n.host), tagList(n.tags, { group: null })),
+      h('div', { class: 'n-name' }, h('a', { href: `#/nodes/${n.id}` }, n.name || 'Unnamed node'), n.host ? h('span', { class: 'n-host' }, n.host) : h('span', { class: 'n-host dim' }, 'targets set per check'), tagList(n.tags || [])),
       chips,
       h('div', { class: 'n-meta' }, h('span', null, last ? `Checked ${relTime(last)}` : 'Not checked yet'), importanceBadge(n.importance)),
       h('div', { class: 'n-actions' }, enabledToggle, menuButton(() => rowMenu(n), { label: `Actions for ${n.name}` })),

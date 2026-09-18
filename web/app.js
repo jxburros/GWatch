@@ -1,7 +1,8 @@
-// GWatch web UI entry: hash router, shell (sidebar/topbar), live updates.
+// GWatch web UI entry: hash router, shell (rail / topbar / status dots),
+// theme + accent handling and live updates.
 
 import { api, onConnection, connection, subscribeUpdates, debounce } from './api.js';
-import { h, icon, clear, toast, closeMenus, replace } from './components.js';
+import { h, icon, clear, toast, closeMenus, replace, applyTheme, applyAccent, onThemeChange } from './components.js';
 import { relTime } from './fmt.js';
 
 const routes = [
@@ -10,7 +11,9 @@ const routes = [
   { pattern: /^\/nodes\/new$/, view: () => import('./views/node-editor.js'), nav: 'nodes' },
   { pattern: /^\/nodes\/(\d+)\/edit$/, view: () => import('./views/node-editor.js'), params: ['id'], nav: 'nodes' },
   { pattern: /^\/nodes\/(\d+)$/, view: () => import('./views/node-detail.js'), params: ['id'], nav: 'nodes' },
+  { pattern: /^\/charts(?:\/([\w-]+))?$/, view: () => import('./views/charts.js'), params: ['id'], nav: 'charts' },
   { pattern: /^\/incidents$/, view: () => import('./views/incidents.js'), nav: 'incidents' },
+  { pattern: /^\/audit(?:\/([a-z]+))?$/, view: () => import('./views/audit.js'), params: ['tab'], nav: 'audit' },
   { pattern: /^\/settings(?:\/([a-z]+))?$/, view: () => import('./views/settings.js'), params: ['tab'], nav: 'settings' },
   { pattern: /^\/wallboard$/, view: () => import('./views/wallboard.js'), nav: 'wallboard', wallboard: true },
 ];
@@ -21,12 +24,41 @@ const subtitleEl = document.getElementById('page-subtitle');
 const actionsEl = document.getElementById('page-actions');
 const banner = document.getElementById('api-banner');
 const healthLink = document.getElementById('service-health');
+const dotsEl = document.getElementById('status-dots');
+const rail = document.getElementById('rail');
+const railPin = document.getElementById('rail-pin');
 
 let current = null; // { instance, route, path }
 let navToken = 0;
 
-/* Sidebar icons */
+/* Rail icons */
 document.querySelectorAll('[data-icon]').forEach((el) => { el.append(icon(el.dataset.icon)); });
+
+/* ---------- Rail pinning ---------- */
+function setRailPinned(pinned, persist = true) {
+  document.documentElement.classList.toggle('rail-pinned', pinned);
+  document.body.classList.toggle('rail-pinned', pinned);
+  railPin.setAttribute('aria-pressed', pinned ? 'true' : 'false');
+  railPin.title = pinned ? 'Collapse the sidebar to icons' : 'Keep the sidebar open';
+  railPin.querySelector('.label').textContent = pinned ? 'Unpin sidebar' : 'Pin sidebar';
+  if (persist) { try { localStorage.setItem('gw.railPinned', pinned ? '1' : '0'); } catch { /* ignore */ } }
+}
+setRailPinned(document.documentElement.classList.contains('rail-pinned'), false);
+railPin.addEventListener('click', () => setRailPinned(!document.documentElement.classList.contains('rail-pinned')));
+// Collapse the hover-expanded rail after a navigation click so it does not cover the page.
+rail.addEventListener('click', (e) => { if (e.target.closest('a')) rail.blur(); });
+
+/* ---------- Theme / accent from settings ---------- */
+let themeSettings = null;
+async function loadAppearance() {
+  try {
+    const s = await api.get('/api/settings');
+    themeSettings = s.general || {};
+    applyTheme(themeSettings.theme || 'dark');
+    applyAccent(themeSettings.accentColor || '#7c6cff');
+  } catch { /* keep the cached theme */ }
+}
+onThemeChange(() => { if (current?.instance?.themeChanged) { try { current.instance.themeChanged(); } catch (e) { console.error(e); } } });
 
 export function parseHash() {
   let hash = location.hash || '#/dashboard';
@@ -111,7 +143,7 @@ function updateBanner() {
   banner.hidden = connection.ok;
 }
 onConnection(updateBanner);
-document.getElementById('api-banner-retry').addEventListener('click', () => { refreshCurrent(); refreshHealth(); });
+document.getElementById('api-banner-retry').addEventListener('click', () => { refreshCurrent(); refreshHealth(); refreshStatus(); });
 
 /* ---------- Service health dot ---------- */
 let lastHealth = null;
@@ -121,7 +153,7 @@ async function refreshHealth() {
     renderHealth();
   } catch {
     lastHealth = null;
-    healthLink.className = 'service-health issue';
+    healthLink.className = 'nav-link service-health issue';
     healthLink.querySelector('.health-text').textContent = 'Service unreachable';
   }
 }
@@ -135,11 +167,27 @@ function renderHealth() {
   if (hl.retention?.lastError) issues.push('retention error');
   if (hl.backup?.lastBackupAt && !hl.backup.lastBackupOk) issues.push('backup failed');
   if (hl.recentErrors?.length) issues.push('recent errors');
-  healthLink.className = `service-health ${issues.length ? 'issue' : 'ok'}`;
-  healthLink.querySelector('.health-text').textContent = issues.length ? 'Service issue' : `Service healthy`;
-  healthLink.title = issues.length ? issues.join(', ') : `Last check ${relTime(hl.lastCheckAt)}`;
+  healthLink.className = `nav-link service-health ${issues.length ? 'issue' : 'ok'}`;
+  healthLink.querySelector('.health-text').textContent = issues.length ? 'Service issue' : 'Service healthy';
+  healthLink.title = issues.length ? issues.join(', ') : `Service healthy · last check ${relTime(hl.lastCheckAt)}`;
 }
 export function getHealth() { return lastHealth; }
+
+/* ---------- Header status circles ---------- */
+async function refreshStatus() {
+  let st;
+  try { st = await api.get('/api/status'); } catch { clear(dotsEl); return; }
+  clear(dotsEl);
+  const dot = (cls, n, label, href, title) => h('a', { class: `sdot ${cls}`, href, title }, h('i'), h('span', null, n != null ? `${n} ${label}` : label));
+  const items = [];
+  if (st.down > 0) items.push(dot('s-down', st.down, 'down', '#/nodes?status=down', 'Nodes that are down'));
+  if (st.degraded > 0) items.push(dot('s-degraded', st.degraded, 'degraded', '#/nodes?status=degraded', 'Nodes that are degraded'));
+  if (st.certWarnings > 0) items.push(dot('s-cert', st.certWarnings, st.certWarnings === 1 ? 'cert' : 'certs', '#/incidents?type=cert_warning', 'Certificates expiring soon or invalid'));
+  if (!st.serviceOk) items.push(dot('s-service', null, 'service', '#/settings/health', (st.serviceIssues || []).join(', ') || 'Service issue'));
+  if (st.unknown > 0 && !items.length) items.push(dot('s-unknown', st.unknown, 'waiting', '#/nodes?status=unknown', 'Waiting for first results'));
+  if (!items.length) items.push(dot('s-ok', null, st.total ? 'all clear' : 'no nodes', '#/dashboard', st.total ? `${st.up} of ${st.total} nodes healthy` : 'Add a node to start monitoring'));
+  dotsEl.append(...items);
+}
 
 /* ---------- Live updates ---------- */
 const refreshCurrent = debounce(() => {
@@ -148,13 +196,19 @@ const refreshCurrent = debounce(() => {
   }
 }, 500);
 const refreshHealthDebounced = debounce(refreshHealth, 2000);
+const refreshStatusDebounced = debounce(refreshStatus, 800);
 
 subscribeUpdates((update) => {
   refreshCurrent();
-  if (!update || update.kind === 'state' || update.kind === 'config' || update.kind === 'event') refreshHealthDebounced();
+  refreshStatusDebounced();
+  if (!update || update.kind === 'state' || update.kind === 'config' || update.kind === 'event' || update.kind === 'health') refreshHealthDebounced();
+  if (update && update.kind === 'config') loadAppearance();
 });
 setInterval(refreshHealth, 60000);
+setInterval(refreshStatus, 30000);
 refreshHealth();
+refreshStatus();
+loadAppearance();
 
 /* ---------- Relative-time ticking ---------- */
 setInterval(() => {

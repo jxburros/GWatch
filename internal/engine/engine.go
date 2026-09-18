@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jxburros/GWatch/internal/actions"
 	"github.com/jxburros/GWatch/internal/checks"
 	"github.com/jxburros/GWatch/internal/logging"
 	"github.com/jxburros/GWatch/internal/mailer"
@@ -58,6 +59,10 @@ type Engine struct {
 	windows  []model.MaintenanceWindow
 	activeMW map[int64]bool
 
+	triggers    map[int64][]model.Trigger // by node id
+	triggerLast map[int64]time.Time       // last run per trigger (cooldowns)
+	runner      *actions.Runner
+
 	sem      chan struct{}
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -101,6 +106,9 @@ func New(st *store.Store, log *logging.Logger, opts Options) *Engine {
 		running:  map[int64]bool{},
 		activeMW: map[int64]bool{},
 		subs:     map[chan Update]struct{}{},
+
+		triggers:    map[int64][]model.Trigger{},
+		triggerLast: map[int64]time.Time{},
 	}
 	return e
 }
@@ -264,6 +272,9 @@ func (e *Engine) ReloadConfig(ctx context.Context) error {
 	}
 	_ = oldNodes
 	e.mu.Unlock()
+	if err := e.loadTriggers(ctx); err != nil {
+		return err
+	}
 	e.broadcast(Update{Kind: "config"})
 	return nil
 }

@@ -43,6 +43,7 @@ export async function mount(root, ctx) {
   ctx.setTitle('Incidents', {
     subtitle: 'Outages, recoveries, alerts, maintenance and configuration changes',
     actions: [
+      h('a', { class: 'btn', href: '#/audit/events' }, icon('audit'), 'Full audit log'),
       h('a', { class: 'btn', href: `/api/export/events.csv${qs({ nodeId: state.nodeId || null, limit: 5000 })}`, download: 'events.csv' }, icon('download'), 'Export CSV'),
       h('button', { class: 'btn btn-primary', type: 'button', onclick: addNote }, icon('note'), 'Add note'),
     ],

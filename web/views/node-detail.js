@@ -5,26 +5,43 @@ import { h, icon, clear, replace, statusPill, statusGlyph, importanceBadge, tagL
 import { LineChart, toSeries, uptimeBar, uptimeLegend, SERIES_COLORS } from '../charts.js';
 import { relTime, ms as fmtMs, pct, dateTime, interval, plural, timeShort } from '../fmt.js';
 import { resultInspector } from './inspector.js';
+import { openTriggerEditor, triggerRow } from './automation.js';
 
 export async function mount(root, ctx) {
   const id = ctx.params.id;
-  const state = { node: null, events: [], range: '24h', charts: [], expanded: new Set(), results: new Map(), destroyed: false, history: null };
+  const state = { node: null, events: [], triggers: [], nodes: [], range: '24h', charts: [], expanded: new Set(), results: new Map(), destroyed: false, history: null };
 
   const headEl = h('div');
-  const bannersEl = h('div', { class: 'stack-sm', style: { marginBottom: '20px' } });
-  const checksEl = h('div', { class: 'stack' });
+  const bannersEl = h('div', { class: 'stack-sm', style: { marginBottom: '14px' } });
+  const checksEl = h('div', { class: 'stack-joined' });
+  const triggersEl = h('section', { class: 'card', 'aria-label': 'Triggers' });
   const chartsEl = h('section', { class: 'card', 'aria-label': 'History' });
   const eventsEl = h('section', { class: 'card', 'aria-label': 'Events' });
-  root.append(headEl, bannersEl, h('div', { class: 'stack' }, checksEl, chartsEl, eventsEl));
+  root.append(headEl, bannersEl, h('div', { class: 'stack' }, checksEl, chartsEl, triggersEl, eventsEl));
   headEl.append(skeleton({ lines: 2 }));
 
   async function load({ quiet = false } = {}) {
-    const [node, events] = await Promise.all([api.get(`/api/nodes/${id}`), api.get(`/api/events${qs({ nodeId: id, limit: 30 })}`).catch(() => [])]);
+    const [node, events, triggers, nodes] = await Promise.all([api.get(`/api/nodes/${id}`), api.get(`/api/events${qs({ nodeId: id, limit: 30 })}`).catch(() => []), api.get(`/api/triggers?nodeId=${id}`).catch(() => []), quiet && state.nodes.length ? Promise.resolve(state.nodes) : api.get('/api/nodes').catch(() => [])]);
     if (state.destroyed) return;
-    state.node = node; state.events = events || [];
-    renderHead(); renderBanners(); renderChecks(); renderEvents();
+    state.node = node; state.events = events || []; state.triggers = triggers || []; state.nodes = nodes || [];
+    renderHead(); renderBanners(); renderChecks(); renderTriggers(); renderEvents();
     if (!quiet || !state.history) await loadHistory();
     else await loadHistory();
+  }
+
+  /* ---------- Triggers ---------- */
+  async function loadTriggers() {
+    try { state.triggers = await api.get(`/api/triggers?nodeId=${id}`); } catch { /* keep */ }
+    if (!state.destroyed) renderTriggers();
+  }
+  function renderTriggers() {
+    const n = state.node;
+    clear(triggersEl);
+    triggersEl.append(h('div', { class: 'card-head' },
+      h('div', null, h('h2', null, icon('zap'), 'Triggers'), h('p', { class: 'note' }, 'Run a webhook, a git command, custom code or another node\'s checks when this node changes state.')),
+      h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: async () => { const saved = await openTriggerEditor(null, { node: n, nodes: state.nodes }); if (saved) loadTriggers(); } }, icon('plus'), 'Add trigger')));
+    if (!state.triggers.length) { triggersEl.append(h('p', { class: 'note' }, 'No triggers on this node. Example: when it goes down, POST to a Discord webhook; when it recovers, run "git pull" in your homelab repo.')); return; }
+    for (const t of state.triggers) triggersEl.append(triggerRow(t, { node: n, nodes: state.nodes, onChange: loadTriggers }));
   }
 
   /* ---------- Header ---------- */
@@ -52,11 +69,12 @@ export async function mount(root, ctx) {
       h('div', { class: 'd-title' },
         h('h1', null, statusPill(n.status || 'unknown', { large: true }), n.name),
         h('div', { class: 'd-meta' },
-          h('span', { class: 'host' }, n.host),
+          n.host ? h('span', { class: 'host' }, n.host) : null,
           n.group ? h('span', { class: 'tag tag-group' }, n.group) : null,
           ...(n.tags || []).map((t) => h('span', { class: 'tag' }, t)),
           importanceBadge(n.importance),
           n.template ? h('span', { class: 'dim small' }, `from ${n.template} template`) : null,
+          state.triggers.length ? h('a', { class: 'tag', href: '#triggers', onclick: (e) => { e.preventDefault(); triggersEl.scrollIntoView({ behavior: 'smooth' }); } }, icon('zap'), ` ${state.triggers.length} trigger${state.triggers.length === 1 ? '' : 's'}`) : null,
         ),
         n.notes ? h('p', { class: 'muted', style: { maxWidth: '720px', whiteSpace: 'pre-wrap' } }, n.notes) : null,
       ),
@@ -237,7 +255,7 @@ export async function mount(root, ctx) {
   /* ---------- Events ---------- */
   function renderEvents() {
     clear(eventsEl);
-    eventsEl.append(h('div', { class: 'card-head' }, h('h2', null, 'Events'), h('a', { class: 'btn btn-sm', href: `#/incidents?nodeId=${id}` }, 'Open timeline')));
+    eventsEl.append(h('div', { class: 'card-head' }, h('h2', null, 'Events'), h('div', { class: 'btn-group' }, h('a', { class: 'btn btn-sm', href: `#/incidents?nodeId=${id}` }, 'Timeline'), h('a', { class: 'btn btn-sm', href: `#/audit/events?nodeId=${id}` }, icon('audit'), 'Audit log'))));
     if (!state.events.length) { eventsEl.append(h('p', { class: 'note' }, 'No events recorded for this node yet.')); return; }
     const list = h('div', { class: 'event-rows' });
     for (const ev of state.events) list.append(eventRow(ev, { showNode: false }));

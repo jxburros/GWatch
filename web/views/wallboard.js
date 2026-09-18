@@ -3,7 +3,7 @@
 import { api } from '../api.js';
 import { h, icon, clear, replace, statusPill, statusMeta, emptyState } from '../components.js';
 import { relTime, ms as fmtMs, plural, dateShort, timeShort } from '../fmt.js';
-import { LineChart, toSeries } from '../charts.js';
+import { LineChart, toSeries, seriesColor } from '../charts.js';
 
 const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const DAYS_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -113,7 +113,7 @@ export async function mount(root, ctx) {
       chartsWrap.append(card);
       const chart = new LineChart(host, { unit: isLoss ? '%' : 'ms', legend: false, height: 150, minTickPx: 90, ariaLabel: `${hs.checkName} trend` });
       state.charts.push(chart);
-      chart.setData({ series: [toSeries(hs, isLoss ? 'loss' : 'avg', '#7c6cff')], from: hs.from, to: hs.to, bucketSeconds: hs.bucketSeconds || 0 });
+      chart.setData({ series: [toSeries(hs, isLoss ? 'loss' : 'avg', seriesColor(0))], from: hs.from, to: hs.to, bucketSeconds: hs.bucketSeconds || 0 });
     }
     right.append(chartsWrap);
     if (state._sideCard) { right.append(state._sideCard); state._sideCard = null; }
@@ -133,6 +133,7 @@ export async function mount(root, ctx) {
 
   return {
     refresh: () => load().catch(() => {}),
+    themeChanged() { if (state.data) render(); },
     destroy() { state.destroyed = true; clearInterval(state.timer); clearInterval(state.clockTimer); state.charts.forEach((c) => c.destroy()); },
   };
 }

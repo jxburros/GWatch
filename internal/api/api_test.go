@@ -22,6 +22,7 @@ import (
 	"github.com/jxburros/GWatch/internal/mailer"
 	"github.com/jxburros/GWatch/internal/model"
 	"github.com/jxburros/GWatch/internal/store"
+	"github.com/jxburros/GWatch/internal/update"
 )
 
 func newTestServer(t *testing.T) (*httptest.Server, *Server) {
@@ -44,7 +45,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *Server) {
 	}
 	t.Cleanup(eng.Stop)
 	web := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html>app</html>")}, "app.js": &fstest.MapFile{Data: []byte("//js")}}
-	srv := &Server{Engine: eng, Store: st, Log: log, Web: web, BackupDir: filepath.Join(dir, "backups"), Version: "test"}
+	srv := &Server{Engine: eng, Store: st, Log: log, Web: web, BackupDir: filepath.Join(dir, "backups"), Version: "test", Updater: &Updater{Client: &update.Client{}, Version: "test", Log: log}}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return ts, srv

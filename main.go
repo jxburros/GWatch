@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/jxburros/GWatch/internal/logging"
 	"github.com/jxburros/GWatch/internal/model"
 	"github.com/jxburros/GWatch/internal/store"
+	"github.com/jxburros/GWatch/internal/update"
 )
 
 //go:embed web
@@ -40,8 +42,12 @@ var version = "dev"
 const (
 	serviceName    = "GWatch"
 	serviceDisplay = "GWatch Network Monitor"
-	serviceDesc    = "Local-only monitoring of home network devices, servers and websites. Serves its web interface on http://127.0.0.1:8080."
+	serviceDesc    = "Monitoring of home network devices, servers and websites. Serves its web interface on http://127.0.0.1:8080 (or on the LAN when remote access is enabled)."
 )
+
+// restartExitCode tells a service manager that the process wants to be
+// restarted (the recovery action configured at install time restarts it).
+const restartExitCode = 3
 
 type config struct {
 	dataDir string
@@ -53,6 +59,7 @@ func usage() {
 
 Usage:
   gwatch [run] [--data-dir DIR] [--listen 127.0.0.1:8080]   run in the foreground (or as the service when started by Windows)
+                                                             use --listen 0.0.0.0:8080 (or Settings › Network) to allow other devices
   gwatch install [--data-dir DIR] [--listen ADDR]            install and start the background service (run as Administrator on Windows)
   gwatch uninstall                                           stop and remove the background service
   gwatch start | stop | restart | status                     control the installed service
@@ -74,7 +81,7 @@ func main() {
 	fs.Usage = usage
 	cfg := config{}
 	fs.StringVar(&cfg.dataDir, "data-dir", envOr("GWATCH_DATA_DIR", defaultDataDir()), "directory for the database, logs and backups")
-	fs.StringVar(&cfg.listen, "listen", envOr("GWATCH_LISTEN", "127.0.0.1:8080"), "localhost address to serve the web interface on")
+	fs.StringVar(&cfg.listen, "listen", envOr("GWATCH_LISTEN", "127.0.0.1:8080"), "address to serve the web interface on (127.0.0.1:8080 = this computer only, 0.0.0.0:8080 = whole network)")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -165,6 +172,68 @@ type program struct {
 	svc    service.Service
 	cancel context.CancelFunc
 	done   chan struct{}
+
+	restartMu sync.Mutex
+	restart   bool // set when the process should come back up after stopping
+	helper    bool // a detached "gwatch restart" helper is doing the restart
+	mode      string
+}
+
+// requestRestart shuts the application down and arranges for it to start
+// again (used after a self-update).
+func (p *program) requestRestart() {
+	p.restartMu.Lock()
+	if p.restart {
+		p.restartMu.Unlock()
+		return
+	}
+	p.restart = true
+	p.restartMu.Unlock()
+	if p.mode == "service" && runtime.GOOS == "windows" {
+		// A detached copy of the (new) executable asks the service manager
+		// to stop and start us; the SCM waits for our graceful shutdown.
+		if exe, err := update.Executable(); err == nil {
+			cmd := exec.Command(exe, "restart")
+			if err := cmd.Start(); err == nil {
+				p.restartMu.Lock()
+				p.helper = true
+				p.restartMu.Unlock()
+				go cmd.Wait()
+				return
+			}
+		}
+	}
+	if p.cancel != nil {
+		p.cancel()
+	}
+}
+
+// afterStop completes a requested restart once the application has shut down.
+func (p *program) afterStop() {
+	p.restartMu.Lock()
+	restart, helper := p.restart, p.helper
+	p.restartMu.Unlock()
+	if !restart || helper {
+		return
+	}
+	if p.mode == "service" {
+		// Leave it to the service manager (recovery action / Restart=always).
+		os.Exit(restartExitCode)
+	}
+	exe, err := update.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "restart: cannot find executable:", err)
+		os.Exit(restartExitCode)
+	}
+	cmd := exec.Command(exe, os.Args[1:]...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	cmd.Env = append(os.Environ(), "GWATCH_RESTARTED=1")
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintln(os.Stderr, "restart failed:", err)
+		os.Exit(restartExitCode)
+	}
+	fmt.Println("GWatch restarted as a new process.")
+	os.Exit(0)
 }
 
 func (p *program) Start(s service.Service) error {
@@ -175,13 +244,21 @@ func (p *program) Start(s service.Service) error {
 	if !service.Interactive() && (runtime.GOOS == "windows" || os.Getenv("INVOCATION_ID") != "") {
 		mode = "service"
 	}
+	p.mode = mode
 	go func() {
 		defer close(p.done)
-		if err := runApp(ctx, p.cfg, mode); err != nil {
+		if err := runApp(ctx, p.cfg, mode, p.requestRestart); err != nil {
 			fmt.Fprintln(os.Stderr, "fatal:", err)
 			if mode == "console" {
 				os.Exit(1)
 			}
+			return
+		}
+		p.afterStop()
+		if mode == "console" && service.Interactive() {
+			// Ctrl+C or a restart request in console mode: leave the
+			// process instead of waiting for a service manager.
+			os.Exit(0)
 		}
 	}()
 	return nil
@@ -199,8 +276,9 @@ func (p *program) Stop(s service.Service) error {
 }
 
 // runApp opens the database, starts the engine and serves the API until ctx
-// is cancelled or an interrupt arrives.
-func runApp(ctx context.Context, cfg config, mode string) error {
+// is cancelled or an interrupt arrives. requestRestart is invoked after a
+// successful self-update.
+func runApp(ctx context.Context, cfg config, mode string, requestRestart func()) error {
 	if err := os.MkdirAll(cfg.dataDir, 0o755); err != nil {
 		return fmt.Errorf("create data dir %s: %w", cfg.dataDir, err)
 	}
@@ -233,37 +311,55 @@ func runApp(ctx context.Context, cfg config, mode string) error {
 	if err != nil {
 		return err
 	}
-	srv := &api.Server{Engine: eng, Store: st, Log: log, Web: webFS, BackupDir: filepath.Join(cfg.dataDir, "backups"), Version: version}
+	lm := &listenManager{base: cfg.listen, log: log}
+	srv := &api.Server{Engine: eng, Store: st, Log: log, Web: webFS, BackupDir: filepath.Join(cfg.dataDir, "backups"), Version: version,
+		Updater: &api.Updater{Client: &update.Client{}, Version: version, Restart: requestRestart, Log: log},
+		Network: func() model.NetworkInfo { return lm.info(eng.Settings().General) },
+	}
 	httpServer := &http.Server{
-		Addr:              cfg.listen,
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       5 * time.Minute, // large backup uploads
 		IdleTimeout:       2 * time.Minute,
 	}
-	ln, err := net.Listen("tcp", cfg.listen)
-	if err != nil {
-		eng.Stop()
-		return fmt.Errorf("listen on %s: %w (is another copy of GWatch already running?)", cfg.listen, err)
-	}
-	log.Printf("web interface available at http://%s", browserHost(cfg.listen))
-	if mode == "console" {
-		fmt.Printf("GWatch %s is running. Open http://%s — press Ctrl+C to stop.\n", version, browserHost(cfg.listen))
-	}
+	lm.server = httpServer
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- httpServer.Serve(ln) }()
+	if err := lm.apply(eng.Settings().General, errCh); err != nil {
+		eng.Stop()
+		return err
+	}
+	if mode == "console" {
+		fmt.Printf("GWatch %s is running. Open http://%s — press Ctrl+C to stop.\n", version, browserHost(lm.current()))
+	}
+
+	// Re-bind when the remote access setting changes.
+	updates := eng.Subscribe()
+	defer eng.Unsubscribe(updates)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	select {
-	case <-ctx.Done():
-	case sig := <-sigCh:
-		log.Printf("received %s, shutting down", sig)
-	case err := <-errCh:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			eng.Stop()
-			return fmt.Errorf("http server: %w", err)
+	defer signal.Stop(sigCh)
+loop:
+	for {
+		select {
+		case <-ctx.Done():
+			break loop
+		case sig := <-sigCh:
+			log.Printf("received %s, shutting down", sig)
+			break loop
+		case err := <-errCh:
+			if err != nil && !errors.Is(err, http.ErrServerClosed) && !lm.closing(err) {
+				eng.Stop()
+				return fmt.Errorf("http server: %w", err)
+			}
+		case u := <-updates:
+			if u.Kind == "config" {
+				if err := lm.apply(eng.Settings().General, errCh); err != nil {
+					log.Errorf("listen: %v", err)
+					eng.RecordError("network listen", err)
+				}
+			}
 		}
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -273,6 +369,134 @@ func runApp(ctx context.Context, cfg config, mode string) error {
 	_ = st.Checkpoint(context.Background())
 	log.Printf("GWatch stopped")
 	return nil
+}
+
+// listenManager owns the TCP listener and can move it between the loopback
+// address and all interfaces when the remote-access setting changes.
+type listenManager struct {
+	base   string // address from the command line
+	log    *logging.Logger
+	server *http.Server
+
+	mu       sync.Mutex
+	ln       net.Listener
+	addr     string // effective address
+	expected map[net.Listener]bool
+	lastErr  string
+}
+
+// effective returns the address to bind for the given settings.
+func effectiveListen(base string, g model.GeneralSettings) string {
+	host, port, err := net.SplitHostPort(base)
+	if err != nil {
+		return base
+	}
+	if g.RemoteAccess && isLoopbackHost(host) {
+		return net.JoinHostPort("", port)
+	}
+	return base
+}
+
+func (m *listenManager) current() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.addr
+}
+
+// closing reports whether err came from a listener we deliberately closed.
+func (m *listenManager) closing(err error) bool {
+	return errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "use of closed network connection")
+}
+
+// apply (re)binds the listener when the effective address changed.
+func (m *listenManager) apply(g model.GeneralSettings, errCh chan error) error {
+	want := effectiveListen(m.base, g)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ln != nil && m.addr == want {
+		return nil
+	}
+	old := m.ln
+	if old != nil {
+		_ = old.Close()
+		m.ln = nil
+		// Give the OS a moment to release the port before rebinding on all interfaces.
+		time.Sleep(150 * time.Millisecond)
+	}
+	ln, err := listenWithRetry(want)
+	if err != nil {
+		m.lastErr = err.Error()
+		if old != nil {
+			// Fall back to the previous address so the UI stays reachable.
+			if prev, err2 := listenWithRetry(m.addr); err2 == nil {
+				m.ln = prev
+				go func() { errCh <- m.server.Serve(prev) }()
+			}
+		}
+		return fmt.Errorf("listen on %s: %w (is another copy of GWatch already running?)", want, err)
+	}
+	m.lastErr = ""
+	m.ln = ln
+	m.addr = want
+	m.log.Printf("web interface available at http://%s%s", browserHost(want), map[bool]string{true: " (reachable from other devices)", false: " (this computer only)"}[!isLoopbackHost(hostOf(want))])
+	go func() { errCh <- m.server.Serve(ln) }()
+	return nil
+}
+
+// listenWithRetry binds addr, retrying for a while when the port is still
+// held by a previous instance (self-update restart).
+func listenWithRetry(addr string) (net.Listener, error) {
+	deadline := time.Now().Add(2 * time.Second)
+	if os.Getenv("GWATCH_RESTARTED") != "" {
+		deadline = time.Now().Add(30 * time.Second)
+	}
+	for {
+		ln, err := net.Listen("tcp", addr)
+		if err == nil || time.Now().After(deadline) {
+			return ln, err
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+func (m *listenManager) info(g model.GeneralSettings) model.NetworkInfo {
+	m.mu.Lock()
+	addr, lastErr := m.addr, m.lastErr
+	m.mu.Unlock()
+	host, portStr, _ := net.SplitHostPort(addr)
+	port := 0
+	fmt.Sscanf(portStr, "%d", &port)
+	remote := !isLoopbackHost(host)
+	info := model.NetworkInfo{ListenAddress: addr, RemoteAccess: remote, PasswordSet: g.AccessPassword != "", Port: port, LocalURL: "http://" + browserHost(addr), LANURLs: []string{}, RestartNeeded: lastErr != ""}
+	if hn, err := os.Hostname(); err == nil {
+		info.Hostname = hn
+	}
+	if remote {
+		for _, ip := range api.LANAddresses() {
+			info.LANURLs = append(info.LANURLs, fmt.Sprintf("http://%s:%d", ip, port))
+		}
+		if info.Hostname != "" {
+			info.LANURLs = append(info.LANURLs, fmt.Sprintf("http://%s:%d", strings.ToLower(info.Hostname), port))
+		}
+	}
+	return info
+}
+
+func hostOf(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return host
+}
+
+// isLoopbackHost reports whether host only binds this computer.
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func stdoutWriter(f *os.File) *os.File {
@@ -327,19 +551,22 @@ func defaultDataDir() string {
 	return "data"
 }
 
-// validateListen enforces the local-only rule: the interface may only bind
-// to a loopback address.
+// validateListen checks the listen address is well formed. Any host is
+// accepted: 127.0.0.1 keeps the interface private to this computer, while
+// 0.0.0.0 (or Settings › Network › remote access) opens it to the LAN.
 func validateListen(addr string) error {
-	host, _, err := net.SplitHostPort(addr)
+	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return fmt.Errorf("invalid listen address %q (expected host:port)", addr)
+	}
+	if port == "" {
+		return fmt.Errorf("invalid listen address %q (a port is required)", addr)
 	}
 	if host == "" || strings.EqualFold(host, "localhost") {
 		return nil
 	}
-	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		return fmt.Errorf("GWatch is local-only: the listen address must be a loopback address such as 127.0.0.1:8080")
+	if ip := net.ParseIP(host); ip == nil {
+		return fmt.Errorf("invalid listen address %q (the host must be an IP address such as 127.0.0.1 or 0.0.0.0)", addr)
 	}
 	return nil
 }

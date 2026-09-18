@@ -273,6 +273,9 @@ func (s *Store) migrate() error {
 		if _, err := tx.ExecContext(ctx, schema); err != nil {
 			return fmt.Errorf("apply schema: %w", err)
 		}
+		if _, err := tx.ExecContext(ctx, automationSchema); err != nil {
+			return fmt.Errorf("apply automation schema: %w", err)
+		}
 		var version int
 		err := tx.QueryRowContext(ctx, "SELECT version FROM schema_version LIMIT 1").Scan(&version)
 		if errors.Is(err, sql.ErrNoRows) {

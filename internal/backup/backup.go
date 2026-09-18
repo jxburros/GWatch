@@ -43,6 +43,9 @@ type Config struct {
 	Nodes       []model.Node              `json:"nodes"`
 	Dashboards  []model.Dashboard         `json:"dashboards"`
 	Maintenance []model.MaintenanceWindow `json:"maintenance"`
+	Triggers    []model.Trigger           `json:"triggers,omitempty"`
+	Endpoints   []model.Endpoint          `json:"endpoints,omitempty"`
+	Charts      []model.SavedChart        `json:"charts,omitempty"`
 }
 
 // Summary reports what a restore imported.
@@ -77,6 +80,15 @@ func ExportConfig(ctx context.Context, st *store.Store) (Config, error) {
 		return cfg, err
 	}
 	if cfg.Maintenance, err = st.ListMaintenance(ctx); err != nil {
+		return cfg, err
+	}
+	if cfg.Triggers, err = st.ListTriggers(ctx, nil); err != nil {
+		return cfg, err
+	}
+	if cfg.Endpoints, err = st.ListEndpoints(ctx); err != nil {
+		return cfg, err
+	}
+	if cfg.Charts, err = st.ListSavedCharts(ctx); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
@@ -332,6 +344,23 @@ func Restore(ctx context.Context, st *store.Store, path, password string, includ
 	for _, m := range cfg.Maintenance {
 		m.ID = 0
 		if _, err := st.SaveMaintenance(ctx, m); err != nil {
+			return sum, err
+		}
+	}
+	for _, t := range cfg.Triggers {
+		t.ID = 0
+		if _, err := st.SaveTrigger(ctx, t); err != nil {
+			return sum, err
+		}
+	}
+	for _, e := range cfg.Endpoints {
+		e.ID = 0
+		if _, err := st.SaveEndpoint(ctx, e); err != nil {
+			return sum, err
+		}
+	}
+	if len(cfg.Charts) > 0 {
+		if err := st.SaveSavedCharts(ctx, cfg.Charts); err != nil {
 			return sum, err
 		}
 	}

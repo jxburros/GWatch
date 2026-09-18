@@ -1,0 +1,6 @@
+# Keep LF everywhere so gofmt, go mod tidy and the embedded web assets
+# are byte-identical on Windows runners and checkouts.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.png binary
+*.gwbackup binary

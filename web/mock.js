@@ -301,7 +301,7 @@
 
   /* ---------- Settings / health / backups ---------- */
   let settings = {
-    general: { instanceName: 'Home monitor', defaultIntervalSeconds: 60, defaultTimeoutSeconds: 10, maxConcurrentChecks: 8, minIntervalSeconds: 10, wallboardRefreshSeconds: 15, latencyWarnMs: 0, packetLossWarnPct: 0, theme: 'dark' },
+    general: { instanceName: 'Home monitor', defaultIntervalSeconds: 60, defaultTimeoutSeconds: 10, maxConcurrentChecks: 8, minIntervalSeconds: 10, wallboardRefreshSeconds: 15, latencyWarnMs: 0, packetLossWarnPct: 0, theme: 'dark', accentColor: '#7c6cff', remoteAccess: false, accessPassword: '', updateRepo: 'jxburros/GWatch' },
     alerts: { enabled: true, recipients: ['jeff@example.com', 'sam@example.com'], failureThreshold: 2, cooldownMinutes: 60, notifyRecovery: true, notifyWarnings: true, certWarnDays: 14, smtp: { host: 'smtp.example.com', port: 587, username: 'gwatch@example.com', password: '********', from: 'GWatch <gwatch@example.com>', security: 'starttls' } },
     retention: { rawDays: 30, fiveMinDays: 180, hourlyDays: 730, dailyDays: 0, eventDays: 730 },
   };
@@ -534,6 +534,16 @@
   on('GET', /^\/api\/history$/, (m, body, u) => { const ids = u.searchParams.getAll('checkId'); const range = u.searchParams.get('range') || '24h'; if (ids.length === 1) return history(ids[0], range); return ids.map((id) => history(id, range)); });
   on('GET', /^\/api\/history\/multi$/, (m, body, u) => { const ids = u.searchParams.getAll('checkId'); const range = u.searchParams.get('range') || '24h'; return ids.map((id) => history(id, range)); });
   on('GET', /^\/api\/events$/, (m, body, u) => {
+    const q = (u.searchParams.get('q') || '').toLowerCase();
+    const until = u.searchParams.get('until');
+    if (q || until) {
+      const untilT = until ? +new Date(until) : Infinity;
+      const filtered = events.filter((e) => (!q || [e.title, e.detail, e.nodeName, e.checkName, e.type].some((x) => (x || '').toLowerCase().includes(q))) && +new Date(e.ts) < untilT);
+      const before = Number(u.searchParams.get('before')) || 0;
+      const type = u.searchParams.get('type');
+      const nid = u.searchParams.get('nodeId');
+      return clone(filtered.filter((e) => (!before || e.id < before) && (!type || e.type === type) && (!nid || e.nodeId === Number(nid))).slice(0, Number(u.searchParams.get('limit')) || 100));
+    }
     let list = events;
     const type = u.searchParams.get('type'); const nodeId = u.searchParams.get('nodeId'); const checkId = u.searchParams.get('checkId'); const before = u.searchParams.get('before'); const limit = Number(u.searchParams.get('limit')) || 100;
     if (type) list = list.filter((e) => e.type === type || (type === 'warning' && e.type === 'warning_cleared') || (type === 'cert_warning' && e.type === 'cert_warning_cleared') || (type === 'silenced' && e.type === 'unsilenced'));
@@ -552,7 +562,7 @@
   on('PUT', /^\/api\/dashboards\/(\d+)$/, (m, body) => { const d = dashboards.find((x) => x.id === Number(m[1])); if (!d) throw err(404, 'dashboard not found'); d.name = body.name ?? d.name; d.widgets = body.widgets ?? d.widgets; d.updatedAt = iso(Date.now()); return clone(d); });
   on('DELETE', /^\/api\/dashboards\/(\d+)$/, (m) => { const i = dashboards.findIndex((x) => x.id === Number(m[1])); if (i < 0) throw err(404, 'dashboard not found'); dashboards.splice(i, 1); return { ok: true }; });
   on('GET', /^\/api\/settings$/, () => clone(settings));
-  on('PUT', /^\/api\/settings$/, (m, body) => { settings = clone(body); if (settings.alerts?.smtp?.password) settings.alerts.smtp.password = '********'; addEvent('config_changed', { title: 'Settings changed' }); return clone(settings); });
+  on('PUT', /^\/api\/settings$/, (m, body) => { settings = clone(body); if (settings.alerts?.smtp?.password) settings.alerts.smtp.password = '********'; if (settings.general?.accessPassword) settings.general.accessPassword = '********'; addEvent('config_changed', { title: 'Settings changed' }); return clone(settings); });
   on('POST', /^\/api\/settings\/test-email$/, (m, body) => { if (!settings.alerts.smtp.host) throw err(400, 'SMTP host is not configured'); return { ok: true, message: `Test email sent to ${body?.to || settings.alerts.recipients.join(', ')} via ${settings.alerts.smtp.host}` }; });
   on('GET', /^\/api\/retention\/status$/, () => retention);
   on('POST', /^\/api\/retention\/run$/, () => { retention = { ...retention, lastRunAt: iso(Date.now()), lastDurationMs: 1830, deletedLastRun: 1043, rawRows: retention.rawRows - 1043, rollupRows5m: retention.rollupRows5m + 288 }; addEvent('retention', { title: 'Retention run finished', detail: 'Rolled up 1,043 raw results · 1.8 s' }); return retention; });
@@ -566,6 +576,33 @@
   on('GET', /^\/api\/export\/results\.csv$/, (m, body, u) => ({ __csv: ['timestamp,success,status,message,latency_ms', ...(resultLog[u.searchParams.get('checkId')] || []).map((r) => [r.ts, r.success, r.status, JSON.stringify(r.message), r.latencyMs ?? ''].join(','))].join('\n') }));
   on('GET', /^\/api\/export\/events\.csv$/, () => ({ __csv: ['timestamp,type,node,check,title,detail', ...events.map((e) => [e.ts, e.type, e.nodeName || '', e.checkName || '', JSON.stringify(e.title), JSON.stringify(e.detail)].join(','))].join('\n') }));
   on('GET', /^\/api\/export\/config\.json$/, () => ({ nodes: clone(nodes), dashboards: clone(dashboards), maintenance: clone(maintenance) }));
+
+  /* ---------- Added endpoints: status, network, charts, automation, updates ---------- */
+  let savedCharts = [{ id: 'chart-1', name: 'Gateway latency', config: { checkIds: [gateway.checks[0].id], metric: 'avg', range: '24h', style: 'area', threshold: 40 }, updatedAt: ago(3 * DAY) }];
+  const triggers = [{ id: 1, nodeId: plex.id, name: 'Restart Plex container', description: '', enabled: true, on: ['down'], checkId: null, latencyOverMs: 0, action: { type: 'script', interpreter: 'sh', code: 'docker restart plex' }, cooldownMinutes: 30, lastRunAt: ago(2 * HOUR), lastStatus: 'ok', lastOutput: 'plex', runCount: 3, createdAt: ago(10 * DAY), updatedAt: ago(10 * DAY) },
+    { id: 2, nodeId: gateway.id, name: 'Post to Discord', description: 'Outage channel', enabled: true, on: ['down', 'recovered'], checkId: null, latencyOverMs: 0, action: { type: 'http', method: 'POST', url: 'https://discord.com/api/webhooks/…', body: '{"content":"{{node.name}} is {{status}}"}' }, cooldownMinutes: 0, lastRunAt: null, lastStatus: '', lastOutput: '', runCount: 0, createdAt: ago(3 * DAY), updatedAt: ago(3 * DAY) }];
+  const endpoints = [{ id: 1, name: 'Router rebooted', slug: 'router-rebooted', description: 'Called by the router after a reboot', enabled: true, method: 'POST', token: 'abc123', action: { type: 'run_node', nodeId: gateway.id }, lastCalledAt: ago(5 * DAY), lastStatus: 'ok', lastOutput: 'Ran the checks of node 21.', callCount: 4, createdAt: ago(20 * DAY), updatedAt: ago(20 * DAY) }];
+  let updateStatus = { last: null, applying: false, applied: false, restarting: false, lastApplyAt: null, lastError: '', executable: 'C:\\Program Files\\GWatch\\gwatch.exe', canApply: true };
+  on('GET', /^\/api\/status$/, () => { const ov = overview(); return { down: ov.summary.down, degraded: ov.summary.degraded, unknown: ov.summary.unknown, up: ov.summary.up, total: ov.summary.total, certWarnings: ov.certWarnings.length, maintenance: ov.summary.maintenance, serviceOk: true, serviceIssues: [], attention: ov.attention.length, generatedAt: iso(Date.now()) }; });
+  on('GET', /^\/api\/network$/, () => ({ listenAddress: settings.general.remoteAccess ? ':8080' : '127.0.0.1:8080', remoteAccess: !!settings.general.remoteAccess, passwordSet: !!settings.general.accessPassword, port: 8080, localUrl: 'http://127.0.0.1:8080', lanUrls: settings.general.remoteAccess ? ['http://192.168.1.10:8080', 'http://desktop-pc:8080'] : [], hostname: 'desktop-pc', restartNeeded: false }));
+  on('GET', /^\/api\/charts$/, () => clone(savedCharts));
+  on('PUT', /^\/api\/charts$/, (m, body) => { savedCharts = (body || []).map((c, i) => ({ ...c, id: c.id || `chart-${Date.now()}${i}`, name: c.name || `Chart ${i + 1}`, updatedAt: iso(Date.now()) })); return clone(savedCharts); });
+  on('GET', /^\/api\/automation\/meta$/, () => ({ conditions: ['down', 'recovered', 'degraded', 'warning_cleared', 'cert_warning', 'content_changed', 'affected_by_parent', 'status_change', 'any_failure', 'any_success', 'latency_over'], interpreters: ['sh', 'bash', 'powershell', 'cmd', 'python', 'node', 'custom'], defaultInterpreter: 'powershell', placeholders: [] }));
+  on('GET', /^\/api\/triggers$/, (m, body, u) => { const nid = u.searchParams.get('nodeId'); return clone(nid ? triggers.filter((t) => t.nodeId === Number(nid)) : triggers); });
+  on('POST', /^\/api\/triggers$/, (m, body) => { const t = { ...body, id: triggers.length ? Math.max(...triggers.map((x) => x.id)) + 1 : 1, lastRunAt: null, lastStatus: '', lastOutput: '', runCount: 0, createdAt: iso(Date.now()), updatedAt: iso(Date.now()) }; triggers.push(t); addEvent('config_changed', { title: `Trigger saved: ${t.name}` }); return clone(t); });
+  on('PUT', /^\/api\/triggers\/(\d+)$/, (m, body) => { const t = triggers.find((x) => x.id === Number(m[1])); if (!t) throw err(404, 'not found'); Object.assign(t, body, { id: t.id, updatedAt: iso(Date.now()) }); return clone(t); });
+  on('DELETE', /^\/api\/triggers\/(\d+)$/, (m) => { const i = triggers.findIndex((x) => x.id === Number(m[1])); if (i < 0) throw err(404, 'not found'); triggers.splice(i, 1); return { ok: true }; });
+  on('POST', /^\/api\/triggers\/(\d+)\/run$/, (m) => { const t = triggers.find((x) => x.id === Number(m[1])); if (!t) throw err(404, 'not found'); t.lastRunAt = iso(Date.now()); t.lastStatus = 'ok'; t.runCount++; t.lastOutput = 'mock run'; addEvent('trigger_fired', { nodeId: t.nodeId, nodeName: findNode(t.nodeId)?.name, title: `Trigger ran: ${t.name}`, detail: `${t.action.type} action on manual — mock run` }); return { ok: true, output: 'mock run', startedAt: t.lastRunAt, durationMs: 42 }; });
+  on('POST', /^\/api\/actions\/test$/, (m, body) => ({ ok: true, output: `mock: would run a ${body?.action?.type} action`, startedAt: iso(Date.now()), durationMs: 12, statusCode: body?.action?.type === 'http' ? 200 : 0 }));
+  on('GET', /^\/api\/endpoints$/, () => clone(endpoints));
+  on('POST', /^\/api\/endpoints$/, (m, body) => { const e = { ...body, id: endpoints.length ? Math.max(...endpoints.map((x) => x.id)) + 1 : 1, slug: (body.slug || body.name || 'hook').toLowerCase().replace(/[^a-z0-9_-]+/g, '-'), lastCalledAt: null, lastStatus: '', lastOutput: '', callCount: 0, createdAt: iso(Date.now()), updatedAt: iso(Date.now()) }; if (endpoints.some((x) => x.slug === e.slug)) throw err(400, `an endpoint with the slug "${e.slug}" already exists`); endpoints.push(e); return clone(e); });
+  on('PUT', /^\/api\/endpoints\/(\d+)$/, (m, body) => { const e = endpoints.find((x) => x.id === Number(m[1])); if (!e) throw err(404, 'not found'); Object.assign(e, body, { id: e.id, updatedAt: iso(Date.now()) }); return clone(e); });
+  on('DELETE', /^\/api\/endpoints\/(\d+)$/, (m) => { const i = endpoints.findIndex((x) => x.id === Number(m[1])); if (i < 0) throw err(404, 'not found'); endpoints.splice(i, 1); return { ok: true }; });
+  on('POST', /^\/api\/endpoints\/(\d+)\/run$/, (m) => { const e = endpoints.find((x) => x.id === Number(m[1])); if (!e) throw err(404, 'not found'); e.lastCalledAt = iso(Date.now()); e.lastStatus = 'ok'; e.callCount++; addEvent('endpoint_called', { title: `Endpoint called: ${e.name}` }); return { ok: true, output: 'mock run', startedAt: e.lastCalledAt, durationMs: 8 }; });
+  on('GET', /^\/api\/update\/status$/, () => ({ status: clone(updateStatus), repo: settings.general.updateRepo || 'jxburros/GWatch', version: '0.4.1' }));
+  on('POST', /^\/api\/update\/check$/, () => { updateStatus.last = { repo: 'jxburros/GWatch', currentVersion: '0.4.1', latestVersion: '0.5.0', updateAvailable: true, currentIsDev: false, releaseUrl: 'https://github.com/jxburros/GWatch/releases', releaseNotes: '- Charts tab\n- Audit tab\n- Triggers and endpoints', publishedAt: ago(2 * DAY), assetName: 'gwatch-windows-amd64.exe', assetUrl: '', assetSize: 12_000_000, checkedAt: iso(Date.now()) }; addEvent('update', { title: 'Checked for updates', detail: 'Current 0.4.1, latest 0.5.0 — update available' }); return clone(updateStatus.last); });
+  on('POST', /^\/api\/update\/apply$/, () => { updateStatus.applied = true; updateStatus.restarting = true; updateStatus.lastApplyAt = iso(Date.now()); addEvent('update', { title: 'Update installed: 0.5.0' }); return { ok: true, info: updateStatus.last, restarting: true }; });
+  on('GET', /^\/api\/export\/logs\.txt$/, () => ({ __csv: logLines.join('\n') }));
 
   const realFetch = window.fetch.bind(window);
   window.fetch = async function mockFetch(input, init = {}) {
