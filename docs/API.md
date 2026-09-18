@@ -4,11 +4,105 @@ All endpoints are served by the local service on `http://127.0.0.1:8080` (config
 return JSON unless noted. Errors are `{"error": "message"}` with a 4xx/5xx status.
 Timestamps are RFC 3339 strings. Field names match `internal/model/model.go`.
 
-When an access password is set (Settings › Network access) every request from a
-non-loopback client must carry HTTP basic auth (any user name, that password). Requests
-from this computer and calls to `/hook/…` are exempt; hooks use their own token.
-
 Static UI: `GET /` serves `web/index.html`; `/app.js`, `/app.css` etc. are served from `web/`.
+
+## Versioning
+
+`/api/v1/…` is the stable prefix. Every route documented here is served under both
+`/api/…` and `/api/v1/…`; the unprefixed form is an alias of the current version and
+follows it. Breaking changes bump the prefix (`/api/v2/…`) and the old prefix keeps
+working for at least one release, so integrations should use `/api/v1/…`.
+
+Every API response carries `X-GWatch-API-Version: 1`, and `GET /api/version` returns
+`{"version": "0.4.1", "platform": "windows/amd64", "apiVersion": 1}` (`platform` is
+omitted for callers who have not identified themselves).
+
+## Authentication and roles
+
+Every request resolves to a **principal**, in this order of precedence:
+
+| Kind | How it identifies itself | Standing |
+| --- | --- | --- |
+| `apikey` | `Authorization: Bearer gw_…` or `X-API-Key: gw_…` | its scope, never administrator |
+| `user` | the `gwatch_session` cookie from `POST /api/auth/login` | its role, `admin` or `viewer` |
+| `password` | HTTP basic auth with the legacy access password (any user name) | administrator |
+| `local` | a client on the computer GWatch runs on | administrator |
+| anonymous | nothing | nothing but the public routes |
+
+A browser on the computer GWatch runs on is an administrator without signing in. That
+is what keeps a fresh install, and every install that predates accounts, working with
+no setup. Turn on `general.requireLoginLocally` once accounts exist and even loopback
+has to sign in. The legacy access password keeps working for existing scripts.
+
+`GET /api/me` reports the current principal:
+
+```json
+{"kind":"user","name":"pat","role":"admin","isAdmin":true,"canWrite":true,"signedIn":true,
+ "theme":"dark","accentColor":"#7c6cff"}
+```
+
+**Roles.** `admin` may change anything. `viewer` may read the overview, status,
+wallboard, stream, nodes and checks, history, events, maintenance, dashboards, charts,
+groups, templates, the CSV exports of history/results/events, the service log, and the
+list of triggers and endpoints — with the endpoint `token` field blanked and a
+`hasToken` boolean added. Everything else answers 403.
+
+**API keys** are minted in Settings › Users & access (`POST /api/apikeys`) and shown
+once. Only a sha256 digest and the first 12 characters are stored. A key is never an
+administrator, whatever its scope:
+
+- `read` — the viewer read list above, minus the service log, triggers, endpoints,
+  automation metadata, retention status and update status.
+- `readwrite` — the same, plus creating, updating, deleting, enabling, running and
+  silencing nodes and checks, notes, maintenance windows, dashboards and charts.
+
+**Denied to every key, whatever its scope** (403, not 401):
+`GET|PUT /api/settings`, `POST /api/settings/test-email`, `GET /api/network`,
+everything under `/api/backups`, `GET /api/export/config.json`, `GET /api/logs`,
+`GET /api/export/logs.txt`, everything under `/api/triggers` (including `GET`),
+everything under `/api/endpoints` (including `GET`), `POST /api/actions/test`,
+`GET /api/automation/meta`, `GET /api/retention/status`, `POST /api/retention/run`,
+`GET|POST /api/update/…`, everything under `/api/users` and `/api/apikeys`, and
+`POST /api/auth/change-password`.
+
+That list is deliberate and tested: a key is for reading a monitor from elsewhere, not
+for administering the machine it runs on. It is the same boundary the planned MCP
+companion runs into.
+
+**Status codes.** `401` with `{"error":"sign in required"}` means no valid credential
+was presented; `WWW-Authenticate: Basic` is only sent when the install still uses the
+old access password and has no accounts. `403` means the credential is valid but not
+entitled, and the message says why — for example `This API key is read-only.` or
+`This action needs an administrator account (you are signed in as viewer "pat").`
+
+**Rate limits.** Failed credentials (sign-in, API key, access password) are limited to
+10 per minute per client IP; API-key requests from off this machine are limited to 300
+per minute per client IP. Both answer `429` with `Retry-After` in seconds.
+
+**Public routes**, reachable without any credential: `GET /api/health` (liveness only —
+`{"serviceRunning","schedulerRunning","now"}` — until the caller identifies itself),
+`GET /api/version`, `GET /api/me`, `GET /api/auth/setup`, `POST /api/auth/login`,
+`POST /api/auth/logout`, the static UI, and `/hook/…`, which is guarded by each
+endpoint's own token rather than by the sign-in.
+
+Anything not listed in the policy table is admin-only with API keys denied, so a new
+route is closed until it is opened on purpose.
+
+### Sign-in and accounts
+
+- `GET /api/auth/setup` → `{ "usersConfigured": bool, "loginRequired": bool, "accessPasswordSet": bool, "localLoginForced": bool, "apiVersion": 1 }`. `loginRequired` is about *this* client.
+- `POST /api/auth/login` body `{ "username", "password" }` → the principal, and sets `gwatch_session` (HttpOnly, SameSite=Lax, 30-day sliding expiry, `Secure` only over HTTPS). Rate limited.
+- `POST /api/auth/logout` → `{ok:true}` and clears the cookie.
+- `POST /api/auth/change-password` body `{ "current", "new" }` → changes your own password and signs every browser of that account out. Any signed-in user; never an API key.
+- `GET /api/users` → `[User]`. `POST /api/users` body `{ "username", "password", "role": "admin"|"viewer" }` → `User` (201). The first account created is always an administrator, and on an install with no accounts a `local` or `password` principal may create it.
+- `PUT /api/users/{id}` body `{ "role"?, "password"? }` → `User`. Changing either ends that account's sessions.
+- `DELETE /api/users/{id}` → `{ok:true}`. Deleting or demoting the last administrator is refused with 400.
+- `GET /api/apikeys` → `[APIKey]` (revoked keys included, so the trail keeps their names).
+- `POST /api/apikeys` body `{ "name", "scope": "read"|"readwrite" }` → `{ "key": "gw_…", "apiKey": APIKey }` (201). An omitted scope means `read`. **The key is returned once and cannot be shown again.**
+- `DELETE /api/apikeys/{id}` → `{ok:true}`, revoking it immediately.
+
+Reaching GWatch from outside your own network is covered in
+[`REMOTE-ACCESS.md`](REMOTE-ACCESS.md).
 
 ## Health & overview
 
@@ -86,6 +180,12 @@ Static UI: `GET /` serves `web/index.html`; `/app.js`, `/app.css` etc. are serve
 
 - `GET /api/events?limit=100&before=ID&nodeId=&checkId=&type=&q=&since=&until=` → `[Event]` newest first. A `type` filter also includes its counterpart (down+recovered, warning+warning_cleared, cert_warning+cert_warning_cleared, silenced+unsilenced, maintenance_began+maintenance_ended, alert_sent+alert_failed) unless `exact=1`. `q` is a case-insensitive search over title, detail, node and check name; `since`/`until` accept RFC 3339, `2006-01-02T15:04` or `2006-01-02`.
 - `POST /api/events/note` body `{ "nodeId": null|id, "text": "rebooted router" }` → Event (timeline annotation).
+
+Every `Event` carries an optional `actor` naming who caused it — `"local"`, `"password"`,
+`"pat (admin)"`, `"api key Home Assistant (read-write)"`, or `"from 198.51.100.5"` for a
+rejected credential. It is absent on events the monitoring engine produces by itself
+(check results, the scheduler, alerts). Sign-ins, sign-outs, failed sign-ins and every
+account or API-key change are recorded with the `auth` event type.
 
 ## Maintenance windows
 
@@ -181,7 +281,7 @@ The `<asset>.sha256` sidecar is still checked when the release publishes one (`c
 ## Settings
 
 - `GET /api/settings` → `Settings` (SMTP password, access password and the scheduled-backup password are returned masked as `"********"` when set).
-- `PUT /api/settings` body `Settings` → saved Settings (a masked password keeps the stored one). `general.theme` is `dark|light|system`, `general.accentColor` a hex colour, `general.remoteAccess` rebinds the listener to all interfaces live, `general.accessPassword` enables basic auth for other devices, `general.updateRepo` is the GitHub repository checked for releases. `backups` configures scheduled automatic backups (see below); it cannot be saved with `enabled: true` and no password.
+- `PUT /api/settings` body `Settings` → saved Settings (a masked password keeps the stored one). `general.theme` is `dark|light|system`, `general.accentColor` a hex colour, `general.remoteAccess` rebinds the listener to all interfaces live, `general.accessPassword` is the legacy shared password for other devices (user accounts replace it), `general.requireLoginLocally` makes a browser on this computer sign in too — it is refused while no administrator account exists, and ignored until one does, `general.updateRepo` is the GitHub repository checked for releases. `backups` configures scheduled automatic backups (see below); it cannot be saved with `enabled: true` and no password.
 - All three passwords are stored encrypted in the database with the local `gwatch.key` file; the API request and response bodies are unchanged.
 - `POST /api/settings/test-email` body `{ "to": "optional@override" }` → `{ "ok": true, "message": "..." }` or error.
 - `GET /api/retention/status` → `RetentionStatus`. `POST /api/retention/run` → runs rollup+cleanup now → RetentionStatus.
@@ -217,7 +317,7 @@ See [`RESTORE.md`](RESTORE.md) for the end-to-end restore-to-a-new-machine proce
 ## Logs
 
 - `GET /api/logs?limit=200` → `{ "lines": ["...", ...], "file": "path" }`.
-- `GET /api/version` → `{ "version": "...", "platform": "windows/amd64" }`.
+- `GET /api/version` → `{ "version": "...", "platform": "windows/amd64", "apiVersion": 1 }` (see Versioning).
 
 ## Server-sent events
 

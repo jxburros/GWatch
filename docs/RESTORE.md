@@ -88,6 +88,13 @@ new machine's remote-access password is set and you are not calling from
   passwords are only ever stored encrypted/hashed as GWatch normally does —
   restoring them onto a new machine works the same as restoring any other
   setting.
+- **User accounts, sessions and API keys.** They are not in the archive and a
+  restore leaves whatever the new machine already has alone. That cuts both
+  ways on purpose: restoring a backup never costs you your sign-in, and it
+  never resurrects an account or a key you deliberately removed. On a machine
+  with no accounts yet, a browser on that machine is an administrator, so you
+  can always get in after a restore and create them again under
+  **Settings › Users & access**.
 - Log files under `logs/` are local operational logs and are not part of a
   backup archive.
 - Anything you changed on the new machine *before* restoring is discarded —
