@@ -865,6 +865,11 @@ func (s *Store) sealSettings(st *model.Settings) error {
 		return fmt.Errorf("seal access password: %w", err)
 	}
 	st.General.AccessPassword = ap
+	bp, err := s.secrets.Seal(st.Backups.Password)
+	if err != nil {
+		return fmt.Errorf("seal backup password: %w", err)
+	}
+	st.Backups.Password = bp
 	return nil
 }
 
@@ -887,6 +892,7 @@ func (s *Store) openSettings(st *model.Settings) {
 	}
 	open(&st.Alerts.SMTP.Password, "smtp password")
 	open(&st.General.AccessPassword, "access password")
+	open(&st.Backups.Password, "backup password")
 	s.setSecretsErr(firstErr)
 }
 
@@ -904,7 +910,7 @@ func (s *Store) migrateSecrets(ctx context.Context) error {
 		return nil
 	}
 	plaintext := func(v string) bool { return v != "" && !secrets.IsSealed(v) }
-	if !plaintext(st.Alerts.SMTP.Password) && !plaintext(st.General.AccessPassword) {
+	if !plaintext(st.Alerts.SMTP.Password) && !plaintext(st.General.AccessPassword) && !plaintext(st.Backups.Password) {
 		return nil
 	}
 	if err := s.sealSettings(&st); err != nil {

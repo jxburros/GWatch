@@ -142,10 +142,11 @@ func (e *Engine) Start(parent context.Context) error {
 	e.mu.Lock()
 	e.log.Printf("engine started: %d node(s), %d check(s), max %d concurrent", len(e.nodes), len(e.checks), cap(e.sem))
 	e.mu.Unlock()
-	e.wg.Add(3)
+	e.wg.Add(4)
 	go e.schedulerLoop()
 	go e.maintenanceLoop()
 	go e.retentionLoop()
+	go e.backupLoop()
 	return nil
 }
 
