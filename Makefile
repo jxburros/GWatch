@@ -1,13 +1,34 @@
 VERSION ?= dev
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build windows test test-race cover fmt fmt-check vet tidy-check web-check ci run keygen sign verify-release mcp-build mcp-test mcp-fmt
+.PHONY: build windows agent agent-all test test-race cover fmt fmt-check vet tidy-check web-check ci run keygen sign verify-release mcp-build mcp-test mcp-fmt
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/gwatch .
 
 windows:
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/gwatch.exe .
+
+# gwatch-agent runs on the machines being watched rather than on this one, so
+# it is built for every platform someone might want to install it on. It is a
+# separate binary on purpose: it carries no database, no web interface and no
+# credential for GWatch beyond its own submit-only token.
+AGENT_LDFLAGS := -s -w -X main.version=$(VERSION)
+
+agent:
+	CGO_ENABLED=0 go build -trimpath -ldflags "$(AGENT_LDFLAGS)" -o dist/gwatch-agent ./cmd/gwatch-agent
+
+agent-all:
+	@set -e; for target in \
+		windows/amd64 windows/arm64 \
+		linux/amd64 linux/arm64 linux/arm \
+		darwin/amd64 darwin/arm64; do \
+		os=$${target%%/*}; arch=$${target##*/}; \
+		ext=''; [ "$$os" = windows ] && ext='.exe'; \
+		echo "  $$os/$$arch"; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath \
+			-ldflags "$(AGENT_LDFLAGS)" -o "dist/gwatch-agent-$$os-$$arch$$ext" ./cmd/gwatch-agent; \
+	done
 
 test:
 	go vet ./... && go test ./...

@@ -206,7 +206,29 @@ promise.
 
 ## Explicit non-goals (keep scope from drifting toward Zabbix/PRTG)
 
-Do not add: SNMP, agent-based host metrics collection, distributed/multi-site
-monitoring, a plugin marketplace, or full RBAC (beyond the two-tier admin/viewer split
-in 2.1). Each would pull GWatch toward enterprise-NMS territory and away from the
-"basic but yours to shape" niche that's actually working.
+Do not add: SNMP, distributed/multi-site monitoring, a plugin marketplace, or full RBAC
+(beyond the two-tier admin/viewer split in 2.1). Each would pull GWatch toward
+enterprise-NMS territory and away from the "basic but yours to shape" niche that's
+actually working.
+
+**Host metrics were on this list and came off it.** The reasoning that put them here was
+that agents are what turns a monitor into an NMS: a fleet to deploy, a protocol to
+version, a config management problem. The reasoning that took them off is that the
+question "is the machine in trouble?" is the one immediately after "does it answer?", and
+a home server that still answers a ping while its disk fills is exactly the failure this
+tool exists to catch. What keeps it from being the thin end of the wedge is the shape of
+what shipped, and that shape is the constraint to hold:
+
+- **One binary, one direction, one permission.** `gwatch-agent` posts a reading and hangs
+  up. GWatch never connects to it and holds no credential for it; the agent's token can
+  submit that one machine's readings and nothing else. There is no remote execution, no
+  remote configuration and no fleet management — and none should be added.
+- **No metric language.** Readings are a fixed struct: processor, memory, filesystem,
+  network, disk throughput. Not a metrics pipeline, not arbitrary series, not something
+  with a query language. A new reading is a field, reviewed like any other field.
+- **Nothing to deploy.** Registering a machine is one screen and one command. If keeping
+  agents working ever needs config management, the feature has grown wrong.
+
+Temperatures and SMART were considered and left out: both are patchy across vendors on
+Windows, and SMART needs elevated privileges on the watched machine. Revisit only if
+someone actually wants them, and only within the constraints above.

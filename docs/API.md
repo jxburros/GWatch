@@ -184,6 +184,53 @@ companion that lets an AI assistant use this API with a key, is documented in
 - `GET /api/history/multi?checkId=1&checkId=2&range=24h` → `[HistorySeries]`. With `auto=1` and no `checkId`, the service picks up to 4 important checks (critical/high nodes, ping and HTTP first).
 - Point spacing by range: 1h/24h → raw results (or 5-minute rollups if raw is gone), 7d → 5-minute rollups, 30d → hourly, 1y → daily.
 
+## Hardware health
+
+- `GET /api/hosts` → `[HostSummary]`: this computer first, then every registered
+  machine, then any machine known only from a scraped endpoint. Each carries its newest
+  reading in `metrics`, a `status` and a `stale` flag. That status means only "are
+  readings still arriving" — whether a figure is *too high* is a hardware check's
+  business, because only a check knows the thresholds somebody chose.
+- `GET /api/hosts/{key}` → one `HostSummary`. The key is `local`, `agent:<id>` or
+  `url:<check id>`.
+- `GET /api/hosts/{key}/history?range=1h|24h|7d|30d|1y` →
+  `{ key, range, from, to, samples }`. A sample is the numeric series only
+  (`cpuPct`, `memPct`, `swapPct`, `diskPct`, `loadPerCore`, `netRxBytesPerSec`,
+  `netTxBytesPerSec`, `diskReadBytesPerSec`, `diskWriteBytesPerSec`), not the whole
+  snapshot. Readings are averaged into at most 600 buckets; a metric no reading in a
+  bucket carried stays absent rather than becoming zero.
+
+Registering a machine mints a credential, so those routes sit with the other credential
+routes — an administrator in the browser, never an API key:
+
+- `GET /api/agents` → `[Agent]`. The token is never returned; only `prefix` is.
+- `POST /api/agents` body `{ "name": "Living room NAS", "nodeId": null|id }` →
+  `{ "token": "gwa_…", "agent": Agent }`. **The token is returned exactly once.** Only its
+  sha256 digest is stored, so it cannot be shown again.
+- `PUT /api/agents/{id}` body `{ "name": …, "nodeId": …, "enabled": bool }` → `Agent`.
+- `DELETE /api/agents/{id}` → 204. Revokes the token and keeps the machine's past
+  readings. `?purge=1` deletes the machine and every reading it ever sent.
+
+### Submitting a reading
+
+`POST /ingest/metrics` with `Authorization: Bearer gwa_…` and a `HostMetrics` body.
+Answers `202` with `{ accepted, ts, intervalSeconds }`.
+
+This route is deliberately outside the authorization table above. It is reached with an
+agent token and nothing else; the token names exactly one machine, the reading is filed
+under that machine whatever the payload claims, and the route can do nothing further. An
+agent therefore never holds a credential that could read or change anything in GWatch —
+which is the point of installing one on a machine you would rather not hand over. An
+agent token is refused by every `/api/…` route, and a wrong one counts against the same
+per-IP failure budget as a wrong password.
+
+Rates in a `HostMetrics` (`usagePct`, anything `…PerSec`) are derived by the reporting
+machine from two of its own consecutive readings, never by GWatch subtracting across the
+network: only the machine itself sees an unbroken counter series. They are omitted when
+there is nothing to compare against, which is not the same as a rate of zero. A timestamp
+more than five minutes ahead of GWatch, or more than 48 hours behind it, is replaced with
+arrival time. See [`HARDWARE.md`](HARDWARE.md).
+
 ## Events / incidents
 
 - `GET /api/events?limit=100&before=ID&nodeId=&checkId=&type=&q=&since=&until=` → `[Event]` newest first. A `type` filter also includes its counterpart (down+recovered, warning+warning_cleared, cert_warning+cert_warning_cleared, silenced+unsilenced, maintenance_began+maintenance_ended, alert_sent+alert_failed) unless `exact=1`. `q` is a case-insensitive search over title, detail, node and check name; `since`/`until` accept RFC 3339, `2006-01-02T15:04` or `2006-01-02`.
