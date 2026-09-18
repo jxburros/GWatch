@@ -12,3 +12,4 @@ coverage.out
 coverage.txt
 .claude/
 gwatch.key
+release.key
