@@ -269,7 +269,7 @@ export function openTriggerEditor(existing, { node, nodes = [] }) {
 export function triggerRow(t, { node, nodes = [], onChange } = {}) {
   const condLabels = (t.on || []).map((c) => (CONDITIONS.find((x) => x.value === c) || { label: c }).label + (c === 'latency_over' && t.latencyOverMs ? ` ${t.latencyOverMs} ms` : ''));
   const checkName = t.checkId ? (node?.checks || []).find((c) => c.id === t.checkId)?.name : null;
-  const runBtn = h('button', { class: 'btn btn-sm', type: 'button', title: 'Run this trigger now', onclick: async () => {
+  const runBtn = h('button', { class: 'btn btn-sm admin-only', type: 'button', title: 'Run this trigger now', onclick: async () => {
     const done = busy(runBtn, 'Running…');
     try { const res = await api.post(`/api/triggers/${t.id}/run`); toast(res.ok ? 'Trigger ran' : `Trigger failed: ${res.error || ''}`, { kind: res.ok ? 'success' : 'error' }); onChange && onChange(); }
     catch (e) { toast(e.message, { kind: 'error' }); }
@@ -277,7 +277,7 @@ export function triggerRow(t, { node, nodes = [], onChange } = {}) {
   } }, icon('play'), 'Run');
   const last = t.lastRunAt ? h('span', { class: t.lastStatus === 'failed' ? 'text-down' : 'text-up' }, `${t.lastStatus === 'failed' ? 'failed' : 'ran'} `, relTimeEl(t.lastRunAt), ` (${t.runCount} run${t.runCount === 1 ? '' : 's'})`) : h('span', { class: 'dim' }, 'never run');
   return h('div', { class: 'trigger-row' },
-    toggle({ ariaLabel: `${t.name} enabled`, checked: t.enabled !== false, onChange: async (v) => { try { await api.put(`/api/triggers/${t.id}`, { ...t, enabled: v }); onChange && onChange(); } catch (e) { toast(e.message, { kind: 'error' }); onChange && onChange(); } } }),
+    h('div', { class: 'admin-only' }, toggle({ ariaLabel: `${t.name} enabled`, checked: t.enabled !== false, onChange: async (v) => { try { await api.put(`/api/triggers/${t.id}`, { ...t, enabled: v }); onChange && onChange(); } catch (e) { toast(e.message, { kind: 'error' }); onChange && onChange(); } } })),
     h('div', { style: { minWidth: 0 } },
       h('div', { class: 't-name' }, t.name, actionBadge(t.action), t.enabled === false ? h('span', { class: 'tag' }, 'disabled') : null),
       h('div', { class: 't-sub' }, `on: ${condLabels.join(', ')}${checkName ? ` · only ${checkName}` : ''}${t.cooldownMinutes ? ` · cooldown ${t.cooldownMinutes} min` : ''} · ${actionSummary(t.action, nodes)}`),
@@ -285,8 +285,8 @@ export function triggerRow(t, { node, nodes = [], onChange } = {}) {
       t.lastOutput ? h('div', { class: 't-out', title: t.lastOutput }, t.lastOutput) : null,
     ),
     h('div', { class: 'btn-group' }, runBtn,
-      h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => { const saved = await openTriggerEditor(t, { node, nodes }); if (saved) onChange && onChange(); } }, icon('edit'), 'Edit'),
-      h('button', { class: 'btn btn-sm btn-danger icon-btn', type: 'button', 'aria-label': 'Delete trigger', onclick: async () => { if (await confirmDialog({ title: `Delete trigger "${t.name}"?`, confirmLabel: 'Delete', danger: true })) { try { await api.del(`/api/triggers/${t.id}`); toast('Trigger deleted', { kind: 'success' }); onChange && onChange(); } catch (e) { toast(e.message, { kind: 'error' }); } } } }, icon('trash'))),
+      h('button', { class: 'btn btn-sm admin-only', type: 'button', onclick: async () => { const saved = await openTriggerEditor(t, { node, nodes }); if (saved) onChange && onChange(); } }, icon('edit'), 'Edit'),
+      h('button', { class: 'btn btn-sm btn-danger icon-btn admin-only', type: 'button', 'aria-label': 'Delete trigger', onclick: async () => { if (await confirmDialog({ title: `Delete trigger "${t.name}"?`, confirmLabel: 'Delete', danger: true })) { try { await api.del(`/api/triggers/${t.id}`); toast('Trigger deleted', { kind: 'success' }); onChange && onChange(); } catch (e) { toast(e.message, { kind: 'error' }); } } } }, icon('trash'))),
   );
 }
 
@@ -356,7 +356,7 @@ export function randomToken() {
 /** One endpoint row for the Settings list. */
 export function endpointRow(e, { nodes = [], onChange } = {}) {
   const url = `${location.origin}/hook/${e.slug}`;
-  const runBtn = h('button', { class: 'btn btn-sm', type: 'button', title: 'Run the action now', onclick: async () => {
+  const runBtn = h('button', { class: 'btn btn-sm admin-only', type: 'button', title: 'Run the action now', onclick: async () => {
     const done = busy(runBtn, 'Running…');
     try { const res = await api.post(`/api/endpoints/${e.id}/run`); toast(res.ok ? 'Endpoint action ran' : `Failed: ${res.error || ''}`, { kind: res.ok ? 'success' : 'error' }); onChange && onChange(); }
     catch (err) { toast(err.message, { kind: 'error' }); }
@@ -372,8 +372,8 @@ export function endpointRow(e, { nodes = [], onChange } = {}) {
       e.lastOutput ? h('div', { class: 't-out', title: e.lastOutput }, e.lastOutput) : null,
     ),
     h('div', { class: 'btn-group' }, runBtn,
-      h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => { const saved = await openEndpointEditor(e, { nodes }); if (saved) onChange && onChange(); } }, icon('edit'), 'Edit'),
-      h('button', { class: 'btn btn-sm btn-danger icon-btn', type: 'button', 'aria-label': 'Delete endpoint', onclick: async () => { if (await confirmDialog({ title: `Delete endpoint "${e.name}"?`, message: 'Anything calling this URL will get a 404.', confirmLabel: 'Delete', danger: true })) { try { await api.del(`/api/endpoints/${e.id}`); toast('Endpoint deleted', { kind: 'success' }); onChange && onChange(); } catch (err) { toast(err.message, { kind: 'error' }); } } } }, icon('trash'))),
+      h('button', { class: 'btn btn-sm admin-only', type: 'button', onclick: async () => { const saved = await openEndpointEditor(e, { nodes }); if (saved) onChange && onChange(); } }, icon('edit'), 'Edit'),
+      h('button', { class: 'btn btn-sm btn-danger icon-btn admin-only', type: 'button', 'aria-label': 'Delete endpoint', onclick: async () => { if (await confirmDialog({ title: `Delete endpoint "${e.name}"?`, message: 'Anything calling this URL will get a 404.', confirmLabel: 'Delete', danger: true })) { try { await api.del(`/api/endpoints/${e.id}`); toast('Endpoint deleted', { kind: 'success' }); onChange && onChange(); } catch (err) { toast(err.message, { kind: 'error' }); } } } }, icon('trash'))),
   );
 }
 

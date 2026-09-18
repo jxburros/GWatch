@@ -15,6 +15,18 @@ const TABS = [
   { id: 'network', label: 'Network access' }, { id: 'alerts', label: 'Alerts' },
   { id: 'automation', label: 'Automation' }, { id: 'retention', label: 'Retention' }, { id: 'maintenance', label: 'Maintenance' },
   { id: 'backups', label: 'Backups' }, { id: 'updates', label: 'Updates' }, { id: 'health', label: 'Monitor health', viewer: true },
+  { id: 'about', label: 'About', viewer: true },
+];
+
+const REPO_URL = 'https://github.com/jxburros/GWatch';
+const GWATCH_COPYRIGHT = 'Copyright (c) 2026 JX Holdings. Original developers: Jeffrey Guntly and Garrett Guntly.';
+// Go module dependencies from go.mod, with licenses confirmed by reading each
+// module's LICENSE file under $(go env GOMODCACHE).
+const DEPENDENCIES = [
+  { name: 'kardianos/service', use: 'runs GWatch as a background service on Windows, macOS and Linux', license: 'zlib' },
+  { name: 'prometheus-community/pro-bing', use: 'sends the ICMP pings used by ping checks', license: 'MIT' },
+  { name: 'modernc.org/sqlite', use: 'the embedded database that stores history, events and settings', license: 'BSD-3-Clause' },
+  { name: 'golang.org/x/crypto', use: 'password hashing for accounts and the access password', license: 'BSD-3-Clause' },
 ];
 
 export async function mount(root, ctx) {
@@ -24,10 +36,11 @@ export async function mount(root, ctx) {
   if (ctx.params.tab === 'logs') { ctx.navigate('/audit/log'); return { destroy() {} }; }
   const nav = h('nav', { class: 'settings-nav', 'aria-label': 'Settings sections' });
   const panel = h('div', { class: 'settings-panel' });
-  const versionEl = h('div', { class: 'version-line' });
+  const versionLink = h('a', { href: '#/settings/about' });
+  const versionEl = h('div', { class: 'version-line' }, versionLink);
   root.append(h('div', { class: 'settings-layout' }, nav, h('div', null, panel, versionEl)));
 
-  api.get('/api/version').then((v) => { state.version = v; versionEl.textContent = `GWatch ${v.version || ''} · ${v.platform || ''}`; }).catch(() => {});
+  api.get('/api/version').then((v) => { state.version = v; versionLink.textContent = `GWatch ${v.version || ''} · ${v.platform || ''}`; }).catch(() => {});
 
   function renderNav() {
     clear(nav);
@@ -51,7 +64,7 @@ export async function mount(root, ctx) {
     replace(panel, skeleton({ lines: 5 }));
     state.panelRefresh = null;
     try {
-      const fn = { general: tabGeneral, appearance: tabAppearance, users: tabUsers, network: tabNetwork, alerts: tabAlerts, automation: tabAutomation, retention: tabRetention, maintenance: tabMaintenance, backups: tabBackups, updates: tabUpdates, health: tabHealth }[state.tab];
+      const fn = { general: tabGeneral, appearance: tabAppearance, users: tabUsers, network: tabNetwork, alerts: tabAlerts, automation: tabAutomation, retention: tabRetention, maintenance: tabMaintenance, backups: tabBackups, updates: tabUpdates, health: tabHealth, about: tabAbout }[state.tab];
       const el = await fn();
       if (state.destroyed) return;
       replace(panel, isAdmin ? el : h('div', { class: 'stack' }, readOnlyNotice(), el));
@@ -244,17 +257,17 @@ export async function mount(root, ctx) {
         wrap.append(banner('warn', h('span', null, h('b', null, open.length === 1 ? 'One custom endpoint has no token: ' : `${open.length} custom endpoints have no token: `),
           ...open.flatMap((e, i) => [i ? ', ' : '', h('code', null, `/hook/${e.slug}`)]),
           '. Anyone who can reach this computer on the network can call them.'), {
-          actions: open.map((e) => h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => { const saved = await openEndpointEditor(e, { nodes }); if (saved) load(); } }, icon('edit'), open.length === 1 ? 'Edit' : `Edit ${e.name}`)),
+          actions: open.map((e) => h('button', { class: 'btn btn-sm admin-only', type: 'button', onclick: async () => { const saved = await openEndpointEditor(e, { nodes }); if (saved) load(); } }, icon('edit'), open.length === 1 ? 'Edit' : `Edit ${e.name}`)),
         }));
       }
       const epCard = h('section', { class: 'card' },
         h('div', { class: 'card-head' }, h('div', null, h('h2', null, 'Custom endpoints'), h('p', { class: 'lead', style: { marginBottom: 0 } }, 'URLs other systems can call to make GWatch do something: run a node\'s checks after a reboot, run a script, call a webhook or pull a git repository. Each lives at ', h('code', null, '/hook/<name>'), '.')),
-          h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => { const saved = await openEndpointEditor(null, { nodes }); if (saved) load(); } }, icon('plus'), 'New endpoint')));
+          h('button', { class: 'btn btn-primary admin-only', type: 'button', onclick: async () => { const saved = await openEndpointEditor(null, { nodes }); if (saved) load(); } }, icon('plus'), 'New endpoint')));
       if (!eps.length) epCard.append(emptyState({ icon: 'webhook', title: 'No endpoints yet', text: 'Create one and call its URL from a script, a router, Home Assistant, a CI job — anything that can make an HTTP request.', compact: true }));
       for (const e of eps) epCard.append(endpointRow(e, { nodes, onChange: load }));
       const trCard = h('section', { class: 'card' },
         h('div', { class: 'card-head' }, h('div', null, h('h2', null, 'Triggers on nodes'), h('p', { class: 'lead', style: { marginBottom: 0 } }, 'Triggers run an action when something happens on a node. They are created on each node\'s page; this is the overview.')),
-          nodes.length ? h('button', { class: 'btn', type: 'button', onclick: async () => {
+          nodes.length ? h('button', { class: 'btn admin-only', type: 'button', onclick: async () => {
             const sel = h('select', null, nodes.map((n) => h('option', { value: n.id }, n.name)));
             const ok = await confirmDialog({ title: 'New trigger', message: 'Which node should it watch?', confirmLabel: 'Continue', body: h('div', { class: 'field' }, sel) });
             if (!ok) return;
@@ -776,6 +789,42 @@ export async function mount(root, ctx) {
         item('Read & write', 'Everything above, plus creating, changing, deleting, enabling, running and silencing nodes and checks, notes, maintenance windows, dashboards and charts.'),
         item('Never, whatever the scope', 'Settings, backups and restores, updates, user accounts, API keys, the configuration export, the service log, and anything that runs a trigger, a custom endpoint or an action on this computer.')),
       h('p', { class: 'note' }, 'That last line is deliberate: a key is for reading a monitor from elsewhere, not for administering the machine it runs on. ', h('code', null, 'docs/REMOTE-ACCESS.md'), ' covers how to reach GWatch from outside your network safely.'));
+  }
+
+  /* ---------- About ---------- */
+  async function tabAbout() {
+    const v = state.version || await api.get('/api/version').catch(() => null);
+    const versionText = v?.version ? `v${v.version}` : 'unknown';
+    const platformText = v?.platform || 'unknown';
+    return h('div', { class: 'stack' },
+      h('section', { class: 'card' },
+        h('div', { style: { display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' } },
+          h('img', { src: 'logo.svg', alt: 'GWatch logo', width: '64', height: '64' }),
+          h('div', null,
+            h('h2', { style: { marginBottom: '2px' } }, 'GWatch'),
+            h('p', { class: 'lead', style: { margin: 0 } }, 'A self-hosted monitor for the machines, sites and services on your own network.'),
+            h('div', { class: 'muted', style: { marginTop: '4px' } }, `${versionText} · ${platformText}`))),
+        h('div', { class: 'health-cards', style: { marginTop: '14px' } },
+          hcard(versionText, 'Installed version'), hcard(platformText, 'Platform'))),
+      h('section', { class: 'card' },
+        h('h2', null, 'Copyright & credit'),
+        h('p', null, GWATCH_COPYRIGHT),
+        h('p', { class: 'muted' }, 'This notice, the GWatch name and the logo above are required attribution under the project license (see below) and may not be removed or obscured in a copy or derivative of this software.')),
+      h('section', { class: 'card' },
+        h('h2', null, 'Links'),
+        h('div', { class: 'stack-sm' },
+          h('div', null, h('a', { href: REPO_URL, target: '_blank', rel: 'noopener' }, 'GitHub repository')),
+          h('div', null, h('a', { href: `${REPO_URL}/releases`, target: '_blank', rel: 'noopener' }, 'Releases')),
+          h('div', null, h('a', { href: `${REPO_URL}/tree/main/docs`, target: '_blank', rel: 'noopener' }, 'Documentation')),
+          h('div', null, h('a', { href: `${REPO_URL}/blob/main/LICENSE`, target: '_blank', rel: 'noopener' }, 'LICENSE')),
+          h('div', null, h('a', { href: `${REPO_URL}/blob/main/TRADEMARKS.md`, target: '_blank', rel: 'noopener' }, 'TRADEMARKS.md')))),
+      h('section', { class: 'card' },
+        h('h2', null, 'License summary'),
+        h('p', null, 'GWatch is source-available under the GWatch Community License 1.0. You are free to use, modify and distribute it, including for commercial deployment and support work. You may not resell it unmodified as a competing product, and every copy must keep the required attribution above. This summary is informal — the ', h('a', { href: `${REPO_URL}/blob/main/LICENSE`, target: '_blank', rel: 'noopener' }, 'LICENSE'), ' file is what actually governs.')),
+      h('section', { class: 'card' },
+        h('h2', null, 'Acknowledgements'),
+        h('p', { class: 'lead' }, 'GWatch is written in Go and depends on a small number of open-source libraries:'),
+        h('div', { class: 'stack-sm' }, ...DEPENDENCIES.map((d) => h('div', null, h('b', null, d.name), h('span', { class: 'tag', style: { marginLeft: '8px' } }, d.license), h('div', { class: 'muted', style: { fontSize: '13px' } }, d.use))))));
   }
 
   await renderTab();
