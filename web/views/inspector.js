@@ -2,7 +2,7 @@
 // backend can provide (timings, redirects, certificate, ping packets, DNS…).
 
 import { h, icon, statusPill, checkTypeLabel } from '../components.js';
-import { ms as fmtMs, pct, dateTime, dateShort, relTime, plural } from '../fmt.js';
+import { ms as fmtMs, pct, dateTime, dateShort, relTime, plural, bytes, duration, num } from '../fmt.js';
 
 function kv(pairs) {
   const dl = h('dl', { class: 'kv' });
@@ -11,6 +11,16 @@ function kv(pairs) {
     dl.append(h('dt', null, k), h('dd', { class: opts.mono ? 'mono' : '' }, v));
   }
   return dl;
+}
+
+// sumRate totals a per-second rate across rows that reported one, returning
+// null when none did — which is not the same as a rate of zero.
+function sumRate(rows, key) {
+  let total = null;
+  for (const r of rows || []) {
+    if (r[key] != null) total = (total || 0) + r[key];
+  }
+  return total;
 }
 
 function yesNo(v, yes = 'Yes', no = 'No') {
@@ -134,6 +144,41 @@ export function resultInspector(result, check, { compact = false } = {}) {
 
   // Certificate
   if (d.cert) right.push(certBlock(d.cert));
+
+  // Hardware health: the reading the check evaluated, so the inspector shows
+  // what the machine looked like at the moment the check passed or failed.
+  if (d.host) {
+    const m = d.host;
+    const rate = (v) => (v == null ? null : `${bytes(v)}/s`);
+    const rx = sumRate(m.interfaces, 'rxBytesPerSec');
+    const tx = sumRate(m.interfaces, 'txBytesPerSec');
+    left.push(h('div', null, h('div', { class: 'section-title' }, 'Machine'), kv([
+      ['Name', m.hostname],
+      ['System', [m.platform, m.kernel].filter(Boolean).join(' · ')],
+      ['Architecture', [m.os, m.arch].filter(Boolean).join('/')],
+      ['Up for', m.uptimeSeconds ? duration(m.uptimeSeconds) : null],
+      ['Reading taken', m.ts ? `${dateTime(m.ts)} (${relTime(m.ts)})` : null],
+      ['Age when checked', d.hostAgeSeconds != null ? duration(d.hostAgeSeconds) : null],
+      ['Agent version', m.agentVersion],
+    ])));
+    right.push(h('div', null, h('div', { class: 'section-title' }, 'Readings'), kv([
+      ['Processor', m.cpu?.usagePct != null ? `${pct(m.cpu.usagePct, 0)} of ${num(m.cpu.cores)} cores` : null, { mono: true }],
+      ['Load (1/5/15)', m.cpu?.load1 != null ? `${m.cpu.load1.toFixed(2)} / ${m.cpu.load5.toFixed(2)} / ${m.cpu.load15.toFixed(2)}` : null, { mono: true }],
+      ['Memory', m.memory?.totalBytes ? `${pct(m.memory.usedPct, 0)} — ${bytes(m.memory.usedBytes)} of ${bytes(m.memory.totalBytes)}` : null, { mono: true }],
+      ['Swap', m.memory?.swapTotalBytes ? `${pct(m.memory.swapUsedPct, 0)} — ${bytes(m.memory.swapUsedBytes)} of ${bytes(m.memory.swapTotalBytes)}` : null, { mono: true }],
+      ['Network', rx != null || tx != null ? `\u2193 ${rate(rx) || '\u2014'}  \u2191 ${rate(tx) || '\u2014'}` : null, { mono: true }],
+    ])));
+    if (m.filesystems?.length) {
+      right.push(h('div', null, h('div', { class: 'section-title' }, 'Disks'),
+        kv(m.filesystems.map((fs) => [fs.mount, `${pct(fs.usedPct, 0)} used — ${bytes(fs.freeBytes)} free of ${bytes(fs.totalBytes)}`, { mono: true }]))));
+    }
+    if (m.warnings?.length) {
+      // A gap in the reading is not a hardware problem, but hiding it would
+      // leave the reader wondering why a figure is missing.
+      left.push(h('div', null, h('div', { class: 'section-title' }, 'Not available on this machine'),
+        h('ul', { class: 'note', style: { margin: 0, paddingLeft: '18px' } }, m.warnings.map((w) => h('li', null, w)))));
+    }
+  }
 
   // Custom script output
   if (d.output) left.push(h('div', null, h('div', { class: 'section-title' }, 'Output'),

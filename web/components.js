@@ -652,5 +652,6 @@ export const CHECK_TYPES = [
   { value: 'keyword', label: 'Keyword', desc: 'Load a page and check that some text is present (or absent).' },
   { value: 'json', label: 'JSON', desc: 'Call an API and check that a value at a path matches what you expect.' },
   { value: 'custom', label: 'Custom script', desc: 'Run your own command on schedule and parse its status from the output.' },
+  { value: 'system', label: 'Hardware health', desc: 'Processor, memory, disk space and throughput — for this computer, or for a machine running the agent.' },
 ];
 export function checkTypeLabel(t) { return (CHECK_TYPES.find((x) => x.value === t) || { label: t }).label; }

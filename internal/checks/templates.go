@@ -2,6 +2,16 @@ package checks
 
 import "github.com/jxburros/GWatch/internal/model"
 
+// withSystemDefaults fills a hardware check's thresholds, so a template lands
+// in the editor showing the numbers it will actually use.
+func withSystemDefaults(cfg model.CheckConfig) model.CheckConfig {
+	d := model.SystemDefaults()
+	d.HostSource = cfg.HostSource
+	d.AgentID = cfg.AgentID
+	d.MetricsURL = cfg.MetricsURL
+	return d
+}
+
 // Templates returns the built-in node templates. Every value is a starting
 // point the user can change before saving.
 func Templates() []model.NodeTemplate {
@@ -83,6 +93,26 @@ func Templates() []model.NodeTemplate {
 			Node:        node("TCP service", "Services", "tcp-service"),
 			Checks: []model.Check{
 				mk(model.CheckTCP, "Port accepts connections", model.CheckConfig{Port: 32400}),
+			},
+		},
+		{
+			ID:          "this-computer",
+			Name:        "This computer",
+			Description: "The hardware GWatch itself runs on: processor, memory, disk space and throughput. Nothing to install and nothing to configure.",
+			Icon:        "cpu",
+			Node:        node("This computer", "Hardware", "this-computer"),
+			Checks: []model.Check{
+				mk(model.CheckSystem, "Hardware health", withSystemDefaults(model.CheckConfig{HostSource: model.HostSourceLocal})),
+			},
+		},
+		{
+			ID:          "agent-machine",
+			Name:        "Machine with an agent",
+			Description: "Another computer's hardware, reported by gwatch-agent installed on it. The agent only sends readings out — GWatch is never given a way in.",
+			Icon:        "cpu",
+			Node:        node("Other computer", "Hardware", "agent-machine"),
+			Checks: []model.Check{
+				mk(model.CheckSystem, "Hardware health", withSystemDefaults(model.CheckConfig{HostSource: model.HostSourceAgent})),
 			},
 		},
 		{

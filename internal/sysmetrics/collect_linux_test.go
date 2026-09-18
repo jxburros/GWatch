@@ -106,13 +106,18 @@ func TestReadNetDevSkipsLoopback(t *testing.T) {
  face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
     lo: 1000 10 0 0 0 0 0 0 1000 10 0 0 0 0 0 0
   eth0: 5000 50 1 2 0 0 0 0 7000 70 3 4 0 0 0 0
+  ifb0: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+  eth1: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
 `})
-	// Pretend eth0 and lo exist, with lo flagged as loopback.
+	// lo is loopback; ifb0 is a kernel shaping device that is down and has
+	// never carried a byte; eth1 is an idle but connected port.
 	restore := netInterfaces
 	netInterfaces = func() ([]net.Interface, error) {
 		return []net.Interface{
 			{Index: 1, Name: "lo", Flags: net.FlagUp | net.FlagLoopback},
 			{Index: 2, Name: "eth0", Flags: net.FlagUp},
+			{Index: 3, Name: "ifb0"},
+			{Index: 4, Name: "eth1", Flags: net.FlagUp},
 		}, nil
 	}
 	t.Cleanup(func() { netInterfaces = restore })
@@ -121,8 +126,8 @@ func TestReadNetDevSkipsLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(nics) != 1 || nics[0].name != "eth0" {
-		t.Fatalf("want only eth0, got %+v", nics)
+	if len(nics) != 2 || nics[0].name != "eth0" || nics[1].name != "eth1" {
+		t.Fatalf("want eth0 and eth1, got %+v", nics)
 	}
 	n := nics[0]
 	if n.rxBytes != 5000 || n.txBytes != 7000 {

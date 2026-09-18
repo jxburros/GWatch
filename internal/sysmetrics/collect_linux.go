@@ -335,14 +335,21 @@ func readNetDev() ([]ifaceCounters, error) {
 			v, _ := strconv.ParseUint(fields[i], 10, 64)
 			return v
 		}
-		out = append(out, ifaceCounters{
+		c := ifaceCounters{
 			name:      name,
 			up:        up[name],
 			addresses: addrs[name],
 			speedMbit: readIfaceSpeed(name),
 			rxBytes:   num(0), rxErrors: num(2), rxDropped: num(3),
 			txBytes: num(8), txErrors: num(10), txDropped: num(11),
-		})
+		}
+		// A down interface that has never carried a byte is scaffolding — the
+		// kernel's shaping devices, an unplugged port, a virtual bridge nobody
+		// uses. Listing them buries the interfaces that matter.
+		if !c.up && c.rxBytes == 0 && c.txBytes == 0 {
+			continue
+		}
+		out = append(out, c)
 	}
 	return out, sc.Err()
 }

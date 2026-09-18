@@ -553,6 +553,22 @@ func (s *Server) normalizeNode(n *model.Node) error {
 		if c.Retries < 0 {
 			c.Retries = 0
 		}
+		if c.Type == model.CheckSystem {
+			if c.Config.HostSource == "" {
+				c.Config.HostSource = model.HostSourceLocal
+			}
+			// A hardware check with no thresholds would watch a machine and
+			// never say anything, so a new one starts with the defaults
+			// written into it rather than applied invisibly at run time.
+			if !c.Config.HasSystemThresholds() {
+				d := model.SystemDefaults()
+				c.Config.CPUWarnPct, c.Config.CPUCritPct = d.CPUWarnPct, d.CPUCritPct
+				c.Config.MemWarnPct, c.Config.MemCritPct = d.MemWarnPct, d.MemCritPct
+				c.Config.SwapWarnPct = d.SwapWarnPct
+				c.Config.DiskWarnPct, c.Config.DiskCritPct = d.DiskWarnPct, d.DiskCritPct
+				c.Config.LoadWarnPerCore = d.LoadWarnPerCore
+			}
+		}
 		if c.FailureThreshold < 0 {
 			c.FailureThreshold = 0
 		}
