@@ -374,3 +374,42 @@ func TestEmbeddedKeysParse(t *testing.T) {
 		t.Fatalf("release_keys.txt does not parse: %v", err)
 	}
 }
+
+// TestPickAssetIgnoresCompanionBinaries guards the updater against the other
+// binaries a release carries. gwatch-mcp (the MCP companion, see mcp/README.md)
+// is published as gwatch-mcp-<goos>-<goarch> next to the core binaries and is
+// signed by the same step, so its name sits inside the dist/gwatch-* glob.
+// pickAsset matches exact names, which is what keeps the two apart: a release
+// that lists gwatch-mcp-linux-amd64 first must still hand a linux/amd64
+// installation gwatch-linux-amd64.
+func TestPickAssetIgnoresCompanionBinaries(t *testing.T) {
+	assets := []ghAsset{
+		{Name: "gwatch-mcp-linux-amd64"},
+		{Name: "gwatch-mcp-linux-amd64.sha256"},
+		{Name: "gwatch-mcp-linux-amd64" + SignatureExt},
+		{Name: "gwatch-linux-amd64"},
+		{Name: "gwatch-linux-amd64.sha256"},
+		{Name: "gwatch-mcp-windows-amd64.exe"},
+		{Name: "gwatch-windows-amd64.exe"},
+		{Name: "gwatch-setup-1.2.3.exe"},
+	}
+	for _, tc := range []struct {
+		goos, goarch, want string
+	}{
+		{"linux", "amd64", "gwatch-linux-amd64"},
+		{"windows", "amd64", "gwatch-windows-amd64.exe"},
+	} {
+		got := pickAsset(assets, tc.goos, tc.goarch)
+		if got == nil {
+			t.Fatalf("%s/%s: no asset picked", tc.goos, tc.goarch)
+		}
+		if got.Name != tc.want {
+			t.Errorf("%s/%s: picked %q, want %q", tc.goos, tc.goarch, got.Name, tc.want)
+		}
+	}
+	// A release with only the companion for this platform has nothing the
+	// updater may install, rather than the wrong binary.
+	if got := pickAsset([]ghAsset{{Name: "gwatch-mcp-darwin-arm64"}}, "darwin", "arm64"); got != nil {
+		t.Errorf("picked %q for darwin/arm64 from a companion-only release", got.Name)
+	}
+}
