@@ -127,8 +127,9 @@ func sign(args []string) error {
 		return err
 	}
 	pub, _ := priv.Public().(ed25519.PublicKey)
+	signed := 0
 	for _, f := range files {
-		if strings.HasSuffix(f, update.SignatureExt) || strings.HasSuffix(f, ".sha256") {
+		if skipSidecar(f) {
 			continue // let callers pass dist/* without signing the sidecars
 		}
 		st, err := os.Stat(f)
@@ -143,6 +144,10 @@ func sign(args []string) error {
 			return err
 		}
 		fmt.Printf("signed %s -> %s (key %s)\n", f, out, update.KeyID(pub))
+		signed++
+	}
+	if signed == 0 {
+		return errors.New("sign: nothing to sign (only signature or checksum files were given)")
 	}
 	return nil
 }
@@ -168,13 +173,27 @@ func verify(args []string) error {
 	if len(keys) == 0 {
 		return errors.New("no public key given and this build pins none; pass -pub ed25519:...")
 	}
+	checked := 0
 	for _, f := range files {
+		if skipSidecar(f) {
+			continue
+		}
 		if err := update.VerifyFile(f, keys); err != nil {
 			return fmt.Errorf("%s: %w", f, err)
 		}
 		fmt.Printf("ok %s\n", f)
+		checked++
+	}
+	if checked == 0 {
+		return errors.New("verify: nothing to check (only signature or checksum files were given)")
 	}
 	return nil
+}
+
+// skipSidecar reports whether a path is one of the files published next to an
+// asset, so callers can pass a whole dist/* glob.
+func skipSidecar(path string) bool {
+	return strings.HasSuffix(path, update.SignatureExt) || strings.HasSuffix(path, ".sha256")
 }
 
 // loadKey reads the private key from a file, or from the environment when no
