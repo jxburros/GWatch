@@ -161,10 +161,11 @@ begin
   end;
 end;
 
-{ ---------------------------------------------------------------------- }
-{ Helpers shared between the wizard, [Run]/[Icons] {code:...} lookups    }
-{ and silent installs (/VERYSILENT /PORT=8080 /LAN=1).                   }
-{ ---------------------------------------------------------------------- }
+// ------------------------------------------------------------------------
+// Helpers shared between the wizard, the [Run]/[Icons] code lookups and
+// silent installs (/VERYSILENT /PORT=8080 /LAN=1). Written as line comments:
+// a "{code:...}" inside a brace comment would end the comment early.
+// ------------------------------------------------------------------------
 function GetPort(Param: String): String;
 begin
   if WizardSilent then
