@@ -3,13 +3,13 @@
 // layout (x, y, width, height per widget) is saved with the dashboard.
 
 import { api, getHistoryMulti, getHistoryAuto, qs } from '../api.js';
-import { h, icon, clear, replace, statusPill, statusGlyph, checkChip, statusOrb, toast, confirmDialog, promptDialog, openModal, menuButton, field, textInput, numberInput, selectInput, checkbox, emptyState, skeleton, eventRow, rangeChips, statusMeta, uid } from '../components.js';
+import { h, icon, clear, replace, statusPill, statusSpine, statusWord, statusGlyph, checkChip, statusOrb, toast, confirmDialog, promptDialog, openModal, menuButton, field, textInput, numberInput, selectInput, checkbox, emptyState, skeleton, eventRow, rangeChips, statusMeta, uid } from '../components.js';
 import { relTime, bytes, plural, dateShort, duration } from '../fmt.js';
 import { chartConfigEditor, renderConfiguredChart, normalizeChartConfig } from '../chart-config.js';
 
 export const COLS = 4;
 export const WIDGET_TYPES = [
-  { type: 'summary', label: 'Overall health', desc: 'Big up / degraded / down / unknown numerals with a headline.', w: 2, h: 1, config: {} },
+  { type: 'summary', label: 'Overall health', desc: 'Big up / degraded / down / unknown numerals with a headline.', w: 2, h: 2, config: {} },
   { type: 'groups', label: 'Group status', desc: 'One card per group with its worst status.', w: 2, h: 1, config: { groups: [] } },
   { type: 'status_list', label: 'Status list', desc: 'Nodes and their checks, optionally filtered by group, tag or node.', w: 2, h: 2, config: { group: '', tag: '', nodeIds: [] } },
   { type: 'chart', label: 'Chart', desc: 'Any metric for any checks, styled the way you like (same options as the Charts tab).', w: 2, h: 2, config: { metric: 'avg', range: '24h', style: 'area' } },
@@ -275,7 +275,7 @@ export async function mount(root, ctx) {
     const card = h('section', { class: 'card widget', 'aria-label': w.title || meta.label });
     applyGeometry(card, l);
     const dragHandle = h('button', { class: 'widget-drag admin-only', type: 'button', 'aria-label': `Move ${w.title || meta.label}`, title: 'Drag to move' }, icon('grip'));
-    const head = h('div', { class: 'widget-head' }, h('h2', { class: 'card-title' }, dragHandle, h('span', { class: 'truncate' }, w.title || meta.label)));
+    const head = h('div', { class: 'widget-head' }, h('h2', { class: 'card-title' }, dragHandle, h('span', { class: 'truncate', title: w.title || meta.label }, w.title || meta.label)));
     const actions = h('div', { class: 'widget-edit-bar' });
     if (CHART_LIKE.has(w.type)) {
       actions.append(rangeChips(cfg.range || (w.type === 'uptime_chart' ? '7d' : '24h'), (r) => setWidgetRange(w, r)));
@@ -290,7 +290,7 @@ export async function mount(root, ctx) {
     head.append(actions);
     const body = h('div', { class: 'widget-body' });
     card.append(head, body);
-    try { renderWidgetBody(w, cfg, body); } catch (e) { console.error(e); body.append(h('div', { class: 'note' }, 'Could not render this widget.')); }
+    try { renderWidgetBody(w, cfg, body, actions); } catch (e) { console.error(e); body.append(h('div', { class: 'note' }, 'Could not render this widget.')); }
     // resize handles
     for (const dir of ['e', 's', 'se']) {
       const hnd = h('div', { class: `rs rs-${dir} admin-only`, title: 'Drag to resize', 'aria-hidden': 'true' });
@@ -449,7 +449,7 @@ export async function mount(root, ctx) {
     });
   }
 
-  function renderWidgetBody(w, cfg, body) {
+  function renderWidgetBody(w, cfg, body, actions) {
     const ov = state.overview;
     body.closest('.widget').dataset.wid = w.id;
     if (!ov) { body.append(skeleton({ lines: 3 })); return; }
@@ -465,7 +465,7 @@ export async function mount(root, ctx) {
       case 'incidents': return renderIncidents(body, ov, cfg);
       case 'cert_warnings': return renderCerts(body, ov);
       case 'attention': return renderAttention(body, ov);
-      case 'monitor_health': return renderMonitorHealth(body);
+      case 'monitor_health': return renderMonitorHealth(body, actions);
       case 'table': return renderTable(body, cfg);
       default: body.append(h('div', { class: 'note' }, `Unknown widget type "${w.type}".`));
     }
@@ -484,7 +484,11 @@ export async function mount(root, ctx) {
     const counts = h('div', { class: 'summary-counts' });
     for (const [key, label] of [['up', 'Up'], ['degraded', 'Degraded'], ['down', 'Down'], ['unknown', 'Unknown']]) {
       const n = s[key] || 0; const m = statusMeta(key);
-      counts.append(h('div', { class: `summary-count ${n === 0 ? 'zero' : ''}` }, h('div', { class: `n ${n > 0 ? 'text-' + key : ''}` }, String(n)), h('div', { class: 'l' }, icon(m.icon), label)));
+      const cls = n > 0 ? `text-${key}` : '';
+      counts.append(h('div', { class: `summary-count ${n === 0 ? 'zero' : ''}` },
+        h('div', { class: `n ${cls}` }, String(n)),
+        h('div', { class: `rule ${cls}` }),
+        h('div', { class: 'l' }, icon(m.icon), label)));
     }
     body.append(counts);
     const foot = [];
@@ -507,8 +511,10 @@ export async function mount(root, ctx) {
       if (g.unknown) parts.push(`${g.unknown} unknown`);
       if (g.maintenance) parts.push(`${g.maintenance} maintenance`);
       if (g.paused) parts.push(`${g.paused} paused`);
+      const gm = statusMeta(g.status);
       wrap.append(h('a', { class: 'group-card', href: `#/nodes?group=${encodeURIComponent(g.name)}` },
-        h('div', { class: 'g-head' }, statusOrb(g.status), h('span', { class: 'g-name' }, g.name)),
+        statusSpine(g.status, { key: `group:${g.name}` }),
+        h('div', { class: 'g-head' }, h('span', { class: 'g-name' }, g.name), h('span', { class: 'sr-only' }, gm.label)),
         h('div', { class: 'g-count' }, parts.join(' · ') || `${g.total} nodes`)));
     }
     body.append(wrap);
@@ -523,7 +529,8 @@ export async function mount(root, ctx) {
       const chips = h('div', { class: 'check-chips' });
       for (const c of r.checks || []) chips.append(checkChip(c.check, c.state));
       list.append(h('div', { class: 'status-row' },
-        statusPill(r.status),
+        statusSpine(r.status, { key: `node:${n.id}` }),
+        statusWord(r.status),
         h('div', { class: 'name' }, h('a', { href: `#/nodes/${n.id}` }, n.name), r.affectedBy ? h('span', { class: 'sub affected-note' }, icon('link'), `affected by ${r.affectedBy}`) : h('span', { class: 'sub' }, n.host || '')),
         chips));
     }
@@ -559,7 +566,8 @@ export async function mount(root, ctx) {
     const list = h('div', null);
     for (const a of items) {
       list.append(h('div', { class: 'attention-row' },
-        statusPill(a.status),
+        statusSpine(a.status, { key: `att:${a.nodeId}:${a.checkName}` }),
+        statusWord(a.status),
         h('div', { class: 'a-body' },
           h('div', { class: 'a-title' }, h('a', { href: `#/nodes/${a.nodeId}`, style: { color: 'inherit' } }, a.nodeName), ` › ${a.checkName}`),
           h('div', { class: 'a-msg' }, a.message || ''),
@@ -570,21 +578,32 @@ export async function mount(root, ctx) {
     body.append(list);
   }
 
-  function renderMonitorHealth(body) {
+  function renderMonitorHealth(body, actions) {
     const hl = state.health;
     if (!hl) { body.append(h('div', { class: 'note' }, 'Service health unavailable.')); return; }
+    // The way out to the full health page is a panel action, so it sits in the
+    // band with the widget's other controls. That leaves the whole body to the
+    // readouts, which is the only way six of them clear the fold in a widget
+    // one row tall.
+    if (actions) actions.prepend(h('a', { class: 'btn btn-sm btn-ghost', href: '#/settings/health', title: 'Open Monitor health' }, 'Open', icon('arrowRight')));
     const okGlyph = (ok, yes, no) => h('span', { class: `status-glyph ${ok ? 'text-up' : 'text-down'}` }, icon(ok ? 'check' : 'x'), ok ? yes : no);
     const gridEl = h('div', { class: 'health-grid' },
-      h('div', { class: 'health-item' }, h('div', { class: 'hv' }, okGlyph(hl.serviceRunning, 'Running', 'Stopped')), h('div', { class: 'hl' }, `Service (${hl.serviceMode || '—'})`)),
+      h('div', { class: 'health-item' }, h('div', { class: 'hv' }, okGlyph(hl.serviceRunning, 'Running', 'Stopped')), h('div', { class: 'hl', title: `Service (${hl.serviceMode || '\u2014'})` }, `Service (${hl.serviceMode || '\u2014'})`)),
       h('div', { class: 'health-item' }, h('div', { class: 'hv' }, okGlyph(hl.schedulerRunning, 'Running', 'Stopped')), h('div', { class: 'hl' }, 'Scheduler')),
       h('div', { class: 'health-item' }, h('div', { class: 'hv' }, relTime(hl.lastCheckAt, now())), h('div', { class: 'hl' }, 'Last check')),
-      h('div', { class: 'health-item' }, h('div', { class: 'hv' }, hl.nextCheckAt ? relTime(hl.nextCheckAt, now()) : '—'), h('div', { class: 'hl' }, 'Next check')),
+      h('div', { class: 'health-item' }, h('div', { class: 'hv' }, hl.nextCheckAt ? relTime(hl.nextCheckAt, now()) : '\u2014'), h('div', { class: 'hl' }, 'Next check')),
       h('div', { class: 'health-item' }, h('div', { class: 'hv' }, bytes(hl.databaseBytes)), h('div', { class: 'hl' }, 'Database')),
       h('div', { class: 'health-item' }, h('div', { class: 'hv' }, hl.backup?.lastBackupAt ? h('span', { class: `status-glyph ${hl.backup.lastBackupOk ? 'text-up' : 'text-down'}` }, icon(hl.backup.lastBackupOk ? 'check' : 'x'), relTime(hl.backup.lastBackupAt, now())) : h('span', { class: 'muted' }, 'never')), h('div', { class: 'hl' }, 'Last backup')),
     );
     body.append(gridEl);
-    if (hl.lastGap && Date.now() - new Date(hl.lastGap.to).getTime() < 86400e3) body.append(h('div', { class: 'note', style: { marginTop: '8px' } }, icon('moon'), ` Monitoring gap of ${duration(hl.lastGap.seconds)} ended ${relTime(hl.lastGap.to, now())}`));
-    body.append(h('div', { style: { marginTop: 'auto', paddingTop: '8px' } }, h('a', { class: 'small', href: '#/settings/health' }, 'Open Monitor Health →')));
+    // A recent monitoring gap is a state of the panel, so it is flagged in the
+    // band rather than set as a paragraph under the readouts, where it would be
+    // the thing pushed out of a panel one row tall.
+    if (hl.lastGap && Date.now() - new Date(hl.lastGap.to).getTime() < 86400e3) {
+      const flag = h('span', { class: 'tag tag-warn', title: `Monitoring gap of ${duration(hl.lastGap.seconds)} ended ${relTime(hl.lastGap.to, now())}` },
+        icon('moon'), `gap ${duration(hl.lastGap.seconds)}`);
+      if (actions) actions.prepend(flag); else body.append(h('div', { class: 'note' }, flag));
+    }
   }
 
   function renderTable(body, cfg) {
@@ -691,7 +710,10 @@ export async function mount(root, ctx) {
 export function openWidgetEditor(existing, state) {
   return new Promise((resolve) => {
     const isNew = !existing;
-    const w = existing ? { ...existing, config: { ...widgetConfig(existing) } } : { id: uid('w'), type: 'summary', title: '', width: 2, height: 1, config: {} };
+    // A new widget starts at whatever size its type asks for, the same as
+    // picking that type in the list does.
+    const firstType = WIDGET_TYPES[0];
+    const w = existing ? { ...existing, config: { ...widgetConfig(existing) } } : { id: uid('w'), type: firstType.type, title: '', width: firstType.w, height: firstType.h, config: { ...firstType.config } };
     let result = null;
     const nodes = state.nodes || [];
     const groups = state.groups?.groups || [];

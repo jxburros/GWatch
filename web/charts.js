@@ -4,7 +4,7 @@
 import { ms as fmtMs, pct as fmtPct, timeShort, dateTime } from './fmt.js';
 import { h, cssColors, onThemeChange } from './components.js';
 
-export const SERIES_COLORS = ['#7c6cff', '#3ec8b8', '#ff9f6e', '#e879a6', '#5aa9e6', '#c8d84a', '#b18cff', '#6fd3ff'];
+export const SERIES_COLORS = ['#43c9c0', '#e879a6', '#ffc542', '#6ea0ff', '#ff9f6e', '#b18cff', '#3ec8b8', '#35e07f'];
 /** Series palette with the current accent first. */
 export function seriesColors() {
   const c = cssColors();

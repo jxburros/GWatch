@@ -38,7 +38,7 @@ has to sign in. The legacy access password keeps working for existing scripts.
 
 ```json
 {"kind":"user","name":"pat","role":"admin","isAdmin":true,"canWrite":true,"signedIn":true,
- "theme":"dark","accentColor":"#7c6cff"}
+ "theme":"dark","accentColor":"#43c9c0"}
 ```
 
 **Roles.** `admin` may change anything. `viewer` may read the overview, status,

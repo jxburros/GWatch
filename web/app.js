@@ -69,7 +69,7 @@ async function loadAppearance() {
   try {
     const me = await refreshMe();
     applyTheme(me.theme || 'dark');
-    applyAccent(me.accentColor || '#7c6cff');
+    applyAccent(me.accentColor || '#43c9c0');
     applyIdentity(me);
   } catch { /* keep the cached theme */ }
 }

@@ -178,18 +178,18 @@ export function applyAccent(hex) {
   notifyTheme();
 }
 export const ACCENT_PRESETS = [
-  { name: 'Violet', hex: '#7c6cff' }, { name: 'Blue', hex: '#3b82f6' }, { name: 'Cyan', hex: '#06b6d4' }, { name: 'Teal', hex: '#14b8a6' },
-  { name: 'Green', hex: '#22c55e' }, { name: 'Lime', hex: '#a3e635' }, { name: 'Amber', hex: '#f59e0b' }, { name: 'Orange', hex: '#f97316' },
-  { name: 'Red', hex: '#ef4444' }, { name: 'Pink', hex: '#ec4899' }, { name: 'Gold', hex: '#d4a017' }, { name: 'Navy', hex: '#3556a8' },
+  { name: 'Signal', hex: '#43c9c0' }, { name: 'Violet', hex: '#7c6cff' }, { name: 'Blue', hex: '#3b82f6' }, { name: 'Cyan', hex: '#06b6d4' },
+  { name: 'Teal', hex: '#14b8a6' }, { name: 'Green', hex: '#22c55e' }, { name: 'Lime', hex: '#a3e635' }, { name: 'Amber', hex: '#f59e0b' },
+  { name: 'Orange', hex: '#f97316' }, { name: 'Red', hex: '#ef4444' }, { name: 'Pink', hex: '#ec4899' }, { name: 'Gold', hex: '#d4a017' },
 ];
 /** Read the current values of the design tokens used by canvas charts. */
 export function cssColors() {
   const cs = getComputedStyle(document.documentElement);
   const v = (name, fb) => (cs.getPropertyValue(name) || fb).trim();
-  const rgb = v('--accent-rgb', '124, 108, 255').split(',').map((x) => Number(x.trim()));
+  const rgb = v('--accent-rgb', '67, 201, 192').split(',').map((x) => Number(x.trim()));
   const hex = '#' + rgb.map((n) => Math.max(0, Math.min(255, n || 0)).toString(16).padStart(2, '0')).join('');
   return {
-    bg: v('--card', '#10131a'), line: v('--line', '#232833'), lineStrong: v('--line-strong', '#303744'), muted: v('--muted', '#98a2b3'), dim: v('--dim', '#66707f'), text: v('--text', '#e9edf2'),
+    bg: v('--card', '#16181d'), line: v('--line', '#262a31'), lineStrong: v('--line-strong', '#333941'), muted: v('--muted', '#9aa3ac'), dim: v('--dim', '#6c757f'), text: v('--text', '#f2f4f6'),
     down: v('--down', '#ff5c5c'), up: v('--up', '#35e07f'), warn: v('--warn', '#ffc542'), accent: hex, accentRgb: rgb,
   };
 }
@@ -209,6 +209,37 @@ export function statusMeta(status) { return STATUS[status] || STATUS.unknown; }
 export function statusPill(status, { label, large = false } = {}) {
   const m = statusMeta(status);
   return h('span', { class: `pill ${m.cls} ${large ? 'pill-lg' : ''}`, role: 'status' }, icon(m.icon), label || m.label);
+}
+
+/* What each spine showed the last time it was drawn, so a row that has changed
+   status since the previous render can flash. Keyed by the caller's row id. */
+const spineWas = new Map();
+function spineChanged(key, status) {
+  if (!key) return false;
+  const prev = spineWas.get(key);
+  spineWas.set(key, status);
+  return prev !== undefined && prev !== status;
+}
+
+/** The list-row counterpart to the pill: a 3px colour spine in its own grid
+ *  column, with the status word set beside it in mono. The spine is decorative
+ *  — `statusWord` carries the status as text, so nothing is lost without it.
+ *  Pass `key` (a stable row id) and the spine flashes when the status changes. */
+export function statusSpine(status, { size = '', key } = {}) {
+  const name = status in STATUS ? status : 'unknown';
+  const flash = spineChanged(key, name) && !prefersReducedMotion();
+  return h('span', { class: `spine spine-${name}${size ? ` spine-${size}` : ''}${flash ? ' flash' : ''}`, 'aria-hidden': 'true' });
+}
+
+function prefersReducedMotion() {
+  return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+/** The status word beside a spine, in the status colour. */
+export function statusWord(status, { label } = {}) {
+  const m = statusMeta(status);
+  const key = status in STATUS ? status : 'unknown';
+  return h('span', { class: `status-word text-${key}`, role: 'status' }, label || m.label);
 }
 
 export function statusGlyph(status, { text = true } = {}) {

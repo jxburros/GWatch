@@ -107,11 +107,11 @@ export async function mount(root, ctx) {
   async function tabAppearance() {
     // A viewer cannot read settings, so their theme choice is theirs alone:
     // it starts from what /api/me reported and is remembered by this browser.
-    const g = isAdmin ? (state.settings || await loadSettings()).general : { theme: ctx.me?.theme || 'dark', accentColor: ctx.me?.accentColor || '#7c6cff' };
+    const g = isAdmin ? (state.settings || await loadSettings()).general : { theme: ctx.me?.theme || 'dark', accentColor: ctx.me?.accentColor || '#43c9c0' };
     const themes = [
-      { value: 'dark', label: 'Dark', desc: 'Low-glare, for wall displays and night owls.', bg: '#0a0c10', card: '#10131a', fg: '#e9edf2' },
-      { value: 'light', label: 'Light', desc: 'Bright, high contrast on white.', bg: '#eef1f5', card: '#ffffff', fg: '#10151d' },
-      { value: 'system', label: 'System', desc: 'Follow the operating system preference.', bg: 'linear-gradient(90deg, #0a0c10 50%, #eef1f5 50%)', card: 'linear-gradient(90deg, #10131a 50%, #ffffff 50%)', fg: '#98a2b3' },
+      { value: 'dark', label: 'Dark', desc: 'Low-glare, for wall displays and night owls.', bg: '#0f1114', card: '#16181d', fg: '#f2f4f6' },
+      { value: 'light', label: 'Light', desc: 'Bright, high contrast on white.', bg: '#f1f2f4', card: '#ffffff', fg: '#10151d' },
+      { value: 'system', label: 'System', desc: 'Follow the operating system preference.', bg: 'linear-gradient(90deg, #0f1114 50%, #f1f2f4 50%)', card: 'linear-gradient(90deg, #16181d 50%, #ffffff 50%)', fg: '#9aa3ac' },
     ];
     const themeWrap = h('div', { class: 'theme-options', role: 'radiogroup', 'aria-label': 'Theme' });
     const renderThemes = () => {
@@ -124,8 +124,8 @@ export async function mount(root, ctx) {
     };
     renderThemes();
     const swatches = h('div', { class: 'swatches', role: 'radiogroup', 'aria-label': 'Accent colour' });
-    const custom = h('input', { type: 'color', value: g.accentColor || '#7c6cff', 'aria-label': 'Custom accent colour', oninput: () => { g.accentColor = custom.value; applyAccent(custom.value); renderSwatches(); } });
-    const hex = textInput({ value: g.accentColor || '#7c6cff', class: 'mono', style: { maxWidth: '110px' }, 'aria-label': 'Accent hex', oninput: () => { if (hexToRgb(hex.value)) { g.accentColor = hex.value.toLowerCase(); custom.value = g.accentColor; applyAccent(g.accentColor); renderSwatches(); } } });
+    const custom = h('input', { type: 'color', value: g.accentColor || '#43c9c0', 'aria-label': 'Custom accent colour', oninput: () => { g.accentColor = custom.value; applyAccent(custom.value); renderSwatches(); } });
+    const hex = textInput({ value: g.accentColor || '#43c9c0', class: 'mono', style: { maxWidth: '110px' }, 'aria-label': 'Accent hex', oninput: () => { if (hexToRgb(hex.value)) { g.accentColor = hex.value.toLowerCase(); custom.value = g.accentColor; applyAccent(g.accentColor); renderSwatches(); } } });
     const renderSwatches = () => {
       clear(swatches);
       for (const p of ACCENT_PRESETS) swatches.append(h('button', { type: 'button', role: 'radio', class: `swatch ${(g.accentColor || '').toLowerCase() === p.hex ? 'active' : ''}`, 'aria-checked': (g.accentColor || '').toLowerCase() === p.hex ? 'true' : 'false', title: p.name, style: { background: p.hex }, onclick: () => { g.accentColor = p.hex; custom.value = p.hex; hex.value = p.hex; applyAccent(p.hex); renderSwatches(); } }));
@@ -261,12 +261,13 @@ export async function mount(root, ctx) {
         }));
       }
       const epCard = h('section', { class: 'card' },
-        h('div', { class: 'card-head' }, h('div', null, h('h2', null, 'Custom endpoints'), h('p', { class: 'lead', style: { marginBottom: 0 } }, 'URLs other systems can call to make GWatch do something: run a node\'s checks after a reboot, run a script, call a webhook or pull a git repository. Each lives at ', h('code', null, '/hook/<name>'), '.')),
-          h('button', { class: 'btn btn-primary admin-only', type: 'button', onclick: async () => { const saved = await openEndpointEditor(null, { nodes }); if (saved) load(); } }, icon('plus'), 'New endpoint')));
+        h('div', { class: 'card-head' }, h('h2', null, 'Custom endpoints'),
+          h('button', { class: 'btn btn-primary admin-only', type: 'button', onclick: async () => { const saved = await openEndpointEditor(null, { nodes }); if (saved) load(); } }, icon('plus'), 'New endpoint')),
+        h('p', { class: 'lead' }, 'URLs other systems can call to make GWatch do something: run a node\'s checks after a reboot, run a script, call a webhook or pull a git repository. Each lives at ', h('code', null, '/hook/<name>'), '.'));
       if (!eps.length) epCard.append(emptyState({ icon: 'webhook', title: 'No endpoints yet', text: 'Create one and call its URL from a script, a router, Home Assistant, a CI job — anything that can make an HTTP request.', compact: true }));
       for (const e of eps) epCard.append(endpointRow(e, { nodes, onChange: load }));
       const trCard = h('section', { class: 'card' },
-        h('div', { class: 'card-head' }, h('div', null, h('h2', null, 'Triggers on nodes'), h('p', { class: 'lead', style: { marginBottom: 0 } }, 'Triggers run an action when something happens on a node. They are created on each node\'s page; this is the overview.')),
+        h('div', { class: 'card-head' }, h('h2', null, 'Triggers on nodes'),
           nodes.length ? h('button', { class: 'btn admin-only', type: 'button', onclick: async () => {
             const sel = h('select', null, nodes.map((n) => h('option', { value: n.id }, n.name)));
             const ok = await confirmDialog({ title: 'New trigger', message: 'Which node should it watch?', confirmLabel: 'Continue', body: h('div', { class: 'field' }, sel) });
@@ -274,7 +275,8 @@ export async function mount(root, ctx) {
             const node = nodes.find((n) => String(n.id) === sel.value);
             const saved = await openTriggerEditor(null, { node, nodes });
             if (saved) load();
-          } }, icon('plus'), 'New trigger') : null));
+          } }, icon('plus'), 'New trigger') : null),
+        h('p', { class: 'lead' }, 'Triggers run an action when something happens on a node. They are created on each node\'s page; this is the overview.'));
       if (!trs.length) trCard.append(emptyState({ icon: 'zap', title: 'No triggers yet', text: 'Open a node and add a trigger, e.g. "when Plex goes down, restart its container", "when the gateway recovers, post to Discord".', compact: true }));
       for (const t of trs) {
         const node = nodes.find((n) => n.id === t.nodeId) || { id: t.nodeId, name: `node ${t.nodeId}`, checks: [] };
@@ -346,7 +348,8 @@ export async function mount(root, ctx) {
     const whenLabel = (w) => w.weekdays?.length ? `Weekly on ${w.weekdays.map(weekdayShort).join(', ')} at ${timeShort(w.startAt)} for ${duration((w.durationMinutes || 60) * 60)}` : `${dateTime(w.startAt, { seconds: false })} → ${dateTime(w.endAt, { seconds: false })}`;
     const render = (list) => {
       clear(wrap);
-      wrap.append(h('div', { class: 'card-head' }, h('div', null, h('h2', null, 'Maintenance windows'), h('p', { class: 'lead', style: { marginBottom: 0 } }, 'Planned reboots and updates should not page you. Checks keep running; alerts are held and the node is marked as in maintenance.')), h('button', { class: 'btn btn-primary', type: 'button', onclick: () => edit(null) }, icon('plus'), 'New window')));
+      wrap.append(h('div', { class: 'card-head' }, h('h2', null, 'Maintenance windows'), h('button', { class: 'btn btn-primary', type: 'button', onclick: () => edit(null) }, icon('plus'), 'New window')),
+        h('p', { class: 'lead' }, 'Planned reboots and updates should not page you. Checks keep running; alerts are held and the node is marked as in maintenance.'));
       if (!list.length) { wrap.append(emptyState({ icon: 'wrench', title: 'No maintenance windows', text: 'Create one for a planned reboot, or a weekly one for your update schedule.', compact: true })); return; }
       const rows = h('div', null);
       for (const w of list) {
@@ -431,7 +434,8 @@ export async function mount(root, ctx) {
       if (st.lastBackupAt) statusLine.append(banner(st.lastBackupOk ? 'up' : 'down', h('span', null, h('b', null, st.lastBackupOk ? 'Last backup succeeded ' : 'Last backup failed '), `${relTime(st.lastBackupAt)}${st.lastBackupFile ? ' · ' + st.lastBackupFile : ''}${st.lastError ? ' · ' + st.lastError : ''}`, st.lastRestoreAt ? ` · last restore ${relTime(st.lastRestoreAt)}` : '')));
       else statusLine.append(banner('info', 'No backup has been made yet. Create one so you can move to a new computer without re-creating every node.'));
       if (bk.enabled) nextLine.append(banner('info', data.nextScheduledAt ? h('span', null, h('b', null, 'Next scheduled backup: '), relTime(data.nextScheduledAt)) : 'Automatic backups are enabled; the next one runs once saved.'));
-      listCard.append(h('div', { class: 'card-head' }, h('div', null, h('h2', null, 'Backups on this computer'), h('p', { class: 'lead', style: { marginBottom: 0 } }, data.dir ? h('span', { class: 'mono' }, data.dir) : 'Encrypted archives stored locally.'))));
+      listCard.append(h('div', { class: 'card-head' }, h('h2', null, 'Backups on this computer')),
+        h('p', { class: 'lead' }, data.dir ? h('span', { class: 'mono' }, data.dir) : 'Encrypted archives stored locally.'));
       if (!data.backups?.length) { listCard.append(emptyState({ icon: 'save', title: 'No backups yet', compact: true })); return; }
       for (const b of data.backups) {
         listCard.append(h('div', { class: 'backup-row' },
