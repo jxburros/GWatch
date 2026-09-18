@@ -470,11 +470,22 @@ type GeneralSettings struct {
 	UpdateRepo           string  `json:"updateRepo"`        // GitHub "owner/repo" checked for new releases
 }
 
+// BackupSettings controls scheduled, unattended backups. Backups are always
+// encrypted, so a password is required to enable them.
+type BackupSettings struct {
+	Enabled        bool   `json:"enabled"`
+	IntervalHours  int    `json:"intervalHours"` // default 24, 1-720 (30 days)
+	Keep           int    `json:"keep"`          // how many archives to retain, default 7, 1-365
+	IncludeHistory bool   `json:"includeHistory"`
+	Password       string `json:"password"`
+}
+
 // Settings is the complete settings document.
 type Settings struct {
 	General   GeneralSettings   `json:"general"`
 	Alerts    AlertSettings     `json:"alerts"`
 	Retention RetentionSettings `json:"retention"`
+	Backups   BackupSettings    `json:"backups"`
 }
 
 // DefaultSettings returns the settings used on first run.
@@ -509,6 +520,12 @@ func DefaultSettings() Settings {
 			HourlyDays:  730,
 			DailyDays:   0,
 			EventDays:   730,
+		},
+		Backups: BackupSettings{
+			Enabled:        false,
+			IntervalHours:  24,
+			Keep:           7,
+			IncludeHistory: true,
 		},
 	}
 }

@@ -232,6 +232,9 @@ func maskSettings(st model.Settings) model.Settings {
 	if st.General.AccessPassword != "" {
 		st.General.AccessPassword = passwordMask
 	}
+	if st.Backups.Password != "" {
+		st.Backups.Password = passwordMask
+	}
 	return st
 }
 
@@ -253,6 +256,9 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if st.General.AccessPassword == passwordMask {
 		st.General.AccessPassword = current.General.AccessPassword
+	}
+	if st.Backups.Password == passwordMask {
+		st.Backups.Password = current.Backups.Password
 	}
 	def := model.DefaultSettings()
 	g := &st.General
@@ -353,6 +359,25 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	bk := &st.Backups
+	if bk.IntervalHours <= 0 {
+		bk.IntervalHours = def.Backups.IntervalHours
+	}
+	if bk.IntervalHours < 1 || bk.IntervalHours > 720 {
+		writeError(w, http.StatusBadRequest, "backup interval must be between 1 and 720 hours")
+		return
+	}
+	if bk.Keep <= 0 {
+		bk.Keep = def.Backups.Keep
+	}
+	if bk.Keep < 1 || bk.Keep > 365 {
+		writeError(w, http.StatusBadRequest, "the number of backups to keep must be between 1 and 365")
+		return
+	}
+	if bk.Enabled && strings.TrimSpace(bk.Password) == "" {
+		writeError(w, http.StatusBadRequest, "scheduled backups cannot be enabled without a password")
+		return
+	}
 	if err := s.Store.SaveSettings(r.Context(), st); err != nil {
 		s.fail(w, err)
 		return
@@ -434,7 +459,7 @@ func (s *Server) handleListBackups(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"backups": list, "dir": s.BackupDir, "status": s.Engine.BackupStatus()})
+	writeJSON(w, http.StatusOK, map[string]any{"backups": list, "dir": s.BackupDir, "status": s.Engine.BackupStatus(), "nextScheduledAt": s.Engine.NextBackupAt()})
 }
 
 func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
@@ -450,37 +475,12 @@ func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "a password is required; backups are always encrypted")
 		return
 	}
-	_ = s.Store.Checkpoint(r.Context())
-	info, err := backup.Create(r.Context(), s.Store, s.BackupDir, body.Password, body.IncludeHistory, s.Version)
-	status := s.Engine.BackupStatus()
-	now := time.Now()
-	status.LastBackupAt = &now
+	info, err := s.Engine.RunBackup(r.Context(), s.BackupDir, body.Password, body.IncludeHistory, 0, "Backup")
 	if err != nil {
-		status.LastBackupOK = false
-		status.LastError = err.Error()
-		s.Engine.SetBackupStatus(r.Context(), status)
-		s.Engine.RecordEvent(model.Event{Type: model.EventBackup, Title: "Backup failed", Detail: err.Error()})
 		s.fail(w, err)
 		return
 	}
-	status.LastBackupOK = true
-	status.LastError = ""
-	status.LastBackupFile = info.FileName
-	s.Engine.SetBackupStatus(r.Context(), status)
-	s.Engine.RecordEvent(model.Event{Type: model.EventBackup, Title: "Backup created", Detail: fmt.Sprintf("%s (%s%s)", info.FileName, humanBytes(info.SizeBytes), map[bool]string{true: ", with history", false: ", configuration only"}[info.IncludeHistory])})
 	writeJSON(w, http.StatusCreated, info)
-}
-
-func humanBytes(n int64) string {
-	switch {
-	case n >= 1<<30:
-		return fmt.Sprintf("%.1f GB", float64(n)/(1<<30))
-	case n >= 1<<20:
-		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
-	case n >= 1<<10:
-		return fmt.Sprintf("%.1f KB", float64(n)/(1<<10))
-	}
-	return fmt.Sprintf("%d B", n)
 }
 
 func (s *Server) backupPath(name string) (string, bool) {
@@ -686,6 +686,7 @@ func (s *Server) handleExportConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg.Settings.Alerts.SMTP.Password = ""
+	cfg.Settings.Backups.Password = ""
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="gwatch-config.json"`)
 	enc := json.NewEncoder(w)

@@ -228,6 +228,33 @@ func List(dir string) ([]model.BackupInfo, error) {
 	return out, nil
 }
 
+// Prune keeps the keep newest archives in dir (by creation time, newest
+// first, same order as List) and removes the rest. It returns the file names
+// that were removed. keep <= 0 removes nothing.
+func Prune(dir string, keep int) ([]string, error) {
+	if keep <= 0 {
+		return nil, nil
+	}
+	list, err := List(dir)
+	if err != nil {
+		return nil, err
+	}
+	if len(list) <= keep {
+		return nil, nil
+	}
+	var removed []string
+	for _, b := range list[keep:] {
+		if err := os.Remove(filepath.Join(dir, b.FileName)); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return removed, err
+		}
+		removed = append(removed, b.FileName)
+	}
+	return removed, nil
+}
+
 // Open decrypts an archive to a temporary file and returns a zip reader.
 func Open(path, password string) (*zip.ReadCloser, func(), error) {
 	f, err := os.Open(path)
