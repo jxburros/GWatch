@@ -16,22 +16,39 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jxburros/GWatch/internal/secrets"
+
 	_ "modernc.org/sqlite"
 )
+
+// KeyFileName is the name of the machine-local secrets key file kept next to
+// the database file.
+const KeyFileName = "gwatch.key"
 
 // ErrNotFound is returned when a row does not exist.
 var ErrNotFound = errors.New("not found")
 
 // Store wraps the SQLite database.
 type Store struct {
-	path   string
-	writer *sql.DB
-	reader *sql.DB
-	wmu    sync.Mutex
+	path    string
+	writer  *sql.DB
+	reader  *sql.DB
+	wmu     sync.Mutex
+	secrets *secrets.Box
+
+	secmu      sync.RWMutex
+	secretsErr error
 }
 
 // Open opens (creating if needed) the database at path and applies the schema.
+// Secrets stored in the settings row are encrypted with the key file
+// "gwatch.key" kept alongside the database, which is created if missing.
 func Open(path string) (*Store, error) {
+	return OpenWithKeyFile(path, filepath.Join(filepath.Dir(path), KeyFileName))
+}
+
+// OpenWithKeyFile is Open with an explicit path for the secrets key file.
+func OpenWithKeyFile(path, keyFile string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
@@ -54,12 +71,38 @@ func Open(path string) (*Store, error) {
 	reader.SetMaxIdleConns(4)
 	reader.SetConnMaxLifetime(0)
 
-	s := &Store{path: path, writer: writer, reader: reader}
+	box, err := secrets.Load(keyFile)
+	if err != nil {
+		writer.Close()
+		reader.Close()
+		return nil, fmt.Errorf("load secrets key: %w", err)
+	}
+
+	s := &Store{path: path, writer: writer, reader: reader, secrets: box}
 	if err := s.migrate(); err != nil {
 		s.Close()
 		return nil, err
 	}
+	if err := s.migrateSecrets(context.Background()); err != nil {
+		s.Close()
+		return nil, err
+	}
 	return s, nil
+}
+
+// SecretsHealthy reports the last secrets problem seen while loading settings
+// (for example a key file that cannot decrypt the stored values). It returns
+// nil while everything decrypts cleanly.
+func (s *Store) SecretsHealthy() error {
+	s.secmu.RLock()
+	defer s.secmu.RUnlock()
+	return s.secretsErr
+}
+
+func (s *Store) setSecretsErr(err error) {
+	s.secmu.Lock()
+	s.secretsErr = err
+	s.secmu.Unlock()
 }
 
 // Path returns the database file path.
