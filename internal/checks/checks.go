@@ -30,6 +30,12 @@ type Options struct {
 	DefaultCertWarn   int     // global cert warn days (used when Config.CertWarnDays == 0; default 14)
 	LatencyWarnMS     float64 // global latency warning threshold (used when Config.LatencyWarnMS == 0; 0 = off)
 	PacketLossWarnPct float64 // global packet loss warning threshold (used when Config.PacketLossWarnPct == 0; 0 = off)
+
+	// Hosts supplies hardware readings taken elsewhere — by the engine's
+	// sampler for this computer, or by an agent that pushed them in. It is nil
+	// outside the engine, and a hardware check then reports that it cannot
+	// read anything rather than panicking.
+	Hosts HostReader
 }
 
 const (
@@ -92,6 +98,11 @@ func runOnce(ctx context.Context, check model.Check, opts Options) (res model.Re
 			res = failResult(fmt.Sprintf("internal error: %v", r))
 		}
 	}()
+	// A hardware check reads a machine, not an address: only the "url" source
+	// has a target at all, and it carries its own.
+	if check.Type == model.CheckSystem {
+		return runSystemCheck(ctx, check, opts)
+	}
 	target := check.Target(opts.NodeHost)
 	if target == "" {
 		return failResult("no target configured")
@@ -162,7 +173,10 @@ func Validate(check model.Check, nodeHost string) error {
 	}
 	cfg := check.Config
 	target := check.Target(nodeHost)
-	if target == "" {
+	// A hardware check names a machine rather than an address, so it is the
+	// one type with nothing to resolve; validateSystemCheck checks what it
+	// does need instead.
+	if target == "" && check.Type != model.CheckSystem {
 		return errors.New("a target (or a node host) is required")
 	}
 	if check.IntervalSeconds != 0 && check.IntervalSeconds < minIntervalSecs {
@@ -252,6 +266,10 @@ func Validate(check model.Check, nodeHost string) error {
 			}
 		}
 		if _, err := hostOnly(target); err != nil {
+			return err
+		}
+	case model.CheckSystem:
+		if err := validateSystemCheck(cfg); err != nil {
 			return err
 		}
 	case model.CheckCustom:

@@ -967,6 +967,9 @@ func (s *Store) LoadSettings(ctx context.Context) (model.Settings, error) {
 	if st.Retention.RawDays <= 0 {
 		st.Retention.RawDays = def.Retention.RawDays
 	}
+	if st.Retention.HostDays <= 0 {
+		st.Retention.HostDays = def.Retention.HostDays
+	}
 	if st.General.AccentColor == "" {
 		st.General.AccentColor = def.General.AccentColor
 	}

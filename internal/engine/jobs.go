@@ -199,6 +199,9 @@ func (e *Engine) runRetention(ctx context.Context, backfill, cleanup bool) error
 		if s.EventDays > 0 {
 			del(st.DeleteEventsBefore(ctx, now.AddDate(0, 0, -s.EventDays)))
 		}
+		if s.HostDays > 0 {
+			del(st.PruneHostSamples(ctx, now.AddDate(0, 0, -s.HostDays)))
+		}
 		if deleted > 0 {
 			_ = st.Checkpoint(ctx)
 		}
@@ -253,6 +256,7 @@ func RetentionPlan(s model.RetentionSettings) []string {
 		fmt.Sprintf("Hourly summaries are kept for %s.", days(s.HourlyDays)),
 		fmt.Sprintf("Daily summaries are kept %s.", map[bool]string{true: "forever", false: "for " + days(s.DailyDays)}[s.DailyDays <= 0]),
 		fmt.Sprintf("Incident and event history is kept for %s.", days(s.EventDays)),
+		fmt.Sprintf("Hardware readings from this computer and any agents are kept for %s.", days(s.HostDays)),
 	}
 	return plan
 }
