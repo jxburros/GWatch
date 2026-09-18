@@ -589,3 +589,27 @@ func (e *Engine) NodeStatus(n model.Node) (model.Status, bool) {
 	defer e.mu.Unlock()
 	return e.nodeStatusLocked(n, time.Now())
 }
+
+// ---- hardware readings ----
+
+// hostSampleLoop reads this computer's hardware on a schedule. It runs whether
+// or not a check watches this machine, so the hardware page has a history to
+// draw from the moment someone opens it.
+func (e *Engine) hostSampleLoop() {
+	defer e.wg.Done()
+	e.hosts.Run(e.ctx)
+}
+
+// recordScrapedHost stores a reading a hardware check fetched itself. Readings
+// this computer produced are already stored by the sampler, and an agent's are
+// stored when it pushes them, so only a scraped endpoint's reading arrives
+// this way — which is why the key decides rather than the check type.
+func (e *Engine) recordScrapedHost(ctx context.Context, result model.Result) {
+	host := result.Details.Host
+	if host == nil || !strings.HasPrefix(host.Key, "url:") {
+		return
+	}
+	if err := e.hosts.Record(ctx, *host); err != nil {
+		e.RecordError("store scraped hardware reading", err)
+	}
+}

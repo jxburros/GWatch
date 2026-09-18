@@ -95,6 +95,9 @@ var policies = []routePolicy{
 	{"GET", "/api/dashboards", levelViewer, keyRead},
 	{"GET", "/api/dashboards/{id}", levelViewer, keyRead},
 	{"GET", "/api/charts", levelViewer, keyRead},
+	{"GET", "/api/hosts", levelViewer, keyRead},
+	{"GET", "/api/hosts/{key}", levelViewer, keyRead},
+	{"GET", "/api/hosts/{key}/history", levelViewer, keyRead},
 	{"GET", "/api/export/history.csv", levelViewer, keyRead},
 	{"GET", "/api/export/results.csv", levelViewer, keyRead},
 	{"GET", "/api/export/events.csv", levelViewer, keyRead},
@@ -161,6 +164,13 @@ var policies = []routePolicy{
 	{"POST", "/api/users", levelAdmin, keyDeny},
 	{"PUT", "/api/users/{id}", levelAdmin, keyDeny},
 	{"DELETE", "/api/users/{id}", levelAdmin, keyDeny},
+	// Registering a machine mints a credential, so it sits with the other
+	// credential routes: administrators in the browser only, never an API key.
+	{"GET", "/api/agents", levelAdmin, keyDeny},
+	{"POST", "/api/agents", levelAdmin, keyDeny},
+	{"PUT", "/api/agents/{id}", levelAdmin, keyDeny},
+	{"DELETE", "/api/agents/{id}", levelAdmin, keyDeny},
+
 	{"GET", "/api/apikeys", levelAdmin, keyDeny},
 	{"POST", "/api/apikeys", levelAdmin, keyDeny},
 	{"DELETE", "/api/apikeys/{id}", levelAdmin, keyDeny},

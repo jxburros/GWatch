@@ -145,6 +145,19 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "/hook/{slug}", s.handleHook)
 	s.route(mux, "/hook/{slug}/{rest...}", s.handleHook)
 
+	s.route(mux, "GET /api/hosts", s.handleListHosts)
+	s.route(mux, "GET /api/hosts/{key}", s.handleGetHost)
+	s.route(mux, "GET /api/hosts/{key}/history", s.handleHostHistory)
+
+	s.route(mux, "GET /api/agents", s.handleListAgents)
+	s.route(mux, "POST /api/agents", s.handleCreateAgent)
+	s.route(mux, "PUT /api/agents/{id}", s.handleUpdateAgent)
+	s.route(mux, "DELETE /api/agents/{id}", s.handleRevokeAgent)
+
+	// Agents authenticate with their own token and are handled outside the
+	// authorization table; see handleIngestMetrics for why.
+	s.route(mux, "/ingest/metrics", s.handleIngestMetrics)
+
 	s.route(mux, "GET /api/charts", s.handleListCharts)
 	s.route(mux, "PUT /api/charts", s.handlePutCharts)
 

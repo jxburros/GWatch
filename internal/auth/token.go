@@ -17,6 +17,11 @@ const (
 	SessionLifetime = 30 * 24 * time.Hour
 	// APIKeyPrefix is the visible marker at the start of every API key.
 	APIKeyPrefix = "gw_"
+	// AgentTokenPrefix marks an agent enrolment token. It is deliberately
+	// distinct from APIKeyPrefix: an agent token is not an API key and grants
+	// nothing but the right to submit one machine's hardware readings, so the
+	// two must never be mistaken for one another in a log or a config file.
+	AgentTokenPrefix = "gwa_"
 	// apiKeySecretLen is the number of random characters after the prefix.
 	apiKeySecretLen = 40
 	// KeyPrefixLen is how many characters of a key are stored in the clear so
@@ -53,6 +58,29 @@ func NewAPIKey() (key, prefix string, err error) {
 	return key, KeyPrefix(key), nil
 }
 
+// NewAgentToken returns a new agent enrolment token and the prefix stored
+// alongside its hash for display.
+func NewAgentToken() (token, prefix string, err error) {
+	b := make([]byte, apiKeySecretLen)
+	if _, err := rand.Read(b); err != nil {
+		return "", "", fmt.Errorf("generate agent token: %w", err)
+	}
+	var sb strings.Builder
+	sb.WriteString(AgentTokenPrefix)
+	for _, v := range b {
+		sb.WriteByte(keyAlphabet[int(v)%len(keyAlphabet)])
+	}
+	token = sb.String()
+	return token, KeyPrefix(token), nil
+}
+
+// LooksLikeAgentToken reports whether s has the shape of an agent token. Like
+// LooksLikeAPIKey it only decides which credential is being presented, never
+// whether to accept it.
+func LooksLikeAgentToken(s string) bool {
+	return strings.HasPrefix(s, AgentTokenPrefix) && len(s) > len(AgentTokenPrefix)+8
+}
+
 // KeyPrefix returns the displayable leading part of an API key.
 func KeyPrefix(key string) string {
 	if len(key) <= KeyPrefixLen {
@@ -74,5 +102,8 @@ func HashToken(token string) string {
 // only used to decide which credential a request is presenting, never to
 // accept one.
 func LooksLikeAPIKey(s string) bool {
-	return strings.HasPrefix(s, APIKeyPrefix) && len(s) > len(APIKeyPrefix)+8
+	// AgentTokenPrefix starts with APIKeyPrefix, so an agent token would
+	// otherwise be taken for a malformed API key and reported as one.
+	return strings.HasPrefix(s, APIKeyPrefix) && !strings.HasPrefix(s, AgentTokenPrefix) &&
+		len(s) > len(APIKeyPrefix)+8
 }

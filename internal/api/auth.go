@@ -171,8 +171,10 @@ func (s *Server) resolvePrincipal(r *http.Request) (auth.Principal, *authError) 
 func (s *Server) accessControl(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Custom endpoints carry their own token and are called by devices that
-		// have no account; they are never subject to the sign-in.
-		if strings.HasPrefix(r.URL.Path, "/hook/") {
+		// have no account; they are never subject to the sign-in. The hardware
+		// ingest route is the same shape: an agent token identifies one
+		// machine and permits one thing, submitting that machine's readings.
+		if strings.HasPrefix(r.URL.Path, "/hook/") || strings.HasPrefix(r.URL.Path, "/ingest/") {
 			next.ServeHTTP(w, r)
 			return
 		}
