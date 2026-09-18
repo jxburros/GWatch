@@ -89,7 +89,7 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 			st.Status = model.StatusDown
 			st.LastChangeAt = ptrTime(now)
 			st.WarningActive = false
-			ev(model.EventDown, fmt.Sprintf("%s — %s is down", n.Name, c.Name), failureDetail(r, st.ConsecutiveFailures), nil)
+			ev(model.EventDown, "Down", failureDetail(r, st.ConsecutiveFailures), nil)
 			evaluateDown = true
 		} else if st.Status == model.StatusDown && !st.AlertActive {
 			// Still down and no notification was sent yet (suppressed): re-evaluate,
@@ -104,7 +104,7 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 			if st.LastChangeAt != nil {
 				dur = " after " + humanDuration(now.Sub(*st.LastChangeAt))
 			}
-			ev(model.EventRecovered, fmt.Sprintf("%s — %s recovered%s", n.Name, c.Name, dur), r.Message, nil)
+			ev(model.EventRecovered, "Recovered"+dur, r.Message, nil)
 			if st.AlertActive && e.notifyRecovery(c, settings) {
 				mails = append(mails, e.newMail("recovered", c, n, r, st, settings))
 			}
@@ -137,7 +137,7 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 			if !r.Details.Cert.Valid {
 				detail = "Certificate is not valid: " + r.Details.Cert.Error
 			}
-			ev(model.EventCertWarning, fmt.Sprintf("%s — certificate warning", n.Name), detail, r.Details.Cert)
+			ev(model.EventCertWarning, "Certificate warning", detail, r.Details.Cert)
 			if e.canWarn(c, n, st, settings, now) {
 				m := e.newMail("warning", c, n, r, st, settings)
 				m.message = detail
@@ -145,12 +145,12 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 			}
 		} else if !certWarn && st.CertWarningActive {
 			st.CertWarningActive = false
-			ev(model.EventCertWarningCleared, fmt.Sprintf("%s — certificate warning cleared", n.Name), "The certificate is valid and not close to expiry.", nil)
+			ev(model.EventCertWarningCleared, "Certificate warning cleared", "The certificate is valid and not close to expiry.", nil)
 		}
 		// Content change detection: one event per change, then re-baseline.
 		if r.Details.ContentChanged {
 			detail := "The response/content differs from the previous observation. This is not a security conclusion: dynamic pages, ads, timestamps and login pages also cause changes."
-			ev(model.EventContentChanged, fmt.Sprintf("%s — %s response/content changed", n.Name, c.Name), detail, map[string]string{"previous": st.LastContentValue, "current": r.Details.ContentValue})
+			ev(model.EventContentChanged, "Response/content changed", detail, map[string]string{"previous": st.LastContentValue, "current": r.Details.ContentValue})
 			if e.canWarn(c, n, st, settings, now) {
 				m := e.newMail("warning", c, n, r, st, settings)
 				m.message = "Response/content changed"
@@ -170,7 +170,7 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 			if detail == "" {
 				detail = r.Message
 			}
-			ev(model.EventWarning, fmt.Sprintf("%s — %s degraded", n.Name, c.Name), detail, nil)
+			ev(model.EventWarning, "Degraded", detail, nil)
 			if !r.Details.ContentChanged && !(certWarn && onlyCertWarning(r)) && e.canWarn(c, n, st, settings, now) {
 				m := e.newMail("warning", c, n, r, st, settings)
 				m.message = detail
@@ -178,7 +178,7 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 			}
 		} else if newStatus == model.StatusUp && st.WarningActive {
 			st.WarningActive = false
-			ev(model.EventWarningCleared, fmt.Sprintf("%s — %s back to normal", n.Name, c.Name), r.Message, nil)
+			ev(model.EventWarningCleared, "Back to normal", r.Message, nil)
 		}
 		if st.Status != newStatus {
 			st.Status = newStatus
@@ -216,7 +216,7 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 				st.AffectedByNodeName = d.parentNode.Name
 			}
 			if changed && d.reason != "disabled" {
-				ev(model.EventAlertSuppressed, fmt.Sprintf("Alert suppressed for %s — %s", n.Name, c.Name), suppressDetail(d, st, settings), map[string]string{"reason": d.reason})
+				ev(model.EventAlertSuppressed, "Alert suppressed ("+suppressLabel(d.reason)+")", suppressDetail(d, st, settings), map[string]string{"reason": d.reason})
 			}
 		}
 	}
@@ -254,16 +254,24 @@ func onlyCertWarning(r model.Result) bool {
 func failureDetail(r model.Result, failures int) string {
 	msg := r.Message
 	if r.Error != "" {
-		if msg != "" && msg != r.Error {
-			msg = msg + " — " + r.Error
-		} else {
+		if msg == "" {
 			msg = r.Error
+		} else if !strings.Contains(msg, r.Error) && !strings.Contains(r.Error, msg) {
+			msg = msg + " — " + r.Error
 		}
 	}
 	if msg == "" {
 		msg = "Check failed"
 	}
 	return fmt.Sprintf("%s (%d consecutive failures)", msg, failures)
+}
+
+func suppressLabel(reason string) string {
+	switch reason {
+	case "dependency":
+		return "parent is down"
+	}
+	return reason
 }
 
 func suppressDetail(d downDecision, st *model.CheckState, s model.Settings) string {
@@ -504,11 +512,11 @@ func (e *Engine) sendMail(m mailTask) {
 		if err != nil {
 			e.log.Errorf("send %s email for %s/%s: %v", m.kind, m.node.Name, m.check.Name, err)
 			e.recordEvent(model.Event{Type: model.EventAlertFailed, NodeID: ptrInt64(m.node.ID), CheckID: ptrInt64(m.check.ID), NodeName: m.node.Name, CheckName: m.check.Name,
-				Title: fmt.Sprintf("%s email failed for %s — %s", label, m.node.Name, m.check.Name), Detail: err.Error()})
+				Title: label + " email failed", Detail: err.Error()})
 			return
 		}
 		e.recordEvent(model.Event{Type: model.EventAlertSent, NodeID: ptrInt64(m.node.ID), CheckID: ptrInt64(m.check.ID), NodeName: m.node.Name, CheckName: m.check.Name,
-			Title: fmt.Sprintf("%s emailed for %s — %s", label, m.node.Name, m.check.Name), Detail: "Sent to " + strings.Join(m.to, ", ")})
+			Title: label + " emailed", Detail: "Sent to " + strings.Join(m.to, ", ")})
 	}()
 }
 
@@ -553,11 +561,11 @@ func (e *Engine) Silence(ctx context.Context, checkID int64, d time.Duration) (m
 	var evt model.Event
 	if d <= 0 {
 		st.SilencedUntil = nil
-		evt = model.Event{Type: model.EventUnsilenced, Title: fmt.Sprintf("%s — %s unsilenced", n.Name, c.Name), Detail: "Alerts are active again."}
+		evt = model.Event{Type: model.EventUnsilenced, Title: "Unsilenced", Detail: "Alerts are active again."}
 	} else {
 		until := time.Now().Add(d)
 		st.SilencedUntil = &until
-		evt = model.Event{Type: model.EventSilenced, Title: fmt.Sprintf("%s — %s silenced for %s", n.Name, c.Name, humanDuration(d)), Detail: "No email alerts until " + until.Format("2006-01-02 15:04") + ". Results are still recorded."}
+		evt = model.Event{Type: model.EventSilenced, Title: "Silenced for " + humanDuration(d), Detail: "No email alerts until " + until.Format("2006-01-02 15:04") + ". Results are still recorded."}
 	}
 	snapshot := *st
 	e.mu.Unlock()

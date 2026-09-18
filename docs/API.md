@@ -34,6 +34,7 @@ Static UI: `GET /` serves `web/index.html`; `/app.js`, `/app.css` etc. are serve
 - `POST /api/nodes/{id}/enable` body `{ "enabled": true|false }` → Node.
 - `POST /api/nodes/{id}/duplicate` → new Node (name suffixed " (copy)", disabled).
 - `POST /api/nodes/{id}/run` → runs all enabled checks of the node now → `[Result]`.
+- `POST /api/nodes/{id}/silence` body `{ "minutes": 60 }` (0 = unsilence) → silences every check of the node → Node.
 - `GET /api/templates` → `[NodeTemplate]` (website, home-server, router, api-endpoint, tcp-service, dns).
 - `GET /api/groups` → `{ "groups": [{"name":"...","count":3}], "tags": [{"name":"...","count":2}] }`.
 
@@ -48,12 +49,12 @@ Static UI: `GET /` serves `web/index.html`; `/app.js`, `/app.css` etc. are serve
 
 - `GET /api/history?checkId=ID&range=1h|24h|7d|30d|1y` → `HistorySeries`.
   Multiple: `GET /api/history?checkId=1&checkId=2&range=24h` → `[HistorySeries]` (always an array when more than one id, single object for one id... to keep it simple the UI should use `GET /api/history/multi?checkId=..&checkId=..&range=` → `[HistorySeries]`).
-- `GET /api/history/multi?checkId=1&checkId=2&range=24h` → `[HistorySeries]`.
+- `GET /api/history/multi?checkId=1&checkId=2&range=24h` → `[HistorySeries]`. With `auto=1` and no `checkId`, the service picks up to 4 important checks (critical/high nodes, ping and HTTP first).
 - Point spacing by range: 1h/24h → raw results (or 5-minute rollups if raw is gone), 7d → 5-minute rollups, 30d → hourly, 1y → daily.
 
 ## Events / incidents
 
-- `GET /api/events?limit=100&before=ID&nodeId=&checkId=&type=` → `[Event]` newest first.
+- `GET /api/events?limit=100&before=ID&nodeId=&checkId=&type=` → `[Event]` newest first. A `type` filter also includes its counterpart (down+recovered, warning+warning_cleared, cert_warning+cert_warning_cleared, silenced+unsilenced, maintenance_began+maintenance_ended, alert_sent+alert_failed).
 - `POST /api/events/note` body `{ "nodeId": null|id, "text": "rebooted router" }` → Event (timeline annotation).
 
 ## Maintenance windows

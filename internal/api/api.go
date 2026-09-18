@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net/http"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -50,6 +51,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/nodes/{id}/enable", s.handleEnableNode)
 	mux.HandleFunc("POST /api/nodes/{id}/duplicate", s.handleDuplicateNode)
 	mux.HandleFunc("POST /api/nodes/{id}/run", s.handleRunNode)
+	mux.HandleFunc("POST /api/nodes/{id}/silence", s.handleSilenceNode)
 	mux.HandleFunc("GET /api/templates", s.handleTemplates)
 	mux.HandleFunc("GET /api/groups", s.handleGroups)
 
@@ -266,13 +268,26 @@ func (s *Server) handleWallboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	doc := wallboardDoc{Overview: ov, Health: s.Engine.Health(r.Context()), Trends: []model.HistorySeries{}}
-	// Pick up to 6 checks: critical/high importance first, then ping/http checks.
-	type cand struct {
-		check model.Check
-		node  model.Node
-		score int
+	rng, _ := store.ParseRange("24h")
+	for _, c := range autoChecks(ov, 6) {
+		series, err := s.Store.History(r.Context(), c.check, c.node.Name, rng, time.Now())
+		if err == nil {
+			doc.Trends = append(doc.Trends, series)
+		}
 	}
-	var cands []cand
+	writeJSON(w, http.StatusOK, doc)
+}
+
+type autoCandidate struct {
+	check model.Check
+	node  model.Node
+	score int
+}
+
+// autoChecks picks up to limit checks worth charting when the user has not
+// chosen any: critical/high importance nodes first, then ping and HTTP checks.
+func autoChecks(ov engine.Overview, limit int) []autoCandidate {
+	var cands []autoCandidate
 	for _, nv := range ov.Nodes {
 		if !nv.Node.Enabled {
 			continue
@@ -296,27 +311,19 @@ func (s *Server) handleWallboard(w http.ResponseWriter, r *http.Request) {
 			case model.CheckTCP, model.CheckDNS:
 				score += 4
 			}
-			cands = append(cands, cand{cv.Check, nv.Node, score})
+			cands = append(cands, autoCandidate{cv.Check, nv.Node, score})
 		}
 	}
-	for i := 0; i < len(cands); i++ {
-		for j := i + 1; j < len(cands); j++ {
-			if cands[j].score > cands[i].score || (cands[j].score == cands[i].score && cands[j].node.Name < cands[i].node.Name) {
-				cands[i], cands[j] = cands[j], cands[i]
-			}
+	sort.SliceStable(cands, func(i, j int) bool {
+		if cands[i].score != cands[j].score {
+			return cands[i].score > cands[j].score
 		}
+		return strings.ToLower(cands[i].node.Name) < strings.ToLower(cands[j].node.Name)
+	})
+	if len(cands) > limit {
+		cands = cands[:limit]
 	}
-	rng, _ := store.ParseRange("24h")
-	for i, c := range cands {
-		if i >= 6 {
-			break
-		}
-		series, err := s.Store.History(r.Context(), c.check, c.node.Name, rng, time.Now())
-		if err == nil {
-			doc.Trends = append(doc.Trends, series)
-		}
-	}
-	writeJSON(w, http.StatusOK, doc)
+	return cands
 }
 
 // ---- nodes ----
@@ -675,6 +682,37 @@ func (s *Server) handleRunNode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, results)
 }
 
+// handleSilenceNode silences (or unsilences) every check of a node.
+func (s *Server) handleSilenceNode(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var body struct {
+		Minutes int `json:"minutes"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	n, err := s.Store.GetNode(r.Context(), id)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	states := map[int64]model.CheckState{}
+	for _, c := range n.Checks {
+		st, err := s.Engine.Silence(r.Context(), c.ID, time.Duration(body.Minutes)*time.Minute)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		states[c.ID] = st
+	}
+	writeJSON(w, http.StatusOK, s.decorateNode(n, states, nil))
+}
+
 func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, checks.Templates())
 }
@@ -876,7 +914,18 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleHistoryMulti(w http.ResponseWriter, r *http.Request) {
 	out := []model.HistorySeries{}
-	for _, raw := range r.URL.Query()["checkId"] {
+	ids := r.URL.Query()["checkId"]
+	if len(ids) == 0 && r.URL.Query().Get("auto") != "" {
+		ov, err := s.Engine.Overview(r.Context())
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		for _, c := range autoChecks(ov, 4) {
+			ids = append(ids, strconv.FormatInt(c.check.ID, 10))
+		}
+	}
+	for _, raw := range ids {
 		id, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
 			continue
@@ -898,10 +947,25 @@ func (s *Server) handleHistoryMulti(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	f := store.EventFilter{Limit: queryInt(r, "limit", 100), BeforeID: int64(queryInt(r, "before", 0)), NodeID: queryInt64Ptr(r, "nodeId"), CheckID: queryInt64Ptr(r, "checkId")}
+	// A filter on a "began" type also shows its counterpart so the timeline
+	// stays readable (warning + warning_cleared, silenced + unsilenced ...).
+	counterparts := map[model.EventType]model.EventType{
+		model.EventWarning:          model.EventWarningCleared,
+		model.EventCertWarning:      model.EventCertWarningCleared,
+		model.EventSilenced:         model.EventUnsilenced,
+		model.EventMaintenanceBegan: model.EventMaintenanceEnded,
+		model.EventDown:             model.EventRecovered,
+		model.EventAlertSent:        model.EventAlertFailed,
+		model.EventServiceStarted:   model.EventServiceStopped,
+	}
 	for _, t := range r.URL.Query()["type"] {
 		for _, part := range strings.Split(t, ",") {
 			if part = strings.TrimSpace(part); part != "" {
-				f.Types = append(f.Types, model.EventType(part))
+				et := model.EventType(part)
+				f.Types = append(f.Types, et)
+				if c, ok := counterparts[et]; ok {
+					f.Types = append(f.Types, c)
+				}
 			}
 		}
 	}
