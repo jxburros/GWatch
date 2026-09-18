@@ -15,8 +15,11 @@
 #      system ANSI codepage, so a typographic dash reaches the wizard as
 #      mojibake -- which compiles cleanly and looks wrong only on screen.
 #   3. Unbalanced begin/end in [Code].
-#   4. A {code:...} reference with no matching function.
-#   5. A Source/LicenseFile/icon/bitmap that is not actually there.
+#   4. A routine in [Code] that ends with unbalanced parentheses -- what is left
+#      behind when a call is refactored into something else and its closing
+#      paren is not removed with it.
+#   5. A {code:...} reference with no matching function.
+#   6. A Source/LicenseFile/icon/bitmap that is not actually there.
 $ErrorActionPreference = "Stop"
 $dir = $PSScriptRoot
 $failed = $false
@@ -56,6 +59,29 @@ foreach ($iss in Get-ChildItem -Path $dir -Filter *.iss) {
         if ($depth -lt 0) { Fail $iss.Name 0 "an 'end' with no matching 'begin' in [Code]."; break }
     }
     if ($depth -gt 0) { Fail $iss.Name 0 "$depth unclosed begin/case/record block(s) in [Code]." }
+
+    # Parenthesis balance, checked per routine so the report names the routine
+    # that is wrong rather than the end of the file. Strings are blanked first:
+    # a bracket inside one is text.
+    $depth = 0
+    $codeStart = ($raw -split "`r?`n").Count - ($code -split "`r?`n").Count
+    $codeLines = $code -split "`r?`n"
+    for ($i = 0; $i -lt $codeLines.Count; $i++) {
+        $t = [regex]::Replace($codeLines[$i], "'(?:[^'\n]|'')*'", "''")
+        $t = [regex]::Replace($t, '\{[^}]*\}', ' ')
+        $t = [regex]::Replace($t, '//.*$', '')
+        foreach ($ch in $t.ToCharArray()) {
+            if ($ch -eq '(') { $depth++ }
+            elseif ($ch -eq ')') {
+                $depth--
+                if ($depth -lt 0) { Fail $iss.Name ($codeStart + $i + 1) "an unmatched ')'."; $depth = 0 }
+            }
+        }
+        if ($codeLines[$i] -match '^\s*end;\s*$' -and $depth -ne 0) {
+            Fail $iss.Name ($codeStart + $i + 1) "this routine ends with $depth unclosed parenthesis/es."
+            $depth = 0
+        }
+    }
 
     $defined = @{}
     foreach ($m in [regex]::Matches($stripped, '\b(?:procedure|function)\s+(\w+)', 'IgnoreCase')) {

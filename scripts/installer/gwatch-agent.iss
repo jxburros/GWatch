@@ -172,7 +172,7 @@ begin
     'A pairing code is good for one machine and expires after about fifteen ' +
     'minutes. It is exchanged during installation for a token that can only ' +
     'submit this machine''s readings -- it grants no other access to GWatch, ' +
-    'and GWatch is given no way back into this computer.');
+    'and GWatch is given no way back into this computer.';
   Note.AutoSize := False;
   Note.WordWrap := True;
   Note.Height := 60;
