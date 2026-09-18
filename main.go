@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -70,6 +72,10 @@ func checkHandler(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 		return
 	}
@@ -146,7 +152,17 @@ func runHTTPCheck(ctx context.Context, target string) (checkResult, error) {
 		return checkResult{}, err
 	}
 
-	client := &http.Client{}
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: safeDialContext,
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("stopped after too many redirects")
+			}
+			return validateHTTPHost(req.URL.Hostname())
+		},
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return checkResult{}, err
@@ -163,7 +179,7 @@ func runHTTPCheck(ctx context.Context, target string) (checkResult, error) {
 }
 
 func validateHTTPHost(host string) error {
-	if strings.EqualFold(os.Getenv("GWATCH_ALLOW_PRIVATE_HTTP_TARGETS"), "true") {
+	if allowPrivateHTTPTargets() {
 		return nil
 	}
 
@@ -176,11 +192,52 @@ func validateHTTPHost(host string) error {
 		return nil
 	}
 
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast() {
+	if isDisallowedIP(ip) {
 		return fmt.Errorf("private or local IP targets are not allowed for HTTP checks")
 	}
 
 	return nil
+}
+
+func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	if allowPrivateHTTPTargets() {
+		return (&net.Dialer{}).DialContext(ctx, network, addr)
+	}
+
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	if ip := net.ParseIP(host); ip != nil {
+		if isDisallowedIP(ip) {
+			return nil, fmt.Errorf("private or local IP targets are not allowed for HTTP checks")
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, addr)
+	}
+
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+
+	dialer := &net.Dialer{}
+	for _, ipAddr := range addrs {
+		if isDisallowedIP(ipAddr.IP) {
+			continue
+		}
+		return dialer.DialContext(ctx, network, net.JoinHostPort(ipAddr.IP.String(), port))
+	}
+
+	return nil, fmt.Errorf("private or local IP targets are not allowed for HTTP checks")
+}
+
+func isDisallowedIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast()
+}
+
+func allowPrivateHTTPTargets() bool {
+	return strings.EqualFold(os.Getenv("GWATCH_ALLOW_PRIVATE_HTTP_TARGETS"), "true")
 }
 
 func runDNSCheck(ctx context.Context, target string) (checkResult, error) {

@@ -110,6 +110,17 @@ func TestCheckHandlerRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestCheckHandlerRejectsTrailingJSON(t *testing.T) {
+	body := `{"type":"dns","target":"localhost"} {}`
+	req := httptest.NewRequest(http.MethodPost, "/api/check", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+
+	checkHandler(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+}
+
 func TestRunCheckValidationAndDefaultTimeout(t *testing.T) {
 	t.Run("empty target", func(t *testing.T) {
 		_, err := runCheck(context.Background(), checkRequest{Type: checkTypeDNS, Target: "  "})
