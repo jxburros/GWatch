@@ -37,6 +37,13 @@ func TestRunHTTPCheckRejectsLocalhost(t *testing.T) {
 	}
 }
 
+func TestRunHTTPCheckRejectsLocalhostHostname(t *testing.T) {
+	_, err := runHTTPCheck(context.Background(), "http://localhost")
+	if err == nil {
+		t.Fatal("expected localhost/private hostname rejection")
+	}
+}
+
 func TestRunDNSCheckSuccess(t *testing.T) {
 	res, err := runDNSCheck(context.Background(), "localhost")
 	if err != nil {

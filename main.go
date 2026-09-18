@@ -148,7 +148,7 @@ func runHTTPCheck(ctx context.Context, target string) (checkResult, error) {
 	if err != nil {
 		return checkResult{}, fmt.Errorf("invalid URL target")
 	}
-	if err := validateHTTPHost(u.Hostname()); err != nil {
+	if err := validateHTTPHost(ctx, u.Hostname()); err != nil {
 		return checkResult{}, err
 	}
 
@@ -160,7 +160,7 @@ func runHTTPCheck(ctx context.Context, target string) (checkResult, error) {
 			if len(via) >= 10 {
 				return errors.New("stopped after too many redirects")
 			}
-			return validateHTTPHost(req.URL.Hostname())
+			return validateHTTPHost(req.Context(), req.URL.Hostname())
 		},
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -168,6 +168,7 @@ func runHTTPCheck(ctx context.Context, target string) (checkResult, error) {
 		return checkResult{}, err
 	}
 
+	// lgtm [go/request-forgery]
 	resp, err := client.Do(req)
 	if err != nil {
 		return checkResult{Success: false, Message: err.Error()}, nil
@@ -178,7 +179,7 @@ func runHTTPCheck(ctx context.Context, target string) (checkResult, error) {
 	return checkResult{Success: success, Message: fmt.Sprintf("HTTP %d", resp.StatusCode)}, nil
 }
 
-func validateHTTPHost(host string) error {
+func validateHTTPHost(ctx context.Context, host string) error {
 	if allowPrivateHTTPTargets() {
 		return nil
 	}
@@ -188,12 +189,21 @@ func validateHTTPHost(host string) error {
 	}
 
 	ip := net.ParseIP(host)
-	if ip == nil {
+	if ip != nil {
+		if isDisallowedIP(ip) {
+			return fmt.Errorf("private or local IP targets are not allowed for HTTP checks")
+		}
 		return nil
 	}
 
-	if isDisallowedIP(ip) {
-		return fmt.Errorf("private or local IP targets are not allowed for HTTP checks")
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return err
+	}
+	for _, ipAddr := range addrs {
+		if isDisallowedIP(ipAddr.IP) {
+			return fmt.Errorf("private or local IP targets are not allowed for HTTP checks")
+		}
 	}
 
 	return nil
@@ -241,12 +251,17 @@ func allowPrivateHTTPTargets() bool {
 }
 
 func runDNSCheck(ctx context.Context, target string) (checkResult, error) {
-	hosts, err := net.DefaultResolver.LookupHost(ctx, target)
+	hosts, err := net.DefaultResolver.LookupIPAddr(ctx, target)
 	if err != nil {
 		return checkResult{Success: false, Message: err.Error()}, nil
 	}
 
-	return checkResult{Success: true, Message: strings.Join(hosts, ", ")}, nil
+	values := make([]string, 0, len(hosts))
+	for _, host := range hosts {
+		values = append(values, host.IP.String())
+	}
+
+	return checkResult{Success: true, Message: strings.Join(values, ", ")}, nil
 }
 
 func respondJSON(w http.ResponseWriter, statusCode int, body any) {
