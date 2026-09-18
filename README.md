@@ -62,6 +62,9 @@ brief that defines the scope lives in [`local-network-monitoring-product-brief.m
   configuration as JSON.
 - **Backups**: one-click, password-encrypted (Argon2id + AES-256-GCM) archives of the
   configuration and optionally the whole history; restore on a new computer in one step.
+  Scheduled automatic backups (Settings › Backups) run unattended on a configurable
+  interval and keep only the newest N archives. See
+  [`docs/RESTORE.md`](docs/RESTORE.md) for the full restore-to-a-new-machine procedure.
 - **Monitor health**: service status, scheduler, last/next check, sleep/offline gaps,
   database size, retention status, last backup, recent internal errors and logs.
 

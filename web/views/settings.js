@@ -370,17 +370,22 @@ export async function mount(root, ctx) {
 
   /* ---------- Backups ---------- */
   async function tabBackups() {
+    const s = state.settings || await loadSettings();
+    s.backups = s.backups || { enabled: false, intervalHours: 24, keep: 7, includeHistory: true, password: '' };
+    const bk = s.backups;
     const listCard = h('section', { class: 'card' });
     const statusLine = h('div');
+    const nextLine = h('div');
     const load = async () => {
       const data = await api.get('/api/backups');
       render(data || { backups: [], status: {} });
     };
     const render = (data) => {
-      clear(listCard); clear(statusLine);
+      clear(listCard); clear(statusLine); clear(nextLine);
       const st = data.status || {};
       if (st.lastBackupAt) statusLine.append(banner(st.lastBackupOk ? 'up' : 'down', h('span', null, h('b', null, st.lastBackupOk ? 'Last backup succeeded ' : 'Last backup failed '), `${relTime(st.lastBackupAt)}${st.lastBackupFile ? ' · ' + st.lastBackupFile : ''}${st.lastError ? ' · ' + st.lastError : ''}`, st.lastRestoreAt ? ` · last restore ${relTime(st.lastRestoreAt)}` : '')));
       else statusLine.append(banner('info', 'No backup has been made yet. Create one so you can move to a new computer without re-creating every node.'));
+      if (bk.enabled) nextLine.append(banner('info', data.nextScheduledAt ? h('span', null, h('b', null, 'Next scheduled backup: '), relTime(data.nextScheduledAt)) : 'Automatic backups are enabled; the next one runs once saved.'));
       listCard.append(h('div', { class: 'card-head' }, h('div', null, h('h2', null, 'Backups on this computer'), h('p', { class: 'lead', style: { marginBottom: 0 } }, data.dir ? h('span', { class: 'mono' }, data.dir) : 'Encrypted archives stored locally.'))));
       if (!data.backups?.length) { listCard.append(emptyState({ icon: 'save', title: 'No backups yet', compact: true })); return; }
       for (const b of data.backups) {
@@ -434,9 +439,30 @@ export async function mount(root, ctx) {
       try { const r = await api.post('/api/backups/restore-existing', { fileName: b.fileName, password: pwIn.value, includeHistory: hist.input.checked }); toast(`Restored ${plural(r.nodes ?? 0, 'node')} and ${plural(r.checks ?? 0, 'check')}`, { kind: 'success' }); load(); }
       catch (e) { toast(`Restore failed: ${e.message}`, { kind: 'error' }); }
     }
+    const autoEnabled = toggle({ label: 'Create backups automatically', checked: !!bk.enabled, onChange: (v) => { bk.enabled = v; } });
+    const autoInterval = numField(bk, 'intervalHours', 'Every', { unitLabel: 'hours', min: 1 });
+    const autoKeep = numField(bk, 'keep', 'Keep the newest', { unitLabel: 'archives', min: 1 });
+    const autoHist = checkbox({ label: 'Include performance history and events (bigger archives)', checked: !!bk.includeHistory, onChange: (v) => { bk.includeHistory = v; } });
+    const autoPw = h('input', { type: 'password', value: bk.password || '', autocomplete: 'new-password', placeholder: bk.password ? '' : 'Required to enable automatic backups', oninput: () => { bk.password = autoPw.value; } });
+    const autoPw2 = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'Repeat the password (leave blank to keep the saved one)' });
+    const autoSaveBtn = h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
+      if (autoPw2.value && autoPw.value !== autoPw2.value) { toast('The passwords do not match', { kind: 'error' }); autoPw2.focus(); return; }
+      if (bk.enabled && !bk.password) { toast('A password is required to enable automatic backups', { kind: 'error' }); autoPw.focus(); return; }
+      const done = busy(autoSaveBtn, 'Saving…');
+      await saveSettings();
+      done();
+      load();
+    } }, icon('save'), 'Save automatic backup settings');
+    const autoCard = h('section', { class: 'card' }, h('h2', null, 'Automatic backups'), h('p', { class: 'lead' }, 'Runs unattended in the background on the schedule below, using the same encrypted format as a manual backup. Archives older than the number to keep are deleted automatically.'),
+      autoEnabled,
+      h('div', { class: 'form-grid', style: { marginTop: '12px' } },
+        autoInterval, autoKeep, h('div', { class: 'span-2' }, autoHist),
+        field({ label: 'Password', input: autoPw, help: bk.password ? 'A password is already saved; leave blank to keep it.' : 'Backups are always encrypted, so a password is required to enable this.' }),
+        field({ label: 'Confirm password', input: autoPw2 })),
+      h('div', { class: 'form-actions', style: { marginTop: '12px' } }, autoSaveBtn), nextLine);
     await load();
     state.panelRefresh = load;
-    return h('div', { class: 'stack' }, statusLine, createCard, listCard, restoreCard);
+    return h('div', { class: 'stack' }, statusLine, createCard, autoCard, listCard, restoreCard);
   }
 
   /* ---------- Updates ---------- */

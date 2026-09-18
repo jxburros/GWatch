@@ -129,19 +129,30 @@ String fields may contain `{{placeholders}}`: `node.name`, `node.host`, `node.gr
 
 ## Settings
 
-- `GET /api/settings` → `Settings` (SMTP password and access password are returned masked as `"********"` when set).
-- `PUT /api/settings` body `Settings` → saved Settings (a masked password keeps the stored one). `general.theme` is `dark|light|system`, `general.accentColor` a hex colour, `general.remoteAccess` rebinds the listener to all interfaces live, `general.accessPassword` enables basic auth for other devices, `general.updateRepo` is the GitHub repository checked for releases.
+- `GET /api/settings` → `Settings` (SMTP password, access password and the scheduled-backup password are returned masked as `"********"` when set).
+- `PUT /api/settings` body `Settings` → saved Settings (a masked password keeps the stored one). `general.theme` is `dark|light|system`, `general.accentColor` a hex colour, `general.remoteAccess` rebinds the listener to all interfaces live, `general.accessPassword` enables basic auth for other devices, `general.updateRepo` is the GitHub repository checked for releases. `backups` configures scheduled automatic backups (see below); it cannot be saved with `enabled: true` and no password.
 - `POST /api/settings/test-email` body `{ "to": "optional@override" }` → `{ "ok": true, "message": "..." }` or error.
 - `GET /api/retention/status` → `RetentionStatus`. `POST /api/retention/run` → runs rollup+cleanup now → RetentionStatus.
 
 ## Backups
 
-- `GET /api/backups` → `{ "backups": [BackupInfo], "dir": "...", "status": BackupStatus }`.
-- `POST /api/backups` body `{ "password": "...", "includeHistory": true }` → BackupInfo.
+Manual, one-click backups always work regardless of the settings below. Scheduled,
+unattended backups are configured through `Settings.backups`
+(`{ enabled, intervalHours, keep, includeHistory, password }`, saved via
+`PUT /api/settings`): `intervalHours` (1-720) is how often a backup is made,
+`keep` (1-365) is how many archives are retained (older ones are deleted
+automatically after each scheduled run), and `password` is required to enable it —
+backups are always encrypted. The password is masked in `GET /api/settings` and
+stripped from `GET /api/export/config.json` like the SMTP password.
+
+- `GET /api/backups` → `{ "backups": [BackupInfo], "dir": "...", "status": BackupStatus, "nextScheduledAt": "RFC3339 or null" }`. `nextScheduledAt` is `null` when scheduled backups are disabled or not configured with a password.
+- `POST /api/backups` body `{ "password": "...", "includeHistory": true }` → BackupInfo. (Manual backups are never pruned.)
 - `GET /api/backups/{fileName}/download` → file (`application/octet-stream`).
 - `DELETE /api/backups/{fileName}` → `{ok:true}`.
 - `POST /api/backups/restore` multipart form: `file`, `password`, `includeHistory` ("true"/"false") → `{ "ok": true, "nodes": n, "checks": n, "results": n }`.
 - `POST /api/backups/restore-existing` body `{ "fileName": "...", "password": "...", "includeHistory": bool }` → same.
+
+See [`RESTORE.md`](RESTORE.md) for the end-to-end restore-to-a-new-machine procedure.
 
 ## Export
 
