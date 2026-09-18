@@ -190,6 +190,50 @@ func TestFreshInstallLoopbackIsAdminRemoteIsNot(t *testing.T) {
 	}
 }
 
+// A page someone merely visits must not be able to make their browser change
+// things on 127.0.0.1, where no credential is needed.
+func TestLocalPrincipalRejectsCrossSiteWrites(t *testing.T) {
+	ts, _ := newTestServer(t)
+	post := func(origin string) (int, string) {
+		b, _ := json.Marshal(newNode("Router"))
+		req, _ := http.NewRequest("POST", ts.URL+"/api/nodes", bytes.NewReader(b))
+		req.Header.Set("Content-Type", "application/json")
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
+	}
+
+	if code, body := post("https://evil.example.com"); code != 403 || !strings.Contains(body, "another website") {
+		t.Fatalf("cross-site write: %d %s", code, body)
+	}
+	// Same origin is fine, and so is a client that sends no Origin at all
+	// (curl, a script) — those are not browsers being driven by a third party.
+	if code, body := post(ts.URL); code != 201 {
+		t.Fatalf("same-origin write: %d %s", code, body)
+	}
+	if code, body := post(""); code != 201 {
+		t.Fatalf("write with no Origin: %d %s", code, body)
+	}
+	// Reads are unaffected.
+	req, _ := http.NewRequest("GET", ts.URL+"/api/nodes", nil)
+	req.Header.Set("Origin", "https://evil.example.com")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("cross-site read: %d", resp.StatusCode)
+	}
+}
+
 // ---- 2. the viewer role ----
 
 func TestViewerCanReadAndCannotWrite(t *testing.T) {

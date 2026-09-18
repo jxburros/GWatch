@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -206,6 +207,18 @@ func (s *Server) accessControl(next http.Handler) http.Handler {
 			return
 		}
 
+		// A local client is an administrator without presenting anything, so a
+		// page the person merely visits could otherwise make their browser
+		// POST to 127.0.0.1 on their behalf. Every other kind of principal
+		// carries a credential a cross-site page cannot obtain (the session
+		// cookie is SameSite=Lax, so it is not sent on a cross-site write),
+		// and may sit behind a proxy that rewrites Host — so the check is
+		// applied only where it is both needed and safe.
+		if p.Kind == auth.KindLocal && r.Method != http.MethodGet && r.Method != http.MethodHead && crossSite(r) {
+			s.deny(w, r, http.StatusForbidden, "this request came from another website; open GWatch directly to make changes", true)
+			return
+		}
+
 		pol := policyFor(r.Method, r.URL.Path)
 		if err := authorize(p, pol, r.URL.Path); err != nil {
 			if !p.Authenticated() {
@@ -222,6 +235,21 @@ func (s *Server) accessControl(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// crossSite reports whether the request carries an Origin naming somewhere
+// other than the host it was sent to. A request with no Origin at all (curl,
+// a script, any non-browser client) is not cross-site.
+func crossSite(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" || origin == "null" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return true // an Origin we cannot read is not one we can trust
+	}
+	return !strings.EqualFold(u.Host, r.Host)
 }
 
 // legacyPasswordOnly reports whether the install still authenticates purely

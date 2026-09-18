@@ -75,6 +75,12 @@ old access password and has no accounts. `403` means the credential is valid but
 entitled, and the message says why — for example `This API key is read-only.` or
 `This action needs an administrator account (you are signed in as viewer "pat").`
 
+**Cross-site writes.** A `local` principal is an administrator without presenting
+anything, so a non-GET request from that principal carrying an `Origin` header naming a
+different host is refused with 403. A request with no `Origin` (curl, a script) is
+unaffected, and so is every other kind of principal — the session cookie is
+`SameSite=Lax` and is not sent on a cross-site write in the first place.
+
 **Rate limits.** Failed credentials (sign-in, API key, access password) are limited to
 10 per minute per client IP; API-key requests from off this machine are limited to 300
 per minute per client IP. Both answer `429` with `Retry-After` in seconds.
