@@ -55,6 +55,22 @@ func TestNormalizeHTTPTargetAddsHTTPSScheme(t *testing.T) {
 	}
 }
 
+func TestNormalizeHTTPTargetPreservesScheme(t *testing.T) {
+	u, err := normalizeHTTPTarget("http://example.com")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if u.Scheme != "http" {
+		t.Fatalf("expected http scheme, got %q", u.Scheme)
+	}
+}
+
+func TestNormalizeHTTPTargetRejectsInvalidURL(t *testing.T) {
+	if _, err := normalizeHTTPTarget("http://bad host"); err == nil {
+		t.Fatal("expected invalid URL error")
+	}
+}
+
 func TestRedirectValidationRejectsLocalhost(t *testing.T) {
 	client := buildHTTPClient(context.Background())
 	u, err := url.Parse("http://localhost/redirect")

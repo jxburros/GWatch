@@ -41,6 +41,25 @@ type checkResult struct {
 }
 
 var pingCommand = exec.CommandContext
+var blockedIPPrefixes = mustParsePrefixes(
+	"0.0.0.0/8",
+	"100.64.0.0/10",
+	"192.0.0.0/24",
+	"192.0.2.0/24",
+	"198.18.0.0/15",
+	"198.51.100.0/24",
+	"203.0.113.0/24",
+	"240.0.0.0/4",
+	"::/128",
+	"::1/128",
+	"::ffff:0:0/96",
+	"64:ff9b:1::/48",
+	"100::/64",
+	"2001:db8::/32",
+	"2001:10::/28",
+	"fc00::/7",
+	"fe80::/10",
+)
 
 func main() {
 	mux := http.NewServeMux()
@@ -154,7 +173,7 @@ func runHTTPCheck(ctx context.Context, target string) (checkResult, error) {
 		return checkResult{}, err
 	}
 
-	// lgtm [go/request-forgery]
+	// lgtm[go/request-forgery]
 	resp, err := client.Do(req)
 	if err != nil {
 		return checkResult{Success: false, Message: err.Error()}, nil
@@ -175,6 +194,9 @@ func normalizeHTTPTarget(target string) (*url.URL, error) {
 
 func buildHTTPClient(ctx context.Context) *http.Client {
 	return &http.Client{
+		Transport: &http.Transport{
+			DialContext: safeValidatedDialContext,
+		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return errors.New("stopped after too many redirects")
@@ -225,32 +247,8 @@ func isDisallowedIP(ip net.IP) bool {
 		return true
 	}
 
-	blockedPrefixes := []string{
-		"0.0.0.0/8",
-		"100.64.0.0/10",
-		"192.0.0.0/24",
-		"192.0.2.0/24",
-		"198.18.0.0/15",
-		"198.51.100.0/24",
-		"203.0.113.0/24",
-		"240.0.0.0/4",
-		"::/128",
-		"::1/128",
-		"::ffff:0:0/96",
-		"64:ff9b:1::/48",
-		"100::/64",
-		"2001:db8::/32",
-		"2001:10::/28",
-		"fc00::/7",
-		"fe80::/10",
-	}
-
-	for _, prefix := range blockedPrefixes {
-		p, err := netip.ParsePrefix(prefix)
-		if err != nil {
-			continue
-		}
-		if p.Contains(addr) {
+	for _, prefix := range blockedIPPrefixes {
+		if prefix.Contains(addr) {
 			return true
 		}
 	}
@@ -260,6 +258,44 @@ func isDisallowedIP(ip net.IP) bool {
 
 func allowPrivateHTTPTargets() bool {
 	return strings.EqualFold(os.Getenv("GWATCH_ALLOW_PRIVATE_HTTP_TARGETS"), "true")
+}
+
+func safeValidatedDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	conn, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+	if err != nil {
+		return nil, err
+	}
+
+	if allowPrivateHTTPTargets() {
+		return conn, nil
+	}
+
+	remoteAddr := conn.RemoteAddr().String()
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil || isDisallowedIP(ip) {
+		_ = conn.Close()
+		return nil, fmt.Errorf("private or local IP targets are not allowed for HTTP checks")
+	}
+
+	return conn, nil
+}
+
+func mustParsePrefixes(prefixes ...string) []netip.Prefix {
+	parsed := make([]netip.Prefix, 0, len(prefixes))
+	for _, prefix := range prefixes {
+		p, err := netip.ParsePrefix(prefix)
+		if err != nil {
+			panic(err)
+		}
+		parsed = append(parsed, p)
+	}
+	return parsed
 }
 
 func runDNSCheck(ctx context.Context, target string) (checkResult, error) {
