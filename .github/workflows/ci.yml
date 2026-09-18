@@ -31,6 +31,10 @@ jobs:
       run:
         shell: bash
     steps:
+      # Windows git defaults to CRLF conversion, which makes gofmt and the
+      # go.mod diff report every file as changed.
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
@@ -114,6 +118,8 @@ jobs:
       run:
         shell: bash
     steps:
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
