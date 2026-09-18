@@ -275,7 +275,7 @@ export async function mount(root, ctx) {
     const card = h('section', { class: 'card widget', 'aria-label': w.title || meta.label });
     applyGeometry(card, l);
     const dragHandle = h('button', { class: 'widget-drag admin-only', type: 'button', 'aria-label': `Move ${w.title || meta.label}`, title: 'Drag to move' }, icon('grip'));
-    const head = h('div', { class: 'widget-head' }, h('h2', { class: 'card-title' }, dragHandle, h('span', { class: 'truncate' }, w.title || meta.label)));
+    const head = h('div', { class: 'widget-head' }, h('h2', { class: 'card-title' }, dragHandle, h('span', { class: 'truncate', title: w.title || meta.label }, w.title || meta.label)));
     const actions = h('div', { class: 'widget-edit-bar' });
     if (CHART_LIKE.has(w.type)) {
       actions.append(rangeChips(cfg.range || (w.type === 'uptime_chart' ? '7d' : '24h'), (r) => setWidgetRange(w, r)));
@@ -290,7 +290,7 @@ export async function mount(root, ctx) {
     head.append(actions);
     const body = h('div', { class: 'widget-body' });
     card.append(head, body);
-    try { renderWidgetBody(w, cfg, body); } catch (e) { console.error(e); body.append(h('div', { class: 'note' }, 'Could not render this widget.')); }
+    try { renderWidgetBody(w, cfg, body, actions); } catch (e) { console.error(e); body.append(h('div', { class: 'note' }, 'Could not render this widget.')); }
     // resize handles
     for (const dir of ['e', 's', 'se']) {
       const hnd = h('div', { class: `rs rs-${dir} admin-only`, title: 'Drag to resize', 'aria-hidden': 'true' });
@@ -449,7 +449,7 @@ export async function mount(root, ctx) {
     });
   }
 
-  function renderWidgetBody(w, cfg, body) {
+  function renderWidgetBody(w, cfg, body, actions) {
     const ov = state.overview;
     body.closest('.widget').dataset.wid = w.id;
     if (!ov) { body.append(skeleton({ lines: 3 })); return; }
@@ -465,7 +465,7 @@ export async function mount(root, ctx) {
       case 'incidents': return renderIncidents(body, ov, cfg);
       case 'cert_warnings': return renderCerts(body, ov);
       case 'attention': return renderAttention(body, ov);
-      case 'monitor_health': return renderMonitorHealth(body);
+      case 'monitor_health': return renderMonitorHealth(body, actions);
       case 'table': return renderTable(body, cfg);
       default: body.append(h('div', { class: 'note' }, `Unknown widget type "${w.type}".`));
     }
@@ -578,21 +578,32 @@ export async function mount(root, ctx) {
     body.append(list);
   }
 
-  function renderMonitorHealth(body) {
+  function renderMonitorHealth(body, actions) {
     const hl = state.health;
     if (!hl) { body.append(h('div', { class: 'note' }, 'Service health unavailable.')); return; }
+    // The way out to the full health page is a panel action, so it sits in the
+    // band with the widget's other controls. That leaves the whole body to the
+    // readouts, which is the only way six of them clear the fold in a widget
+    // one row tall.
+    if (actions) actions.prepend(h('a', { class: 'btn btn-sm btn-ghost', href: '#/settings/health', title: 'Open Monitor health' }, 'Open', icon('arrowRight')));
     const okGlyph = (ok, yes, no) => h('span', { class: `status-glyph ${ok ? 'text-up' : 'text-down'}` }, icon(ok ? 'check' : 'x'), ok ? yes : no);
     const gridEl = h('div', { class: 'health-grid' },
-      h('div', { class: 'health-item' }, h('div', { class: 'hv' }, okGlyph(hl.serviceRunning, 'Running', 'Stopped')), h('div', { class: 'hl' }, `Service (${hl.serviceMode || '—'})`)),
+      h('div', { class: 'health-item' }, h('div', { class: 'hv' }, okGlyph(hl.serviceRunning, 'Running', 'Stopped')), h('div', { class: 'hl', title: `Service (${hl.serviceMode || '\u2014'})` }, `Service (${hl.serviceMode || '\u2014'})`)),
       h('div', { class: 'health-item' }, h('div', { class: 'hv' }, okGlyph(hl.schedulerRunning, 'Running', 'Stopped')), h('div', { class: 'hl' }, 'Scheduler')),
       h('div', { class: 'health-item' }, h('div', { class: 'hv' }, relTime(hl.lastCheckAt, now())), h('div', { class: 'hl' }, 'Last check')),
-      h('div', { class: 'health-item' }, h('div', { class: 'hv' }, hl.nextCheckAt ? relTime(hl.nextCheckAt, now()) : '—'), h('div', { class: 'hl' }, 'Next check')),
+      h('div', { class: 'health-item' }, h('div', { class: 'hv' }, hl.nextCheckAt ? relTime(hl.nextCheckAt, now()) : '\u2014'), h('div', { class: 'hl' }, 'Next check')),
       h('div', { class: 'health-item' }, h('div', { class: 'hv' }, bytes(hl.databaseBytes)), h('div', { class: 'hl' }, 'Database')),
       h('div', { class: 'health-item' }, h('div', { class: 'hv' }, hl.backup?.lastBackupAt ? h('span', { class: `status-glyph ${hl.backup.lastBackupOk ? 'text-up' : 'text-down'}` }, icon(hl.backup.lastBackupOk ? 'check' : 'x'), relTime(hl.backup.lastBackupAt, now())) : h('span', { class: 'muted' }, 'never')), h('div', { class: 'hl' }, 'Last backup')),
     );
     body.append(gridEl);
-    if (hl.lastGap && Date.now() - new Date(hl.lastGap.to).getTime() < 86400e3) body.append(h('div', { class: 'note', style: { marginTop: '8px' } }, icon('moon'), ` Monitoring gap of ${duration(hl.lastGap.seconds)} ended ${relTime(hl.lastGap.to, now())}`));
-    body.append(h('div', { style: { marginTop: 'auto', paddingTop: '8px' } }, h('a', { class: 'small', href: '#/settings/health' }, 'Open Monitor Health →')));
+    // A recent monitoring gap is a state of the panel, so it is flagged in the
+    // band rather than set as a paragraph under the readouts, where it would be
+    // the thing pushed out of a panel one row tall.
+    if (hl.lastGap && Date.now() - new Date(hl.lastGap.to).getTime() < 86400e3) {
+      const flag = h('span', { class: 'tag tag-warn', title: `Monitoring gap of ${duration(hl.lastGap.seconds)} ended ${relTime(hl.lastGap.to, now())}` },
+        icon('moon'), `gap ${duration(hl.lastGap.seconds)}`);
+      if (actions) actions.prepend(flag); else body.append(h('div', { class: 'note' }, flag));
+    }
   }
 
   function renderTable(body, cfg) {

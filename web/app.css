@@ -384,6 +384,8 @@ html.rail-pinned .main, body.rail-pinned .main { margin-left: var(--rail-expande
 .range-chips .chip:first-child { margin-left: 0; }
 .tag { display: inline-flex; align-items: center; padding: 1px 7px; background: var(--elev); border: 1px solid var(--line); color: var(--muted); font-size: 11.5px; font-weight: 400; letter-spacing: 0.02em; font-family: var(--mono); }
 .tag.tag-group { color: var(--accent-hover); border-color: var(--accent); background: var(--accent-soft); }
+.tag.tag-warn { color: var(--warn); border-color: rgba(var(--warn-rgb), 0.45); background: var(--warn-soft); gap: 4px; }
+.tag.tag-warn .icon { font-size: 12px; }
 
 /* Status pills */
 .pill {
@@ -868,6 +870,17 @@ select { appearance: none; -webkit-appearance: none; padding-right: 30px; backgr
 .attention-row .a-since { font-size: 12px; color: var(--dim); font-family: var(--mono); text-align: right; }
 .affected-note { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--maint); font-weight: 600; }
 .health-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; }
+/* In a widget the readouts fill whatever width the panel has rather than
+   always splitting in two, so a wider panel spends rows instead of stacking. */
+.widget .health-grid { grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); align-content: start; }
+/* One row tall there is 113px of body for six readouts, so they tighten. */
+.widget[data-h="1"] .health-grid { gap: 6px 14px; }
+.widget[data-h="1"] .health-item .hv { font-size: 13px; line-height: 1.25; }
+.widget[data-h="1"] .health-item .hl { font-size: 10px; line-height: 1.3; letter-spacing: 0.12em; }
+/* A long value or label truncates rather than wrapping: one wrapped line would
+   push the last readout out of the panel. */
+.widget .health-item .hv, .widget .health-item .hl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+.widget .health-item .hv .status-glyph { display: inline-flex; vertical-align: -3px; }
 .health-item { display: flex; flex-direction: column; gap: 1px; }
 .health-item .hv { font-weight: 600; font-size: 13.5px; display: flex; align-items: center; gap: 6px; }
 .health-item .hl { font-size: 10.5px; color: var(--muted); font-weight: 400; text-transform: uppercase; letter-spacing: 0.14em; font-family: var(--mono); }
@@ -1232,6 +1245,11 @@ body.wallboard-mode .view { padding: 0; }
   .node-row .n-actions { justify-content: flex-start; }
   .inspector-grid { grid-template-columns: 1fr; }
   .health-grid { grid-template-columns: 1fr; }
+  /* Widgets are min-height here rather than one 182px row, so the readouts get
+     their full size back. */
+  .widget .health-grid { grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 8px 16px; }
+  .widget[data-h="1"] .health-item .hv { font-size: 13.5px; line-height: 1.45; }
+  .widget[data-h="1"] .health-item .hl { font-size: 10.5px; letter-spacing: 0.14em; }
   .summary-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .template-grid, .type-picker, .widget-picker, .theme-options { grid-template-columns: 1fr; }
   .uptime-row { grid-template-columns: 1fr; gap: 4px; }
