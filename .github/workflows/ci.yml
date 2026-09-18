@@ -104,6 +104,25 @@ jobs:
           path: dist/gwatch-windows-amd64.exe
           if-no-files-found: error
 
+      # Compiles the Windows setup program from the exe just built, so every
+      # push/PR exercises scripts/installer/gwatch.iss the same way the
+      # release job does. See scripts/installer/README.md.
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+        shell: pwsh
+      - name: Build Windows installer
+        run: |
+          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" \
+            "/DAppVersion=0.0.0-ci-${GITHUB_SHA::7}" \
+            "/DExePath=$(pwd)/dist/gwatch-windows-amd64.exe" \
+            scripts/installer/gwatch.iss
+          ls -lh scripts/installer/Output
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gwatch-windows-installer
+          path: scripts/installer/Output/gwatch-setup-*.exe
+          if-no-files-found: error
+
   # Tagging v1.2.3 publishes a GitHub release with the binaries the in-app
   # updater (Settings › Updates) looks for: gwatch-<os>-<arch>[.exe] plus a
   # .sha256 checksum and an ed25519 .sig signature next to each. The updater
@@ -166,6 +185,24 @@ jobs:
         run: |
           go run ./cmd/gwatch-sign sign dist/gwatch-*
           go run ./cmd/gwatch-sign verify dist/gwatch-*
+          ls -lh dist
+
+      # Windows setup program built from the windows/amd64 binary above. Not
+      # part of the signed self-update chain (see docs/RELEASING.md#the-installer-artefact):
+      # pickAsset only matches gwatch-<os>-<arch>[.exe], so this asset is
+      # invisible to the in-app updater by design, and it isn't
+      # Authenticode-signed.
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+        shell: pwsh
+      - name: Build Windows installer
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" \
+            "/DAppVersion=${version}" \
+            "/DExePath=$(pwd)/dist/gwatch-windows-amd64.exe" \
+            scripts/installer/gwatch.iss
+          cp scripts/installer/Output/gwatch-setup-*.exe dist/
           ls -lh dist
 
       - uses: softprops/action-gh-release@v2

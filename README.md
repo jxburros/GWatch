@@ -78,6 +78,17 @@ brief that defines the scope lives in [`local-network-monitoring-product-brief.m
 
 ## Install on Windows
 
+**Easiest: the setup program.** Download `gwatch-setup-<version>.exe` from the
+[latest release](https://github.com/jxburros/GWatch/releases/latest), run it, and follow
+the wizard — it asks for a port and whether to allow other devices on your network, then
+installs the `GWatch` service, starts it, and adds a Start Menu shortcut. No PowerShell
+or command line needed. Full walkthrough, including upgrading and uninstalling:
+[`docs/INSTALL.md`](docs/INSTALL.md).
+
+**Advanced: the PowerShell scripts.** The setup program wraps these same steps; use them
+directly if you'd rather build from source, script an unattended rollout, or skip
+running a downloaded `.exe`.
+
 1. Build (or download) `gwatch.exe`. With Go 1.24+ installed:
    ```powershell
    powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -Version 1.0.0
@@ -178,7 +189,8 @@ request as a single job on a Windows runner (Linux runners are switched off for 
 | build + test | `go build ./...` and the whole test suite on Windows, the platform GWatch installs as a service on |
 | web assets | `node --check` on every file under `web/` — the UI is embedded with `//go:embed`, so the Go compiler never sees a syntax error there |
 | PowerShell | Parses `scripts/*.ps1`, since those scripts are the Windows install path |
-| artefact | Uploads `gwatch-windows-amd64.exe` |
+| installer | Compiles `scripts/installer/gwatch.iss` with Inno Setup into `gwatch-setup-*.exe` |
+| artefact | Uploads `gwatch-windows-amd64.exe` and `gwatch-setup-*.exe` |
 
 Pushing a tag such as `v1.2.0` additionally runs the `release` job, which cross-compiles
 `gwatch-<os>-<arch>[.exe]` for Windows, Linux and macOS, writes a `.sha256` checksum and
