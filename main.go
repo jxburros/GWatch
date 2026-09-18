@@ -1,0 +1,171 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"net/url"
+	"os/exec"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type checkType string
+
+const (
+	checkTypePing checkType = "ping"
+	checkTypeHTTP checkType = "http"
+	checkTypeDNS  checkType = "dns"
+)
+
+type checkRequest struct {
+	Type           checkType `json:"type"`
+	Target         string    `json:"target"`
+	TimeoutSeconds int       `json:"timeoutSeconds"`
+}
+
+type checkResult struct {
+	Type       checkType `json:"type"`
+	Target     string    `json:"target"`
+	Success    bool      `json:"success"`
+	Message    string    `json:"message"`
+	DurationMS int64     `json:"durationMs"`
+}
+
+var pingCommand = exec.CommandContext
+
+func main() {
+	mux := http.NewServeMux()
+	mux.Handle("/", http.FileServer(http.Dir("web")))
+	mux.HandleFunc("/api/check", checkHandler)
+	mux.HandleFunc("/api/health", func(w http.ResponseWriter, _ *http.Request) {
+		respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	server := &http.Server{
+		Addr:              ":8080",
+		ReadHeaderTimeout: 5 * time.Second,
+		Handler:           mux,
+	}
+
+	fmt.Println("GWatch listening on http://localhost:8080")
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		panic(err)
+	}
+}
+
+func checkHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var req checkRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+
+	result, err := runCheck(r.Context(), req)
+	if err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	respondJSON(w, http.StatusOK, result)
+}
+
+func runCheck(parent context.Context, req checkRequest) (checkResult, error) {
+	target := strings.TrimSpace(req.Target)
+	if target == "" {
+		return checkResult{}, fmt.Errorf("target is required")
+	}
+
+	timeout := 5
+	if req.TimeoutSeconds > 0 {
+		timeout = req.TimeoutSeconds
+	}
+
+	ctx, cancel := context.WithTimeout(parent, time.Duration(timeout)*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	var result checkResult
+	var err error
+
+	switch req.Type {
+	case checkTypePing:
+		result, err = runPingCheck(ctx, target, timeout)
+	case checkTypeHTTP:
+		result, err = runHTTPCheck(ctx, target)
+	case checkTypeDNS:
+		result, err = runDNSCheck(ctx, target)
+	default:
+		return checkResult{}, fmt.Errorf("unsupported check type: %s", req.Type)
+	}
+
+	result.Type = req.Type
+	result.Target = target
+	result.DurationMS = time.Since(start).Milliseconds()
+	return result, err
+}
+
+func runPingCheck(ctx context.Context, target string, timeoutSeconds int) (checkResult, error) {
+	args := []string{"-c", "1", "-W", strconv.Itoa(timeoutSeconds), target}
+	if runtime.GOOS == "windows" {
+		args = []string{"-n", "1", "-w", strconv.Itoa(timeoutSeconds * 1000), target}
+	}
+
+	out, err := pingCommand(ctx, "ping", args...).CombinedOutput()
+	if err != nil {
+		return checkResult{Success: false, Message: strings.TrimSpace(string(out))}, nil
+	}
+
+	return checkResult{Success: true, Message: "ping successful"}, nil
+}
+
+func runHTTPCheck(ctx context.Context, target string) (checkResult, error) {
+	urlText := target
+	if !strings.HasPrefix(urlText, "http://") && !strings.HasPrefix(urlText, "https://") {
+		urlText = "https://" + urlText
+	}
+
+	u, err := url.ParseRequestURI(urlText)
+	if err != nil {
+		return checkResult{}, fmt.Errorf("invalid URL target")
+	}
+
+	client := &http.Client{}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return checkResult{}, err
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return checkResult{Success: false, Message: err.Error()}, nil
+	}
+	defer resp.Body.Close()
+
+	success := resp.StatusCode < http.StatusBadRequest
+	return checkResult{Success: success, Message: fmt.Sprintf("HTTP %d", resp.StatusCode)}, nil
+}
+
+func runDNSCheck(ctx context.Context, target string) (checkResult, error) {
+	hosts, err := net.DefaultResolver.LookupHost(ctx, target)
+	if err != nil {
+		return checkResult{Success: false, Message: err.Error()}, nil
+	}
+
+	return checkResult{Success: true, Message: strings.Join(hosts, ", ")}, nil
+}
+
+func respondJSON(w http.ResponseWriter, statusCode int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	_ = json.NewEncoder(w).Encode(body)
+}
