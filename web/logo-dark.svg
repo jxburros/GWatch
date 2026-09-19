@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="GWatch">
+  <!-- The GWatch mark for dark backgrounds: the same geometry as logo.svg with
+       the black and white of it exchanged. The ring, bar, handle and pupil go
+       from navy to near-white; the sclera goes from white to graphite; the
+       catchlight goes from white to dark. The gold iris is the one thing that
+       does not invert — it is the mark's colour, not its contrast, and it
+       reads on either field.
+
+       The geometry is measured from the master artwork and is shared with
+       logo.svg, so edit the two together or the G stops closing on itself. -->
+  <title>GWatch</title>
+  <circle cx="55.8" cy="55.8" r="39.5" fill="#1b1e24"/>
+  <circle cx="56.8" cy="56.4" r="22.9" fill="#d3a32e"/>
+  <circle cx="56.9" cy="56.9" r="12.7" fill="#f2f4f6"/>
+  <circle cx="62.8" cy="51.6" r="3.6" fill="#0f1114"/>
+  <g fill="none" stroke="#f2f4f6" stroke-linecap="round">
+    <!-- The ring runs clockwise from -3deg the long way round to 330deg; the
+         27deg it leaves open is the G's mouth, closed underneath by the bar. -->
+    <path d="M101.2 53.42 A45.46 45.46 0 1 1 95.17 33.07" stroke-width="12.37"/>
+    <path d="M88.9 58.81 H101.6" stroke-width="11.44"/>
+    <path d="M94.46 94.62 L115.57 115.88" stroke-width="16.24"/>
+  </g>
+</svg>

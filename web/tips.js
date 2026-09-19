@@ -43,11 +43,11 @@ export function resetTips() { drop(SEEN_KEY); }
 export const TIPS = [
   {
     id: 'header-counts',
-    route: /^\/(dashboard|nodes|incidents|hardware)/,
+    route: /^\/(dashboard|nodes|incidents)/,
     anchor: '#status-dots .sdot',
     place: 'bottom',
-    title: 'The header counts are links',
-    body: 'Every circle up here opens the list behind it — "2 down" goes straight to the nodes that are down. When there is nothing to report it collapses to a single all-clear.',
+    title: 'The page counts are links',
+    body: 'Every circle in the bar above the page opens the list behind it — "2 down" goes straight to the nodes that are down. When there is nothing to report it collapses to a single all-clear.',
   },
   {
     id: 'service-health',
@@ -99,11 +99,11 @@ export const TIPS = [
   },
   {
     id: 'hardware-agent',
-    route: /^\/hardware/,
-    anchor: '.host-grid, .host-name',
+    route: /^\/nodes/,
+    anchor: '.topbar-actions .btn',
     place: 'bottom',
     title: 'Other machines report inward',
-    body: 'GWatch reads this computer by itself; anything else needs the agent installed on it. The agent connects out to GWatch and hangs up — GWatch never connects back and holds no credential for that machine.',
+    body: 'A machine is a node like any other. Pair one and GWatch makes its node for you; the agent you install on it connects out and hangs up — GWatch never connects back and holds no credential for that machine.',
   },
   {
     id: 'incidents-suppressed',

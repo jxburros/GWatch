@@ -74,6 +74,23 @@ func NewAgentToken() (token, prefix string, err error) {
 	return token, KeyPrefix(token), nil
 }
 
+// NewWallboardToken returns the random part of a wallboard's projected
+// address. It is not a credential in the sense the others here are: it names
+// one read-only board and nothing else, carries no prefix because it travels
+// in a URL somebody has to type by hand, and is stored as it is so that the
+// address can be shown again.
+func NewWallboardToken() (string, error) {
+	b := make([]byte, 20)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate wallboard token: %w", err)
+	}
+	var sb strings.Builder
+	for _, v := range b {
+		sb.WriteByte(keyAlphabet[int(v)%len(keyAlphabet)])
+	}
+	return sb.String(), nil
+}
+
 // LooksLikeAgentToken reports whether s has the shape of an agent token. Like
 // LooksLikeAPIKey it only decides which credential is being presented, never
 // whether to accept it.

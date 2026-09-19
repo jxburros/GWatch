@@ -12,9 +12,10 @@
 ;   iscc /DAppVersion=1.2.3 /DExePath=..\..\dist\gwatch-agent-windows-amd64.exe gwatch-agent.iss
 ;
 ; The wizard asks for the GWatch server's address and a pairing code (get one
-; in GWatch under Hardware), hands both to `gwatch-agent install --code`, and
-; that command exchanges the code for this machine's own submit-only token
-; before registering the "GWatchAgent" service. See docs/HARDWARE.md.
+; in GWatch under Nodes > Pair a machine), hands both to
+; `gwatch-agent install --code`, and that command exchanges the code for this
+; machine's own submit-only token before registering the "GWatchAgent"
+; service. See docs/HARDWARE.md.
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -66,8 +67,13 @@ SetupLogging=yes
 LicenseFile=license.txt
 SetupIconFile=assets\gwatch.ico
 WizardImageFile=assets\wizard-large.bmp,assets\wizard-large-2x.bmp
-WizardSmallImageFile=assets\wizard-small.bmp,assets\wizard-small-2x.bmp
+; The inner pages' header is graphite now (see style.iss), so the badge that
+; sits on it is the inverted mark rather than the one drawn for white.
+WizardSmallImageFile=assets\wizard-small-dark.bmp,assets\wizard-small-dark-2x.bmp
 WizardImageStretch=yes
+; The connect page asks four questions and explains the code underneath them,
+; which is more than the default wizard size is comfortable with.
+WizardSizePercent=110
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -76,7 +82,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 WelcomeLabel1=Install [name]
 WelcomeLabel2=The GWatch Agent reports this computer's processor, memory, disk and network health to a GWatch server you already run.%n%nIt only ever sends readings out. Nothing can reach this computer through it, and the credential it ends up holding can do one thing: submit this machine's readings.%n%nDeveloped by {#Developers}.{#BetaNote}
 FinishedHeadingLabel=This machine is reporting
-FinishedLabel=The agent is installed as a Windows service and starts with this computer.%n%nIt should appear on the GWatch server's Hardware page within a minute.
+FinishedLabel=The agent is installed as a Windows service and starts with this computer.%n%nIt should appear on the GWatch server, on its own node, within a minute.
 
 [CustomMessages]
 ConnectCaption=Connect to GWatch
@@ -102,6 +108,11 @@ var
   CodeEdit: TNewEdit;
   NameEdit: TNewEdit;
   InsecureCheck: TNewCheckBox;
+
+// The wizard skin. It is included here, after this script's own
+// declarations, so that its procedures are defined before
+// InitializeWizard below calls them.
+#include "style.iss"
 
 { The alphabet a pairing code is drawn from. Kept in step with
   auth.PairingCodeAlphabet in internal/auth/token.go -- no I, L, O, U, 0 or 1,
@@ -138,7 +149,7 @@ begin
   ServerEdit.Width := ConnectPage.SurfaceWidth;
   ServerEdit.Text := ExpandConstant('{param:SERVER|http://gwatch.lan:8080}');
 
-  AddLabel(ConnectPage, 48, 'Pairing code (GWatch > Hardware > Pair a machine)');
+  AddLabel(ConnectPage, 48, 'Pairing code (GWatch > Nodes > Pair a machine)');
   CodeEdit := TNewEdit.Create(ConnectPage);
   CodeEdit.Parent := ConnectPage.Surface;
   CodeEdit.Left := 0;
@@ -176,6 +187,21 @@ begin
   Note.AutoSize := False;
   Note.WordWrap := True;
   Note.Height := 60;
+
+  { The server address and the pairing code are machine text, so they are typed
+    in the face the application shows machine text in. }
+  SkinMono(ServerEdit);
+  SkinMono(CodeEdit);
+  SkinNote(Note);
+  ApplyGWatchSkin;
+end;
+
+{ Every page is skinned as it is shown: some of the wizard's controls do not
+  exist until their page is first needed, and a page that arrived unskinned
+  would be a white rectangle in the middle of a dark wizard. }
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  ApplyGWatchSkin;
 end;
 
 { Strips dashes, spaces and case so the code can be typed however it reads

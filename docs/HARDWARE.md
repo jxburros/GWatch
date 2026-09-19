@@ -19,8 +19,13 @@ of this document explains why.
 ## This computer
 
 Nothing to set up. GWatch reads the machine it runs on every minute and keeps
-the readings alongside everything else, so **Hardware** in the sidebar has a
-history whether or not you ever add a check.
+the readings alongside everything else, so there is a history whether or not you
+ever add a check.
+
+A machine is not a separate kind of thing in GWatch: it is a node with a
+hardware check, and its readings are shown on that node. That is why there is no
+hardware section in the sidebar — the machines of your network are in **Nodes**,
+with everything else you watch.
 
 To be *told* when something is wrong, add a check: **Nodes › Add node**, pick
 the **This computer** template, or add a **Hardware health** check to any node
@@ -33,9 +38,13 @@ this machine.
 `gwatch-agent` is a single file with no dependencies. It reads the machine it
 runs on and posts the reading to GWatch every minute.
 
-1. In GWatch: **Settings › Hardware › Register a machine**. Give it a name.
+1. In GWatch: **Nodes › Pair a machine**. Give it a name. GWatch creates the
+   node the machine will be watched as, carrying a hardware check that is
+   completed and switched on the moment the machine actually pairs. (**Settings
+   › Hardware › Register a machine** does the same thing with a token instead of
+   a code, for a rollout you are scripting.)
 2. Copy the install command it shows you. It already has this server's address
-   and the new token in it.
+   and the new code or token in it.
 3. Run it on the machine you want to watch:
 
    ```
@@ -45,8 +54,9 @@ runs on and posts the reading to GWatch every minute.
    On Windows, from an Administrator prompt. The agent installs itself as a
    background service and starts reporting immediately.
 
-4. The machine appears under **Hardware** within a minute. To be alerted about
-   it, add a **Hardware health** check with its source set to that machine.
+4. Its readings appear on its node within a minute, and the hardware check
+   there starts alerting on the thresholds it was created with. Change them to
+   whatever "wrong" means for that machine.
 
 Before installing anything, `gwatch-agent print` shows exactly what would be
 sent, and contacts nothing. `gwatch-agent once --server … --token …` sends a

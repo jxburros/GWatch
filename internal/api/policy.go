@@ -71,6 +71,10 @@ var policies = []routePolicy{
 	{"GET", "/api/version", levelPublic, keyRead},
 	{"GET", "/api/me", levelPublic, keyRead},
 	{"GET", "/api/auth/setup", levelPublic, keyRead},
+	// A projected wallboard: public only in that it takes no credential here.
+	// The handler refuses every caller that does not present the token of a
+	// board whose sharing its administrator switched on.
+	{"GET", "/api/wallboards/{id}/view", levelPublic, keyRead},
 	{"POST", "/api/auth/login", levelPublic, keyDeny},
 	{"POST", "/api/auth/logout", levelPublic, keyDeny},
 
@@ -94,6 +98,8 @@ var policies = []routePolicy{
 	{"GET", "/api/maintenance", levelViewer, keyRead},
 	{"GET", "/api/dashboards", levelViewer, keyRead},
 	{"GET", "/api/dashboards/{id}", levelViewer, keyRead},
+	{"GET", "/api/wallboards", levelViewer, keyRead},
+	{"GET", "/api/wallboards/{id}", levelViewer, keyRead},
 	{"GET", "/api/charts", levelViewer, keyRead},
 	{"GET", "/api/hosts", levelViewer, keyRead},
 	{"GET", "/api/hosts/{key}", levelViewer, keyRead},
@@ -134,6 +140,12 @@ var policies = []routePolicy{
 	{"POST", "/api/dashboards", levelAdmin, keyWrite},
 	{"PUT", "/api/dashboards/{id}", levelAdmin, keyWrite},
 	{"DELETE", "/api/dashboards/{id}", levelAdmin, keyWrite},
+	{"POST", "/api/wallboards", levelAdmin, keyWrite},
+	{"PUT", "/api/wallboards/{id}", levelAdmin, keyWrite},
+	{"DELETE", "/api/wallboards/{id}", levelAdmin, keyWrite},
+	// Handing out an address that needs no sign-in is an administrator's
+	// decision and never an integration's, however wide its key.
+	{"POST", "/api/wallboards/{id}/share", levelAdmin, keyDeny},
 	{"PUT", "/api/charts", levelAdmin, keyWrite},
 
 	// ---- administration: never through an API key ----

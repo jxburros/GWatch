@@ -50,9 +50,9 @@ const STEPS = [
     body: () => [
       h('p', null, 'GWatch reads this computer\'s processor, memory, disk space and throughput on its own. For any other machine, you install the small ', h('b', null, 'agent'), ' on it and it reports in every minute.'),
       h('p', null, 'The agent connects outwards and hangs up: GWatch never connects back, holds no credential for that machine, and the agent\'s token can do exactly one thing — submit that machine\'s readings.'),
-      h('p', { class: 'note' }, 'Register a machine under Settings › Hardware; it appears on the Hardware page within a minute.'),
+      h('p', { class: 'note' }, 'Pair a machine from the Nodes page. GWatch makes a node for it, and its readings appear on that node within a minute of the agent starting.'),
     ],
-    actions: () => [h('a', { class: 'btn', href: '#/settings/hardware' }, icon('cpu'), 'Register a machine')],
+    actions: () => [h('a', { class: 'btn', href: '#/nodes' }, icon('cpu'), 'Pair a machine')],
   },
   {
     id: 'alerts',
@@ -97,7 +97,7 @@ export async function mount(root, ctx) {
 
   function render() {
     const s = STEPS[i];
-    ctx.setTitle('Welcome to GWatch', { subtitle: `Step ${i + 1} of ${STEPS.length} · ${s.title}` });
+    ctx.setTitle('Welcome to GWatch');
     const dots = h('ol', { class: 'ob-dots', 'aria-label': `Step ${i + 1} of ${STEPS.length}` });
     STEPS.forEach((st, n) => dots.append(h('li', { class: `ob-dot ${n === i ? 'active' : ''} ${n < i ? 'done' : ''}`, 'aria-current': n === i ? 'step' : null, title: st.title })));
     const last = i === STEPS.length - 1;

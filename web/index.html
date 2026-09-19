@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="color-scheme" content="dark light">
   <title>GWatch</title>
+  <!-- The mark inverts for a dark field; browsers that honour a media query on
+       an icon link pick the right one, and the rest fall back to the first. -->
+  <link rel="icon" href="logo.svg" type="image/svg+xml" media="(prefers-color-scheme: light)">
+  <link rel="icon" href="logo-dark.svg" type="image/svg+xml" media="(prefers-color-scheme: dark)">
   <link rel="icon" href="logo.svg" type="image/svg+xml">
   <link rel="stylesheet" href="app.css">
   <script>
@@ -30,20 +34,22 @@
   <div class="app" id="app">
     <aside class="rail" id="rail" aria-label="Primary">
       <a class="brand" href="#/dashboard" aria-label="GWatch home" title="Home">
-        <img class="brand-logo" src="logo.svg" alt="" width="30" height="30">
+        <!-- Two marks rather than one recoloured by CSS: the artwork is not a
+             silhouette, so only the black and white of it may invert. Which one
+             shows is decided in app.css by the theme. -->
+        <img class="brand-logo brand-logo-light" src="logo.svg" alt="" width="30" height="30">
+        <img class="brand-logo brand-logo-dark" src="logo-dark.svg" alt="" width="30" height="30">
         <span class="label brand-name">GWatch</span>
       </a>
       <nav class="nav" aria-label="Main navigation">
         <p class="nav-section" aria-hidden="true"><span class="label">Monitor</span><span class="rule"></span></p>
         <a class="nav-link" href="#/dashboard" data-nav="dashboard" title="Dashboard" style="--i:1"><span class="nav-icon" data-icon="grid"></span><span class="label">Dashboard</span></a>
         <a class="nav-link" href="#/nodes" data-nav="nodes" title="Nodes" style="--i:2"><span class="nav-icon" data-icon="server"></span><span class="label">Nodes</span></a>
-        <a class="nav-link" href="#/hardware" data-nav="hardware" title="Hardware" style="--i:3"><span class="nav-icon" data-icon="cpu"></span><span class="label">Hardware</span></a>
-        <a class="nav-link" href="#/charts" data-nav="charts" title="Charts" style="--i:4"><span class="nav-icon" data-icon="chart"></span><span class="label">Charts</span></a>
-        <a class="nav-link" href="#/incidents" data-nav="incidents" title="Incidents" style="--i:5"><span class="nav-icon" data-icon="activity"></span><span class="label">Incidents</span></a>
+        <a class="nav-link" href="#/charts" data-nav="charts" title="Charts" style="--i:3"><span class="nav-icon" data-icon="chart"></span><span class="label">Charts</span></a>
+        <a class="nav-link" href="#/incidents" data-nav="incidents" title="Incidents" style="--i:4"><span class="nav-icon" data-icon="activity"></span><span class="label">Incidents</span></a>
         <p class="nav-section" aria-hidden="true"><span class="label">System</span><span class="rule"></span></p>
-        <a class="nav-link" href="#/audit" data-nav="audit" title="Audit" style="--i:6"><span class="nav-icon" data-icon="audit"></span><span class="label">Audit</span></a>
-        <a class="nav-link" href="#/settings" data-nav="settings" title="Settings" style="--i:7"><span class="nav-icon" data-icon="settings"></span><span class="label">Settings</span></a>
-        <a class="nav-link" href="#/help" data-nav="help" title="Help" style="--i:8"><span class="nav-icon" data-icon="help"></span><span class="label">Help</span></a>
+        <a class="nav-link" href="#/audit" data-nav="audit" title="Audit" style="--i:5"><span class="nav-icon" data-icon="audit"></span><span class="label">Audit</span></a>
+        <a class="nav-link" href="#/help" data-nav="help" title="Help" style="--i:6"><span class="nav-icon" data-icon="help"></span><span class="label">Help</span></a>
       </nav>
       <div class="rail-footer">
         <div class="account" id="account" hidden>
@@ -54,7 +60,7 @@
           </span>
         </div>
         <button class="nav-link nav-link-secondary" id="sign-out" type="button" hidden title="Sign out"><span class="nav-icon" data-icon="logout"></span><span class="label">Sign out</span></button>
-        <a class="nav-link nav-link-secondary" href="#/wallboard" data-nav="wallboard" title="Open wallboard" style="--i:8"><span class="nav-icon" data-icon="monitor"></span><span class="label">Wallboard</span></a>
+        <a class="nav-link nav-link-secondary" href="#/wallboards" data-nav="wallboard" title="Wallboards" style="--i:8"><span class="nav-icon" data-icon="monitor"></span><span class="label">Wallboards</span></a>
         <a class="nav-link service-health" href="#/settings/health" id="service-health" aria-live="polite" title="Service health">
           <span class="nav-icon"><span class="orb orb-sm health-dot" aria-hidden="true"></span></span>
           <span class="label health-text">Checking service…</span>
@@ -64,17 +70,17 @@
     </aside>
     <div class="main">
       <header class="topbar">
-        <div class="topbar-left">
-          <div class="topbar-title">
-            <h1 id="page-title">Dashboard</h1>
-            <p class="topbar-subtitle" id="page-subtitle" hidden></p>
-          </div>
-          <div class="status-dots" id="status-dots" aria-label="Attention summary" aria-live="polite"></div>
-        </div>
+        <h1 class="topbar-title" id="page-title">Dashboard</h1>
         <div class="topbar-right">
-          <div class="topbar-actions" id="page-actions"></div>
+          <a class="topbar-btn nav-link" href="#/settings" data-nav="settings" id="settings-link" title="Settings" aria-label="Settings"><span class="nav-icon" data-icon="settings"></span><span class="topbar-btn-label">Settings</span></a>
         </div>
       </header>
+      <!-- Page bar: live state on the left, this page's controls on the right.
+           The header itself carries nothing but the page name and Settings. -->
+      <div class="page-bar" id="page-bar">
+        <div class="status-dots" id="status-dots" aria-label="Attention summary" aria-live="polite"></div>
+        <div class="topbar-actions" id="page-actions"></div>
+      </div>
       <div class="api-banner" id="api-banner" role="alert" hidden>
         <span class="api-banner-icon" data-icon="alert"></span>
         <span id="api-banner-text">The GWatch service is not responding — is it running?</span>

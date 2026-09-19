@@ -300,6 +300,16 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "the node this machine belongs to does not exist")
 			return
 		}
+	} else {
+		// A machine is a node like any other, so one is made for it here: a
+		// machine registered without a node of its own would otherwise be
+		// watched by nothing and appear nowhere.
+		node, err := s.createMachineNode(ctx, name)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		body.NodeID = &node.ID
 	}
 
 	token, prefix, err := auth.NewAgentToken()
@@ -311,6 +321,11 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.fail(w, err)
 		return
+	}
+	if body.NodeID != nil {
+		if err := s.bindMachineCheck(ctx, *body.NodeID, created); err != nil {
+			s.Log.Errorf("bind hardware check to agent %d: %v", created.ID, err)
+		}
 	}
 	s.auditAuth(ctx, "Hardware agent registered: "+created.Name,
 		"The machine may submit its own hardware readings and nothing else.")
@@ -469,6 +484,16 @@ func (s *Server) handleCreatePairing(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "the node this machine belongs to does not exist")
 			return
 		}
+	} else {
+		// The machine gets its node now, while there is a name to give it. Its
+		// hardware check is left waiting and is completed with the agent's id
+		// once the code is redeemed and the agent exists (see handlePair).
+		node, err := s.createMachineNode(ctx, name)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		body.NodeID = &node.ID
 	}
 
 	code, err := auth.NewPairingCode()
@@ -593,6 +618,12 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	}
 	created.Hostname, created.OS, created.Arch = hostname, trimTo(body.OS, 60), trimTo(body.Arch, 30)
 
+	if pairing.NodeID != nil {
+		if err := s.bindMachineCheck(ctx, *pairing.NodeID, created); err != nil {
+			s.Log.Errorf("bind hardware check to agent %d: %v", created.ID, err)
+		}
+	}
+
 	s.auditAuth(ctx, "Machine paired: "+created.Name,
 		fmt.Sprintf("A pairing code was redeemed from %s by %s. The machine may submit its own hardware readings and nothing else.",
 			ip, describeMachine(hostname, body.OS, body.Arch, body.Version)))
@@ -627,6 +658,75 @@ func describeMachine(hostname, os, arch, version string) string {
 	}
 	return strings.Join(parts, "/")
 }
+
+// createMachineNode makes the node a machine is watched as. It carries one
+// hardware check whose agent is filled in by bindMachineCheck once the machine
+// has actually paired; until then the check has nothing to read and stays
+// disabled rather than failing every minute against an agent that may never
+// arrive.
+func (s *Server) createMachineNode(ctx context.Context, name string) (model.Node, error) {
+	cfg := model.SystemDefaults()
+	cfg.HostSource = model.HostSourceAgent
+	node := model.Node{
+		Name:       name,
+		Group:      machineGroup,
+		Tags:       []string{},
+		Importance: model.ImportanceNormal,
+		Enabled:    true,
+		Template:   "agent-machine",
+		Checks: []model.Check{{
+			Type:             model.CheckSystem,
+			Name:             "Hardware health",
+			Enabled:          false,
+			IntervalSeconds:  60,
+			TimeoutSeconds:   10,
+			Retries:          1,
+			FailureThreshold: 2,
+			Config:           cfg,
+		}},
+	}
+	created, err := s.Store.CreateNode(ctx, node)
+	if err != nil {
+		return created, err
+	}
+	s.configChanged(ctx, &created, "Added node "+created.Name, "Created for a machine being paired; its hardware check starts once the machine reports.")
+	return created, nil
+}
+
+// bindMachineCheck points the node's hardware check at the agent that has just
+// been enrolled, and switches it on. A node the administrator chose themselves
+// may already have a hardware check for this machine, or none at all; both are
+// left as they are, since only a check that is waiting for an agent is ours to
+// complete.
+func (s *Server) bindMachineCheck(ctx context.Context, nodeID int64, agent model.Agent) error {
+	node, err := s.Store.GetNode(ctx, nodeID)
+	if err != nil {
+		return err
+	}
+	changed := false
+	for i, c := range node.Checks {
+		if c.Type != model.CheckSystem || c.Config.HostSource != model.HostSourceAgent || c.Config.AgentID != 0 {
+			continue
+		}
+		node.Checks[i].Config.AgentID = agent.ID
+		node.Checks[i].Enabled = true
+		changed = true
+		break
+	}
+	if !changed {
+		return nil
+	}
+	updated, _, err := s.Store.UpdateNode(ctx, node)
+	if err != nil {
+		return err
+	}
+	s.configChanged(ctx, &updated, "Machine "+agent.Name+" attached to node "+updated.Name, "Its hardware check now reads the readings this machine sends.")
+	return nil
+}
+
+// machineGroup is the group a node created for a paired machine lands in, so
+// the machines of a network sort together in the node list.
+const machineGroup = "Hardware"
 
 // trimTo bounds a string the machine sent about itself. None of these fields
 // are trusted for anything, but they are shown in the UI and written to the

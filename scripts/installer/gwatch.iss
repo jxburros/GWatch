@@ -67,8 +67,13 @@ LicenseFile=license.txt
 SetupIconFile=assets\gwatch.ico
 ; Two sizes each: Inno picks by the display's DPI rather than upscaling.
 WizardImageFile=assets\wizard-large.bmp,assets\wizard-large-2x.bmp
-WizardSmallImageFile=assets\wizard-small.bmp,assets\wizard-small-2x.bmp
+; The inner pages' header is graphite now (see style.iss), so the badge that
+; sits on it is the inverted mark rather than the one drawn for white.
+WizardSmallImageFile=assets\wizard-small-dark.bmp,assets\wizard-small-dark-2x.bmp
 WizardImageStretch=yes
+; A little more room than the default: the network page has a paragraph on it
+; that should not need three lines to say eight words.
+WizardSizePercent=110
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -123,6 +128,11 @@ var
   LanCheck: TNewCheckBox;
   NoteLabel: TNewStaticText;
 
+// The wizard skin. It is included here, after this script's own
+// declarations, so that its procedures are defined before
+// InitializeWizard below calls them.
+#include "style.iss"
+
 { ---------------------------------------------------------------------- }
 { Custom "Network access" wizard page: port + "allow other devices"      }
 { checkbox, shown between the install-folder page and the ready page.    }
@@ -165,6 +175,9 @@ begin
   NoteLabel.AutoSize := False;
   NoteLabel.WordWrap := True;
   NoteLabel.Height := 84;
+  SkinMono(PortEdit);
+  SkinNote(NoteLabel);
+
   NoteLabel.Caption :=
     'GWatch has no access password by default. After installing, open ' +
     'Settings > Users & access in the web interface and set a password (or ' +
@@ -172,6 +185,16 @@ begin
     'who can reach this port on your network will otherwise see everything.' + #13#10 + #13#10 +
     'Do not forward this port to the internet. See docs/REMOTE-ACCESS.md for ' +
     'the safe way to reach GWatch from outside your home.';
+
+  ApplyGWatchSkin;
+end;
+
+{ Every page is skinned as it is shown: some of the wizard's controls do not
+  exist until their page is first needed, and a page that arrived unskinned
+  would be a white rectangle in the middle of a dark wizard. }
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  ApplyGWatchSkin;
 end;
 
 { Validate the port field before leaving the Network access page. }

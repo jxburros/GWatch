@@ -62,7 +62,7 @@ export async function mount(root, ctx) {
     const t = visibleTabs.find((x) => x.id === state.tab) || visibleTabs[0];
     state.tab = t.id;
     renderNav();
-    ctx.setTitle('Settings', { subtitle: t.label });
+    ctx.setTitle('Settings');
     replace(panel, skeleton({ lines: 5 }));
     state.panelRefresh = null;
     try {
@@ -331,7 +331,7 @@ export async function mount(root, ctx) {
       replace(wrap,
         h('div', { class: 'card-head' }, h('h2', null, 'Machines'),
           h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => registerAgent(reload) }, icon('plus'), 'Register a machine')),
-        h('p', { class: 'lead' }, 'GWatch reads this computer by itself. To see another machine\u2019s hardware, register it here and install gwatch-agent on it — the agent only sends readings out, so registering a machine gives GWatch no way into it.'),
+        h('p', { class: 'lead' }, 'GWatch reads this computer by itself. To see another machine\u2019s hardware, register it here and install gwatch-agent on it — the agent only sends readings out, so registering a machine gives GWatch no way into it. Each machine gets a node of its own, and its readings are shown there.'),
         agents.length
           ? h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
               h('thead', null, h('tr', null, h('th', null, 'Name'), h('th', null, 'Token'), h('th', null, 'Reporting'), h('th', null, 'Last seen'), h('th', null, 'Node'), h('th', null, ''))),
@@ -351,7 +351,7 @@ export async function mount(root, ctx) {
         h('td', null, a.lastSeenAt ? relTime(a.lastSeenAt) : h('span', { class: 'muted' }, 'never')),
         h('td', null, nodes.find((n) => n.id === a.nodeId)?.name || h('span', { class: 'muted' }, '—')),
         h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },
-          a.lastSeenAt ? h('a', { class: 'btn btn-sm', href: `#/hardware/agent:${a.id}` }, 'Readings') : null,
+          a.nodeId ? h('a', { class: 'btn btn-sm', href: `#/nodes/${a.nodeId}` }, 'Open node') : null,
           revoked
             ? h('button', { class: 'btn btn-sm btn-danger', type: 'button', onclick: () => purgeAgent(a, reloadFn) }, 'Delete')
             : h('button', { class: 'btn btn-sm', type: 'button', onclick: () => revokeAgent(a, reloadFn) }, 'Revoke')));

@@ -8,7 +8,7 @@
   const iso = (t) => new Date(t).toISOString();
   const ago = (ms) => iso(NOW - ms);
   const ahead = (ms) => iso(NOW + ms);
-  const seq = { node: 20, check: 100, result: 90000, event: 5000, dash: 5, maint: 5 };
+  const seq = { node: 20, check: 100, result: 90000, event: 5000, dash: 5, maint: 5, wall: 1 };
   const clone = (o) => JSON.parse(JSON.stringify(o));
 
   function rng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
@@ -451,6 +451,27 @@
     return { ...ov, health: health(), trends: picks.map((c) => history(c.id, '24h')) };
   }
 
+  // One configured wallboard, arranged the way a new one arrives from the
+  // service, so the editor and the board itself both have something to work on.
+  const wallboards = [{
+    id: 1,
+    name: 'Office screen',
+    sortOrder: 0,
+    layout: { columns: 12, theme: 'signal', scale: 1, refreshSeconds: 20, hideChrome: false },
+    panels: [
+      { id: 'p1', type: 'headline', title: '', width: 6, height: 1, config: {} },
+      { id: 'p2', type: 'counts', title: '', width: 4, height: 1, config: {} },
+      { id: 'p3', type: 'clock', title: '', width: 2, height: 1, config: { seconds: false } },
+      { id: 'p4', type: 'attention', title: 'Needs attention', width: 5, height: 2, config: { limit: 6 } },
+      { id: 'p5', type: 'trends', title: 'Trends', width: 7, height: 2, config: { range: '24h', limit: 4, checkIds: [] } },
+      { id: 'p6', type: 'groups', title: 'Groups', width: 5, height: 1, config: {} },
+      { id: 'p7', type: 'certs', title: 'Certificates', width: 4, height: 1, config: {} },
+      { id: 'p8', type: 'health', title: 'Service', width: 3, height: 1, config: {} },
+    ],
+    share: { enabled: false },
+    createdAt: iso(Date.now()), updatedAt: iso(Date.now()),
+  }];
+
   /* ---------- Mutations ---------- */
   function addEvent(type, o) { const e = { id: ++seq.event, ts: iso(Date.now()), type, nodeId: o.nodeId ?? null, checkId: o.checkId ?? null, nodeName: o.nodeName, checkName: o.checkName, title: o.title || '', detail: o.detail || '' }; events.unshift(e); return e; }
 
@@ -497,6 +518,27 @@
   on('GET', /^\/api\/apikeys$/, () => []);
   on('GET', /^\/api\/overview$/, () => overview());
   on('GET', /^\/api\/wallboard$/, () => wallboard());
+  on('GET', /^\/api\/wallboards$/, () => clone(wallboards));
+  on('GET', /^\/api\/wallboards\/(\d+)$/, (m) => { const b = wallboards.find((x) => x.id === Number(m[1])); if (!b) throw err(404, 'wallboard not found'); return clone(b); });
+  on('POST', /^\/api\/wallboards$/, (m, body) => {
+    const def = clone(wallboards[0]);
+    const b = { id: ++seq.wall, name: body.name || 'Untitled', sortOrder: wallboards.length, layout: body.layout || def.layout, panels: body.panels?.length ? body.panels : def.panels, share: { enabled: false }, createdAt: iso(Date.now()), updatedAt: iso(Date.now()) };
+    wallboards.push(b);
+    return clone(b);
+  });
+  on('PUT', /^\/api\/wallboards\/(\d+)$/, (m, body) => { const b = wallboards.find((x) => x.id === Number(m[1])); if (!b) throw err(404, 'wallboard not found'); b.name = body.name ?? b.name; b.layout = body.layout ?? b.layout; b.panels = body.panels ?? b.panels; b.updatedAt = iso(Date.now()); return clone(b); });
+  on('DELETE', /^\/api\/wallboards\/(\d+)$/, (m) => { const i = wallboards.findIndex((x) => x.id === Number(m[1])); if (i < 0) throw err(404, 'wallboard not found'); wallboards.splice(i, 1); return { ok: true }; });
+  on('POST', /^\/api\/wallboards\/(\d+)\/share$/, (m, body) => {
+    const b = wallboards.find((x) => x.id === Number(m[1]));
+    if (!b) throw err(404, 'wallboard not found');
+    b.share = body.enabled ? { enabled: true, token: (!body.rotate && b.share.token) || 'demotoken' + b.id } : { enabled: false };
+    return clone(b);
+  });
+  on('GET', /^\/api\/wallboards\/(\d+)\/view$/, (m) => {
+    const b = wallboards.find((x) => x.id === Number(m[1]));
+    if (!b) throw err(404, 'wallboard not found');
+    return { ...wallboard(), wallboard: clone(b), serverNow: iso(Date.now()) };
+  });
   on('GET', /^\/api\/templates$/, () => templates);
   on('GET', /^\/api\/groups$/, () => {
     const g = new Map(); const t = new Map();

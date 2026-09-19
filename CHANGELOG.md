@@ -9,6 +9,43 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## Unreleased
+
+### Changed
+
+- **Hardware is no longer a section of its own.** A machine is a node like any
+  other: pairing or registering one creates the node it is watched as, with a
+  hardware check that is completed and switched on as soon as the machine
+  reports, and its readings and history are shown on that node. Links to the
+  old hardware pages follow the machine to its node.
+- **The header carries the page name and nothing else.** Page subtitles are
+  gone; Settings has moved to the upper right, where it belongs to the
+  application rather than to any page; and the live counts and each page's own
+  controls have moved to a bar beneath the header.
+- **Every size is relative.** The interface is stated in `rem` against a root
+  that grows with the viewport, so it scales with the screen instead of being
+  pinned to one laptop's pixels. The left rail scrolls and tightens rather than
+  clipping an icon on a short window.
+
+### Added
+
+- **Wallboards you configure, and can put on a screen.** As many boards as you
+  like, each arranged from its own panels — headline, counts, clock, attention,
+  groups, a node grid, trends, certificates, maintenance, service health or a
+  line of text — with its own columns, theme, type size and refresh, and its
+  own visual identity rather than the application's.
+- **Projecting a wallboard.** Switch projection on for a board and GWatch gives
+  you an address any browser on your network can open. That screen never signs
+  in and can read that one board and nothing else; the address is shown only to
+  an administrator, is never echoed back to the display, and switching
+  projection off or changing it revokes the old one at once. Every change is in
+  the audit trail. See [`docs/API.md`](docs/API.md#wallboards).
+- **An inverted mark for dark backgrounds** (`web/logo-dark.svg`), used in the
+  interface's dark theme and on the installers' header strip.
+- **The setup programs wear the application's skin**: graphite field, a teal
+  accent rule under the header, and the monospaced face in the fields that hold
+  a port, an address or a pairing code.
+
 ## 0.1.0 — first beta
 
 The first released version. Everything below is new, so this entry describes

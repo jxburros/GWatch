@@ -11,10 +11,15 @@
 #      reads that as a preprocessor directive, so a Pascal continuation line
 #      starting with #13#10 aborts the compile with "Unknown preprocessor
 #      directive" pointing at a line that looks perfectly ordinary.
+#   1b. A line inside [Code] starting with ";". A semicolon comments out a line
+#      in every other section of an .iss file, but [Code] is Pascal, where ";"
+#      is a statement separator -- the compiler stops on it with a message
+#      ("'BEGIN' expected") that says nothing about comments.
 #   2. Any byte outside ASCII. Inno reads a .iss without a UTF-8 BOM in the
 #      system ANSI codepage, so a typographic dash reaches the wizard as
 #      mojibake -- which compiles cleanly and looks wrong only on screen.
-#   3. Unbalanced begin/end in [Code].
+#   3. Unbalanced begin/end in [Code]. "try" and "case" open a block the same
+#      way "begin" does, since each is closed by its own "end".
 #   4. A routine in [Code] that ends with unbalanced parentheses -- what is left
 #      behind when a call is refactored into something else and its closing
 #      paren is not removed with it.
@@ -32,7 +37,12 @@ function Fail([string]$File, [int]$Line, [string]$Message) {
 foreach ($iss in Get-ChildItem -Path $dir -Filter *.iss) {
     $raw = Get-Content $iss.FullName -Raw
     $lines = $raw -split "`r?`n"
-    $inCode = $false
+    # A file with no section header that declares routines is a Pascal fragment
+    # meant to be #included inside someone else's [Code] (style.iss), so all of
+    # it is code. A fragment of ISPP #defines (brand.iss) is not: there a ";"
+    # really is a comment and a "#" really is a directive.
+    $isFragment = (-not ($raw -match '(?m)^\[\w+\]\s*$')) -and ($raw -match '(?im)^\s*(procedure|function)\s+\w+')
+    $inCode = $isFragment
 
     for ($i = 0; $i -lt $lines.Count; $i++) {
         $line = $lines[$i]
@@ -41,6 +51,9 @@ foreach ($iss in Get-ChildItem -Path $dir -Filter *.iss) {
         if ($inCode -and $line -match '^\s+#') {
             Fail $iss.Name $n "a line inside [Code] starts with '#', which ISPP reads as a preprocessor directive. Move it onto the end of the previous line."
         }
+        if ($inCode -and $line -match '^\s*;') {
+            Fail $iss.Name $n "a line inside [Code] starts with ';'. That comments a line out everywhere else in an .iss file, but [Code] is Pascal: use '//' or '{ }'."
+        }
         if ($line -match '[^\x09\x20-\x7E]') {
             Fail $iss.Name $n "non-ASCII character. Inno reads a BOM-less .iss in the system codepage, so this reaches the wizard as mojibake. Use an ASCII equivalent."
         }
@@ -48,14 +61,14 @@ foreach ($iss in Get-ChildItem -Path $dir -Filter *.iss) {
 
     # Strip string literals first (a brace inside one is not a comment), then
     # brace comments across lines, then line comments.
-    $code = if ($raw -match '(?s)\[Code\](.*)$') { $matches[1] } else { "" }
+    $code = if ($raw -match '(?s)\[Code\](.*)$') { $matches[1] } elseif ($isFragment) { $raw } else { "" }
     $stripped = [regex]::Replace($code, "'(?:[^'\n]|'')*'", "''")
     $stripped = [regex]::Replace($stripped, '\{[^}]*\}', ' ', 'Singleline')
     $stripped = [regex]::Replace($stripped, '//[^\n]*', ' ')
 
     $depth = 0
-    foreach ($m in [regex]::Matches($stripped, '\b(begin|end|case|record)\b', 'IgnoreCase')) {
-        if ($m.Groups[1].Value.ToLower() -in @('begin', 'case', 'record')) { $depth++ } else { $depth-- }
+    foreach ($m in [regex]::Matches($stripped, '\b(begin|end|case|record|try)\b', 'IgnoreCase')) {
+        if ($m.Groups[1].Value.ToLower() -in @('begin', 'case', 'record', 'try')) { $depth++ } else { $depth-- }
         if ($depth -lt 0) { Fail $iss.Name 0 "an 'end' with no matching 'begin' in [Code]."; break }
     }
     if ($depth -gt 0) { Fail $iss.Name 0 "$depth unclosed begin/case/record block(s) in [Code]." }

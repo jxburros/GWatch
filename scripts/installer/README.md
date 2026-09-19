@@ -80,7 +80,7 @@ gwatch-setup-0.1.0.exe /VERYSILENT /PORT=8080 /LAN=1
 Installs to `{autopf}\GWatch Agent`, asks for the GWatch server's address and a
 pairing code, and runs `gwatch-agent install --code` to exchange the code for
 this machine's own submit-only token before registering the `GWatchAgent`
-service. Get a pairing code from GWatch under **Hardware › Pair a machine**; one
+service. Get a pairing code from GWatch under **Nodes › Pair a machine**; one
 is good for a single machine and expires after about fifteen minutes.
 
 Pairing runs in `CurStepChanged` rather than `[Run]` so a mistyped, expired or
@@ -96,6 +96,14 @@ gwatch-agent-setup-0.1.0.exe /VERYSILENT /SERVER=http://gwatch.lan:8080 /CODE=AB
 ## Branding assets
 
 `brand.iss` holds the publisher, developers and URLs that both scripts share.
+`style.iss` holds the wizard's skin: both scripts include it as the first line
+of their `[Code]` section, and it repaints the wizard in the application's own
+“Signal” palette — graphite field, teal accent rule under the header, the
+monospaced face in the fields that hold machine text. It is written against
+Inno's control classes rather than against named fields, and the whole of it
+runs inside `try`, so a future Inno Setup that renames something leaves a plain
+wizard rather than an error box.
+
 `assets\` holds the artwork:
 
 | File | Used as | Notes |
@@ -103,15 +111,26 @@ gwatch-agent-setup-0.1.0.exe /VERYSILENT /SERVER=http://gwatch.lan:8080 /CODE=AB
 | `logo-master.png` | source artwork | 1254×1254 RGBA, transparent background. Everything else here is derived from it. |
 | `gwatch.ico` | `SetupIconFile`, shortcut icon | 16/24/32/48/64/128 as 32-bit BMP entries, 256 as PNG |
 | `wizard-large.bmp`, `wizard-large-2x.bmp` | `WizardImageFile` | 164×314 and 328×628, the welcome and finish panels |
-| `wizard-small.bmp`, `wizard-small-2x.bmp` | `WizardSmallImageFile` | 55×58 and 110×116, the inner-page header badge |
+| `wizard-small.bmp`, `wizard-small-2x.bmp` | source for the dark badge | 55×58 and 110×116, the mark on white |
+| `wizard-small-dark.bmp`, `wizard-small-dark-2x.bmp` | `WizardSmallImageFile` | the same badge inverted for the graphite header |
+
+The dark badge is derived from the light one by exchanging its black and white,
+exactly as [`web/logo-dark.svg`](../../web/logo-dark.svg) does for the vector
+mark: a pixel whose chroma leans blue or is neutral — the navy ring, the white
+sclera, and every antialiased blend between them — is remapped along the
+navy-to-white axis onto `#f2f4f6`-to-`#16181d`, and a pixel whose chroma leans
+red is left alone, because the gold iris is the mark's colour rather than its
+contrast. Redo it that way if the light badge ever changes.
 
 The large panel is deliberately the app's own skin — graphite `#0f1114`, the teal
 accent, square corners, a hairline grid, and status dots in the up/warn/down
-colours from `web/app.css`. The small badge is white instead, because Inno draws
-it on the inner pages' white header strip and the mark's navy needs the contrast.
+colours from `web/app.css`. The small badge is the inverted mark, because Inno draws
+it on the inner pages' header strip, which `style.iss` paints graphite.
 
-The vector form of the same mark is [`web/logo.svg`](../../web/logo.svg), which is
-what the web interface and the favicon use. Change one and change the other.
+The vector form of the same mark is [`web/logo.svg`](../../web/logo.svg), with
+[`web/logo-dark.svg`](../../web/logo-dark.svg) for a dark field; the web
+interface and the favicon use whichever the theme calls for. Change one and
+change the others.
 
 ### The executables' own icon
 
