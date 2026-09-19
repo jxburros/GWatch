@@ -217,9 +217,10 @@ export async function mount(root, ctx) {
   // Panels are kept across reloads and keyed by machine: rebuilding them would
   // throw away their charts and the range the reader had chosen.
   function renderHardware() {
+    const systems = (state.node.checks || []).filter((x) => x.type === 'system');
     const wanted = new Map();
-    for (const c of (state.node.checks || []).filter((x) => x.type === 'system')) {
-      wanted.set(hostKeyFor(c), c.name);
+    for (const c of systems) {
+      wanted.set(hostKeyFor(c), systems.length > 1 ? c.name : 'Hardware');
     }
     for (const [key, panel] of state.hardware) {
       if (!wanted.has(key)) { panel.destroy(); panel.el.remove(); state.hardware.delete(key); }

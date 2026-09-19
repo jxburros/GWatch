@@ -108,14 +108,15 @@ export async function mount(root, ctx) {
     };
     return h('div', { class: 'wb-panel-row' },
       h('div', { class: 'wb-panel-main' },
-        h('div', { class: 'wb-panel-name' }, h('b', null, p.title || meta.label), h('span', { class: 'tag' }, meta.label)),
+        h('div', { class: 'wb-panel-name' }, h('b', null, p.title || meta.label),
+          p.title && p.title !== meta.label ? h('span', { class: 'tag' }, meta.label) : null),
         h('div', { class: 'note' }, meta.desc)),
       h('div', { class: 'wb-panel-size mono' }, `${p.width}×${p.height}`),
       h('div', { class: 'wb-panel-actions admin-only' },
-        h('button', { class: 'icon-btn', type: 'button', title: 'Move up', 'aria-label': `Move ${p.title || meta.label} up`, disabled: i === 0, onclick: () => move(-1) }, icon('arrowUp')),
-        h('button', { class: 'icon-btn', type: 'button', title: 'Move down', 'aria-label': `Move ${p.title || meta.label} down`, disabled: i === board.panels.length - 1, onclick: () => move(1) }, icon('arrowDown')),
+        h('button', { class: 'btn btn-sm icon-btn', type: 'button', title: 'Move up', 'aria-label': `Move ${p.title || meta.label} up`, disabled: i === 0, onclick: () => move(-1) }, icon('arrowUp')),
+        h('button', { class: 'btn btn-sm icon-btn', type: 'button', title: 'Move down', 'aria-label': `Move ${p.title || meta.label} down`, disabled: i === board.panels.length - 1, onclick: () => move(1) }, icon('arrowDown')),
         h('button', { class: 'btn btn-sm', type: 'button', onclick: () => editPanel(board, p) }, 'Edit'),
-        h('button', { class: 'icon-btn danger', type: 'button', title: 'Remove', 'aria-label': `Remove ${p.title || meta.label}`, onclick: async () => {
+        h('button', { class: 'btn btn-sm btn-danger icon-btn', type: 'button', title: 'Remove', 'aria-label': `Remove ${p.title || meta.label}`, onclick: async () => {
           const ok = await confirmDialog({ title: 'Remove this panel?', message: `"${p.title || meta.label}" comes off the board. The board itself is kept.`, confirmLabel: 'Remove', danger: true });
           if (!ok) return;
           board.panels = board.panels.filter((x) => x.id !== p.id);

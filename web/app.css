@@ -1255,15 +1255,24 @@ body.wallboard-mode .view { padding: 0; }
   background: var(--wall-bg, transparent);
   color: var(--wall-text, var(--text));
 }
-.wall-page { background: var(--bg); }
-.wall-root { min-height: 100vh; }
+.wall-page { background: var(--bg); overflow: hidden; }
+.wall-root { height: 100vh; }
+.wall-page .wall { height: 100%; min-height: 0; }
 
 /* The panel grid. Panels are placed in order and wrap; nothing is dragged,
    because a wallboard is arranged once and then left alone. */
 .wall-grid {
-  flex: 1; display: grid; gap: var(--wall-gap); align-content: start;
+  display: grid; gap: var(--wall-gap);
   grid-template-columns: repeat(var(--wall-cols), minmax(0, 1fr));
-  grid-auto-rows: minmax(calc(7rem * var(--wall-scale)), auto);
+  /* Rows take an equal share of the height the board has left, down to a
+     floor: a wallboard that leaves the bottom third of a television empty is
+     wasting the only thing the screen has to offer. flex-basis 0 plus
+     min-height 0 is what gives the grid a definite height to divide -- without
+     them an auto-height grid resolves 1fr as max-content and the tallest panel
+     sets every row. Past the floor the grid scrolls, which is a board with too
+     much on it rather than a layout to fix here. */
+  flex: 1 1 0; min-height: 0; overflow: auto;
+  grid-auto-rows: minmax(calc(6rem * var(--wall-scale)), 1fr);
 }
 .wall-panel {
   display: flex; flex-direction: column; min-width: 0; min-height: 0;
@@ -1548,7 +1557,10 @@ kbd { font-family: var(--mono); font-size: 0.71875rem; padding: 2px 6px; border:
 }
 @media (max-width: 43.75rem) {
   .health-cards { grid-template-columns: 1fr; }
-  .status-dots .sdot span { display: none; }
+  /* The counts used to shed their labels here, because they were competing
+     with the page title for one header. They have their own bar now, which
+     wraps, so a bar of colour with no number beside it is only confusing. */
+  .page-bar { align-items: flex-start; }
 }
 @media print {
   .rail, .topbar, .page-bar, .toasts { display: none; }
