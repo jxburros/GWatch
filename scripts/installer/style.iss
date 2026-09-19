@@ -1,22 +1,23 @@
-; Shared wizard skin -- included from inside the [Code] section of gwatch.iss
-; and gwatch-agent.iss, so both setup programs look like the thing they are
-; installing rather than like a generic Windows wizard.
-;
-; The palette is the application's own "Signal" skin (web/app.css): warm
-; graphite, a teal accent, square corners. Delphi's TColor is $00BBGGRR, so the
-; constants below read backwards compared with the CSS they come from -- the
-; hex comment on each line is the CSS value it matches.
-;
-; This file is Pascal only. It carries no section header: each script includes
-; it as the first line of its own [Code] section, which both keeps the
-; procedures defined before they are called and keeps the '#' of the include
-; directive in column one, where ISPP expects it.
-;
-; Nothing here is load-bearing. If a future Inno Setup renames a control, the
-; skin is skipped and the wizard is the default one -- an installer that looks
-; plain still installs, and an installer that raises an error box on its first
-; page does not.
-
+// Shared wizard skin -- included from inside the [Code] section of gwatch.iss
+// and gwatch-agent.iss, so both setup programs look like the thing they are
+// installing rather than like a generic Windows wizard.
+//
+// The palette is the application's own "Signal" skin (web/app.css): warm
+// graphite, a teal accent, square corners. Delphi's TColor is $00BBGGRR, so the
+// constants below read backwards compared with the CSS they come from -- the
+// hex comment on each line is the CSS value it matches.
+//
+// This file is Pascal, not an .iss section, so its comments are "//" and not
+// ";" -- a ";" here is a statement separator and the compiler stops on it.
+// It carries no section header either: each script includes it inside its own
+// [Code] section, after that script's own var block, which keeps these
+// procedures defined before they are called and keeps the "#" of the include
+// directive in column one, where ISPP expects it.
+//
+// Nothing here is load-bearing. If a future Inno Setup renames a control, the
+// skin is skipped and the wizard is the default one -- an installer that looks
+// plain still installs, and an installer that raises an error box on its first
+// page does not.
 const
   clGWatchBg      = $14110F;  { #0f1114 -- the field }
   clGWatchCard    = $1D1816;  { #16181d -- panels and inputs }

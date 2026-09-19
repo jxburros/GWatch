@@ -102,14 +102,17 @@ Name: "{group}\Uninstall GWatch Agent"; Filename: "{uninstallexe}"
 Filename: "{app}\gwatch-agent.exe"; Parameters: "uninstall"; RunOnceId: "GWatchAgentServiceUninstall"; Flags: runhidden waituntilterminated
 
 [Code]
-#include "style.iss"
-
 var
   ConnectPage: TWizardPage;
   ServerEdit: TNewEdit;
   CodeEdit: TNewEdit;
   NameEdit: TNewEdit;
   InsecureCheck: TNewCheckBox;
+
+// The wizard skin. It is included here, after this script's own
+// declarations, so that its procedures are defined before
+// InitializeWizard below calls them.
+#include "style.iss"
 
 { The alphabet a pairing code is drawn from. Kept in step with
   auth.PairingCodeAlphabet in internal/auth/token.go -- no I, L, O, U, 0 or 1,

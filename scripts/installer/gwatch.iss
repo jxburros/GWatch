@@ -122,13 +122,16 @@ Filename: "{app}\gwatch.exe"; Parameters: "uninstall"; RunOnceId: "GWatchService
 Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""GWatch"""; RunOnceId: "GWatchFirewallRuleRemove"; Flags: runhidden
 
 [Code]
-#include "style.iss"
-
 var
   NetworkPage: TWizardPage;
   PortEdit: TNewEdit;
   LanCheck: TNewCheckBox;
   NoteLabel: TNewStaticText;
+
+// The wizard skin. It is included here, after this script's own
+// declarations, so that its procedures are defined before
+// InitializeWizard below calls them.
+#include "style.iss"
 
 { ---------------------------------------------------------------------- }
 { Custom "Network access" wizard page: port + "allow other devices"      }
