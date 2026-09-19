@@ -13,10 +13,6 @@ const routes = [
   { pattern: /^\/nodes\/(\d+)\/edit$/, view: () => import('./views/node-editor.js'), params: ['id'], nav: 'nodes' },
   { pattern: /^\/nodes\/(\d+)$/, view: () => import('./views/node-detail.js'), params: ['id'], nav: 'nodes' },
   { pattern: /^\/charts(?:\/([\w-]+))?$/, view: () => import('./views/charts.js'), params: ['id'], nav: 'charts' },
-  { pattern: /^\/hardware$/, view: () => import('./views/hosts.js'), nav: 'hardware' },
-  // A host key contains a colon ("agent:3"), so it is matched loosely here and
-  // decoded by the view rather than being pinned to one shape.
-  { pattern: /^\/hardware\/(.+)$/, view: () => import('./views/hosts.js'), params: ['key'], nav: 'hardware' },
   { pattern: /^\/incidents$/, view: () => import('./views/incidents.js'), nav: 'incidents' },
   { pattern: /^\/audit(?:\/([a-z]+))?$/, view: () => import('./views/audit.js'), params: ['tab'], nav: 'audit' },
   { pattern: /^\/settings(?:\/([a-z]+))?$/, view: () => import('./views/settings.js'), params: ['tab'], nav: 'settings' },
@@ -28,8 +24,8 @@ const routes = [
 
 const viewRoot = document.getElementById('view');
 const titleEl = document.getElementById('page-title');
-const subtitleEl = document.getElementById('page-subtitle');
 const actionsEl = document.getElementById('page-actions');
+const pageBar = document.getElementById('page-bar');
 const banner = document.getElementById('api-banner');
 const healthLink = document.getElementById('service-health');
 const dotsEl = document.getElementById('status-dots');
@@ -120,7 +116,10 @@ export function navigate(path) { location.hash = path.startsWith('#') ? path : `
 const ctxBase = {
   navigate,
   get me() { return identity; },
-  setTitle(title, { subtitle, actions } = {}) {
+  /** The header carries the page name and nothing else, so anything a view
+   *  offers goes to the page bar underneath it. A `subtitle` is accepted and
+   *  dropped: pages no longer explain themselves in the chrome. */
+  setTitle(title, { actions } = {}) {
     if (titleEl.textContent !== title) {
       titleEl.classList.remove('title-enter');
       void titleEl.offsetWidth;
@@ -128,10 +127,9 @@ const ctxBase = {
     }
     titleEl.textContent = title;
     document.title = title === 'Dashboard' ? 'GWatch' : `${title} — GWatch`;
-    subtitleEl.hidden = !subtitle;
-    subtitleEl.textContent = subtitle || '';
     clear(actionsEl);
     if (actions) replace(actionsEl, actions);
+    syncPageBar();
   },
 };
 
@@ -147,7 +145,11 @@ async function route() {
     const m = candidate.pattern.exec(path);
     if (m) { match = m; r = candidate; break; }
   }
-  if (!r) { navigate('/dashboard'); return; }
+  if (!r) {
+    if (await redirectHardware(path)) return;
+    navigate('/dashboard');
+    return;
+  }
 
   // A client that has to sign in sees nothing but the sign-in screen.
   if (!r.bare && await loginRequired()) { navigate('/login'); return; }
@@ -166,7 +168,7 @@ async function route() {
   document.body.classList.toggle('wallboard-mode', !!r.wallboard);
   setNav(r.nav);
   clear(actionsEl);
-  subtitleEl.hidden = true;
+  syncPageBar();
   clear(viewRoot);
   viewRoot.append(h('div', { class: 'skeleton', style: { maxWidth: '600px' } }, h('div', { class: 'skeleton-line', style: { width: '40%' } }), h('div', { class: 'skeleton-line' }), h('div', { class: 'skeleton-line', style: { width: '70%' } })));
 
@@ -213,6 +215,12 @@ function setNav(name) {
   });
 }
 
+/** The page bar is only there when it has something in it. */
+function syncPageBar() {
+  if (!pageBar) return;
+  pageBar.hidden = !dotsEl.childElementCount && !actionsEl.childElementCount;
+}
+
 /* ---------- Connection banner ---------- */
 function updateBanner() {
   banner.hidden = connection.ok;
@@ -251,7 +259,7 @@ export function getHealth() { return lastHealth; }
 /* ---------- Header status circles ---------- */
 async function refreshStatus() {
   let st;
-  try { st = await api.get('/api/status'); } catch { clear(dotsEl); return; }
+  try { st = await api.get('/api/status'); } catch { clear(dotsEl); syncPageBar(); return; }
   clear(dotsEl);
   const dot = (cls, n, label, href, title) => h('a', { class: `sdot ${cls}`, href, title }, h('i'), h('span', null, n != null ? `${n} ${label}` : label));
   const items = [];
@@ -262,6 +270,7 @@ async function refreshStatus() {
   if (st.unknown > 0 && !items.length) items.push(dot('s-unknown', st.unknown, 'waiting', '#/nodes?status=unknown', 'Waiting for first results'));
   if (!items.length) items.push(dot('s-ok', null, st.total ? 'all clear' : 'no nodes', '#/dashboard', st.total ? `${st.up} of ${st.total} nodes healthy` : 'Add a node to start monitoring'));
   dotsEl.append(...items);
+  syncPageBar();
 }
 
 /* ---------- Live updates ---------- */
@@ -304,6 +313,24 @@ onAuthChallenge(() => {
   if (parseHash().path !== '/login') navigate('/login');
 });
 onDenied((message) => toast(message, { kind: 'error', timeout: 8000 }));
+
+/* ---------- Hardware, which is now part of Nodes ---------- */
+// Machines used to have a section of their own. They are nodes now, so a link
+// to #/hardware/<key> is followed to the node that machine belongs to. A host
+// key contains a colon ("agent:3"), which is why it is matched loosely.
+async function redirectHardware(path) {
+  const m = /^\/hardware(?:\/(.+))?$/.exec(path);
+  if (!m) return false;
+  const key = m[1] && decodeURIComponent(m[1]);
+  if (key) {
+    try {
+      const host = await api.get(`/api/hosts/${encodeURIComponent(key)}`);
+      if (host?.nodeId) { navigate(`/nodes/${host.nodeId}`); return true; }
+    } catch { /* fall through to the list */ }
+  }
+  navigate('/nodes');
+  return true;
+}
 
 window.addEventListener('hashchange', route);
 window.addEventListener('error', (e) => { if (e.message) console.error('Unhandled:', e.message); });

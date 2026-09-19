@@ -66,8 +66,8 @@ const TOPICS = [
     icon: 'cpu',
     q: 'agent gwatch-agent token cpu memory swap disk filesystem throughput machine register install once print status',
     body: () => [
-      h('p', null, 'GWatch reads this computer\'s processor, memory and swap, filesystem space, and network and disk throughput by itself. Any other machine needs ', h('code', null, 'gwatch-agent'), ' installed on it; it posts a reading every minute and appears on the ', h('a', { href: '#/hardware' }, 'Hardware'), ' page within a minute of starting.'),
-      h('p', null, 'Register the machine under ', h('a', { href: '#/settings/hardware' }, 'Settings › Hardware'), ' and it gives you an install command with this server\'s address and a new token already in it. The agent connects outwards and hangs up: GWatch never connects back, holds no credential for that machine, and the token can do exactly one thing — submit that machine\'s readings. A machine that goes quiet is reported as down, which is the point.'),
+      h('p', null, 'GWatch reads this computer\'s processor, memory and swap, filesystem space, and network and disk throughput by itself. Any other machine needs ', h('code', null, 'gwatch-agent'), ' installed on it; it posts a reading every minute, and its readings appear on the machine\u2019s own node within a minute of starting.'),
+      h('p', null, 'Pair the machine from ', h('a', { href: '#/nodes' }, 'Nodes'), ' — GWatch creates its node for you — or register it under ', h('a', { href: '#/settings/hardware' }, 'Settings › Hardware'), ', and it gives you an install command with this server\'s address and a new token already in it. The agent connects outwards and hangs up: GWatch never connects back, holds no credential for that machine, and the token can do exactly one thing — submit that machine\'s readings. A machine that goes quiet is reported as down, which is the point.'),
       h('p', null, 'Before installing anything, ', h('code', null, 'gwatch-agent print'), ' shows exactly what would be sent and contacts nothing, and ', h('code', null, 'gwatch-agent once --server … --token …'), ' sends one reading and exits, which is the quickest way to prove a token works.'),
       h('p', { class: 'note' }, 'Thresholds, what each figure really means and the full agent reference: ', doc('HARDWARE.md', 'HARDWARE.md'), '.'),
     ],
@@ -164,7 +164,7 @@ function matches(topic, q) {
 }
 
 export async function mount(root, ctx) {
-  ctx.setTitle('Help', { subtitle: 'How GWatch works, and where each thing lives' });
+  ctx.setTitle('Help');
 
   // Bodies are built once so the filter can search their real text rather than
   // a summary that would drift out of step with it.

@@ -24,7 +24,7 @@ export async function mount(root, ctx) {
 
   async function renderTab() {
     renderTabs();
-    ctx.setTitle('Audit', { subtitle: { events: 'Every recorded event, searchable and exportable', log: 'What the service itself is doing', exports: 'Download history, events, logs and configuration' }[state.tab] });
+    ctx.setTitle('Audit');
     replace(panel, skeleton({ lines: 5 }));
     state.refresh = null;
     try {

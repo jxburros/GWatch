@@ -485,3 +485,57 @@ func TestPairingAdminRoutesNeedAnAdministrator(t *testing.T) {
 		t.Errorf("an invitation for a node that does not exist should be refused, got %d", status)
 	}
 }
+
+// A machine is a node like any other, so pairing one has to leave a node
+// behind carrying a hardware check pointed at that machine. Without it a
+// paired machine would report readings nothing was watching.
+func TestPairingCreatesTheMachinesNode(t *testing.T) {
+	ts, _ := newTestServer(t)
+	code, _ := mintPairing(t, ts, "nas")
+
+	var before []model.Node
+	call(t, ts, "GET", "/api/nodes", nil, &before)
+	node := findNodeNamed(t, before, "nas")
+	if len(node.Checks) != 1 || node.Checks[0].Type != model.CheckSystem {
+		t.Fatalf("the node should carry one hardware check: %+v", node.Checks)
+	}
+	if node.Checks[0].Enabled {
+		t.Error("the check has no machine to read yet, so it should start switched off")
+	}
+
+	status, body := redeem(t, ts, code)
+	if status != 201 {
+		t.Fatalf("redeem: %d %s", status, body)
+	}
+	var out struct {
+		Agent model.Agent `json:"agent"`
+	}
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Agent.NodeID == nil || *out.Agent.NodeID != node.ID {
+		t.Fatalf("the agent should belong to the node made for it: %+v", out.Agent)
+	}
+
+	var after []model.Node
+	call(t, ts, "GET", "/api/nodes", nil, &after)
+	node = findNodeNamed(t, after, "nas")
+	if len(node.Checks) != 1 {
+		t.Fatalf("pairing should not add checks: %+v", node.Checks)
+	}
+	c := node.Checks[0]
+	if !c.Enabled || c.Config.HostSource != model.HostSourceAgent || c.Config.AgentID != out.Agent.ID {
+		t.Fatalf("the check should now read the paired machine: enabled=%v config=%+v", c.Enabled, c.Config)
+	}
+}
+
+func findNodeNamed(t *testing.T, nodes []model.Node, name string) model.Node {
+	t.Helper()
+	for _, n := range nodes {
+		if n.Name == name {
+			return n
+		}
+	}
+	t.Fatalf("no node named %q in %+v", name, nodes)
+	return model.Node{}
+}

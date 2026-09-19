@@ -3,13 +3,21 @@
 import { api } from '../api.js';
 import { h, icon, clear, replace, statusSpine, statusWord, checkChip, importanceBadge, tagList, toggle, menuButton, toast, confirmDialog, openModal, emptyState, skeleton } from '../components.js';
 import { relTime } from '../fmt.js';
+import { pairMachine } from './hardware.js';
 
 const STATUS_ORDER = ['down', 'degraded', 'unknown', 'maintenance', 'up', 'paused'];
 
 export async function mount(root, ctx) {
   const state = { nodes: [], groups: { groups: [], tags: [] }, templates: null, q: ctx.query.get('q') || '', group: ctx.query.get('group') || '', status: ctx.query.get('status') || '', tag: ctx.query.get('tag') || '', destroyed: false };
 
-  ctx.setTitle('Nodes', { actions: [h('button', { class: 'btn btn-primary admin-only', type: 'button', onclick: () => openTemplatePicker(state, ctx) }, icon('plus'), 'Add node')] });
+  // A machine is a node too, so pairing one starts from here rather than from
+  // a hardware section of its own.
+  ctx.setTitle('Nodes', {
+    actions: [
+      h('button', { class: 'btn admin-only', type: 'button', onclick: () => pairMachine(load) }, icon('cpu'), 'Pair a machine'),
+      h('button', { class: 'btn btn-primary admin-only', type: 'button', onclick: () => openTemplatePicker(state, ctx) }, icon('plus'), 'Add node'),
+    ],
+  });
 
   const searchInput = h('input', { type: 'search', placeholder: 'Search name, host, group or tag…', value: state.q, 'aria-label': 'Search nodes', oninput: () => { state.q = searchInput.value; renderList(); } });
   const countEl = h('span', { class: 'filter-count' });

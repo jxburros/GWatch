@@ -54,7 +54,7 @@ export async function mount(root, ctx) {
         c ? { label: 'Delete chart', icon: 'trash', danger: true, onClick: remove } : null,
       ], { label: 'Chart options' }),
     ];
-    ctx.setTitle(c ? c.name : 'Charts', { subtitle: describeChartConfig(state.cfg) + (state.dirty ? ' · unsaved changes' : ''), actions });
+    ctx.setTitle(c ? c.name : 'Charts', { actions });
   }
   function exportCsvItems() {
     const ids = state.cfg.checkIds.length ? state.cfg.checkIds : (state.lastSeries || []).map((s) => s.checkId);

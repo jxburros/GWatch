@@ -6,25 +6,29 @@ import { LineChart, toSeries, uptimeBar, uptimeLegend, SERIES_COLORS } from '../
 import { relTime, ms as fmtMs, pct, dateTime, interval, plural, timeShort } from '../fmt.js';
 import { resultInspector } from './inspector.js';
 import { openTriggerEditor, triggerRow } from './automation.js';
+import { hardwarePanel } from './hardware.js';
 
 export async function mount(root, ctx) {
   const id = ctx.params.id;
-  const state = { node: null, events: [], triggers: [], nodes: [], range: '24h', charts: [], expanded: new Set(), results: new Map(), destroyed: false, history: null };
+  const state = { node: null, events: [], triggers: [], nodes: [], range: '24h', charts: [], expanded: new Set(), results: new Map(), destroyed: false, history: null, hardware: new Map() };
 
   const headEl = h('div');
   const bannersEl = h('div', { class: 'stack-sm', style: { marginBottom: '14px' } });
   const checksEl = h('div', { class: 'stack-joined' });
+  // A machine is a node, so its readings belong on the node rather than on a
+  // page of their own. One panel per hardware check.
+  const hardwareEl = h('div', { class: 'stack' });
   const triggersEl = h('section', { class: 'card', 'aria-label': 'Triggers' });
   const chartsEl = h('section', { class: 'card', 'aria-label': 'History' });
   const eventsEl = h('section', { class: 'card', 'aria-label': 'Events' });
-  root.append(headEl, bannersEl, h('div', { class: 'stack' }, checksEl, chartsEl, triggersEl, eventsEl));
+  root.append(headEl, bannersEl, h('div', { class: 'stack' }, checksEl, hardwareEl, chartsEl, triggersEl, eventsEl));
   headEl.append(skeleton({ lines: 2 }));
 
   async function load({ quiet = false } = {}) {
     const [node, events, triggers, nodes] = await Promise.all([api.get(`/api/nodes/${id}`), api.get(`/api/events${qs({ nodeId: id, limit: 30 })}`).catch(() => []), api.get(`/api/triggers?nodeId=${id}`).catch(() => []), quiet && state.nodes.length ? Promise.resolve(state.nodes) : api.get('/api/nodes').catch(() => [])]);
     if (state.destroyed) return;
     state.node = node; state.events = events || []; state.triggers = triggers || []; state.nodes = nodes || [];
-    renderHead(); renderBanners(); renderChecks(); renderTriggers(); renderEvents();
+    renderHead(); renderBanners(); renderChecks(); renderHardware(); renderTriggers(); renderEvents();
     if (!quiet || !state.history) await loadHistory();
     else await loadHistory();
   }
@@ -209,6 +213,31 @@ export async function mount(root, ctx) {
     return 'local';
   }
 
+  /* ---------- Hardware ---------- */
+  // Panels are kept across reloads and keyed by machine: rebuilding them would
+  // throw away their charts and the range the reader had chosen.
+  function renderHardware() {
+    const wanted = new Map();
+    for (const c of (state.node.checks || []).filter((x) => x.type === 'system')) {
+      wanted.set(hostKeyFor(c), c.name);
+    }
+    for (const [key, panel] of state.hardware) {
+      if (!wanted.has(key)) { panel.destroy(); panel.el.remove(); state.hardware.delete(key); }
+    }
+    for (const [key, name] of wanted) {
+      if (state.hardware.has(key)) continue;
+      const panel = hardwarePanel(key, { title: name || 'Hardware' });
+      state.hardware.set(key, panel);
+      hardwareEl.append(panel.el);
+    }
+  }
+
+  function destroyHardware() {
+    for (const panel of state.hardware.values()) panel.destroy();
+    state.hardware.clear();
+    clear(hardwareEl);
+  }
+
   /* ---------- Charts ---------- */
   async function loadHistory() {
     const n = state.node;
@@ -231,8 +260,8 @@ export async function mount(root, ctx) {
     const latencySeries = list.filter((hs) => (hs.points || []).some((p) => p.avgMs != null));
 
     // Latency / response time chart. A hardware check measures a machine
-    // rather than a round trip, so a node made only of those gets a link to
-    // its readings instead of an empty latency chart.
+    // rather than a round trip, so it is left out here — its readings are in
+    // the hardware panel above.
     const timed = ids.filter((id) => checks.find((c) => c.id === id)?.type !== 'system');
     if (timed.length) {
       const latHost = h('div', null);
@@ -241,12 +270,6 @@ export async function mount(root, ctx) {
       latChart.setData({ series: latencySeries.map((hs, i) => ({ ...toSeries(hs, 'avg', SERIES_COLORS[i % SERIES_COLORS.length]), name: hs.checkName })), from, to, bucketSeconds: bucket });
       body.append(chartSection('Latency / response time', latHost, () => latChart.exportPNG(`${slug(n.name)}-latency-${state.range}.png`), timed));
     }
-    for (const c of checks.filter((x) => x.type === 'system')) {
-      body.append(h('p', { class: 'note' },
-        'Processor, memory, disk and throughput history for this machine is on its ',
-        h('a', { href: `#/hardware/${encodeURIComponent(hostKeyFor(c))}` }, 'hardware page'), '.'));
-    }
-
     // Packet loss for ping checks
     const pings = list.filter((hs) => hs.checkType === 'ping');
     if (pings.length) {
@@ -330,6 +353,7 @@ export async function mount(root, ctx) {
 
   return {
     refresh: () => load({ quiet: true }),
-    destroy() { state.destroyed = true; clearCharts(); },
+    themeChanged() { for (const panel of state.hardware.values()) panel.themeChanged(); },
+    destroy() { state.destroyed = true; clearCharts(); destroyHardware(); },
   };
 }

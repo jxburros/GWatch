@@ -143,7 +143,7 @@ export async function mount(root, ctx) {
       actions.push(h('button', { class: 'btn btn-primary admin-only', type: 'button', onclick: newDashboard }, icon('plus'), 'New dashboard'));
     }
     // A viewer cannot save a layout, so the hint about dragging is misleading.
-    ctx.setTitle(d ? d.name : 'Dashboard', { subtitle: d && ctx.me?.isAdmin ? 'Drag widgets by their handle, resize from the edges' : null, actions });
+    ctx.setTitle(d ? d.name : 'Dashboard', { actions });
   }
 
   function renderTabs() {
