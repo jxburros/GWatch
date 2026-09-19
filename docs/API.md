@@ -42,7 +42,8 @@ has to sign in. The legacy access password keeps working for existing scripts.
 ```
 
 **Roles.** `admin` may change anything. `viewer` may read the overview, status,
-wallboard, stream, nodes and checks, history, events, maintenance, dashboards, charts,
+wallboard, stream, nodes and checks, history, events, maintenance, dashboards, wallboards,
+charts,
 groups, templates, the CSV exports of history/results/events, the service log, and the
 list of triggers and endpoints — with the endpoint `token` field blanked and a
 `hasToken` boolean added. Everything else answers 403.
@@ -54,7 +55,8 @@ administrator, whatever its scope:
 - `read` — the viewer read list above, minus the service log, triggers, endpoints,
   automation metadata, retention status and update status.
 - `readwrite` — the same, plus creating, updating, deleting, enabling, running and
-  silencing nodes and checks, notes, maintenance windows, dashboards and charts.
+  silencing nodes and checks, notes, maintenance windows, dashboards, wallboards and
+  charts. A key may lay a wallboard out; it may not project one.
 
 **Denied to every key, whatever its scope** (403, not 401):
 `GET|PUT /api/settings`, `POST /api/settings/test-email`, `GET /api/network`,
@@ -128,7 +130,7 @@ companion that lets an AI assistant use this API with a key, is documented in
     "generatedAt": "..."
   }
   ```
-- `GET /api/wallboard` → same shape as overview plus `"health": Health` and `"trends": [HistorySeries...]` for up to 6 most important checks over 24h.
+- `GET /api/wallboard` → same shape as overview plus `"health": Health` and `"trends": [HistorySeries...]` for up to 6 most important checks over 24h. This is the automatic board; a configured one is read from `/api/wallboards/{id}/view` (see Wallboards).
 - `GET /api/status` → header summary: `{ "down", "degraded", "unknown", "up", "total", "certWarnings", "maintenance", "attention", "serviceOk", "serviceIssues": [..] }`.
 - `GET /api/network` → `NetworkInfo`: effective listen address, whether other devices can reach it, LAN URLs, whether a password is set.
 
@@ -322,6 +324,61 @@ Widget types (`Widget.type`) and their `config`:
 | `attention` | `{}` | needs-attention list |
 | `monitor_health` | `{}` | service health |
 | `table` | `{ "group": "", "tag": "" }` | filtered node table |
+
+## Wallboards
+
+A wallboard is a screen-sized view for a spare display. It is a separate object
+from a dashboard with its own panel catalogue: a dashboard is read at a desk, a
+wallboard from across a room.
+
+- `GET /api/wallboards` → `[Wallboard]`. `GET /api/wallboards/{id}` → one.
+- `POST /api/wallboards` body `{name, layout?, panels?}` → Wallboard. Created with
+  no panels, it starts as the default arrangement.
+- `PUT /api/wallboards/{id}` body `{name, sortOrder, layout, panels}` → updated.
+  The share settings are **not** changed here.
+- `DELETE /api/wallboards/{id}` → `{ok:true}`.
+- `POST /api/wallboards/{id}/share` body `{ "enabled": true, "rotate": false }` →
+  Wallboard. Switching projection on mints the board's address; `rotate` replaces
+  it; switching off clears it. Administrator only, and never through an API key.
+- `GET /api/wallboards/{id}/view?token=…` → the board and its data in one
+  document: the overview fields, plus `"wallboard": Wallboard`, `"health": Health`,
+  `"trends": [HistorySeries...]` and `"serverNow"`. This is what a display polls.
+
+`layout`: `{ "columns": 4..24, "theme": "signal|contrast|midnight|daylight",
+"scale": 0.6..2, "refreshSeconds": 5..3600, "hideChrome": false }`. A panel's
+`width` is counted in `columns`; `height` is 1..4 grid rows. Values outside these
+ranges are clamped rather than refused.
+
+Panel types (`WallPanel.type`) and their `config`:
+| type | config | description |
+|---|---|---|
+| `headline` | `{}` | the one sentence that matters, with a lit status circle |
+| `counts` | `{}` | up / degraded / down / unknown as large numerals |
+| `clock` | `{ "seconds": false }` | time and date |
+| `attention` | `{ "limit": 6 }` | what is down or degraded now, worst first |
+| `groups` | `{}` | one tile per group, worst status wins |
+| `nodes` | `{ "group": "", "tag": "", "nodeIds": [], "limit": 24 }` | a grid of nodes and their status |
+| `trends` | `{ "range": "24h", "limit": 4, "checkIds": [] }` | charts; no `checkIds` means GWatch picks |
+| `certs` | `{}` | certificates expiring soon or invalid |
+| `maintenance` | `{}` | maintenance windows in force |
+| `health` | `{}` | whether GWatch itself is running and checking |
+| `message` | `{ "text": "" }` | a fixed line of text |
+
+### Projecting a board
+
+`GET /api/wallboards/{id}/view` is the only route that returns monitoring data
+without a credential, and only for a board whose administrator switched
+projection on, and only with that board's own token. The token is stored as it
+is rather than hashed, because the address has to be readable again later — it
+is typed into a display that has no keyboard. It is worth one read-only board
+and nothing else, it is shown only to an administrator (`share.token` comes back
+`{"enabled":true,"redacted":true}` for a viewer, and is never included in the
+view document), and switching projection off or rotating the token revokes it.
+Every change is written to the audit trail.
+
+The display itself is pointed at `/wall?id=<id>&token=<token>`, a page of its
+own rather than the application: a screen with no keyboard must never be sent to
+a sign-in form. It accepts `&mode=light` and `&accent=<hex>` as well.
 
 ## Saved charts
 

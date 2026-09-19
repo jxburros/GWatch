@@ -18,7 +18,8 @@ const routes = [
   { pattern: /^\/settings(?:\/([a-z]+))?$/, view: () => import('./views/settings.js'), params: ['tab'], nav: 'settings' },
   { pattern: /^\/help$/, view: () => import('./views/help.js'), nav: 'help' },
   { pattern: /^\/onboarding$/, view: () => import('./views/onboarding.js'), nav: null },
-  { pattern: /^\/wallboard$/, view: () => import('./views/wallboard.js'), nav: 'wallboard', wallboard: true },
+  { pattern: /^\/wallboards(?:\/(\d+))?$/, view: () => import('./views/wallboards.js'), params: ['id'], nav: 'wallboard' },
+  { pattern: /^\/wallboard(?:\/(\d+))?$/, view: () => import('./views/wallboard.js'), params: ['id'], nav: 'wallboard', wallboard: true },
   { pattern: /^\/login$/, view: () => import('./views/login.js'), nav: null, bare: true },
 ];
 

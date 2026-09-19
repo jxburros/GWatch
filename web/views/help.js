@@ -73,6 +73,18 @@ const TOPICS = [
     ],
   },
   {
+    id: 'wallboards',
+    title: 'Wallboards',
+    icon: 'monitor',
+    q: 'wallboard screen display television project share address token panel headline counts clock kiosk',
+    body: () => [
+      h('p', null, 'A ', h('a', { href: '#/wallboards' }, 'wallboard'), ' is what a spare screen shows. It is a cousin of a dashboard rather than the same thing: a dashboard is read at a desk by somebody who came looking for an answer, a wallboard is read across a room by somebody who did not, so it has its own panels and its own look.'),
+      h('p', null, 'You can have as many as you like — one for the office screen, one for the rack — and each one is arranged from its own panels: a headline, the counts, a clock, what needs attention, groups, a grid of nodes, trend charts, certificates, maintenance, or a line of text for whoever walks past. Columns, theme, type size and how often it reloads are all yours to set.'),
+      h('p', null, h('b', null, 'Putting one on a screen.'), ' Switch projection on for a board and GWatch gives you an address. Type that into the browser on the television, tablet or old laptop you want it on, and it shows the board and keeps itself up to date. That screen never signs in and never has to: it can read that one board and nothing else.'),
+      h('p', { class: 'note' }, 'An address that needs no sign-in is worth treating like a key to that board. It is shown only to an administrator, it works only while projection is on, and "Change address" takes the old one back at once. Do not forward it to the internet — see ', doc('REMOTE-ACCESS.md', 'REMOTE-ACCESS.md'), '.'),
+    ],
+  },
+  {
     id: 'users',
     title: 'Users and access',
     icon: 'users',

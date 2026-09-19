@@ -109,6 +109,16 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "PUT /api/dashboards/{id}", s.handleSaveDashboard)
 	s.route(mux, "DELETE /api/dashboards/{id}", s.handleDeleteDashboard)
 
+	s.route(mux, "GET /api/wallboards", s.handleListWallboards)
+	s.route(mux, "POST /api/wallboards", s.handleSaveWallboard)
+	s.route(mux, "GET /api/wallboards/{id}", s.handleGetWallboard)
+	s.route(mux, "PUT /api/wallboards/{id}", s.handleSaveWallboard)
+	s.route(mux, "DELETE /api/wallboards/{id}", s.handleDeleteWallboard)
+	s.route(mux, "POST /api/wallboards/{id}/share", s.handleShareWallboard)
+	// The projected view: reachable with a shared board's token and nothing
+	// else. See handleWallboardView.
+	s.route(mux, "GET /api/wallboards/{id}/view", s.handleWallboardView)
+
 	s.route(mux, "GET /api/settings", s.handleGetSettings)
 	s.route(mux, "PUT /api/settings", s.handlePutSettings)
 	s.route(mux, "POST /api/settings/test-email", s.handleTestEmail)
@@ -226,6 +236,16 @@ func (s *Server) staticHandler() http.Handler {
 		if p == "/" || p == "/index.html" {
 			w.Header().Set("Cache-Control", "no-cache")
 			r.URL.Path = "/"
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		// /wall is the address a display is pointed at. It is its own page
+		// rather than the application shell: the shell would send a browser
+		// that cannot sign in to the sign-in screen, which is exactly what a
+		// screen with no keyboard cannot do anything about.
+		if p == "/wall" || p == "/wall/" {
+			w.Header().Set("Cache-Control", "no-cache")
+			r.URL.Path = "/wall.html"
 			fileServer.ServeHTTP(w, r)
 			return
 		}

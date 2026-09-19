@@ -1234,26 +1234,73 @@ body.bare-mode .main { margin-left: 0; }
 body.wallboard-mode .rail, body.wallboard-mode .topbar, body.wallboard-mode .page-bar, body.wallboard-mode .api-banner { display: none; }
 body.wallboard-mode .main { margin-left: 0; }
 body.wallboard-mode .view { padding: 0; }
-.wall { min-height: 100vh; padding: 1.75rem 2.25rem; display: grid; grid-template-rows: auto 1fr auto; gap: 1.25rem; font-size: 1.0625rem; }
-.wall-top { display: flex; align-items: center; justify-content: space-between; gap: 1.75rem; }
+/* A wallboard is its own thing, not the application in bigger type. It keeps
+   its own field colour, its own scale dial and its own panel chrome, so a
+   screen on a wall reads as a sign rather than as somebody's open laptop.
+   --wall-scale is set per board and multiplies everything typographic. */
+.wall {
+  --wall-cols: 12;
+  --wall-scale: 1;
+  --wall-gap: calc(0.75rem * var(--wall-scale));
+  --wall-pad: calc(1.25rem * var(--wall-scale));
+  min-height: 100vh;
+  padding: var(--wall-pad);
+  display: flex; flex-direction: column; gap: var(--wall-gap);
+  font-size: calc(1.0625rem * var(--wall-scale));
+  background: var(--wall-bg, transparent);
+  color: var(--wall-text, var(--text));
+}
+.wall-page { background: var(--bg); }
+.wall-root { min-height: 100vh; }
+
+/* The panel grid. Panels are placed in order and wrap; nothing is dragged,
+   because a wallboard is arranged once and then left alone. */
+.wall-grid {
+  flex: 1; display: grid; gap: var(--wall-gap); align-content: start;
+  grid-template-columns: repeat(var(--wall-cols), minmax(0, 1fr));
+  grid-auto-rows: minmax(calc(7rem * var(--wall-scale)), auto);
+}
+.wall-panel {
+  display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  background: var(--wall-panel, var(--card));
+  border: 1px solid var(--wall-line, var(--line));
+  box-shadow: var(--wall-panel-shadow, none);
+  overflow: hidden;
+}
+/* The label band, in the same mono small-caps the application uses for panel
+   labels — the one thing the two surfaces deliberately share. */
+.wall-panel-head {
+  flex: none; padding: calc(0.4rem * var(--wall-scale)) calc(0.85rem * var(--wall-scale));
+  background: var(--wall-band, var(--band));
+  border-bottom: 1px solid var(--wall-line, var(--line));
+  font-family: var(--mono); font-size: calc(0.72rem * var(--wall-scale));
+  letter-spacing: 0.18em; text-transform: uppercase; color: var(--wall-dim, var(--dim));
+}
+.wall-panel-body { flex: 1; min-height: 0; padding: calc(0.85rem * var(--wall-scale)); overflow: hidden; }
+/* A headline, the counts, a clock and a message are the message itself, so
+   they sit on the field with no chrome at all and centre themselves in it. */
+.wall-panel-headline, .wall-panel-counts, .wall-panel-clock, .wall-panel-message {
+  background: none; border-color: transparent; box-shadow: none;
+}
+.wall-panel-headline .wall-panel-body, .wall-panel-counts .wall-panel-body,
+.wall-panel-clock .wall-panel-body, .wall-panel-message .wall-panel-body {
+  display: flex; align-items: center; padding: 0;
+}
+.wall-panel-counts .wall-panel-body, .wall-panel-clock .wall-panel-body { justify-content: flex-end; }
+
 .wall-headline { display: flex; align-items: center; gap: 1.125rem; }
 /* The wall's headline circle is the same orb, sized for a room-away read. */
 .wall-headline .orb { width: 1.75rem; height: 1.75rem; box-shadow: 0 0 0 1px rgba(var(--orb), 0.3), 0 0 calc(30px * var(--glow-strength)) rgba(var(--orb), 0.9); }
 .wall-headline .orb::after { inset: -18px; }
-.wall-headline h1 { font-size: clamp(32px, 4.2vw, 58px); font-weight: 700; letter-spacing: -0.03em; line-height: 1.05; }
-.wall-headline .sub { color: var(--muted); font-size: clamp(15px, 1.3vw, 21px); margin-top: 4px; }
-.wall-counts { display: flex; gap: 1.5rem; }
+.wall-headline h1 { font-size: calc(clamp(30px, 3.6vw, 54px) * var(--wall-scale)); font-weight: 700; letter-spacing: -0.03em; line-height: 1.05; }
+.wall-headline .sub { color: var(--wall-muted, var(--muted)); font-size: calc(clamp(14px, 1.15vw, 20px) * var(--wall-scale)); margin-top: 4px; }
+.wall-counts { display: flex; gap: 1.5rem; margin-left: auto; }
 .wall-count { display: flex; flex-direction: column; align-items: flex-end; }
-.wall-count .n { font-size: clamp(32px, 3.8vw, 52px); font-weight: 500; line-height: 1; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; font-family: var(--mono); }
+.wall-count .n { font-size: calc(clamp(28px, 3.2vw, 48px) * var(--wall-scale)); font-weight: 500; line-height: 1; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; font-family: var(--mono); }
 .wall-count .l { font-size: 0.8125rem; font-weight: 400; text-transform: uppercase; letter-spacing: 0.14em; color: var(--muted); display: flex; gap: 6px; align-items: center; font-family: var(--mono); }
 .wall-clock { text-align: right; }
-.wall-clock .time { font-size: clamp(32px, 3.8vw, 52px); font-weight: 500; letter-spacing: -0.03em; line-height: 1; font-variant-numeric: tabular-nums; font-family: var(--mono); }
+.wall-clock .time { font-size: calc(clamp(28px, 3.2vw, 48px) * var(--wall-scale)); font-weight: 500; letter-spacing: -0.03em; line-height: 1; font-variant-numeric: tabular-nums; font-family: var(--mono); }
 .wall-clock .date { color: var(--muted); font-size: 0.9375rem; margin-top: 4px; }
-.wall-main { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.6fr); gap: 1.25rem; min-height: 0; }
-.wall-col { display: flex; flex-direction: column; gap: 1rem; min-height: 0; }
-.wall-card { padding: 1rem 1.125rem; }
-.wall-card > .card-head:first-child, .wall-card > h2:first-child, .wall-card > .card-title:first-child { margin: -1rem -1.125rem 0.875rem; padding: 0.5rem 1rem; }
-.wall-card > .card-head:first-child h2, .wall-card > h2:first-child, .wall-card > .card-title:first-child, .wall-card > .card-head:first-child .card-title { font-size: 0.8125rem; letter-spacing: 0.16em; }
 .wall-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(11.875rem, 1fr)); gap: 1px; border: 1px solid var(--line); overflow: hidden; }
 .wall-group { padding: 0.625rem 0.875rem; background: var(--elev); display: flex; flex-direction: column; gap: 4px; box-shadow: 0 0 0 1px var(--line); }
 .wall-group .g-head { display: flex; align-items: center; gap: 0.75rem; min-width: 0; }
@@ -1278,7 +1325,61 @@ body.wallboard-mode .view { padding: 0; }
 .wall-all-clear .icon { color: var(--up); font-size: 1.5rem; filter: drop-shadow(0 0 calc(14px * var(--glow-strength)) rgba(var(--up-rgb), 0.8)); }
 .wall-cert { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0; border-bottom: 1px solid var(--line); font-size: 0.9375rem; }
 .wall-cert:last-child { border-bottom: 0; }
-.wall-cert .days { font-size: 1.5rem; font-weight: 500; min-width: 3.125rem; font-family: var(--mono); }
+.wall-cert .days { font-size: calc(1.5rem * var(--wall-scale)); font-weight: 500; min-width: 3.125rem; font-family: var(--mono); }
+.wall-nodes { display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(9rem * var(--wall-scale)), 1fr)); gap: 1px; }
+.wall-node { display: flex; align-items: center; gap: 0.625rem; min-width: 0; padding: calc(0.4rem * var(--wall-scale)) calc(0.6rem * var(--wall-scale)); background: var(--wall-tile, var(--elev)); box-shadow: 0 0 0 1px var(--wall-line, var(--line)); font-size: calc(0.95rem * var(--wall-scale)); }
+.wall-node .n-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+/* Down and degraded are lit rather than merely coloured: from across a room a
+   tinted field carries further than a coloured word. */
+.wall-node.s-down { background: var(--down-soft); }
+.wall-node.s-degraded { background: var(--warn-soft); }
+.wall-health { display: flex; align-items: center; gap: 1rem; font-size: calc(1rem * var(--wall-scale)); }
+.wall-message { font-size: calc(clamp(18px, 1.6vw, 30px) * var(--wall-scale)); font-weight: 600; letter-spacing: -0.01em; line-height: 1.25; }
+.wall-foot-name { font-family: var(--mono); font-size: calc(0.75rem * var(--wall-scale)); letter-spacing: 0.16em; text-transform: uppercase; color: var(--wall-dim, var(--dim)); }
+
+/* The way out of a wallboard shown inside the application. It is not part of
+   the board: a projected screen never renders it. */
+.wall-exit { position: fixed; top: 0.75rem; right: 0.75rem; z-index: 30; display: flex; gap: 0.5rem; align-items: center; opacity: 0.25; transition: opacity var(--dur) var(--ease); }
+.wall-exit:hover, .wall-exit:focus-within { opacity: 1; }
+
+/* A projected screen has nobody at it, so a problem is stated plainly and the
+   last good board is left showing behind it. */
+.wall-problem { position: fixed; left: 50%; bottom: 1.5rem; transform: translateX(-50%); z-index: 50; max-width: min(90vw, 40rem); padding: 1rem 1.25rem; background: var(--down-soft); border: 1px solid rgba(var(--down-rgb), 0.45); color: var(--text); text-align: center; }
+.wall-problem h2 { font-size: 1.125rem; }
+.wall-problem p { color: var(--muted); margin-top: 0.25rem; }
+
+/* ---- the board's four skins ---- */
+/* Signal is the application's own field, so it sets nothing and inherits. */
+.wall[data-wall-theme="contrast"] {
+  --wall-bg: #000; --wall-panel: #0a0a0a; --wall-band: #141414; --wall-tile: #121212;
+  --wall-line: #3a3a3a; --wall-text: #fff; --wall-muted: #cfcfcf; --wall-dim: #9a9a9a;
+  font-weight: 600;
+}
+.wall[data-wall-theme="midnight"] {
+  --wall-bg: #050b18; --wall-panel: #0a1428; --wall-band: #0f1d38; --wall-tile: #0d182f;
+  --wall-line: #1b2c4e; --wall-text: #dfe7f5; --wall-muted: #8fa1c0; --wall-dim: #6a7c9c;
+}
+.wall[data-wall-theme="daylight"] {
+  --wall-bg: #f4f5f7; --wall-panel: #fff; --wall-band: #e9ebef; --wall-tile: #f7f8fa;
+  --wall-line: #ccd1d9; --wall-text: #10151d; --wall-muted: #4d5764; --wall-dim: #7a8391;
+  --wall-panel-shadow: 0 1px 2px rgba(20, 30, 50, 0.08);
+}
+.wall[data-wall-theme] .muted { color: var(--wall-muted, var(--muted)); }
+.wall[data-wall-theme] .dim { color: var(--wall-dim, var(--dim)); }
+.wall[data-wall-theme] .wall-foot { color: var(--wall-muted, var(--muted)); }
+.wall[data-wall-theme] .wall-incident, .wall[data-wall-theme] .wall-group,
+.wall[data-wall-theme] .wall-chart { background: var(--wall-tile, var(--elev)); box-shadow: 0 0 0 1px var(--wall-line, var(--line)); }
+.wall[data-wall-theme] .wall-incidents, .wall[data-wall-theme] .wall-groups,
+.wall[data-wall-theme] .wall-charts { border-color: var(--wall-line, var(--line)); }
+
+/* ---------- Wallboard editor ---------- */
+.wb-panels { display: flex; flex-direction: column; }
+.wb-panel-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 1rem; padding: 0.625rem 0; border-bottom: 1px solid var(--line); }
+.wb-panel-row:last-child { border-bottom: 0; }
+.wb-panel-main { min-width: 0; }
+.wb-panel-name { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.wb-panel-size { color: var(--dim); font-size: 0.8125rem; }
+.wb-panel-actions { display: flex; align-items: center; gap: 0.25rem; }
 
 /* ---------- Onboarding ---------- */
 /* One card, centred, doing one thing at a time. It is the first surface a new
@@ -1365,7 +1466,6 @@ kbd { font-family: var(--mono); font-size: 0.71875rem; padding: 2px 6px; border:
 }
 @media (max-width: 68.75rem) {
   .health-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .wall-main { grid-template-columns: 1fr; }
   .charts-layout { grid-template-columns: 1fr; }
   .charts-side { position: static; max-height: none; }
 }
@@ -1424,9 +1524,14 @@ kbd { font-family: var(--mono); font-size: 0.71875rem; padding: 2px 6px; border:
   .template-grid, .type-picker, .widget-picker, .theme-options { grid-template-columns: 1fr; }
   .uptime-row { grid-template-columns: 1fr; gap: 4px; }
   .audit-toolbar { grid-template-columns: 1fr; }
+  /* A phone is not a wall, but a board opened on one should still be
+     readable: the grid collapses to one column and the panels stack. */
   .wall { padding: 1rem; }
-  .wall-top { flex-direction: column; align-items: flex-start; }
+  .wall-grid { grid-template-columns: 1fr; grid-auto-rows: auto; }
+  .wall-panel { grid-column: 1 / -1 !important; grid-row: auto !important; }
   .wall-charts { grid-template-columns: 1fr; }
+  .wall-counts { margin-left: 0; }
+  .wall-panel-counts .wall-panel-body, .wall-panel-clock .wall-panel-body { justify-content: flex-start; }
   .kv { grid-template-columns: 1fr; gap: 2px 0; }
   .kv dt { margin-top: 6px; }
   /* The tour's icon column and the shortcut table both stop earning their

@@ -309,6 +309,23 @@ CREATE TABLE IF NOT EXISTS dashboards (
   updated_at TEXT NOT NULL
 );
 
+-- A wallboard is a dashboard's cousin for a screen across the room. The share
+-- token is stored as it is rather than hashed: an address typed into a display
+-- with no keyboard has to be readable again later. It is worth one read-only
+-- board, and clearing it is what takes the address back.
+CREATE TABLE IF NOT EXISTS wallboards (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  layout TEXT NOT NULL DEFAULT '{}',
+  panels TEXT NOT NULL DEFAULT '[]',
+  share_enabled INTEGER NOT NULL DEFAULT 0,
+  share_token TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wallboards_share ON wallboards(share_token);
+
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT NOT NULL UNIQUE COLLATE NOCASE,

@@ -76,7 +76,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 WelcomeLabel1=Install [name]
 WelcomeLabel2=The GWatch Agent reports this computer's processor, memory, disk and network health to a GWatch server you already run.%n%nIt only ever sends readings out. Nothing can reach this computer through it, and the credential it ends up holding can do one thing: submit this machine's readings.%n%nDeveloped by {#Developers}.{#BetaNote}
 FinishedHeadingLabel=This machine is reporting
-FinishedLabel=The agent is installed as a Windows service and starts with this computer.%n%nIt should appear on the GWatch server's Hardware page within a minute.
+FinishedLabel=The agent is installed as a Windows service and starts with this computer.%n%nIt should appear on the GWatch server, on its own node, within a minute.
 
 [CustomMessages]
 ConnectCaption=Connect to GWatch

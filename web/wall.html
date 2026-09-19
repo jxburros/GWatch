@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark light">
+  <title>GWatch wallboard</title>
+  <link rel="icon" href="logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="app.css">
+</head>
+<!--
+  The projected wallboard.
+
+  This page is what a display on the network is pointed at:
+
+      http://<this machine>:8080/wall?id=2&token=<the board's token>
+
+  It is deliberately not the application. A screen showing a wallboard has no
+  keyboard and nobody standing at it, so it must never be sent to a sign-in
+  form, must never navigate anywhere, and must recover from the service going
+  away and coming back without anyone touching it. It asks for one board, draws
+  it, and keeps asking.
+-->
+<body class="wall-page">
+  <main id="wall" class="wall-root"></main>
+  <script type="module" src="wall.js"></script>
+</body>
+</html>

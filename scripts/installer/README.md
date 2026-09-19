@@ -80,7 +80,7 @@ gwatch-setup-0.1.0.exe /VERYSILENT /PORT=8080 /LAN=1
 Installs to `{autopf}\GWatch Agent`, asks for the GWatch server's address and a
 pairing code, and runs `gwatch-agent install --code` to exchange the code for
 this machine's own submit-only token before registering the `GWatchAgent`
-service. Get a pairing code from GWatch under **Hardware › Pair a machine**; one
+service. Get a pairing code from GWatch under **Nodes › Pair a machine**; one
 is good for a single machine and expires after about fifteen minutes.
 
 Pairing runs in `CurStepChanged` rather than `[Run]` so a mistyped, expired or

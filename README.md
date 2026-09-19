@@ -30,8 +30,9 @@ brief that defines the scope lives in [`local-network-monitoring-product-brief.m
 - **Hardware health** of the computer GWatch runs on and of any other machine you install
   the agent on: processor, memory and swap, filesystem space, network throughput and disk
   throughput, with warning and critical thresholds so "the disk is filling" and "the disk
-  is full" are different events. The **Hardware** tab lists every machine with its current
-  state and keeps a history of each. The agent connects outwards to GWatch and hands over
+  is full" are different events. A machine is a node like any other — pairing one creates
+  its node, and its readings and their history are shown there rather than in a section of
+  their own. The agent connects outwards to GWatch and hands over
   a reading; GWatch never connects back and holds no credential for the machine, and the
   agent's token can do exactly one thing — submit that one machine's readings. A machine
   that goes quiet is reported as down, which is the whole point. See
@@ -74,7 +75,15 @@ brief that defines the scope lives in [`local-network-monitoring-product-brief.m
   `{{status}}` and `{{message}}` are expanded; every run is recorded with its output.
   See [`docs/RECIPES.md`](docs/RECIPES.md) for ready-made trigger recipes (Home Assistant,
   Discord/Slack, ntfy/Pushover, Docker restarts, git pulls, custom inbound hooks).
-- **Wallboard**: a read-only full-screen status view for a spare monitor or tablet.
+- **Wallboards**: full-screen status views for a spare monitor, television or tablet.
+  Make as many as you like and arrange each one from its own panels — a headline, the
+  counts, a clock, what needs attention, groups, a grid of nodes, trend charts,
+  certificates, maintenance, or a line of text — with its own columns, theme, type size
+  and refresh. A board can be **projected**: switch it on and GWatch gives you an
+  address any browser on your network can open, so a screen with no keyboard shows it
+  without ever signing in. That address is worth that one read-only board and nothing
+  else, it is shown only to an administrator, and it can be changed or withdrawn at any
+  time.
 - **Appearance**: dark, light or system theme and a user-chosen accent colour.
 - **Remote access**: opt in to serving the interface on the whole LAN.
 - **Accounts and API keys**: user accounts with two roles — administrator and viewer —
@@ -107,7 +116,7 @@ or command line needed. Full walkthrough, including upgrading and uninstalling:
 The same release carries a second setup program, `gwatch-agent-setup-<version>.exe`. That
 one does not go on this machine — it goes on the *other* machines you want GWatch to
 report the health of. It asks for the server's address and a pairing code you generate in
-GWatch under **Hardware › Pair a machine**, and nothing else; see
+GWatch under **Nodes › Pair a machine**, and nothing else; see
 [`docs/HARDWARE.md`](docs/HARDWARE.md).
 
 **Advanced: the PowerShell scripts.** The setup program wraps these same steps; use them

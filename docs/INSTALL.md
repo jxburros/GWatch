@@ -90,7 +90,7 @@ Then, on the other machine, run `gwatch-agent-setup-<version>.exe` and fill in t
 `http://gwatch.lan:8080`), the pairing code, and optionally a name. The installer
 exchanges the code for a credential that can do exactly one thing — submit that
 machine's readings — and registers the `GWatchAgent` service. The machine should appear
-on the Hardware page within a minute.
+on its own node within a minute.
 
 Nothing is opened up on the machine running the agent: it dials out to GWatch and hangs
 up, and GWatch is given no way back in. To install across several machines at once:
