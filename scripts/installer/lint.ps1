@@ -14,7 +14,8 @@
 #   2. Any byte outside ASCII. Inno reads a .iss without a UTF-8 BOM in the
 #      system ANSI codepage, so a typographic dash reaches the wizard as
 #      mojibake -- which compiles cleanly and looks wrong only on screen.
-#   3. Unbalanced begin/end in [Code].
+#   3. Unbalanced begin/end in [Code]. "try" and "case" open a block the same
+#      way "begin" does, since each is closed by its own "end".
 #   4. A routine in [Code] that ends with unbalanced parentheses -- what is left
 #      behind when a call is refactored into something else and its closing
 #      paren is not removed with it.
@@ -54,8 +55,8 @@ foreach ($iss in Get-ChildItem -Path $dir -Filter *.iss) {
     $stripped = [regex]::Replace($stripped, '//[^\n]*', ' ')
 
     $depth = 0
-    foreach ($m in [regex]::Matches($stripped, '\b(begin|end|case|record)\b', 'IgnoreCase')) {
-        if ($m.Groups[1].Value.ToLower() -in @('begin', 'case', 'record')) { $depth++ } else { $depth-- }
+    foreach ($m in [regex]::Matches($stripped, '\b(begin|end|case|record|try)\b', 'IgnoreCase')) {
+        if ($m.Groups[1].Value.ToLower() -in @('begin', 'case', 'record', 'try')) { $depth++ } else { $depth-- }
         if ($depth -lt 0) { Fail $iss.Name 0 "an 'end' with no matching 'begin' in [Code]."; break }
     }
     if ($depth -gt 0) { Fail $iss.Name 0 "$depth unclosed begin/case/record block(s) in [Code]." }

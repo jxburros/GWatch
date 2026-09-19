@@ -246,6 +246,11 @@ html.rail-pinned .rail, body.rail-pinned .rail { box-shadow: none; }
   width: 1.75rem; height: 1.75rem; flex: none; display: block; margin-left: 1px;
   transition: transform var(--dur-slow) var(--ease);
 }
+/* The mark has a white sclera and a navy ring, which is the wrong way round on
+   a dark field, so there are two of them and the theme picks. */
+.brand-logo-dark { display: none; }
+:root[data-theme="dark"] .brand-logo-light { display: none; }
+:root[data-theme="dark"] .brand-logo-dark { display: block; }
 .brand:hover .brand-logo { transform: scale(1.06); }
 .brand-name { color: var(--text); }
 .nav {
