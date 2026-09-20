@@ -149,6 +149,11 @@ var policies = []routePolicy{
 	{"PUT", "/api/charts", levelAdmin, keyWrite},
 
 	// ---- administration: never through an API key ----
+	// Walking a device takes a credential and an address and makes GWatch
+	// talk to whatever is there. That is a probe, and it belongs to the
+	// administrator in front of the machine rather than to any integration,
+	// however wide its key.
+	{"POST", "/api/snmp/walk", levelAdmin, keyDeny},
 	{"GET", "/api/network", levelAdmin, keyDeny},
 	{"GET", "/api/settings", levelAdmin, keyDeny},
 	{"PUT", "/api/settings", levelAdmin, keyDeny},

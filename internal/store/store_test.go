@@ -656,3 +656,155 @@ func TestResultSpreadFieldsRoundTrip(t *testing.T) {
 		t.Errorf("details = %+v", got.Details)
 	}
 }
+
+func rawCheckConfig(t *testing.T, s *Store, checkID int64) string {
+	t.Helper()
+	var raw string
+	if err := s.Reader().QueryRow("SELECT config FROM checks WHERE id = ?", checkID).Scan(&raw); err != nil {
+		t.Fatalf("read raw check config: %v", err)
+	}
+	return raw
+}
+
+func TestCheckSecretsSealedAtRest(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	n, err := s.CreateNode(ctx, model.Node{Name: "Gateway", Host: "192.168.1.1", Enabled: true, Checks: []model.Check{{
+		Type:            model.CheckSNMP,
+		Name:            "SNMP",
+		Enabled:         true,
+		IntervalSeconds: 60,
+		Config: model.CheckConfig{
+			SNMPVersion:   "2c",
+			SNMPCommunity: "n0t-public",
+			SNMPAuthPass:  "auth-s3cret",
+			MetricsToken:  "token-s3cret",
+			SNMPOIDs:      []model.SNMPOID{{OID: "1.3.6.1.2.1.1.3.0", Name: "Uptime"}},
+		},
+	}}})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	id := n.Checks[0].ID
+
+	raw := rawCheckConfig(t, s, id)
+	for _, secret := range []string{"n0t-public", "auth-s3cret", "token-s3cret"} {
+		if strings.Contains(raw, secret) {
+			t.Fatalf("%q stored in cleartext: %s", secret, raw)
+		}
+	}
+	if strings.Count(raw, secrets.Prefix) != 3 {
+		t.Fatalf("expected three sealed values in the row: %s", raw)
+	}
+	// The check handed back to the caller keeps the plaintext it was given:
+	// the engine has to be able to talk to the device with it.
+	if n.Checks[0].Config.SNMPCommunity != "n0t-public" {
+		t.Fatalf("create returned a sealed community: %q", n.Checks[0].Config.SNMPCommunity)
+	}
+
+	got, err := s.GetCheck(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Config.SNMPCommunity != "n0t-public" || got.Config.SNMPAuthPass != "auth-s3cret" || got.Config.MetricsToken != "token-s3cret" {
+		t.Fatalf("round trip lost secrets: %+v", got.Config)
+	}
+	if err := s.SecretsHealthy(); err != nil {
+		t.Fatalf("SecretsHealthy: %v", err)
+	}
+}
+
+func TestPlaintextCheckSecretsMigratedOnOpen(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	ctx := context.Background()
+
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	n, err := s.CreateNode(ctx, model.Node{Name: "NAS", Host: "nas.local", Enabled: true, Checks: []model.Check{{
+		Type: model.CheckSystem, Name: "Hardware", Enabled: true, IntervalSeconds: 60,
+	}}})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	id := n.Checks[0].ID
+	// Write the row the way a build from before check secrets were sealed
+	// would have written it.
+	if _, err := s.Exec(ctx, "UPDATE checks SET config = ? WHERE id = ?", `{"metricsToken":"legacy-token"}`, id); err != nil {
+		t.Fatalf("plant plaintext: %v", err)
+	}
+	s.Close()
+
+	s2, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+	if raw := rawCheckConfig(t, s2, id); strings.Contains(raw, "legacy-token") {
+		t.Fatalf("plaintext survived migration: %s", raw)
+	}
+	got, err := s2.GetCheck(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Config.MetricsToken != "legacy-token" {
+		t.Fatalf("migration lost the value: %q", got.Config.MetricsToken)
+	}
+}
+
+func TestResultMetricsRoundTripAndChart(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	check := model.Check{
+		Type: model.CheckSNMP, Name: "SNMP", Enabled: true, IntervalSeconds: 60,
+		Config: model.CheckConfig{SNMPOIDs: []model.SNMPOID{{OID: "1.3.6.1.2.1.2.2.1.10.1", Name: "WAN in", Kind: "counter", Unit: "bit/s"}}},
+	}
+	n, err := s.CreateNode(ctx, model.Node{Name: "Gateway", Host: "192.168.1.1", Enabled: true, Checks: []model.Check{check}})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	saved := n.Checks[0]
+
+	now := time.Now()
+	for i, v := range []float64{100, 250} {
+		if _, err := s.InsertResult(ctx, model.Result{
+			CheckID: saved.ID, Timestamp: now.Add(time.Duration(i-2) * time.Minute), Success: true,
+			Status: model.StatusUp, LatencyMS: f(4), Metrics: map[string]float64{"WAN in": v},
+		}); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+
+	results, err := s.RecentResults(ctx, saved.ID, 10)
+	if err != nil {
+		t.Fatalf("recent: %v", err)
+	}
+	if len(results) != 2 || results[0].Metrics["WAN in"] != 250 {
+		t.Fatalf("metrics did not survive the round trip: %+v", results)
+	}
+
+	rng, _ := ParseRange("24h")
+	series, err := s.HistoryMetric(ctx, saved, n.Name, rng, now, "WAN in")
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	if series.Metric != "WAN in" || series.MetricUnit != "bit/s" || series.Source != "raw" {
+		t.Fatalf("series does not describe the metric: %+v", series)
+	}
+	if len(series.Points) != 2 {
+		t.Fatalf("points = %d, want 2", len(series.Points))
+	}
+	for i, want := range []float64{100, 250} {
+		p := series.Points[i]
+		if p.Value == nil || *p.Value != want {
+			t.Fatalf("point %d value = %v, want %v", i, p.Value, want)
+		}
+		// The latency fields carry the same number, so a chart drawn from
+		// avgMs plots a named metric unchanged.
+		if p.AvgMS == nil || *p.AvgMS != want {
+			t.Fatalf("point %d avgMs = %v, want %v", i, p.AvgMS, want)
+		}
+	}
+}

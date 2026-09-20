@@ -1,6 +1,6 @@
 // Node detail: header, per-check cards with result inspector, charts, events.
 
-import { api, getHistoryMulti, qs } from '../api.js';
+import { api, getHistoryMulti, getHistoryMetric, qs } from '../api.js';
 import { h, icon, clear, replace, statusPill, statusGlyph, importanceBadge, tagList, banner, toast, confirmDialog, showMenu, menuButton, emptyState, skeleton, eventRow, rangeChips, checkTypeLabel } from '../components.js';
 import { LineChart, toSeries, uptimeBar, uptimeLegend, SERIES_COLORS } from '../charts.js';
 import { relTime, ms as fmtMs, pct, dateTime, interval, plural, timeShort, nodeGroups } from '../fmt.js';
@@ -10,7 +10,7 @@ import { hardwarePanel } from './machines.js';
 
 export async function mount(root, ctx) {
   const id = ctx.params.id;
-  const state = { node: null, events: [], triggers: [], nodes: [], range: '24h', charts: [], expanded: new Set(), results: new Map(), destroyed: false, history: null, hardware: new Map(), latChart: null, lossChart: null, uptimeEl: null, historyShape: '' };
+  const state = { node: null, events: [], triggers: [], nodes: [], range: '24h', charts: [], expanded: new Set(), results: new Map(), destroyed: false, history: null, hardware: new Map(), latChart: null, lossChart: null, uptimeEl: null, historyShape: '', snmpCharts: new Map() };
 
   const headEl = h('div');
   const bannersEl = h('div', { class: 'stack-sm', style: { marginBottom: '14px' } });
@@ -297,12 +297,17 @@ export async function mount(root, ctx) {
     // unchanged the existing canvases are handed the new points and redraw
     // themselves; a new canvas would start life blank and unsized, which is
     // the other half of the flash.
-    const shape = JSON.stringify([state.range, timed.length > 0, latencySeries.map((hs) => hs.checkName), pings.map((hs) => hs.checkName)]);
+    const snmpChecks = checks.filter((x) => x.type === 'snmp');
+    const shape = JSON.stringify([state.range, timed.length > 0, latencySeries.map((hs) => hs.checkName), pings.map((hs) => hs.checkName), snmpChecks.map((c) => [c.id, (c.config?.snmpOids || []).map((o) => o.name)])]);
     if (shape === state.historyShape && state.uptimeEl && historyBody.contains(state.uptimeEl)) {
       state.latChart?.setData(latData());
       state.lossChart?.setData(lossData());
       replace(state.uptimeEl, ...uptimeContent(list));
-      return;
+      // An OID that has just produced its first reading has no chart yet, and
+      // that is the one case where the card's shape changes without any
+      // check being added — so it falls through to the rebuild below.
+      if (await refreshSNMPCharts(snmpChecks)) return;
+      if (state.destroyed) return;
     }
 
     // The shape did change, so the card is rebuilt — but off-screen and in one
@@ -323,6 +328,14 @@ export async function mount(root, ctx) {
       lossChart.setData(lossData());
       built.push(chartSection('Packet loss', lossHost, () => lossChart.exportPNG(`${slug(n.name)}-loss-${state.range}.png`), pings.map((p) => p.checkId)));
     }
+    // SNMP readings. Each OID is its own metric with its own unit, so each
+    // one gets its own chart rather than sharing an axis with a rate in
+    // bits per second and a percentage.
+    for (const c of snmpChecks) {
+      const section = await renderSNMPCharts(c);
+      if (state.destroyed) return;
+      if (section) built.push(section);
+    }
     state.uptimeEl = h('div', null, ...uptimeContent(list));
     built.push(state.uptimeEl);
     replace(historyBody, built);
@@ -342,6 +355,55 @@ export async function mount(root, ctx) {
     return out;
   }
 
+  // An SNMP check's OIDs are charted like any other metric: the server serves
+  // them from /api/history with metric=<name>, and only from raw results —
+  // the rollup tables have no column for a metric a check invented, so these
+  // charts reach back only as far as raw history is kept. Each chart is kept
+  // in state.snmpCharts so a later pass can hand it new points in place.
+  async function renderSNMPCharts(c) {
+    const oids = (c.config?.snmpOids || []).filter((o) => o.name);
+    if (!oids.length) return null;
+    const n = state.node;
+    const section = h('div', { class: 'stack-sm' }, h('div', { class: 'section-title' }, `${c.name} — SNMP readings`));
+    let drew = false;
+    for (const o of oids) {
+      let series;
+      try { series = await getHistoryMetric(c.id, state.range, o.name); } catch { continue; }
+      if (state.destroyed) return null;
+      if (!(series.points || []).some((p) => p.value != null)) continue;
+      const host = h('div', null);
+      const chart = new LineChart(host, { unit: o.unit || '', height: 180, ariaLabel: `${o.name} history`, title: `${n.name} — ${o.name} (${state.range})` });
+      state.charts.push(chart);
+      state.snmpCharts.set(`${c.id}:${o.name}`, chart);
+      chart.setData(snmpData(series, o));
+      section.append(h('div', null, h('div', { class: 'row-between', style: { marginBottom: '4px' } },
+        h('div', { class: 'small muted' }, o.name, o.unit ? ` (${o.unit})` : ''),
+        h('a', { class: 'btn btn-sm', href: `/api/export/history.csv${qs({ checkId: c.id, range: state.range, metric: o.name })}`, download: `${slug(o.name)}-${state.range}.csv` }, icon('download'), 'CSV')), host));
+      drew = true;
+    }
+    if (!drew) section.append(h('p', { class: 'note' }, 'No readings recorded in this period yet. A counter also needs two runs before it has a rate to chart.'));
+    return section;
+  }
+  function snmpData(series, o) {
+    return { series: [{ ...toSeries(series, 'avg', SERIES_COLORS[state.charts.length % SERIES_COLORS.length]), name: o.name }], from: series.from, to: series.to, bucketSeconds: 0 };
+  }
+  /** Hands every existing SNMP chart its new points. Returns false when an
+   *  OID has readings but no chart yet, which means the card must be rebuilt. */
+  async function refreshSNMPCharts(snmpChecks) {
+    for (const c of snmpChecks) {
+      for (const o of (c.config?.snmpOids || []).filter((x) => x.name)) {
+        let series;
+        try { series = await getHistoryMetric(c.id, state.range, o.name); } catch { continue; }
+        if (state.destroyed) return true;
+        const chart = state.snmpCharts.get(`${c.id}:${o.name}`);
+        const hasData = (series.points || []).some((p) => p.value != null);
+        if (chart) chart.setData(snmpData(series, o));
+        else if (hasData) return false;
+      }
+    }
+    return true;
+  }
+
   function chartSection(title, host, onExportPng, ids) {
     const csvBtn = h('button', { class: 'btn btn-sm', type: 'button', onclick: () => showMenu(csvBtn, ids.map((cid) => { const c = state.node.checks.find((x) => x.id === cid); return { label: `CSV — ${c ? c.name : cid}`, icon: 'download', href: `/api/export/history.csv${qs({ checkId: cid, range: state.range })}`, download: `history-${cid}-${state.range}.csv` }; })) }, icon('download'), 'Export CSV');
     return h('div', null,
@@ -349,7 +411,7 @@ export async function mount(root, ctx) {
       host);
   }
   function clearCharts() {
-    state.charts.forEach((c) => c.destroy()); state.charts = [];
+    state.charts.forEach((c) => c.destroy()); state.charts = []; state.snmpCharts.clear();
     state.latChart = null; state.lossChart = null; state.uptimeEl = null; state.historyShape = '';
   }
   const slug = (s) => String(s).toLowerCase().replace(/[^\w]+/g, '-');

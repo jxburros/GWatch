@@ -110,6 +110,14 @@ export function qs(params) {
 /** History for the checks the service considers most important (used when a chart widget has no explicit selection). */
 export const getHistoryAuto = (range) => api.get(`/api/history/multi?auto=1&range=${encodeURIComponent(range || '24h')}`);
 
+/**
+ * One of a check's own measurements rather than its latency — an SNMP check's
+ * OIDs. The series' avgMs carries the metric as well as its `value`, so the
+ * existing chart helpers plot it unchanged.
+ */
+export const getHistoryMetric = (checkId, range, metric) =>
+  api.get(`/api/history${qs({ checkId, range: range || '24h', metric })}`);
+
 export const getHistoryMulti = (checkIds, range) => {
   const ids = (checkIds || []).filter((x) => x != null);
   if (!ids.length) return Promise.resolve([]);

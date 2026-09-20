@@ -121,6 +121,8 @@ func runOnce(ctx context.Context, check model.Check, opts Options) (res model.Re
 		return runDNSCheck(ctx, check, target)
 	case model.CheckCustom:
 		return runCustomCheck(ctx, check, target)
+	case model.CheckSNMP:
+		return runSNMPCheck(ctx, check, target, opts)
 	}
 	return failResult(fmt.Sprintf("unsupported check type %q", check.Type))
 }
@@ -278,6 +280,13 @@ func Validate(check model.Check, nodeHost string) error {
 		}
 	case model.CheckCustom:
 		if err := validateCustomCheck(cfg); err != nil {
+			return err
+		}
+	case model.CheckSNMP:
+		if _, _, err := hostPort(target, cfg.SNMPPort, defaultSNMPPort); err != nil {
+			return err
+		}
+		if err := validateSNMPCheck(cfg); err != nil {
 			return err
 		}
 	}

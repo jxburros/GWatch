@@ -43,6 +43,68 @@ export function timingBar(d) {
   return h('div', null, bar, legend);
 }
 
+/**
+ * snmpValueText renders one reading with its unit. Large per-second rates are
+ * abbreviated the way a person would say them (1.4 Mbit/s, not 1400000).
+ */
+export function snmpValueText(v, unit) {
+  if (v == null) return null;
+  const round = (x) => num(Math.round(x * 100) / 100);
+  const abs = Math.abs(v);
+  if (unit && abs >= 1000) {
+    for (const [factor, prefix] of [[1e9, 'G'], [1e6, 'M'], [1e3, 'k']]) {
+      if (abs >= factor) return `${round(v / factor)} ${prefix}${unit}`;
+    }
+  }
+  return unit ? `${round(v)} ${unit}` : round(v);
+}
+
+/**
+ * snmpVerdict works out whether one reading crossed a threshold, so the table
+ * can say so per row rather than only in the result's message. The comparisons
+ * match internal/checks.judgeSNMP: strict, critical first.
+ */
+export function snmpVerdict(value, cfg) {
+  if (value == null || !cfg) return { label: 'Not thresholded', cls: 'dim' };
+  const n = (k) => (cfg[k] == null ? null : Number(cfg[k]));
+  const [wa, ca, wb, cb] = ['warnAbove', 'critAbove', 'warnBelow', 'critBelow'].map(n);
+  if (ca != null && value > ca) return { label: `Critical — above ${ca}`, cls: 'text-down' };
+  if (cb != null && value < cb) return { label: `Critical — below ${cb}`, cls: 'text-down' };
+  if (wa != null && value > wa) return { label: `Warning — above ${wa}`, cls: 'text-degraded' };
+  if (wb != null && value < wb) return { label: `Warning — below ${wb}`, cls: 'text-degraded' };
+  if (wa == null && ca == null && wb == null && cb == null) return { label: 'No thresholds set', cls: 'dim' };
+  return { label: 'Within thresholds', cls: 'text-up' };
+}
+
+function snmpTable(rows, check, result) {
+  const byName = new Map((check?.config?.snmpOids || []).map((o) => [o.name, o]));
+  const table = h('table', { class: 'table' }, h('thead', null, h('tr', null,
+    h('th', null, 'Reading'), h('th', null, 'OID'), h('th', { class: 'num' }, 'Value'), h('th', { class: 'num' }, 'Rate'), h('th', null, 'Verdict'))));
+  const tb = h('tbody');
+  let awaitingSecondSample = false;
+  for (const r of rows) {
+    const cfg = byName.get(r.name);
+    const measured = r.value != null ? r.value : r.rate;
+    const verdict = r.value == null && r.rate == null
+      ? { label: cfg?.kind === 'counter' ? 'Waiting for a second sample' : 'Reported as text', cls: 'dim' }
+      : snmpVerdict(measured, cfg);
+    if (cfg?.kind === 'counter' && r.rate == null) awaitingSecondSample = true;
+    tb.append(h('tr', null,
+      h('td', null, r.name),
+      h('td', { class: 'mono dim' }, r.oid),
+      h('td', { class: 'num mono' }, r.value != null ? snmpValueText(r.value, r.unit) : (r.rate != null ? '—' : h('span', { class: 'muted' }, r.raw || '—'))),
+      h('td', { class: 'num mono' }, r.rate != null ? snmpValueText(r.rate, r.unit) : '—'),
+      h('td', { class: verdict.cls }, verdict.label)));
+  }
+  table.append(tb);
+  return h('div', null,
+    h('div', { class: 'section-title' }, 'SNMP readings'),
+    h('div', { class: 'table-wrap' }, table),
+    awaitingSecondSample && result?.success
+      ? h('p', { class: 'note' }, 'A counter has no rate until a second sample exists to compare it against, so the first run after GWatch starts leaves those rows blank.')
+      : null);
+}
+
 export function certBlock(cert) {
   if (!cert) return null;
   const dr = cert.daysRemaining;
@@ -183,6 +245,11 @@ export function resultInspector(result, check, { compact = false } = {}) {
         h('ul', { class: 'note', style: { margin: 0, paddingLeft: '18px' } }, m.warnings.map((w) => h('li', null, w)))));
     }
   }
+
+  // SNMP: every OID the run asked for, with what came back and whether it
+  // crossed one of its thresholds. A reading with no number is text the
+  // device reported (a description, a name) and is shown as it arrived.
+  if (d.snmp?.length) left.push(snmpTable(d.snmp, check, result));
 
   // Custom script output
   if (d.output) left.push(h('div', null, h('div', { class: 'section-title' }, 'Output'),

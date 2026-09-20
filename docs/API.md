@@ -199,6 +199,19 @@ companion that lets an AI assistant use this API with a key, is documented in
 - `GET /api/templates` → `[NodeTemplate]` (website, home-server, router — shown as "Network device", ping, api, tcp-service, this-computer, agent-machine, dns).
 - `GET /api/groups` → `{ "groups": [{"name":"...","count":3}], "tags": [{"name":"...","count":2}] }`. A node in several groups is counted once in each of them, so the counts can add up to more than the number of nodes.
 
+**Credentials inside a check's config** — `metricsToken` (hardware health via a metrics
+URL) and `snmpCommunity`, `snmpAuthPass`, `snmpPrivPass` (SNMP) — follow the same
+convention as the SMTP password in settings. They are sealed with the machine-local key
+file (`gwatch.key`, see [the store](../internal/store)) before they reach the database,
+they come back from every read (`/api/nodes`, `/api/nodes/{id}`, `/api/overview`,
+`/api/wallboard`) as `********` rather than in the clear, and on a `PUT /api/nodes/{id}`
+a field that arrives blank **or** as `********` keeps the stored value. To change one,
+send the new value; `/api/export/config.json` omits them entirely. `POST
+/api/checks/test` fills them in from the stored check when the body carries a check `id`,
+so testing a saved check from the editor does not need the editor to hold the secret.
+Request `headers` are *not* treated this way: they are free-form and are stored and
+echoed as written, so an `Authorization` header on an HTTP check is stored in the clear.
+
 - `POST /api/checks/test` body: `{ "check": Check, "nodeHost": "..." }` → `Result` (not recorded; for validating unsaved config).
 - The `custom` check type (`Check.type == "custom"`) runs a user-supplied command on the
   check's schedule instead of one of the built-in check types. Its config
@@ -224,6 +237,49 @@ companion that lets an AI assistant use this API with a key, is documented in
 
   Every other line of stdout and stderr (i.e. not recognised as one of the control lines
   above) is combined and kept, capped at 8 KiB, as `Result.details.output`.
+- The `snmp` check type (`Check.type == "snmp"`) reads one or more OIDs off a network
+  device — a router, a switch, an access point — in a single GET per run (chunked at 20
+  OIDs), and turns each reading into its own metric with its own thresholds. See
+  [SNMP.md](SNMP.md) for enabling SNMP on a device and choosing OIDs. Its config
+  (`Check.config`):
+
+  | field | meaning |
+  | --- | --- |
+  | `snmpVersion` | `"2c"` (default) or `"3"` |
+  | `snmpPort` | UDP port, default 161 |
+  | `snmpCommunity` | v2c community string, default `public` |
+  | `snmpUser` | v3 security name (required for v3) |
+  | `snmpAuthProto` | `""` (noAuth), `MD5`, `SHA`, `SHA224`, `SHA256`, `SHA384`, `SHA512` |
+  | `snmpAuthPass` | required when `snmpAuthProto` is set |
+  | `snmpPrivProto` | `""` (no encryption), `DES`, `AES`, `AES192`, `AES256`, `AES192C`, `AES256C` |
+  | `snmpPrivPass` | required when `snmpPrivProto` is set; privacy also requires authentication |
+  | `snmpOids` | up to 64 readings, see below |
+
+  Each entry of `snmpOids` is `{ oid, name, kind, scale, unit, warnAbove, critAbove,
+  warnBelow, critBelow }`. `oid` is dotted numeric, with or without a leading dot (MIB
+  names are refused — GWatch ships no MIB files). `name` identifies the metric in
+  results and charts, so names must be non-empty and unique within the check. `kind` is
+  `"gauge"` (default — the value means something as it stands) or `"counter"` (a total
+  that only climbs, evaluated as its per-second rate of change between consecutive runs,
+  wrap-aware for 32- and 64-bit counters). `scale` multiplies the value or rate before
+  it is compared and stored (`8` turns octets per second into bits per second, `0.01`
+  turns TimeTicks into seconds); 0 and 1 both mean "as read". The four thresholds are
+  optional and compared **strictly**: crossing a `warn` marks the check degraded,
+  crossing a `crit` marks it down. Setting `critAbove` and `critBelow` to the same number
+  means "must be exactly this", which is how an interface's operational status is
+  expressed. Validation requires `warnAbove < critAbove` and `warnBelow > critBelow`.
+
+  A run reports every OID in `Result.details.snmp`, an array of
+  `{ oid, name, raw, value, rate, unit }`. `raw` is the value as the device sent it;
+  `value` is the scaled number for a gauge; `rate` is the scaled per-second rate for a
+  counter. A value that is not a number (`sysDescr`, a MAC address) is reported as `raw`
+  only and never thresholded, and a counter has neither `rate` nor a verdict on the
+  first run after the service starts, because there is nothing to compare against. An
+  OID the device does not implement makes the check down and is named in the message.
+  Every OID that produced a number also appears in `Result.metrics` (see below).
+  A device that does not answer makes the check down with the usual network wording;
+  note that SNMP v2c answers a *wrong community* with silence, so a wrong community and
+  an unreachable device produce the same timeout — the message says so.
 - `POST /api/checks/{id}/run` → `Result` (recorded and processed through alerting).
 - `POST /api/checks/{id}/enable` body `{ "enabled": bool }` → Check.
 - `POST /api/checks/{id}/silence` body `{ "minutes": 60 }` (0 = unsilence) → CheckState.
@@ -246,12 +302,57 @@ deviation of all the packets in the run, the figure `ping` prints beside min/avg
 type-specific diagnostics: for ping, `packetsSent`, `packetsReceived` and `rtts` (the
 per-packet round-trip times in milliseconds).
 
+### Walking an SNMP device
+
+- `POST /api/snmp/walk` body:
+  `{ "host", "version", "port", "community", "user", "authProto", "authPass",
+  "privProto", "privPass", "oid", "max", "checkId" }` →
+  `{ "rows": [{ "oid", "type", "value", "name", "kind" }], "truncated": bool, "max": 500 }`.
+
+  `oid` is the subtree to walk, default `1.3.6.1.2.1` (mib-2); walking from the root of
+  the whole tree would drag in vendor subtrees thousands of rows deep. `max` is capped at
+  500 and `truncated` says the ceiling was hit. The whole exchange is bounded at 15
+  seconds. `checkId` names a saved check whose stored credentials fill in the blank ones,
+  the same arrangement as `POST /api/checks/test`.
+
+  `name` is a suggestion from a small table of standard-MIB OIDs (`Port 3 in`,
+  `Uptime`…), empty for an OID GWatch does not recognise, which is most of a device's
+  tree. `kind` is `"counter"` for the Counter32/Counter64 types and `"gauge"` otherwise,
+  so a ticked row arrives in the editor set up the right way.
+
+  **Administrator only, and refused to API keys of every scope.** The call takes a
+  credential and an address of the caller's choosing, makes GWatch talk to whatever is
+  there, and reports what came back — that is a probe, and it belongs to the person in
+  front of the machine rather than to an integration.
+
 ## History (charts)
 
 - `GET /api/history?checkId=ID&range=1h|24h|7d|30d|1y` → `HistorySeries`.
   Multiple: `GET /api/history?checkId=1&checkId=2&range=24h` → `[HistorySeries]` (always an array when more than one id, single object for one id... to keep it simple the UI should use `GET /api/history/multi?checkId=..&checkId=..&range=` → `[HistorySeries]`).
 - `GET /api/history/multi?checkId=1&checkId=2&range=24h` → `[HistorySeries]`. With `auto=1` and no `checkId`, the service picks up to 4 important checks (critical/high nodes, ping and HTTP first).
 - Point spacing by range: 1h/24h → raw results (or 5-minute rollups if raw is gone), 7d → 5-minute rollups, 30d → hourly, 1y → daily.
+
+### Named metrics
+
+A check may measure things beyond the latency every check reports. Those go into
+`Result.metrics`, a JSON object of name → number stored alongside the result; an SNMP
+check writes one entry per OID that produced a number, keyed by the OID's `name` and
+holding the value (gauge) or rate (counter) **after** `scale`. Every other check type
+leaves it absent.
+
+- `GET /api/history?checkId=ID&range=…&metric=<name>` → `HistorySeries` for that metric.
+  The series carries `metric` and `metricUnit`, each point carries `value`, and `avgMs`,
+  `minMs` and `maxMs` carry the same number so that a chart drawn from a series' latency
+  fields plots a named metric unchanged. `GET /api/export/history.csv` takes `metric=`
+  too.
+- A name the check is not configured to measure is a `400`, rather than an empty series.
+- **Limit:** a named-metric series is always read from raw results. The rollup tables
+  have a column per built-in metric (latency, jitter, loss) and nowhere to put one a
+  check invented, so `metric=` reaches back only as far as raw history is retained — 30
+  days by default, whatever Settings › Retention says otherwise. Ranges beyond that
+  return the part of the window raw results still cover. Availability, latency and the
+  uptime bars for an SNMP check are rolled up normally; only the per-OID readings are
+  limited this way.
 
 ## Hardware health
 

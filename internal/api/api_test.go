@@ -560,3 +560,110 @@ func TestNodeGroupsOverTheAPI(t *testing.T) {
 		t.Fatalf("update should replace the group list: %+v", updated)
 	}
 }
+
+// A check's credentials are not monitoring data: reading a node hands back a
+// mask, and saving the node back with the field blank keeps what is stored.
+func TestCheckSecretsAreMaskedAndKept(t *testing.T) {
+	ts, srv := newTestServer(t)
+	ctx := context.Background()
+
+	node := model.Node{Name: "Gateway", Host: "192.168.1.1", Enabled: true, Importance: model.ImportanceNormal, Checks: []model.Check{{
+		Type: model.CheckSNMP, Name: "SNMP", Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5,
+		Config: model.CheckConfig{
+			SNMPVersion: "2c", SNMPPort: 161, SNMPCommunity: "n0t-public",
+			SNMPOIDs: []model.SNMPOID{{OID: "1.3.6.1.2.1.1.3.0", Name: "Uptime", Kind: "gauge", Scale: 0.01, Unit: "s"}},
+		},
+	}}}
+	var created nodeDoc
+	if code := call(t, ts, "POST", "/api/nodes", node, &created); code != 201 {
+		t.Fatalf("create = %d", code)
+	}
+	if got := created.Checks[0].Config.SNMPCommunity; got != passwordMask {
+		t.Fatalf("community echoed as %q, want the mask", got)
+	}
+
+	var fetched nodeDoc
+	if code := call(t, ts, "GET", fmt.Sprintf("/api/nodes/%d", created.ID), nil, &fetched); code != 200 {
+		t.Fatalf("get = %d", code)
+	}
+	if got := fetched.Checks[0].Config.SNMPCommunity; got != passwordMask {
+		t.Fatalf("reading a node handed out %q", got)
+	}
+
+	// Saving it back the way the editor does — with the credential left
+	// blank — must not wipe the stored one.
+	back := fetched.Node
+	back.Checks[0].Config.SNMPCommunity = ""
+	var saved nodeDoc
+	if code := call(t, ts, "PUT", fmt.Sprintf("/api/nodes/%d", created.ID), back, &saved); code != 200 {
+		t.Fatalf("update = %d", code)
+	}
+	stored, err := srv.Store.GetCheck(ctx, created.Checks[0].ID)
+	if err != nil {
+		t.Fatalf("get check: %v", err)
+	}
+	if stored.Config.SNMPCommunity != "n0t-public" {
+		t.Fatalf("stored community = %q, want it kept", stored.Config.SNMPCommunity)
+	}
+
+	// The overview is readable by viewers and read-only API keys, so it must
+	// not hand the credential out either.
+	var ov engine.Overview
+	if code := call(t, ts, "GET", "/api/overview", nil, &ov); code != 200 {
+		t.Fatalf("overview = %d", code)
+	}
+	for _, nv := range ov.Nodes {
+		for _, c := range nv.Node.Checks {
+			if c.Config.SNMPCommunity == "n0t-public" {
+				t.Fatal("the overview handed out a community string")
+			}
+		}
+		for _, cv := range nv.Checks {
+			if cv.Check.Config.SNMPCommunity == "n0t-public" {
+				t.Fatal("the overview's check views handed out a community string")
+			}
+		}
+	}
+}
+
+// An SNMP check's per-OID readings are charted like any other metric.
+func TestHistoryServesANamedMetric(t *testing.T) {
+	ts, srv := newTestServer(t)
+	ctx := context.Background()
+
+	node := model.Node{Name: "Gateway", Host: "192.168.1.1", Enabled: true, Importance: model.ImportanceNormal, Checks: []model.Check{{
+		Type: model.CheckSNMP, Name: "SNMP", Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5,
+		Config: model.CheckConfig{
+			SNMPVersion: "2c", SNMPPort: 161, SNMPCommunity: "public",
+			SNMPOIDs: []model.SNMPOID{{OID: "1.3.6.1.2.1.2.2.1.10.1", Name: "WAN in", Kind: "counter", Scale: 8, Unit: "bit/s"}},
+		},
+	}}}
+	var created nodeDoc
+	if code := call(t, ts, "POST", "/api/nodes", node, &created); code != 201 {
+		t.Fatalf("create = %d", code)
+	}
+	checkID := created.Checks[0].ID
+	if _, err := srv.Store.InsertResult(ctx, model.Result{
+		CheckID: checkID, Timestamp: time.Now().Add(-time.Minute), Success: true, Status: model.StatusUp,
+		Metrics: map[string]float64{"WAN in": 1600},
+	}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	var series model.HistorySeries
+	if code := call(t, ts, "GET", fmt.Sprintf("/api/history?checkId=%d&range=24h&metric=WAN+in", checkID), nil, &series); code != 200 {
+		t.Fatalf("history = %d", code)
+	}
+	if series.Metric != "WAN in" || series.MetricUnit != "bit/s" {
+		t.Fatalf("series = %+v, want it to describe the metric", series)
+	}
+	if len(series.Points) != 1 || series.Points[0].Value == nil || *series.Points[0].Value != 1600 {
+		t.Fatalf("points = %+v, want the stored reading", series.Points)
+	}
+
+	// A name the check does not measure is refused rather than served empty,
+	// so /api/history cannot be used to fish for names in stored results.
+	if code := call(t, ts, "GET", fmt.Sprintf("/api/history?checkId=%d&metric=whatever", checkID), nil, nil); code != 400 {
+		t.Fatalf("unknown metric = %d, want 400", code)
+	}
+}
