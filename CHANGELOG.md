@@ -9,6 +9,16 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## Unreleased
+
+### Fixed
+
+- **A chart no longer hides the result that was just recorded.** Result
+  timestamps are stored to the millisecond and a raw history window excluded
+  its own upper bound, so a check run by hand and looked at in that same
+  millisecond charted as empty. The window now includes `now`, as the host
+  sample history already did.
+
 ## 0.2.0 — second beta
 
 ### Changed

@@ -533,9 +533,14 @@ func (s *Store) LastResults(ctx context.Context) (map[int64]model.Result, error)
 	return out, rows.Err()
 }
 
-// ResultsBetween returns raw results of a check in [from, to) ascending.
+// ResultsBetween returns raw results of a check in [from, to] ascending.
+//
+// The upper bound is inclusive, as it is for host samples. Timestamps are
+// stored truncated to the millisecond, so an exclusive bound would drop a
+// result recorded in the same millisecond the caller asks in — a chart drawn
+// immediately after a check ran would miss the very result that prompted it.
 func (s *Store) ResultsBetween(ctx context.Context, checkID int64, from, to time.Time) ([]model.Result, error) {
-	rows, err := s.reader.QueryContext(ctx, "SELECT "+resultCols+" FROM results WHERE check_id = ? AND ts >= ? AND ts < ? ORDER BY ts ASC", checkID, from.UnixMilli(), to.UnixMilli())
+	rows, err := s.reader.QueryContext(ctx, "SELECT "+resultCols+" FROM results WHERE check_id = ? AND ts >= ? AND ts <= ? ORDER BY ts ASC", checkID, from.UnixMilli(), to.UnixMilli())
 	if err != nil {
 		return nil, err
 	}

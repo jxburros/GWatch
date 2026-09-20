@@ -143,6 +143,34 @@ func TestResultsRollupsHistory(t *testing.T) {
 	}
 }
 
+// TestHistoryIncludesAResultFromThisMillisecond pins the upper bound of a raw
+// history window. Result timestamps are stored truncated to the millisecond,
+// so a result recorded in the same millisecond the chart is drawn in lands
+// exactly on "now" — running a check by hand and looking at its history is
+// precisely that case, and it used to come back empty.
+func TestHistoryIncludesAResultFromThisMillisecond(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	n, err := s.CreateNode(ctx, model.Node{Name: "Site", Host: "example.com", Enabled: true, Checks: []model.Check{{Type: model.CheckHTTP, Name: "HTTP", Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if _, err := s.InsertResult(ctx, model.Result{CheckID: n.Checks[0].ID, Timestamp: now, Success: true, Status: model.StatusUp, LatencyMS: f(12), Attempts: 1}); err != nil {
+		t.Fatal(err)
+	}
+	rng, _ := ParseRange("24h")
+	// Truncated so the stored timestamp and the window's end are the same
+	// millisecond however long the lines above took.
+	h, err := s.History(ctx, n.Checks[0], n.Name, rng, now.Truncate(time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h.Points) != 1 {
+		t.Fatalf("a result from this millisecond should be in the window, got %d points", len(h.Points))
+	}
+}
+
 func TestEventsSettingsDashboardsMaintenance(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
