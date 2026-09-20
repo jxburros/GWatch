@@ -145,6 +145,27 @@ The installer wraps the same steps the [`scripts/install.ps1`](../scripts/instal
 and [`scripts/uninstall.ps1`](../scripts/uninstall.ps1) PowerShell scripts perform, and
 either path is fully supported. Use the scripts directly if you want to script an
 unattended install across several machines, prefer not to run a downloaded `.exe`, or
-want to build `gwatch.exe` from source yourself. See the
-[README's "Install on Windows" section](../README.md#install-on-windows) for the exact
-commands.
+want to build `gwatch.exe` from source yourself.
+
+1. Build (or download) `gwatch.exe`. With Go 1.24+ installed:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts\build.ps1
+   ```
+2. Install the service from an **Administrator** PowerShell:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -Exe .\dist\gwatch.exe
+   ```
+   This copies the program to `C:\Program Files\GWatch`, registers the `GWatch` service
+   (automatic start, restarts on failure), starts it, and adds a Start-menu shortcut that
+   opens the interface. Data lives in `C:\ProgramData\GWatch` (`gwatch.db`, `logs\`, `backups\`).
+   Add `-Listen 0.0.0.0:7230` to serve the interface to the whole network from the start
+   (it can also be switched on later in Settings › Network access).
+3. Open <http://127.0.0.1:7230> (or run `gwatch open`).
+
+**Updating**: build the new `gwatch.exe` and run `scripts\install.ps1` again. It stops the
+service, replaces the executable and starts the service. Your data is untouched.
+
+**Removing**: `scripts\uninstall.ps1` (add `-RemoveData` to also delete the database).
+
+You can also manage the service by hand: `gwatch install`, `gwatch uninstall`,
+`gwatch start|stop|restart|status`.
