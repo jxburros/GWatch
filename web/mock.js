@@ -233,7 +233,7 @@
     const n = o.node; const c = o.check;
     events.push({ id: 0, ts: ago(msAgo), type, nodeId: n ? n.id : null, checkId: c ? c.id : null, nodeName: n ? n.name : undefined, checkName: c ? c.name : undefined, title: o.title || '', detail: o.detail || '', meta: o.meta ? JSON.stringify(o.meta) : undefined });
   }
-  ev(3 * DAY + 2 * HOUR, 'service_started', { title: 'GWatch service started', detail: 'Version 0.4.1 · windows/amd64 · listening on 127.0.0.1:8080' });
+  ev(3 * DAY + 2 * HOUR, 'service_started', { title: 'GWatch service started', detail: 'Version 0.4.1 · windows/amd64 · listening on 127.0.0.1:7230' });
   ev(3 * DAY + 2 * HOUR + 40 * MIN, 'service_stopped', { title: 'GWatch service stopped', detail: 'Stopped for upgrade to 0.4.1' });
   ev(3 * DAY + 2 * HOUR + 41 * MIN, 'backup', { title: 'Backup created', detail: 'gwatch-2026-09-15-0713.gwbackup · 12.4 MB · configuration + history' });
   ev(2 * DAY + 6 * HOUR, 'monitor_gap', { title: 'Monitoring gap of 45 minutes', detail: 'The computer was asleep or offline from 01:10 to 01:55. No checks ran during this time.' });
@@ -323,7 +323,7 @@
       checksTotal: all.length, checksEnabled: all.filter((c) => c.enabled && findNode(c.nodeId).enabled).length, checksRunning: 0,
       lastGap: { from: ago(2 * DAY + 6 * HOUR + 45 * MIN), to: ago(2 * DAY + 6 * HOUR), seconds: 2700 },
       databasePath: 'C:\\ProgramData\\GWatch\\gwatch.db', databaseBytes: 48_300_000, dataDir: 'C:\\ProgramData\\GWatch', retention, backup: backupStatus,
-      recentErrors: events.filter((e) => e.type === 'internal_error').slice(0, 5), alertsEnabled: settings.alerts.enabled, smtpConfigured: !!settings.alerts.smtp.host, lastAlertAt: ago(21 * MIN + 30e3), lastAlertError: '', listenAddress: '127.0.0.1:8080', platform: 'windows/amd64',
+      recentErrors: events.filter((e) => e.type === 'internal_error').slice(0, 5), alertsEnabled: settings.alerts.enabled, smtpConfigured: !!settings.alerts.smtp.host, lastAlertAt: ago(21 * MIN + 30e3), lastAlertError: '', listenAddress: '127.0.0.1:7230', platform: 'windows/amd64',
     };
   }
 
@@ -357,7 +357,7 @@
     out.push(`${fmt(t0)} INFO  gwatch 0.4.1 starting (service mode) data=C:\\ProgramData\\GWatch`);
     out.push(`${fmt(t0 + 120)} INFO  database opened gwatch.db (WAL) size=46.1MB`);
     out.push(`${fmt(t0 + 300)} INFO  scheduler started: 24 checks, 22 enabled, max concurrency 8`);
-    out.push(`${fmt(t0 + 900)} INFO  http listening on 127.0.0.1:8080`);
+    out.push(`${fmt(t0 + 900)} INFO  http listening on 127.0.0.1:7230`);
     for (let i = 0; i < 60; i++) {
       const t = NOW - (60 - i) * 4 * MIN;
       const c = nodes[i % nodes.length].checks[0];
@@ -632,7 +632,7 @@
   const endpoints = [{ id: 1, name: 'Router rebooted', slug: 'router-rebooted', description: 'Called by the router after a reboot', enabled: true, method: 'POST', token: 'abc123', action: { type: 'run_node', nodeId: gateway.id }, lastCalledAt: ago(5 * DAY), lastStatus: 'ok', lastOutput: 'Ran the checks of node 21.', callCount: 4, createdAt: ago(20 * DAY), updatedAt: ago(20 * DAY) }];
   let updateStatus = { last: null, applying: false, applied: false, restarting: false, lastApplyAt: null, lastError: '', executable: 'C:\\Program Files\\GWatch\\gwatch.exe', canApply: true };
   on('GET', /^\/api\/status$/, () => { const ov = overview(); return { down: ov.summary.down, degraded: ov.summary.degraded, unknown: ov.summary.unknown, up: ov.summary.up, total: ov.summary.total, certWarnings: ov.certWarnings.length, maintenance: ov.summary.maintenance, serviceOk: true, serviceIssues: [], attention: ov.attention.length, generatedAt: iso(Date.now()) }; });
-  on('GET', /^\/api\/network$/, () => ({ listenAddress: settings.general.remoteAccess ? ':8080' : '127.0.0.1:8080', remoteAccess: !!settings.general.remoteAccess, passwordSet: !!settings.general.accessPassword, port: 8080, localUrl: 'http://127.0.0.1:8080', lanUrls: settings.general.remoteAccess ? ['http://192.168.1.10:8080', 'http://desktop-pc:8080'] : [], hostname: 'desktop-pc', restartNeeded: false }));
+  on('GET', /^\/api\/network$/, () => ({ listenAddress: settings.general.remoteAccess ? ':7230' : '127.0.0.1:7230', remoteAccess: !!settings.general.remoteAccess, passwordSet: !!settings.general.accessPassword, port: 7230, localUrl: 'http://127.0.0.1:7230', lanUrls: settings.general.remoteAccess ? ['http://192.168.1.10:7230', 'http://desktop-pc:7230'] : [], hostname: 'desktop-pc', restartNeeded: false }));
   on('GET', /^\/api\/charts$/, () => clone(savedCharts));
   on('PUT', /^\/api\/charts$/, (m, body) => { savedCharts = (body || []).map((c, i) => ({ ...c, id: c.id || `chart-${Date.now()}${i}`, name: c.name || `Chart ${i + 1}`, updatedAt: iso(Date.now()) })); return clone(savedCharts); });
   on('GET', /^\/api\/automation\/meta$/, () => ({ conditions: ['down', 'recovered', 'degraded', 'warning_cleared', 'cert_warning', 'content_changed', 'affected_by_parent', 'status_change', 'any_failure', 'any_success', 'latency_over'], interpreters: ['sh', 'bash', 'powershell', 'cmd', 'python', 'node', 'custom'], defaultInterpreter: 'powershell', placeholders: [] }));

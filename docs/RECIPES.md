@@ -270,12 +270,12 @@ Create an **Endpoint** (Automation tab → Endpoints):
 
 Call it from the router/CI job:
 ```bash
-curl -X POST 'http://gwatch.local:8080/hook/router-rebooted' \
+curl -X POST 'http://gwatch.local:7230/hook/router-rebooted' \
   -H 'X-GWatch-Token: s3cr3t-token-value'
 ```
 or with the token in the URL:
 ```bash
-curl -X POST 'http://gwatch.local:8080/hook/router-rebooted?token=s3cr3t-token-value'
+curl -X POST 'http://gwatch.local:7230/hook/router-rebooted?token=s3cr3t-token-value'
 ```
 
 The response is the `ActionResult` JSON (`{ "ok": true, "output": "Ran the
@@ -287,7 +287,7 @@ If the caller needs to pass extra context, it is available to the action's
 placeholders as `{{body}}` (raw request body) and `{{query.<name>}}` (query
 string params), e.g.:
 ```bash
-curl -X POST 'http://gwatch.local:8080/hook/router-rebooted?token=s3cr3t-token-value&reason=firmware-update' \
+curl -X POST 'http://gwatch.local:7230/hook/router-rebooted?token=s3cr3t-token-value&reason=firmware-update' \
   -d 'rebooted by cron at 03:00'
 ```
 would make `{{query.reason}}` = `firmware-update` and `{{body}}` = `rebooted
@@ -312,7 +312,7 @@ Create an endpoint:
 
 Call it from your deploy pipeline's last step:
 ```bash
-curl -X POST 'http://gwatch.local:8080/hook/deploy-finished' \
+curl -X POST 'http://gwatch.local:7230/hook/deploy-finished' \
   -H 'X-GWatch-Token: s3cr3t-token-value'
 ```
 
@@ -331,7 +331,7 @@ You can equally use a *trigger* instead of an endpoint here — e.g. run
 Before saving, or any time after, use **Test this action** in the trigger or
 endpoint editor. It calls `POST /api/actions/test`:
 ```bash
-curl -X POST 'http://127.0.0.1:8080/api/actions/test' \
+curl -X POST 'http://127.0.0.1:7230/api/actions/test' \
   -H 'Content-Type: application/json' \
   -d '{"action": {"type": "http", "url": "https://ntfy.sh/gwatch-home-alerts", "body": "test from GWatch"}, "nodeId": null}'
 ```

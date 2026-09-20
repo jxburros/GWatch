@@ -70,10 +70,10 @@ service, removes the firewall rule, and asks (default: no) whether to delete the
 data directory.
 
 ```powershell
-gwatch-setup-0.1.0.exe /VERYSILENT /PORT=8080 /LAN=1
+gwatch-setup-0.1.0.exe /VERYSILENT /PORT=7230 /LAN=1
 ```
 
-`/PORT` defaults to `8080` and `/LAN` to `0`.
+`/PORT` defaults to `7230` and `/LAN` to `0`.
 
 ## What the agent's installer does
 
@@ -88,7 +88,7 @@ already-used code produces a real error message instead of a service that never
 reports.
 
 ```powershell
-gwatch-agent-setup-0.1.0.exe /VERYSILENT /SERVER=http://gwatch.lan:8080 /CODE=ABCD-2345 /NAME=nas
+gwatch-agent-setup-0.1.0.exe /VERYSILENT /SERVER=http://gwatch.lan:7230 /CODE=ABCD-2345 /NAME=nas
 ```
 
 `/INSECURE=1` accepts a self-signed certificate on the server.

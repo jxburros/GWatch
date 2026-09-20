@@ -47,7 +47,7 @@ open the web interface.
 ### Via the API
 
 ```sh
-curl -sS -X POST http://127.0.0.1:8080/api/backups/restore \
+curl -sS -X POST http://127.0.0.1:7230/api/backups/restore \
   -F "file=@gwatch-backup-20260101-020000-full.gwbackup" \
   -F "password=your-backup-password" \
   -F "includeHistory=true"

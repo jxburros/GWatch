@@ -42,7 +42,7 @@ var version = "dev"
 const (
 	serviceName    = "GWatch"
 	serviceDisplay = "GWatch Network Monitor"
-	serviceDesc    = "Monitoring of home network devices, servers and websites. Serves its web interface on http://127.0.0.1:8080 (or on the LAN when remote access is enabled)."
+	serviceDesc    = "Monitoring of home network devices, servers and websites. Serves its web interface on http://127.0.0.1:7230 (or on the LAN when remote access is enabled)."
 )
 
 // restartExitCode tells a service manager that the process wants to be
@@ -58,8 +58,8 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `GWatch %s — local network & service monitor
 
 Usage:
-  gwatch [run] [--data-dir DIR] [--listen 127.0.0.1:8080]   run in the foreground (or as the service when started by Windows)
-                                                             use --listen 0.0.0.0:8080 (or Settings › Network) to allow other devices
+  gwatch [run] [--data-dir DIR] [--listen 127.0.0.1:7230]   run in the foreground (or as the service when started by Windows)
+                                                             use --listen 0.0.0.0:7230 (or Settings › Network) to allow other devices
   gwatch install [--data-dir DIR] [--listen ADDR]            install and start the background service (run as Administrator on Windows)
   gwatch uninstall                                           stop and remove the background service
   gwatch start | stop | restart | status                     control the installed service
@@ -81,7 +81,7 @@ func main() {
 	fs.Usage = usage
 	cfg := config{}
 	fs.StringVar(&cfg.dataDir, "data-dir", envOr("GWATCH_DATA_DIR", defaultDataDir()), "directory for the database, logs and backups")
-	fs.StringVar(&cfg.listen, "listen", envOr("GWATCH_LISTEN", "127.0.0.1:8080"), "address to serve the web interface on (127.0.0.1:8080 = this computer only, 0.0.0.0:8080 = whole network)")
+	fs.StringVar(&cfg.listen, "listen", envOr("GWATCH_LISTEN", "127.0.0.1:7230"), "address to serve the web interface on (127.0.0.1:7230 = this computer only, 0.0.0.0:7230 = whole network)")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}

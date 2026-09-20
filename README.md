@@ -9,7 +9,7 @@ background service (or a plain console program on Linux/macOS), checks your rout
 servers, websites and APIs on a schedule, keeps long-term history in an embedded SQLite
 database, sends email alerts that do not spam, can run webhooks / git commands / scripts
 when something changes, and shows everything in a compact dark or light web interface
-served on `http://127.0.0.1:8080` (optionally to the rest of your LAN).
+served on `http://127.0.0.1:7230` (optionally to the rest of your LAN).
 
 No cloud account, no AI features, never exposed to the internet by itself. The product
 brief that defines the scope lives in [`local-network-monitoring-product-brief.md`](local-network-monitoring-product-brief.md).
@@ -137,7 +137,7 @@ running a downloaded `.exe`.
    This copies the program to `C:\Program Files\GWatch`, registers the `GWatch` service
    (automatic start, restarts on failure), starts it, and adds a Start-menu shortcut that
    opens the interface. Data lives in `C:\ProgramData\GWatch` (`gwatch.db`, `logs\`, `backups\`).
-3. Open <http://127.0.0.1:8080> (or run `gwatch open`).
+3. Open <http://127.0.0.1:7230> (or run `gwatch open`).
 
 **Updating**: build the new `gwatch.exe` and run `scripts\install.ps1` again. It stops the
 service, replaces the executable and starts the service. Your data is untouched.
@@ -153,10 +153,10 @@ You can also manage the service by hand: `gwatch install`, `gwatch uninstall`,
 go run . run --data-dir ./data
 ```
 
-Then open <http://127.0.0.1:8080>. Monitoring only runs while this process runs.
+Then open <http://127.0.0.1:7230>. Monitoring only runs while this process runs.
 
-Options: `--data-dir DIR` (or `GWATCH_DATA_DIR`), `--listen 127.0.0.1:8080` (or
-`GWATCH_LISTEN`). The default binds this computer only. Use `--listen 0.0.0.0:8080`, or
+Options: `--data-dir DIR` (or `GWATCH_DATA_DIR`), `--listen 127.0.0.1:7230` (or
+`GWATCH_LISTEN`). The default binds this computer only. Use `--listen 0.0.0.0:7230`, or
 turn on **Settings › Network access**, to reach the interface from other devices on your
 network (the listener is rebound live, no restart needed); create an account under
 **Settings › Users & access** so other devices have to sign in.

@@ -1,6 +1,6 @@
 # GWatch localhost API
 
-All endpoints are served by the local service on `http://127.0.0.1:8080` (configurable) and
+All endpoints are served by the local service on `http://127.0.0.1:7230` (configurable) and
 return JSON unless noted. Errors are `{"error": "message"}` with a 4xx/5xx status.
 Timestamps are RFC 3339 strings. Field names match `internal/model/model.go`.
 

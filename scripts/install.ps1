@@ -1,7 +1,7 @@
 # Installs (or updates) GWatch as a Windows service that starts with Windows.
 # Run from an elevated (Administrator) PowerShell:
 #   powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -Exe .\dist\gwatch.exe
-# Add -Listen 0.0.0.0:8080 to serve the interface to the whole network from the start
+# Add -Listen 0.0.0.0:7230 to serve the interface to the whole network from the start
 # (it can also be switched on later in Settings > Network access).
 # Re-running the script with a newer gwatch.exe performs a safe upgrade:
 # it stops the service, replaces the executable and starts the service again.
@@ -9,7 +9,7 @@ param(
     [string]$Exe = "$PSScriptRoot\..\dist\gwatch.exe",
     [string]$InstallDir = "$env:ProgramFiles\GWatch",
     [string]$DataDir = "$env:ProgramData\GWatch",
-    [string]$Listen = "127.0.0.1:8080"
+    [string]$Listen = "127.0.0.1:7230"
 )
 $ErrorActionPreference = "Stop"
 
