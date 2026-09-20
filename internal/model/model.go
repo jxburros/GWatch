@@ -610,6 +610,18 @@ type Settings struct {
 	Alerts    AlertSettings     `json:"alerts"`
 	Retention RetentionSettings `json:"retention"`
 	Backups   BackupSettings    `json:"backups"`
+	Updates   UpdateSettings    `json:"updates"`
+}
+
+// UpdateSettings controls how GWatch looks for new releases of itself. It is
+// the only part of GWatch that reaches the internet on its own, so it is
+// switchable off in one place and off means off: no periodic check, no check
+// when the interface is opened, no prompt.
+type UpdateSettings struct {
+	CheckAutomatically bool `json:"checkAutomatically"` // periodic checks and the check when the interface is opened
+	CheckIntervalHours int  `json:"checkIntervalHours"` // default 24, 1-720 (30 days)
+	IncludePrerelease  bool `json:"includePrerelease"`  // offer pre-releases as well as stable releases
+	PromptOnOpen       bool `json:"promptOnOpen"`       // offer the update in a dialog when the interface is opened
 }
 
 // DefaultSettings returns the settings used on first run.
@@ -651,6 +663,12 @@ func DefaultSettings() Settings {
 			IntervalHours:  24,
 			Keep:           7,
 			IncludeHistory: true,
+		},
+		Updates: UpdateSettings{
+			CheckAutomatically: true,
+			CheckIntervalHours: 24,
+			IncludePrerelease:  false,
+			PromptOnOpen:       true,
 		},
 	}
 }
@@ -945,19 +963,43 @@ type UpdateInfo struct {
 	AssetURL        string     `json:"assetUrl"`
 	AssetSize       int64      `json:"assetSize"`
 	CheckedAt       time.Time  `json:"checkedAt"`
+	Prerelease      bool       `json:"prerelease"`
 	Error           string     `json:"error,omitempty"`
+}
+
+// Release is one published release of GWatch, as offered to the user to pick
+// from. Installable is false when the release carries no executable for this
+// platform, which is what an older release predating a platform looks like.
+type Release struct {
+	Version     string     `json:"version"`
+	Tag         string     `json:"tag"`
+	Name        string     `json:"name"`
+	Prerelease  bool       `json:"prerelease"`
+	Notes       string     `json:"notes"`
+	URL         string     `json:"url"`
+	PublishedAt *time.Time `json:"publishedAt"`
+	AssetName   string     `json:"assetName"`
+	AssetURL    string     `json:"assetUrl"`
+	AssetSize   int64      `json:"assetSize"`
+	Installable bool       `json:"installable"`
+	Newer       bool       `json:"newer"`   // newer than the running version
+	Running     bool       `json:"running"` // this is the running version
 }
 
 // UpdateStatus is the state of the self-updater.
 type UpdateStatus struct {
-	Last        *UpdateInfo `json:"last"`
-	Applying    bool        `json:"applying"`
-	Applied     bool        `json:"applied"`    // the new executable is in place; a restart is pending / happened
-	Restarting  bool        `json:"restarting"` // the service is about to restart
-	LastApplyAt *time.Time  `json:"lastApplyAt"`
-	LastError   string      `json:"lastError,omitempty"`
-	Executable  string      `json:"executable"`
-	CanApply    bool        `json:"canApply"` // the executable directory is writable
+	Last         *UpdateInfo `json:"last"`
+	Applying     bool        `json:"applying"`
+	Applied      bool        `json:"applied"`    // the new executable is in place; a restart is pending / happened
+	Restarting   bool        `json:"restarting"` // the service is about to restart
+	LastApplyAt  *time.Time  `json:"lastApplyAt"`
+	LastError    string      `json:"lastError,omitempty"`
+	Executable   string      `json:"executable"`
+	CanApply     bool        `json:"canApply"` // the executable directory is writable
+	LastCheckAt  *time.Time  `json:"lastCheckAt"`
+	NextCheckAt  *time.Time  `json:"nextCheckAt"` // nil when automatic checks are off
+	AutoCheck    bool        `json:"autoCheck"`
+	PromptOnOpen bool        `json:"promptOnOpen"`
 }
 
 // NetworkInfo tells the UI how the interface is reachable.

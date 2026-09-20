@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -81,49 +82,157 @@ var repoPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 // ValidRepo reports whether repo looks like "owner/name".
 func ValidRepo(repo string) bool { return repoPattern.MatchString(repo) }
 
-// Check fetches the latest release of repo and compares it with current.
-func (c *Client) Check(ctx context.Context, repo, current string) (model.UpdateInfo, error) {
-	info := model.UpdateInfo{Repo: repo, CurrentVersion: current, CheckedAt: time.Now(), CurrentIsDev: IsDev(current)}
+// get fetches a GitHub API path and decodes it into out.
+func (c *Client) get(ctx context.Context, repo, path string, out any) error {
 	if !ValidRepo(repo) {
-		return info, fmt.Errorf("invalid repository %q (expected owner/name)", repo)
+		return fmt.Errorf("invalid repository %q (expected owner/name)", repo)
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", c.base()+"/repos/"+repo+"/releases/latest", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", c.base()+"/repos/"+repo+path, nil)
 	if err != nil {
-		return info, err
+		return err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "GWatch-updater")
 	resp, err := c.http().Do(req)
 	if err != nil {
-		return info, fmt.Errorf("contact GitHub: %w", err)
+		return fmt.Errorf("contact GitHub: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
-		return info, fmt.Errorf("no releases found for %s (publish a release with a tag like v1.2.0)", repo)
+		return fmt.Errorf("no releases found for %s (publish a release with a tag like v1.2.0)", repo)
 	}
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return info, fmt.Errorf("GitHub answered %s: %s", resp.Status, strings.TrimSpace(string(b)))
+		return fmt.Errorf("GitHub answered %s: %s", resp.Status, strings.TrimSpace(string(b)))
 	}
-	var rel ghRelease
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&rel); err != nil {
-		return info, fmt.Errorf("decode release: %w", err)
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(out); err != nil {
+		return fmt.Errorf("decode release: %w", err)
 	}
-	info.LatestVersion = strings.TrimPrefix(rel.TagName, "v")
-	info.ReleaseURL = rel.HTMLURL
-	info.ReleaseNotes = rel.Body
-	if !rel.PublishedAt.IsZero() {
-		t := rel.PublishedAt
-		info.PublishedAt = &t
+	return nil
+}
+
+// CatalogSize is how many releases back Releases looks. A release every
+// fortnight keeps rather more than a year of them in view, which is as far
+// back as anyone sensibly installs.
+const CatalogSize = 50
+
+// Releases lists the repository's releases, newest first, each annotated for
+// this build: whether it carries an executable for this platform and how it
+// compares with the running version. Drafts are left out — they are not public
+// — but pre-releases are included and flagged, so the caller decides whether
+// to offer them.
+func (c *Client) Releases(ctx context.Context, repo, current string) ([]model.Release, error) {
+	var rels []ghRelease
+	if err := c.get(ctx, repo, fmt.Sprintf("/releases?per_page=%d", CatalogSize), &rels); err != nil {
+		return nil, err
 	}
-	if a := pickAsset(rel.Assets, c.goos(), c.goarch()); a != nil {
-		info.AssetName, info.AssetURL, info.AssetSize = a.Name, a.BrowserDownloadURL, a.Size
+	out := make([]model.Release, 0, len(rels))
+	for _, rel := range rels {
+		if rel.Draft {
+			continue
+		}
+		r := model.Release{
+			Version:    strings.TrimPrefix(rel.TagName, "v"),
+			Tag:        rel.TagName,
+			Name:       rel.Name,
+			Prerelease: rel.Prerelease,
+			Notes:      rel.Body,
+			URL:        rel.HTMLURL,
+		}
+		if !rel.PublishedAt.IsZero() {
+			t := rel.PublishedAt
+			r.PublishedAt = &t
+		}
+		if a := pickAsset(rel.Assets, c.goos(), c.goarch()); a != nil {
+			r.AssetName, r.AssetURL, r.AssetSize, r.Installable = a.Name, a.BrowserDownloadURL, a.Size, true
+		}
+		cmp := CompareVersions(r.Version, current)
+		r.Newer = IsDev(current) || cmp > 0
+		r.Running = !IsDev(current) && cmp == 0
+		out = append(out, r)
 	}
-	info.UpdateAvailable = info.CurrentIsDev || CompareVersions(info.LatestVersion, current) > 0
+	sort.SliceStable(out, func(i, j int) bool { return CompareVersions(out[i].Version, out[j].Version) > 0 })
+	return out, nil
+}
+
+// Newest returns the release a build on current should move to, or nil when
+// there is nothing newer. Pre-releases are skipped unless includePrerelease.
+//
+// A release with no executable for this platform is still returned: learning
+// that a new version exists is worth having even where GWatch cannot install
+// it for you, and installing is where that is refused, with an explanation.
+func Newest(rels []model.Release, includePrerelease bool) *model.Release {
+	for i := range rels {
+		r := rels[i]
+		if !r.Newer {
+			continue
+		}
+		if r.Prerelease && !includePrerelease {
+			continue
+		}
+		return &rels[i]
+	}
+	return nil
+}
+
+// Find returns the release with the given version, or nil. The version is
+// matched with or without its leading "v" so a tag and a version string are
+// both accepted.
+func Find(rels []model.Release, version string) *model.Release {
+	want := strings.TrimPrefix(strings.TrimSpace(version), "v")
+	for i := range rels {
+		if rels[i].Version == want {
+			return &rels[i]
+		}
+	}
+	return nil
+}
+
+// infoFor renders a release as the UpdateInfo the API and UI speak in.
+func (c *Client) infoFor(repo, current string, rel *model.Release) model.UpdateInfo {
+	info := model.UpdateInfo{Repo: repo, CurrentVersion: current, CheckedAt: time.Now(), CurrentIsDev: IsDev(current)}
+	if rel == nil {
+		info.LatestVersion = current
+		return info
+	}
+	info.LatestVersion = rel.Version
+	info.ReleaseURL = rel.URL
+	info.ReleaseNotes = rel.Notes
+	info.PublishedAt = rel.PublishedAt
+	info.AssetName, info.AssetURL, info.AssetSize = rel.AssetName, rel.AssetURL, rel.AssetSize
+	info.Prerelease = rel.Prerelease
+	info.UpdateAvailable = rel.Newer
+	return info
+}
+
+// Check reports the newest release this build could move to. With
+// includePrerelease it considers pre-releases too, at the caller's risk.
+//
+// Checking works even in a build with no pinned signing key, so the user still
+// learns that a new version exists; installing it is what gets refused, and
+// the refusal is put in Error here rather than at the end of a download.
+func (c *Client) Check(ctx context.Context, repo, current string, includePrerelease bool) (model.UpdateInfo, error) {
+	rels, err := c.Releases(ctx, repo, current)
+	if err != nil {
+		return model.UpdateInfo{Repo: repo, CurrentVersion: current, CheckedAt: time.Now(), CurrentIsDev: IsDev(current), LatestVersion: current}, err
+	}
+	newest := Newest(rels, includePrerelease)
+	if newest == nil {
+		// Nothing to move to: report the newest release that exists so the
+		// interface can say which version "up to date" means.
+		for i := range rels {
+			if rels[i].Prerelease && !includePrerelease {
+				continue
+			}
+			newest = &rels[i]
+			break
+		}
+		info := c.infoFor(repo, current, newest)
+		info.UpdateAvailable = false
+		return info, nil
+	}
+	info := c.infoFor(repo, current, newest)
 	if !c.SigningEnabled() {
-		// Checking still works so the user learns a new version exists, but
-		// installing it will be refused: say so here rather than at the end of
-		// a download.
 		info.Error = ErrNoSigningKey.Error() + "; this release can only be installed by hand from " + info.ReleaseURL
 	}
 	return info, nil

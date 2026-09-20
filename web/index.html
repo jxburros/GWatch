@@ -72,6 +72,10 @@
       <header class="topbar">
         <h1 class="topbar-title" id="page-title">Dashboard</h1>
         <div class="topbar-right">
+          <!-- Shown only when a release newer than this build is waiting, and
+               only to an administrator, who is the only one who can install it.
+               It leads to Settings > Updates, where the choosing happens. -->
+          <a class="topbar-btn nav-link update-badge" href="#/settings/updates" id="update-badge" hidden title="An update is available" aria-live="polite"><span class="nav-icon" data-icon="rocket"></span><span class="topbar-btn-label" id="update-badge-label">Update</span></a>
           <a class="topbar-btn nav-link" href="#/settings" data-nav="settings" id="settings-link" title="Settings" aria-label="Settings"><span class="nav-icon" data-icon="settings"></span><span class="topbar-btn-label">Settings</span></a>
         </div>
       </header>

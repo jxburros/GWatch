@@ -181,6 +181,7 @@ func (s *Server) Handler() http.Handler {
 
 	s.route(mux, "GET /api/update/status", s.handleUpdateStatus)
 	s.route(mux, "POST /api/update/check", s.handleUpdateCheck)
+	s.route(mux, "GET /api/update/releases", s.handleUpdateReleases)
 	s.route(mux, "POST /api/update/apply", s.handleUpdateApply)
 
 	s.route(mux, "GET /api/logs", s.handleLogs)

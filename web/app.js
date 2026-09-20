@@ -2,7 +2,7 @@
 // theme + accent handling and live updates.
 
 import { api, onConnection, connection, subscribeUpdates, debounce, refreshMe, signOut, getAuthSetup, onAuthChallenge, onDenied } from './api.js';
-import { h, icon, clear, toast, closeMenus, replace, applyTheme, applyAccent, onThemeChange } from './components.js';
+import { h, icon, clear, toast, closeMenus, replace, applyTheme, applyAccent, onThemeChange, openModal } from './components.js';
 import { relTime } from './fmt.js';
 import { notifyRoute as tipsRoute, closeTip, onboardingDone } from './tips.js';
 
@@ -274,6 +274,85 @@ async function refreshStatus() {
   syncPageBar();
 }
 
+/* ---------- Application updates ---------- */
+/** The badge in the header is the only place an update announces itself
+ *  outside Settings. It appears for an administrator — nobody else can install
+ *  one — and leads to Settings › Updates, where the version is chosen. */
+const updateBadge = document.getElementById('update-badge');
+const updateBadgeLabel = document.getElementById('update-badge-label');
+let updateStatus = null;
+let promptedThisLoad = false;
+
+/** A check on open would hit GitHub on every reload, so a check made in the
+ *  last quarter of an hour is taken as current and the cached one is used. */
+function checkedRecently(st) {
+  if (!st?.lastCheckAt) return false;
+  return Date.now() - new Date(st.lastCheckAt).getTime() < 15 * 60e3;
+}
+
+function renderUpdateBadge() {
+  if (!updateBadge) return;
+  const last = updateStatus?.last;
+  const available = !!(last?.updateAvailable && !last.error && identity.isAdmin);
+  updateBadge.hidden = !available;
+  if (!available) return;
+  updateBadgeLabel.textContent = last.latestVersion || 'Update';
+  updateBadge.title = `GWatch ${last.latestVersion} is available${last.prerelease ? ' (pre-release)' : ''} — you are running ${last.currentVersion}`;
+}
+
+/** Offer the update when GWatch is opened. "Not now" asks again next time, as
+ *  intended; "Skip this version" stops it for that version only, so the next
+ *  release asks again. The choice is per browser, which is where the dialog
+ *  is: it is a prompt, not a policy. */
+function skippedVersion() {
+  try { return localStorage.getItem('gw.updateSkip') || ''; } catch { return ''; }
+}
+function skipVersion(v) {
+  try { localStorage.setItem('gw.updateSkip', v); } catch { /* private window: it asks again */ }
+}
+
+function promptForUpdate() {
+  const last = updateStatus?.last;
+  if (promptedThisLoad || !identity.isAdmin) return;
+  if (!updateStatus?.promptOnOpen || !last?.updateAvailable || last.error) return;
+  if (!updateStatus.canApply || !last.assetUrl) return; // nothing this dialog could do
+  if (skippedVersion() === last.latestVersion) return;
+  promptedThisLoad = true;
+  const m = openModal({
+    title: `GWatch ${last.latestVersion} is available`,
+    body: [
+      h('p', null, `You are running ${last.currentVersion}. ${last.prerelease ? 'This is a pre-release, published for testing and not finished work. ' : ''}Installing downloads the release, checks its signature, replaces this copy and restarts the service — monitoring pauses for a few seconds.`),
+      last.releaseNotes ? h('details', { class: 'collapsible' }, h('summary', null, 'Release notes'), h('div', { class: 'update-notes' }, last.releaseNotes)) : null,
+    ],
+    footer: [
+      h('button', { class: 'btn', type: 'button', onclick: () => { skipVersion(last.latestVersion); m.close(); } }, 'Skip this version'),
+      h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Not now'),
+      h('button', { class: 'btn btn-primary', type: 'button', onclick: () => { m.close(); navigate('/settings/updates'); } }, 'Go to updates'),
+    ],
+  });
+}
+
+/** Refresh what the badge shows. With `open`, this is the check made because
+ *  GWatch was just opened: it asks the service to contact GitHub (unless that
+ *  was done moments ago, or automatic checks are off) and then offers the
+ *  update. */
+async function refreshUpdates({ open = false } = {}) {
+  if (!identity.isAdmin) { if (updateBadge) updateBadge.hidden = true; return; }
+  try {
+    let doc = await api.get('/api/update/status');
+    let st = doc?.status;
+    if (open && st?.autoCheck && !checkedRecently(st)) {
+      try {
+        await api.post('/api/update/check');
+        st = (await api.get('/api/update/status'))?.status;
+      } catch { /* offline, rate-limited: the cached answer still shows */ }
+    }
+    updateStatus = st || null;
+    renderUpdateBadge();
+    if (open) promptForUpdate();
+  } catch { /* the connection banner covers this */ }
+}
+
 /* ---------- Live updates ---------- */
 const refreshCurrent = debounce(() => {
   if (current?.instance?.refresh) {
@@ -291,6 +370,9 @@ subscribeUpdates((update) => {
 });
 setInterval(refreshHealth, 60000);
 setInterval(refreshStatus, 30000);
+// Half-hourly, so a check the service made in the background reaches the
+// header without a reload. The check itself is the service's business.
+setInterval(() => refreshUpdates(), 30 * 60e3);
 refreshHealth();
 refreshStatus();
 
@@ -359,4 +441,8 @@ function firstRunRedirect() {
 
 // Who is looking has to be known before the first view is built: views read
 // ctx.me to decide what they may offer, and the theme travels with it.
-loadAppearance().finally(() => { if (!firstRunRedirect()) route(); });
+loadAppearance().finally(() => {
+  if (!firstRunRedirect()) route();
+  // Opening GWatch is one of the moments it looks for a new version.
+  refreshUpdates({ open: true });
+});

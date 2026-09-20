@@ -566,8 +566,28 @@ type Updater struct {
 	Restart func() // asked to restart the process after a successful swap
 	Log     interface{ Printf(string, ...any) }
 
-	mu     sync.Mutex
-	status model.UpdateStatus
+	// Prefs and Repo report the current update settings and the repository to
+	// check. They are functions rather than values because settings change
+	// while the service runs.
+	Prefs func() model.UpdateSettings
+	Repo  func() string
+
+	mu        sync.Mutex
+	status    model.UpdateStatus
+	lastCheck time.Time
+}
+
+// prefs returns the update settings, falling back to the defaults when no
+// accessor is wired (tests, and any build that constructs an Updater bare).
+func (u *Updater) prefs() model.UpdateSettings {
+	if u.Prefs == nil {
+		return model.DefaultSettings().Updates
+	}
+	p := u.Prefs()
+	if p.CheckIntervalHours <= 0 {
+		p.CheckIntervalHours = model.DefaultSettings().Updates.CheckIntervalHours
+	}
+	return p
 }
 
 func (u *Updater) exe() string {
@@ -579,29 +599,167 @@ func (u *Updater) exe() string {
 
 // Status returns a copy of the updater state.
 func (u *Updater) Status() model.UpdateStatus {
+	p := u.prefs()
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	st := u.status
 	st.Executable = u.exe()
 	st.CanApply = st.Executable != "" && update.DirWritable(st.Executable)
+	st.AutoCheck = p.CheckAutomatically
+	st.PromptOnOpen = p.CheckAutomatically && p.PromptOnOpen
+	if !u.lastCheck.IsZero() {
+		last := u.lastCheck
+		st.LastCheckAt = &last
+		if p.CheckAutomatically {
+			next := last.Add(time.Duration(p.CheckIntervalHours) * time.Hour)
+			st.NextCheckAt = &next
+		}
+	}
 	return st
 }
 
-// Check queries GitHub for the latest release.
+// Check queries GitHub for the newest release this build could move to.
 func (u *Updater) Check(ctx context.Context, repo string) (model.UpdateInfo, error) {
-	info, err := u.Client.Check(ctx, repo, u.Version)
+	info, err := u.Client.Check(ctx, repo, u.Version, u.prefs().IncludePrerelease)
 	if err != nil {
 		info.Error = err.Error()
 	}
 	u.mu.Lock()
 	cp := info
 	u.status.Last = &cp
+	u.lastCheck = time.Now()
 	u.mu.Unlock()
 	return info, err
 }
 
-// Apply downloads the latest asset, swaps the executable and requests a restart.
-func (u *Updater) Apply(ctx context.Context, repo string) (model.UpdateInfo, error) {
+// Releases lists what this build could move to, newest first. Pre-releases are
+// included and flagged: the interface decides whether to show them, and says
+// what they are when it does.
+func (u *Updater) Releases(ctx context.Context, repo string) ([]model.Release, error) {
+	return u.Client.Releases(ctx, repo, u.Version)
+}
+
+// Run checks for updates in the background: once shortly after the service
+// starts, then every CheckIntervalHours. It returns when ctx is cancelled.
+// Nothing is contacted while CheckAutomatically is off, and turning it back on
+// is picked up on the next tick rather than needing a restart.
+func (u *Updater) Run(ctx context.Context) {
+	// A moment's grace so the first check does not compete with everything
+	// else a starting service is doing.
+	timer := time.NewTimer(30 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-timer.C:
+		u.checkIfDue(ctx)
+	}
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			u.checkIfDue(ctx)
+		}
+	}
+}
+
+// checkIfDue runs a background check when automatic checks are on and the
+// interval has elapsed. A failure is kept in the status rather than retried:
+// the next tick is the retry.
+func (u *Updater) checkIfDue(ctx context.Context) {
+	p := u.prefs()
+	if !p.CheckAutomatically {
+		return
+	}
+	u.mu.Lock()
+	last := u.lastCheck
+	u.mu.Unlock()
+	if !last.IsZero() && time.Since(last) < time.Duration(p.CheckIntervalHours)*time.Hour {
+		return
+	}
+	repo := "jxburros/GWatch"
+	if u.Repo != nil {
+		repo = u.Repo()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	info, err := u.Check(ctx, repo)
+	if err != nil {
+		if u.Log != nil {
+			u.Log.Printf("update: check failed: %v", err)
+		}
+		return
+	}
+	if info.UpdateAvailable && u.Log != nil {
+		u.Log.Printf("update: %s is available (running %s)", info.LatestVersion, info.CurrentVersion)
+	}
+}
+
+// target resolves what Apply should install. It records the check it performs
+// in the status, so asking to install also refreshes what the interface shows.
+func (u *Updater) target(ctx context.Context, repo, version string) (model.UpdateInfo, error) {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		info, err := u.Check(ctx, repo)
+		if err != nil {
+			return info, err
+		}
+		if !info.UpdateAvailable {
+			return info, fmt.Errorf("already up to date (%s)", info.LatestVersion)
+		}
+		return info, nil
+	}
+	rels, err := u.Releases(ctx, repo)
+	if err != nil {
+		return model.UpdateInfo{Repo: repo, CurrentVersion: u.Version, CheckedAt: time.Now()}, err
+	}
+	rel := update.Find(rels, version)
+	if rel == nil {
+		return model.UpdateInfo{Repo: repo, CurrentVersion: u.Version, CheckedAt: time.Now()},
+			fmt.Errorf("no release %s was published for %s", version, repo)
+	}
+	if rel.Running {
+		return model.UpdateInfo{Repo: repo, CurrentVersion: u.Version, CheckedAt: time.Now()},
+			fmt.Errorf("%s is the version already running", rel.Version)
+	}
+	if !rel.Newer {
+		// Swapping in an older executable is not an update: the database has
+		// already been migrated by the running version and an older build may
+		// not understand it. Downloading the release by hand stays possible.
+		return model.UpdateInfo{Repo: repo, CurrentVersion: u.Version, CheckedAt: time.Now()},
+			fmt.Errorf("%s is older than the running version (%s); GWatch does not install an earlier version over a later one", rel.Version, u.Version)
+	}
+	if !rel.Installable {
+		return model.UpdateInfo{Repo: repo, CurrentVersion: u.Version, CheckedAt: time.Now()}, update.ErrNoAsset
+	}
+	info := model.UpdateInfo{
+		Repo: repo, CurrentVersion: u.Version, CheckedAt: time.Now(), CurrentIsDev: update.IsDev(u.Version),
+		LatestVersion: rel.Version, ReleaseURL: rel.URL, ReleaseNotes: rel.Notes, PublishedAt: rel.PublishedAt,
+		AssetName: rel.AssetName, AssetURL: rel.AssetURL, AssetSize: rel.AssetSize,
+		Prerelease: rel.Prerelease, UpdateAvailable: true,
+	}
+	u.mu.Lock()
+	cp := info
+	u.status.Last = &cp
+	u.lastCheck = time.Now()
+	u.mu.Unlock()
+	return info, nil
+}
+
+// Apply downloads a release asset, swaps the executable and requests a
+// restart. An empty version means the newest release this build could move to,
+// honouring the pre-release setting; a version names one release to install,
+// which may be an older one than the newest available or a pre-release the
+// user has chosen to accept.
+//
+// The version is resolved against the release list fetched here, never used to
+// build a download URL: what is downloaded is always an asset GitHub itself
+// lists for that release, and it is verified against the pinned signing keys
+// like any other.
+func (u *Updater) Apply(ctx context.Context, repo, version string) (model.UpdateInfo, error) {
 	u.mu.Lock()
 	if u.status.Applying {
 		u.mu.Unlock()
@@ -618,13 +776,8 @@ func (u *Updater) Apply(ctx context.Context, repo string) (model.UpdateInfo, err
 		}
 		u.mu.Unlock()
 	}
-	info, err := u.Check(ctx, repo)
+	info, err := u.target(ctx, repo, version)
 	if err != nil {
-		done(err)
-		return info, err
-	}
-	if !info.UpdateAvailable {
-		err := fmt.Errorf("already up to date (%s)", info.LatestVersion)
 		done(err)
 		return info, err
 	}
@@ -712,14 +865,44 @@ func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, info)
 }
 
+// handleUpdateReleases lists the releases this build could move to. The
+// pre-release ones are listed too, flagged as such: what the interface offers
+// is decided there, with the warning next to it.
+func (s *Server) handleUpdateReleases(w http.ResponseWriter, r *http.Request) {
+	if s.Updater == nil {
+		writeError(w, http.StatusServiceUnavailable, "updates are not available in this build")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	rels, err := s.Updater.Releases(ctx, s.updateRepo())
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "releases": []model.Release{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"releases": rels, "repo": s.updateRepo(), "version": s.Version})
+}
+
 func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 	if s.Updater == nil {
 		writeError(w, http.StatusServiceUnavailable, "updates are not available in this build")
 		return
 	}
+	// An empty version installs the newest release on offer; naming one
+	// installs that release instead, which is how a user takes an update that
+	// is not the most recent, or a pre-release.
+	var body struct {
+		Version string `json:"version"`
+	}
+	if r.ContentLength > 0 {
+		if err := decodeJSON(r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	info, err := s.Updater.Apply(ctx, s.updateRepo())
+	info, err := s.Updater.Apply(ctx, s.updateRepo(), body.Version)
 	if err != nil {
 		s.recordEvent(r.Context(), model.Event{Type: model.EventUpdate, Title: "Update failed", Detail: err.Error()})
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "info": info})

@@ -395,6 +395,14 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "scheduled backups cannot be enabled without a password")
 		return
 	}
+	up := &st.Updates
+	if up.CheckIntervalHours <= 0 {
+		up.CheckIntervalHours = def.Updates.CheckIntervalHours
+	}
+	if up.CheckIntervalHours < 1 || up.CheckIntervalHours > 720 {
+		writeError(w, http.StatusBadRequest, "the update check interval must be between 1 and 720 hours")
+		return
+	}
 	if err := s.Store.SaveSettings(r.Context(), st); err != nil {
 		s.fail(w, err)
 		return
@@ -431,6 +439,18 @@ func describeSettingsChange(before, after model.Settings) string {
 	}
 	if before.General != after.General {
 		parts = append(parts, "general settings changed")
+	}
+	// Automatic update checks are the one thing GWatch does that reaches
+	// outside the network on its own, so switching them is worth a line of
+	// its own rather than "settings changed".
+	if before.Updates.CheckAutomatically != after.Updates.CheckAutomatically {
+		parts = append(parts, "automatic update checks "+map[bool]string{true: "enabled", false: "disabled"}[after.Updates.CheckAutomatically])
+	}
+	if before.Updates.IncludePrerelease != after.Updates.IncludePrerelease {
+		parts = append(parts, "pre-release updates "+map[bool]string{true: "offered", false: "no longer offered"}[after.Updates.IncludePrerelease])
+	}
+	if before.Updates != after.Updates {
+		parts = append(parts, "update settings changed")
 	}
 	if len(parts) == 0 {
 		return "No effective change."

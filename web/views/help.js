@@ -122,9 +122,11 @@ const TOPICS = [
     id: 'updates',
     title: 'Updates',
     icon: 'download',
-    q: 'upgrade release github version signature ed25519 install in place restart old binary',
+    q: 'upgrade release github version signature ed25519 install in place restart old binary prerelease beta automatic check notify',
     body: () => [
-      h('p', null, h('a', { href: '#/settings/updates' }, 'Settings › Updates'), ' checks GitHub releases and can install a new executable in place, keeping the previous one as ', h('code', null, '.old'), ' and restarting the service itself.'),
+      h('p', null, h('a', { href: '#/settings/updates' }, 'Settings › Updates'), ' lists the releases the project has published and installs the one you choose — the newest, or an earlier one you would rather have. The new executable goes in place of the running one, the previous one is kept as ', h('code', null, '.old'), ', and the service restarts itself.'),
+      h('p', null, 'GWatch looks for a new version shortly after it starts, once a day after that, and when you open the interface; an indicator appears beside Settings when one is waiting, and it can offer the update in a dialog as you arrive. All of that switches off in one place, and with it off GWatch contacts nobody until you press ', h('b', null, 'Check now'), '.'),
+      h('p', null, 'Pre-releases are hidden until you ask for them. They are published for testing and are not finished work, so installing one is at your own risk.'),
       h('p', null, 'An update is only installed if its ed25519 signature verifies against a release key pinned into the running binary. An unsigned, differently signed or altered download is refused outright, never installed with a warning. A build with no key pinned — the default for forks and local builds — still reports new releases but will not install them.'),
       h('p', { class: 'note' }, 'Your data is untouched by an update; reinstalling over the top on Windows replaces the executable only.'),
     ],
