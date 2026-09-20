@@ -468,6 +468,8 @@ export async function mount(root, ctx) {
         st.plan?.length ? h('ul', { class: 'note', style: { marginTop: '12px', paddingLeft: '18px' } }, st.plan.map((p) => h('li', null, p))) : null);
     };
     api.get('/api/retention/status').then(renderStatus).catch((e) => replace(statusBox, h('p', { class: 'note' }, e.message)));
+    const pathsBox = h('div', null, skeleton({ lines: 2 }));
+    loadDataPaths(pathsBox);
     state.panelRefresh = () => api.get('/api/retention/status').then(renderStatus).catch(() => {});
     return h('form', { class: 'stack', onsubmit: (e) => { e.preventDefault(); saveSettings(); } },
       h('section', { class: 'card' }, h('h2', null, 'History retention'), h('p', { class: 'lead' }, 'Recent data stays detailed; older data is summarised so the database never grows without limit. 0 = keep forever.'),
@@ -476,10 +478,28 @@ export async function mount(root, ctx) {
           f('rawDays', 'Keep every result for'), f('fiveMinDays', 'Keep 5-minute summaries for'), f('hourlyDays', 'Keep hourly summaries for'), f('dailyDays', 'Keep daily summaries for'), f('eventDays', 'Keep events for'),
           f('hostDays', 'Keep hardware readings for', 'Each reading is a whole snapshot of a machine rather than a single number, so these are kept for less time than check results.')),
         h('hr', { class: 'divider' }), saveBar()),
-      h('section', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', null, 'Current storage'), runBtn), statusBox));
+      h('section', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', null, 'Current storage'), runBtn), statusBox, h('hr', { class: 'divider' }), pathsBox));
   }
 
   function hcard(value, label, sub) { return h('div', { class: 'health-card' }, h('div', { class: 'hv' }, value), h('div', { class: 'hl' }, label), sub ? h('div', { class: 'hs' }, sub) : null); }
+
+  // dataPathsBlock shows where GWatch's files actually live, in a read-only
+  // monospace block. Used on both the Retention and Backups tabs, since that
+  // is where people go looking for "where is my data".
+  function dataPathsBlock(hl) {
+    const dl = h('dl', { class: 'kv' });
+    const row = (k, v) => { if (v) dl.append(h('dt', null, k), h('dd', { class: 'mono' }, v)); };
+    row('Data directory', hl.dataDir);
+    row('Database', hl.databasePath);
+    row('Key file', hl.keyPath);
+    row('Backups folder', hl.backupDir);
+    return h('div', { style: { marginTop: '10px' } }, dl,
+      h('p', { class: 'note', style: { marginTop: '8px' } },
+        'These are ordinary files on this computer’s own disk, in a permanent folder — never a temp directory the OS can clear on reboot or under disk pressure.'));
+  }
+  function loadDataPaths(box) {
+    api.get('/api/health').then((hl) => replace(box, dataPathsBlock(hl))).catch(() => clear(box));
+  }
 
   /* ---------- Maintenance ---------- */
   async function tabMaintenance() {
@@ -649,13 +669,16 @@ export async function mount(root, ctx) {
       done();
       load();
     } }, icon('save'), 'Save automatic backup settings');
+    const pathsBox = h('div', null, skeleton({ lines: 2 }));
+    loadDataPaths(pathsBox);
     const autoCard = h('section', { class: 'card' }, h('h2', null, 'Automatic backups'), h('p', { class: 'lead' }, 'Runs unattended in the background on the schedule below, using the same encrypted format as a manual backup. Archives older than the number to keep are deleted automatically.'),
       autoEnabled,
       h('div', { class: 'form-grid', style: { marginTop: '12px' } },
         autoInterval, autoKeep, h('div', { class: 'span-2' }, autoHist),
         field({ label: 'Password', input: autoPw, help: bk.password ? 'A password is already saved; leave blank to keep it.' : 'Backups are always encrypted, so a password is required to enable this.' }),
         field({ label: 'Confirm password', input: autoPw2 })),
-      h('div', { class: 'form-actions', style: { marginTop: '12px' } }, autoSaveBtn), nextLine);
+      h('div', { class: 'form-actions', style: { marginTop: '12px' } }, autoSaveBtn), nextLine,
+      h('hr', { class: 'divider' }), h('p', { class: 'lead' }, 'Where archives land, alongside the database itself:'), pathsBox);
     await load();
     state.panelRefresh = load;
     return h('div', { class: 'stack' }, statusLine, createCard, autoCard, listCard, restoreCard);
