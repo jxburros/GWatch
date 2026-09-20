@@ -283,7 +283,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		NodeID *int64 `json:"nodeId"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	name := strings.TrimSpace(body.Name)
@@ -345,7 +345,7 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 		Enabled *bool  `json:"enabled"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	current, err := s.Store.GetAgent(ctx, id)
@@ -467,7 +467,7 @@ func (s *Server) handleCreatePairing(w http.ResponseWriter, r *http.Request) {
 		NodeID *int64 `json:"nodeId"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	name := strings.TrimSpace(body.Name)

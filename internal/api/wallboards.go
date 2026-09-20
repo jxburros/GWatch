@@ -57,7 +57,7 @@ func (s *Server) handleGetWallboard(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSaveWallboard(w http.ResponseWriter, r *http.Request) {
 	var b model.Wallboard
 	if err := decodeJSON(r, &b); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	if r.Method == http.MethodPut {
@@ -140,7 +140,7 @@ func (s *Server) handleShareWallboard(w http.ResponseWriter, r *http.Request) {
 		Rotate  bool `json:"rotate"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	current, err := s.Store.GetWallboard(ctx, id)

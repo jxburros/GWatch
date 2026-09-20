@@ -44,7 +44,11 @@ func newTestServer(t *testing.T) (*httptest.Server, *Server) {
 		t.Fatal(err)
 	}
 	t.Cleanup(eng.Stop)
-	web := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html>app</html>")}, "app.js": &fstest.MapFile{Data: []byte("//js")}}
+	web := fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte("<html>app</html>")},
+		"app.js":     &fstest.MapFile{Data: []byte("//js")},
+		"wall.html":  &fstest.MapFile{Data: []byte("<html>wall</html>")},
+	}
 	srv := &Server{Engine: eng, Store: st, Log: log, Web: web, BackupDir: filepath.Join(dir, "backups"), Version: "test", Updater: &Updater{Client: &update.Client{}, Version: "test", Log: log}}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -379,5 +383,72 @@ func TestStreamEmitsUpdates(t *testing.T) {
 	}
 	if !strings.Contains(got, `"kind":"config"`) && !strings.Contains(got, `"kind":"event"`) {
 		t.Fatalf("unexpected stream payload: %q", got)
+	}
+}
+
+// The security headers are the browser's half of the bargain, so they go on
+// every response — the app shell, the API and each static asset alike. A
+// header only some responses carry is a header an attacker aims at the rest.
+func TestSecurityHeadersOnEveryResponse(t *testing.T) {
+	ts, _ := newTestServer(t)
+	head := func(path string) http.Header {
+		t.Helper()
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return resp.Header
+	}
+
+	for _, path := range []string{"/", "/api/health", "/app.js", "/api/no-such-endpoint", "/#/nodes"} {
+		h := head(path)
+		csp := h.Get("Content-Security-Policy")
+		if csp == "" {
+			t.Errorf("%s: no Content-Security-Policy", path)
+			continue
+		}
+		for _, want := range []string{"default-src 'self'", "script-src 'self'", "object-src 'none'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'none'"} {
+			if !strings.Contains(csp, want) {
+				t.Errorf("%s: policy is missing %q: %s", path, want, csp)
+			}
+		}
+		if got := h.Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Errorf("%s: X-Content-Type-Options = %q", path, got)
+		}
+		if got := h.Get("X-Frame-Options"); got != "DENY" {
+			t.Errorf("%s: X-Frame-Options = %q", path, got)
+		}
+		if got := h.Get("Referrer-Policy"); got != "same-origin" {
+			t.Errorf("%s: Referrer-Policy = %q", path, got)
+		}
+	}
+
+	// The wallboard is the one page meant to be embedded — a screen in a Home
+	// Assistant dashboard is a real use, and the page is read-only and gated
+	// on its own share token, so there is nothing for clickjacking to steal.
+	// It says so with frame-ancestors, and stays silent on X-Frame-Options,
+	// which has no way to express "anyone".
+	for _, path := range []string{"/wall", "/wall/", "/wall.html", "/wall?id=2&token=abc"} {
+		h := head(path)
+		csp := h.Get("Content-Security-Policy")
+		if !strings.Contains(csp, "frame-ancestors *") {
+			t.Errorf("%s: the wallboard should be framable: %s", path, csp)
+		}
+		if got := h.Get("X-Frame-Options"); got != "" {
+			t.Errorf("%s: X-Frame-Options must not contradict frame-ancestors, got %q", path, got)
+		}
+		// Everything else about the policy is the same as anywhere else.
+		if !strings.Contains(csp, "script-src 'self'") || h.Get("X-Content-Type-Options") != "nosniff" {
+			t.Errorf("%s: the rest of the policy should be unchanged: %s", path, csp)
+		}
+	}
+
+	// A path that merely starts with the same letters is not the wallboard.
+	for _, path := range []string{"/wallboards", "/api/wallboards", "/wall.html.bak"} {
+		if csp := head(path).Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'none'") {
+			t.Errorf("%s: only the wallboard page itself may be framed: %s", path, csp)
+		}
 	}
 }

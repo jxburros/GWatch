@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -113,7 +114,7 @@ func (s *Server) handleListTriggers(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSaveTrigger(w http.ResponseWriter, r *http.Request) {
 	var t model.Trigger
 	if err := decodeJSON(r, &t); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	if r.Method == http.MethodPut {
@@ -180,7 +181,7 @@ func (s *Server) handleTestAction(w http.ResponseWriter, r *http.Request) {
 		NodeID *int64       `json:"nodeId"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	if err := s.normalizeAction(&body.Action); err != nil {
@@ -275,7 +276,7 @@ func (s *Server) handleListEndpoints(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSaveEndpoint(w http.ResponseWriter, r *http.Request) {
 	var e model.Endpoint
 	if err := decodeJSON(r, &e); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	if r.Method == http.MethodPut {
@@ -376,6 +377,18 @@ func (s *Server) handleRunEndpoint(w http.ResponseWriter, r *http.Request) {
 
 // handleHook serves /hook/{slug}: the public face of a custom endpoint.
 func (s *Server) handleHook(w http.ResponseWriter, r *http.Request) {
+	// An endpoint's token is a credential, and this route is reached with
+	// nothing else, so every attempt that does not produce a working one is
+	// charged to the same per-IP failure budget as a wrong password. That
+	// includes a slug nobody recognises: the 404 is kept because it is what
+	// makes a mistyped URL diagnosable, but paying for it stops the slug space
+	// from being enumerated for free.
+	ip := s.clientIP(r)
+	if allowed, wait := s.failLimiter.Allow(ip); !allowed {
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds()+0.999)))
+		writeError(w, http.StatusTooManyRequests, "too many failed attempts; try again shortly")
+		return
+	}
 	slug := strings.ToLower(strings.Trim(r.PathValue("slug"), "/"))
 	e, err := s.Store.GetEndpointBySlug(r.Context(), slug)
 	if err != nil || !e.Enabled {
@@ -404,10 +417,15 @@ func (s *Server) handleHook(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if subtle.ConstantTimeCompare([]byte(got), []byte(e.Token)) != 1 {
+			s.auditAuthFailure(r.Context(), "Endpoint token rejected",
+				fmt.Sprintf("The wrong token was presented for /hook/%s from %s.", e.Slug, ip), ip)
 			writeError(w, http.StatusUnauthorized, "invalid token")
 			return
 		}
 	}
+	// The caller got in, so give its budget back: an endpoint called on a
+	// schedule must never talk itself into a 429.
+	s.failLimiter.Reset(ip)
 	vars := actions.Vars{"method": r.Method, "remote": r.RemoteAddr}
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	vars["body"] = string(body)
@@ -438,7 +456,7 @@ func (s *Server) handleListCharts(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePutCharts(w http.ResponseWriter, r *http.Request) {
 	var list []model.SavedChart
 	if err := decodeJSON(r, &list); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	now := time.Now()
@@ -896,7 +914,7 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.ContentLength > 0 {
 		if err := decodeJSON(r, &body); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeDecodeError(w, err)
 			return
 		}
 	}

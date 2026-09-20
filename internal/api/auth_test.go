@@ -22,6 +22,7 @@ type creds struct {
 	APIKey   string // sent as Authorization: Bearer
 	Basic    string // legacy access password
 	Remote   string // override the client address (e.g. a LAN client)
+	Origin   string // send an Origin header, as a browser would
 	KeyInHdr bool   // send the key in X-API-Key instead of Authorization
 }
 
@@ -57,6 +58,9 @@ func as(t *testing.T, ts *httptest.Server, c creds, method, path string, body an
 	}
 	if c.Remote != "" {
 		req.Header.Set("X-Test-Remote", c.Remote)
+	}
+	if c.Origin != "" {
+		req.Header.Set("Origin", c.Origin)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -231,6 +235,103 @@ func TestLocalPrincipalRejectsCrossSiteWrites(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Fatalf("cross-site read: %d", resp.StatusCode)
+	}
+}
+
+// The legacy access password travels in HTTP basic auth, which a browser
+// re-attaches from its own cache to a cross-origin request once it has been
+// asked for it. So it needs the same guard the local principal has.
+func TestAccessPasswordRejectsCrossSiteWrites(t *testing.T) {
+	ts, srv := newTestServer(t)
+	allowTestRemote(srv)
+	st := srv.Engine.Settings()
+	st.General.AccessPassword = "letmein"
+	if err := srv.Store.SaveSettings(t.Context(), st); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.Engine.ReloadConfig(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	remote := "192.168.1.77:2222"
+
+	code, body, _ := as(t, ts, creds{Remote: remote, Basic: "letmein", Origin: "https://evil.example.com"}, "POST", "/api/nodes", newNode("Planted"), nil)
+	if code != 403 || !strings.Contains(body, "another website") {
+		t.Fatalf("cross-site write with the access password: %d %s", code, body)
+	}
+	// The same credential from the same origin, and from a script that sends
+	// no Origin at all, is untouched.
+	if code, body, _ := as(t, ts, creds{Remote: remote, Basic: "letmein", Origin: ts.URL}, "POST", "/api/nodes", newNode("Same origin"), nil); code != 201 {
+		t.Fatalf("same-origin write: %d %s", code, body)
+	}
+	if code, body, _ := as(t, ts, creds{Remote: remote, Basic: "letmein"}, "POST", "/api/nodes", newNode("From a script"), nil); code != 201 {
+		t.Fatalf("write with no Origin: %d %s", code, body)
+	}
+	// Reads are unaffected, as they are for the local principal.
+	if code, _, _ := as(t, ts, creds{Remote: remote, Basic: "letmein", Origin: "https://evil.example.com"}, "GET", "/api/nodes", nil, nil); code != 200 {
+		t.Errorf("cross-site read: %d", code)
+	}
+}
+
+// A form post from another website arrives as text/plain, form-urlencoded or
+// multipart, because those are the content types a browser will send
+// cross-origin with no preflight. Insisting on JSON is what puts every write
+// behind a preflight the other site cannot pass.
+func TestJSONEndpointsRefuseNonJSONBodies(t *testing.T) {
+	ts, _ := newTestServer(t)
+	send := func(path, contentType, body string) (int, string) {
+		t.Helper()
+		req, err := http.NewRequest("POST", ts.URL+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		data, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(data)
+	}
+
+	node := `{"name":"Router","host":"example.com","enabled":true,"checks":[]}`
+	// The node route reads its body through decodeNode rather than decodeJSON,
+	// and /api/events/note through decodeJSON: both have to refuse the same
+	// things, so both are exercised here.
+	for _, path := range []string{"/api/nodes", "/api/events/note"} {
+		for _, ct := range []string{"text/plain", "text/plain;charset=UTF-8", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x", "application/octet-stream", "not a media type at all"} {
+			code, body := send(path, ct, node)
+			if code != http.StatusUnsupportedMediaType {
+				t.Errorf("POST %s with %q: got %d %s, want 415", path, ct, code, body)
+			}
+			if !strings.Contains(body, "application/json") {
+				t.Errorf("POST %s with %q: the 415 should name the type it wants, got %s", path, ct, body)
+			}
+		}
+		// A body with no content type at all is the same refusal: a browser
+		// form always sends one, and a script that means JSON can say so.
+		if code, body := send(path, "", node); code != http.StatusUnsupportedMediaType {
+			t.Errorf("POST %s with no Content-Type: got %d %s, want 415", path, code, body)
+		}
+	}
+
+	// JSON is accepted, with or without parameters, and so is a +json suffix.
+	for _, ct := range []string{"application/json", "application/json; charset=utf-8", "APPLICATION/JSON", "application/merge-patch+json"} {
+		if code, body := send("/api/nodes", ct, node); code != 201 {
+			t.Errorf("POST /api/nodes with %q: got %d %s, want 201", ct, code, body)
+		}
+	}
+	// A JSON content type with a broken document is still a 400, not a 415:
+	// the two failures stay distinguishable.
+	if code, body := send("/api/nodes", "application/json", "{not json"); code != 400 {
+		t.Errorf("malformed JSON: got %d %s, want 400", code, body)
+	}
+	// A handler that treats a missing body as "nothing to change" keeps
+	// working: there is nothing to parse, so there is nothing to insist on.
+	if code, body := send("/api/settings/test-email", "", ""); code == http.StatusUnsupportedMediaType {
+		t.Errorf("an empty body with no Content-Type should not be a 415: %s", body)
 	}
 }
 
