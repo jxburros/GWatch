@@ -698,13 +698,13 @@ func (s *Server) handleExportResults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cw := csvWriter(w, fmt.Sprintf("gwatch-results-%d.csv", *id))
-	_ = cw.Write([]string{"timestamp", "success", "status", "message", "error", "latency_ms", "min_ms", "max_ms", "jitter_ms", "loss_pct", "http_status", "final_url", "attempts"})
+	_ = cw.Write([]string{"timestamp", "success", "status", "message", "error", "latency_ms", "min_ms", "max_ms", "jitter_ms", "stddev_ms", "loss_pct", "http_status", "final_url", "attempts"})
 	for _, res := range results {
 		code := ""
 		if res.Details.StatusCode != 0 {
 			code = strconv.Itoa(res.Details.StatusCode)
 		}
-		_ = cw.Write([]string{res.Timestamp.Format(time.RFC3339), strconv.FormatBool(res.Success), string(res.Status), res.Message, res.Error, fmtFloat(res.LatencyMS), fmtFloat(res.MinMS), fmtFloat(res.MaxMS), fmtFloat(res.JitterMS), fmtFloat(res.LossPct), code, res.Details.FinalURL, strconv.Itoa(res.Attempts)})
+		_ = cw.Write([]string{res.Timestamp.Format(time.RFC3339), strconv.FormatBool(res.Success), string(res.Status), res.Message, res.Error, fmtFloat(res.LatencyMS), fmtFloat(res.MinMS), fmtFloat(res.MaxMS), fmtFloat(res.JitterMS), fmtFloat(res.StdDevMS), fmtFloat(res.LossPct), code, res.Details.FinalURL, strconv.Itoa(res.Attempts)})
 	}
 	cw.Flush()
 }

@@ -126,8 +126,16 @@
         const count = check.config.pingCount || 4;
         const rtts = failed ? [] : Array.from({ length: count }, () => +(latency * (0.8 + r() * 0.4)).toFixed(2));
         res.details = { packetsSent: count, packetsReceived: rtts.length, rtts };
-        if (!failed) { res.minMs = Math.min(...rtts); res.maxMs = Math.max(...rtts); res.jitterMs = +(res.maxMs - res.minMs).toFixed(2); res.lossPct = 0; res.message = res.message || `${count}/${count} replies, avg ${latency.toFixed(1)} ms`; }
-        else { res.lossPct = 100; res.minMs = null; }
+        if (!failed) {
+          res.minMs = Math.min(...rtts); res.maxMs = Math.max(...rtts);
+          res.jitterMs = +(res.maxMs - res.minMs).toFixed(2);
+          // Population standard deviation of the packets, the same figure the
+          // service computes, so the detail card shows something plausible.
+          const mean = rtts.reduce((a2, b2) => a2 + b2, 0) / rtts.length;
+          res.stddevMs = +Math.sqrt(rtts.reduce((a2, v) => a2 + (v - mean) ** 2, 0) / rtts.length).toFixed(2);
+          res.lossPct = 0;
+          res.message = res.message || `${count}/${count} replies, avg ${latency.toFixed(1)} ms`;
+        } else { res.lossPct = 100; res.minMs = null; }
         break;
       }
       case 'http': case 'keyword': case 'json': {

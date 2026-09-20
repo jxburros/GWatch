@@ -157,6 +157,10 @@ export async function mount(root, ctx) {
       stat(st.nextRunAt && c.enabled !== false ? relTime(st.nextRunAt) : '—', 'Next run', st.nextRunAt),
       stat(String(st.consecutiveFailures ?? 0), 'Consecutive failures', null, st.consecutiveFailures > 0 ? 'text-down' : ''),
       last?.lossPct != null ? stat(pct(last.lossPct), 'Packet loss', null, last.lossPct > 0 ? 'text-degraded' : '') : null,
+      // A ping run measures several packets, so min/max and the two spread
+      // figures say far more about the link than the average alone. They come
+      // from the last result rather than the state, which only keeps latency.
+      ...(c.type === 'ping' && last ? pingStats(last) : []),
       last?.details?.cert ? stat(plural(last.details.cert.daysRemaining, 'day'), 'Cert expires in', null, last.details.cert.daysRemaining <= 14 ? 'text-degraded' : '') : null,
       st.lastChangeAt ? stat(relTime(st.lastChangeAt), `${status[0].toUpperCase()}${status.slice(1)} since`, st.lastChangeAt) : null,
     );
@@ -168,6 +172,20 @@ export async function mount(root, ctx) {
       loadResults(c).then((rows) => { if (!state.destroyed) replace(recent, h('div', { class: 'section-title' }, 'Recent results'), resultsTable(rows, c)); }).catch((e) => replace(recent, h('div', { class: 'note' }, e.message)));
     }
     return card;
+  }
+
+  // pingStats renders the extra per-packet figures of a ping result. Jitter is
+  // the average step between consecutive packets; the standard deviation is how
+  // far the whole run spreads around its average.
+  function pingStats(r) {
+    const d = r.details || {};
+    const out = [];
+    if (r.minMs != null) out.push(stat(fmtMs(r.minMs), 'Min RTT'));
+    if (r.maxMs != null) out.push(stat(fmtMs(r.maxMs), 'Max RTT'));
+    if (r.jitterMs != null) out.push(stat(fmtMs(r.jitterMs), 'Jitter'));
+    if (r.stddevMs != null) out.push(stat(fmtMs(r.stddevMs), 'Std deviation'));
+    if (d.packetsSent) out.push(stat(`${d.packetsReceived ?? 0}/${d.packetsSent}`, 'Packets received'));
+    return out;
   }
 
   function stat(value, label, ts, cls = '') {

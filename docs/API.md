@@ -224,6 +224,18 @@ companion that lets an AI assistant use this API with a key, is documented in
 - `GET /api/checks/{id}/results?limit=50` → `[Result]` newest first.
 - `GET /api/checks/{id}/state` → CheckState.
 
+A `Result` is one observation: `{id, checkId, ts, success, status, message, error,
+latencyMs, minMs, maxMs, jitterMs, stddevMs, lossPct, details, attempts, warnings}`.
+`latencyMs` is the primary metric of the check type (average RTT for ping, total
+request time for HTTP, connect time for TCP, resolve time for DNS) and is what the
+charts plot. `minMs`, `maxMs`, `jitterMs` and `stddevMs` are filled in when a check
+takes several samples in one run — today that means ping. `jitterMs` is the mean
+difference between consecutive packets; `stddevMs` is the population standard
+deviation of all the packets in the run, the figure `ping` prints beside min/avg/max.
+`lossPct` is the percentage of packets that did not come back. `details` carries the
+type-specific diagnostics: for ping, `packetsSent`, `packetsReceived` and `rtts` (the
+per-packet round-trip times in milliseconds).
+
 ## History (charts)
 
 - `GET /api/history?checkId=ID&range=1h|24h|7d|30d|1y` → `HistorySeries`.
@@ -563,7 +575,7 @@ See [`RESTORE.md`](RESTORE.md) for the end-to-end restore-to-a-new-machine proce
 ## Export
 
 - `GET /api/export/history.csv?checkId=ID&range=30d` → CSV: `timestamp,avg_ms,min_ms,max_ms,jitter_ms,loss_pct,availability_pct,count,failures`.
-- `GET /api/export/results.csv?checkId=ID&limit=5000` → raw results CSV.
+- `GET /api/export/results.csv?checkId=ID&limit=5000` → raw results CSV: `timestamp,success,status,message,error,latency_ms,min_ms,max_ms,jitter_ms,stddev_ms,loss_pct,http_status,final_url,attempts`.
 - `GET /api/export/events.csv?nodeId=&limit=5000&type=&q=&since=&until=` → events CSV (same filters as `/api/events`).
 - `GET /api/export/logs.txt?limit=1000` → the recent service log as text.
 - `GET /api/export/config.json` → nodes+checks+dashboards+maintenance+triggers+endpoints+saved charts as JSON (no passwords).

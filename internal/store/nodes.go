@@ -435,20 +435,21 @@ func saveStateTx(ctx context.Context, tx *sql.Tx, st model.CheckState) error {
 
 // ---- results ----
 
-const resultCols = `id, check_id, ts, success, status, message, error, latency_ms, min_ms, max_ms, jitter_ms, loss_pct, attempts, details, warnings`
+const resultCols = `id, check_id, ts, success, status, message, error, latency_ms, min_ms, max_ms, jitter_ms, stddev_ms, loss_pct, attempts, details, warnings`
 
 func scanResult(sc interface{ Scan(...any) error }) (model.Result, error) {
 	var r model.Result
 	var ts int64
 	var success int
-	var lat, min, max, jit, loss sql.NullFloat64
+	var lat, min, max, jit, sd, loss sql.NullFloat64
 	var details, warnings string
-	if err := sc.Scan(&r.ID, &r.CheckID, &ts, &success, &r.Status, &r.Message, &r.Error, &lat, &min, &max, &jit, &loss, &r.Attempts, &details, &warnings); err != nil {
+	if err := sc.Scan(&r.ID, &r.CheckID, &ts, &success, &r.Status, &r.Message, &r.Error, &lat, &min, &max, &jit, &sd, &loss, &r.Attempts, &details, &warnings); err != nil {
 		return r, err
 	}
 	r.Timestamp = time.UnixMilli(ts).Local()
 	r.Success = success == 1
 	r.LatencyMS, r.MinMS, r.MaxMS, r.JitterMS, r.LossPct = floatPtr(lat), floatPtr(min), floatPtr(max), floatPtr(jit), floatPtr(loss)
+	r.StdDevMS = floatPtr(sd)
 	_ = json.Unmarshal([]byte(details), &r.Details)
 	_ = json.Unmarshal([]byte(warnings), &r.Warnings)
 	return r, nil
@@ -471,9 +472,9 @@ func insertResultTx(ctx context.Context, tx *sql.Tx, r model.Result) (model.Resu
 	if r.Warnings == nil {
 		r.Warnings = []string{}
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO results(check_id, ts, success, status, message, error, latency_ms, min_ms, max_ms, jitter_ms, loss_pct, attempts, details, warnings)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		r.CheckID, r.Timestamp.UnixMilli(), boolInt(r.Success), string(r.Status), r.Message, r.Error, nullFloat(r.LatencyMS), nullFloat(r.MinMS), nullFloat(r.MaxMS), nullFloat(r.JitterMS), nullFloat(r.LossPct), r.Attempts, jsonString(r.Details), jsonString(r.Warnings))
+	res, err := tx.ExecContext(ctx, `INSERT INTO results(check_id, ts, success, status, message, error, latency_ms, min_ms, max_ms, jitter_ms, stddev_ms, loss_pct, attempts, details, warnings)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		r.CheckID, r.Timestamp.UnixMilli(), boolInt(r.Success), string(r.Status), r.Message, r.Error, nullFloat(r.LatencyMS), nullFloat(r.MinMS), nullFloat(r.MaxMS), nullFloat(r.JitterMS), nullFloat(r.StdDevMS), nullFloat(r.LossPct), r.Attempts, jsonString(r.Details), jsonString(r.Warnings))
 	if err != nil {
 		return r, err
 	}

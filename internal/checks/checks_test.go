@@ -691,6 +691,10 @@ func TestPingCheck(t *testing.T) {
 	if *res.JitterMS != 2.3 {
 		t.Errorf("jitter = %v", *res.JitterMS)
 	}
+	// Population stddev around the mean of 12: (4+0+1+9)/4 = 3.5, sqrt = 1.87.
+	if *res.StdDevMS != 1.9 {
+		t.Errorf("stddev = %v", *res.StdDevMS)
+	}
 	if res.Message != "4/4 replies, avg 12 ms" || res.Details.PacketsSent != 4 || len(res.Details.RTTs) != 4 {
 		t.Errorf("message/details: %q %+v", res.Message, res.Details)
 	}

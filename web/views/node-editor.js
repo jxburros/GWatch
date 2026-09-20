@@ -274,7 +274,7 @@ export async function mount(root, ctx) {
     switch (c.type) {
       case 'ping': {
         const count = numberInput({ value: cfg.pingCount || 4, min: 1, max: 20, oninput: () => { cfg.pingCount = Number(count.value); } });
-        return h('div', { class: 'form-grid-3' }, targetField(c, err, 'Host override'), field({ label: 'Packets per run', input: count }), ...warnFields(c, { loss: true }));
+        return h('div', { class: 'form-grid-3' }, targetField(c, err, 'Host override'), field({ label: 'Packets per run', input: count, error: err.pingCount, help: 'Packets per run, default 4, max 20. More packets give a steadier average and a more meaningful jitter and standard deviation.' }), ...warnFields(c, { loss: true }));
       }
       case 'http':
         return h('div', { class: 'stack' }, httpCommon(c, err), h('div', { class: 'form-grid-3' }, ...certFields(c, { withToggle: true }), ...warnFields(c)), contentWatch(c));

@@ -102,6 +102,17 @@ func runPingCheck(ctx context.Context, check model.Check, target string, opts Op
 			jitter = diff / float64(len(pr.RTTs)-1)
 		}
 		res.JitterMS = fptr(jitter)
+		// Standard deviation of the whole run, not of consecutive pairs the
+		// way jitter is measured. The population form (divide by n) is what
+		// ping itself reports: these packets are the entire run, not a sample
+		// drawn from a larger one, and it keeps a single-packet run at 0
+		// rather than dividing by zero.
+		var sq float64
+		for _, d := range pr.RTTs {
+			diff := float64(d)/float64(time.Millisecond) - avg
+			sq += diff * diff
+		}
+		res.StdDevMS = fptr(math.Sqrt(sq / float64(len(pr.RTTs))))
 	}
 
 	if pr.Received == 0 {

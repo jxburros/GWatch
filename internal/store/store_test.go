@@ -528,3 +528,47 @@ func TestKeyFileCreatedNextToDatabase(t *testing.T) {
 		t.Fatalf("key file perms = %v, want 0600", fi.Mode().Perm())
 	}
 }
+
+// A ping result carries a spread of numbers around its average, and #30 added
+// the standard deviation to them. They are stored in columns of their own, so
+// this guards the column list as much as the values.
+func TestResultSpreadFieldsRoundTrip(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	n, err := s.CreateNode(ctx, model.Node{Name: "Router", Host: "192.168.1.1", Enabled: true, Checks: []model.Check{{Type: model.CheckPing, Name: "Ping", Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := model.Result{
+		CheckID: n.Checks[0].ID, Timestamp: time.Now(), Success: true, Status: model.StatusUp,
+		LatencyMS: f(12), MinMS: f(10), MaxMS: f(15), JitterMS: f(2.3), StdDevMS: f(1.9), LossPct: f(0),
+		Attempts: 1,
+		Details:  model.ResultDetails{PacketsSent: 4, PacketsReceived: 4, RTTs: []float64{10, 12, 11, 15}},
+	}
+	if _, err := s.InsertResult(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.RecentResults(ctx, n.Checks[0].ID, 1)
+	if err != nil || len(out) != 1 {
+		t.Fatalf("recent results: %v %d", err, len(out))
+	}
+	got := out[0]
+	for _, c := range []struct {
+		name      string
+		got, want *float64
+	}{
+		{"latency", got.LatencyMS, in.LatencyMS},
+		{"min", got.MinMS, in.MinMS},
+		{"max", got.MaxMS, in.MaxMS},
+		{"jitter", got.JitterMS, in.JitterMS},
+		{"stddev", got.StdDevMS, in.StdDevMS},
+		{"loss", got.LossPct, in.LossPct},
+	} {
+		if c.got == nil || *c.got != *c.want {
+			t.Errorf("%s = %v, want %v", c.name, c.got, *c.want)
+		}
+	}
+	if got.Details.PacketsReceived != 4 || len(got.Details.RTTs) != 4 {
+		t.Errorf("details = %+v", got.Details)
+	}
+}

@@ -266,21 +266,27 @@ type AlertOverride struct {
 
 // Result is a single observation produced by running a check.
 type Result struct {
-	ID        int64         `json:"id"`
-	CheckID   int64         `json:"checkId"`
-	Timestamp time.Time     `json:"ts"`
-	Success   bool          `json:"success"`
-	Status    Status        `json:"status"` // up, degraded or down
-	Message   string        `json:"message"`
-	Error     string        `json:"error,omitempty"`
-	LatencyMS *float64      `json:"latencyMs"` // primary metric: avg RTT, total HTTP time, connect time, resolve time
-	MinMS     *float64      `json:"minMs,omitempty"`
-	MaxMS     *float64      `json:"maxMs,omitempty"`
-	JitterMS  *float64      `json:"jitterMs,omitempty"`
-	LossPct   *float64      `json:"lossPct,omitempty"`
-	Details   ResultDetails `json:"details"`
-	Attempts  int           `json:"attempts"`
-	Warnings  []string      `json:"warnings,omitempty"` // degraded reasons
+	ID        int64     `json:"id"`
+	CheckID   int64     `json:"checkId"`
+	Timestamp time.Time `json:"ts"`
+	Success   bool      `json:"success"`
+	Status    Status    `json:"status"` // up, degraded or down
+	Message   string    `json:"message"`
+	Error     string    `json:"error,omitempty"`
+	LatencyMS *float64  `json:"latencyMs"` // primary metric: avg RTT, total HTTP time, connect time, resolve time
+	MinMS     *float64  `json:"minMs,omitempty"`
+	MaxMS     *float64  `json:"maxMs,omitempty"`
+	JitterMS  *float64  `json:"jitterMs,omitempty"`
+	// StdDevMS is the population standard deviation of the individual samples
+	// behind LatencyMS — for a ping check, of its per-packet RTTs. Jitter says
+	// how much consecutive packets differ from each other; this says how far
+	// the whole run spreads around its average, which is the figure most ping
+	// tools print beside min/avg/max.
+	StdDevMS *float64      `json:"stddevMs,omitempty"`
+	LossPct  *float64      `json:"lossPct,omitempty"`
+	Details  ResultDetails `json:"details"`
+	Attempts int           `json:"attempts"`
+	Warnings []string      `json:"warnings,omitempty"` // degraded reasons
 }
 
 // ResultDetails carries the type-specific diagnostics shown in the
