@@ -47,16 +47,19 @@ func TestCompareVersions(t *testing.T) {
 }
 
 // pinKeys makes the given public keys the ones this build trusts for the rest
-// of the test, the way the -X ldflags override does at build time.
+// of the test, the way the -X ldflags override does at build time. The
+// embedded list is emptied for the duration as well: the override only takes
+// effect when it is non-empty, so pinning no keys at all — an unkeyed build —
+// would otherwise fall back to whatever release_keys.txt ships.
 func pinKeys(t *testing.T, pubs ...ed25519.PublicKey) {
 	t.Helper()
 	var lines []string
 	for _, p := range pubs {
 		lines = append(lines, FormatPublicKey(p))
 	}
-	old := releaseKeys
-	releaseKeys = strings.Join(lines, ",")
-	t.Cleanup(func() { releaseKeys = old })
+	oldOverride, oldEmbedded := releaseKeys, embeddedReleaseKeys
+	releaseKeys, embeddedReleaseKeys = strings.Join(lines, ","), ""
+	t.Cleanup(func() { releaseKeys, embeddedReleaseKeys = oldOverride, oldEmbedded })
 }
 
 // testKey returns a fresh signing key plus a signature file for payload.

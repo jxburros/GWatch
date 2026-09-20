@@ -14,7 +14,7 @@ served on `http://127.0.0.1:8080` (optionally to the rest of your LAN).
 No cloud account, no AI features, never exposed to the internet by itself. The product
 brief that defines the scope lives in [`local-network-monitoring-product-brief.md`](local-network-monitoring-product-brief.md).
 
-> **GWatch is in beta (0.1.0).** It works and it looks after your data, but the
+> **GWatch is in beta (0.2.0).** It works and it looks after your data, but the
 > interface and the JSON API can still change between releases, and bugs are likelier
 > now than they will be at 1.0 — which is reserved for the first public, stable
 > release. [`CHANGELOG.md`](CHANGELOG.md) lists what is in this version and the gaps it

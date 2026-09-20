@@ -9,7 +9,7 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
-## Unreleased
+## 0.2.0 — second beta
 
 ### Changed
 
@@ -45,6 +45,12 @@ disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 - **The setup programs wear the application's skin**: graphite field, a teal
   accent rule under the header, and the monospaced face in the fields that hold
   a port, an address or a pairing code.
+- **Releases are signed, and updates install themselves.** A release signing
+  key is pinned into the binary
+  ([`internal/update/release_keys.txt`](internal/update/release_keys.txt)), so
+  Settings › Updates can verify a download against it before replacing the
+  running copy. 0.1.0 shipped without a key and could only tell you a newer
+  version existed.
 
 ## 0.1.0 — first beta
 
