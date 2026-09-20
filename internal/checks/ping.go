@@ -13,8 +13,6 @@ import (
 	"strings"
 	"time"
 
-	probing "github.com/prometheus-community/pro-bing"
-
 	"github.com/jxburros/GWatch/internal/model"
 )
 
@@ -27,11 +25,26 @@ type pingResult struct {
 	RTTs     []time.Duration
 }
 
-// pingFunc performs the actual ICMP exchange. Tests replace it.
+// pingFunc performs the actual ICMP exchange with an already-resolved method.
+// Tests replace it.
 var pingFunc = runPing
 
+// resolvePingMethod picks the ping method a run will use: the check's own
+// override first, then the global setting, and "auto" when neither names one.
+// Anything unrecognised is treated as unset rather than refused — a setting
+// written by a newer build should not stop a check from running.
+func resolvePingMethod(override, global string) string {
+	for _, m := range []string{override, global} {
+		switch m {
+		case model.PingMethodAuto, model.PingMethodBuiltin, model.PingMethodSystem:
+			return m
+		}
+	}
+	return model.PingMethodAuto
+}
+
 // runPingCheck sends Config.PingCount echo requests and summarises latency,
-// jitter and loss.
+// jitter, spread and loss.
 func runPingCheck(ctx context.Context, check model.Check, target string, opts Options) model.Result {
 	cfg := check.Config
 	timeout := attemptTimeout(check)
@@ -47,7 +60,7 @@ func runPingCheck(ctx context.Context, check model.Check, target string, opts Op
 		count = maxPingCount
 	}
 
-	pr, err := pingFunc(ctx, host, count, timeout)
+	pr, err := pingFunc(ctx, host, count, timeout, resolvePingMethod(cfg.PingMethod, opts.PingMethod))
 	res := model.Result{}
 	if err != nil && pr.Received == 0 {
 		msg := describeNetError(err, timeout)
@@ -102,6 +115,17 @@ func runPingCheck(ctx context.Context, check model.Check, target string, opts Op
 			jitter = diff / float64(len(pr.RTTs)-1)
 		}
 		res.JitterMS = fptr(jitter)
+		// Standard deviation of the whole run, not of consecutive pairs the
+		// way jitter is measured. The population form (divide by n) is what
+		// ping itself reports: these packets are the entire run, not a sample
+		// drawn from a larger one, and it keeps a single-packet run at 0
+		// rather than dividing by zero.
+		var sq float64
+		for _, d := range pr.RTTs {
+			diff := float64(d)/float64(time.Millisecond) - avg
+			sq += diff * diff
+		}
+		res.StdDevMS = fptr(math.Sqrt(sq / float64(len(pr.RTTs))))
 	}
 
 	if pr.Received == 0 {
@@ -126,60 +150,51 @@ func runPingCheck(ctx context.Context, check model.Check, target string, opts Op
 	return res
 }
 
-// runPing tries pro-bing (unprivileged first on non-Windows, then privileged)
-// and finally falls back to the operating system's ping command.
-func runPing(ctx context.Context, host string, count int, timeout time.Duration) (pingResult, error) {
-	pr, err := runProBing(ctx, host, count, timeout, runtime.GOOS == "windows")
+// systemPingFunc shells out to the operating system's ping command. It is a
+// variable so that tests can exercise the fallback on a machine that has no
+// ping command of its own.
+var systemPingFunc = runSystemPing
+
+// runPing performs one ping run with the named method:
+//
+//   - "builtin" only ever uses GWatch's own ICMP sender, so a machine that
+//     will not let it open a socket gets an error saying exactly that rather
+//     than quietly running an external program.
+//   - "system" only ever runs the operating system's ping command, which is
+//     the way out where raw sockets are forbidden but ping is not.
+//   - "auto" (the default) tries the built-in sender and falls back to the
+//     command, which is what GWatch has always done.
+func runPing(ctx context.Context, host string, count int, timeout time.Duration, method string) (pingResult, error) {
+	switch method {
+	case model.PingMethodSystem:
+		return systemPingFunc(ctx, host, count, timeout)
+	case model.PingMethodBuiltin:
+		return runBuiltinPing(ctx, host, count, timeout)
+	}
+	pr, err := runBuiltinPing(ctx, host, count, timeout)
 	if err == nil {
 		return pr, nil
 	}
 	if ctx.Err() != nil {
 		return pr, err
 	}
+	// A name that does not resolve will not resolve for the ping command
+	// either, and reporting the DNS failure is more useful than reporting
+	// whatever the command makes of it.
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
 		return pr, err
 	}
-	if runtime.GOOS != "windows" && isSocketPermissionError(err) {
-		pr, err2 := runProBing(ctx, host, count, timeout, true)
-		if err2 == nil {
-			return pr, nil
-		}
-		err = err2
-	}
-	if ctx.Err() != nil {
-		return pr, err
-	}
-	pr2, err2 := runSystemPing(ctx, host, count, timeout)
+	pr2, err2 := systemPingFunc(ctx, host, count, timeout)
 	if err2 == nil {
 		return pr2, nil
 	}
 	return pr, fmt.Errorf("%v (system ping: %v)", err, err2)
 }
 
-func runProBing(ctx context.Context, host string, count int, timeout time.Duration, privileged bool) (pingResult, error) {
-	pinger, err := probing.NewPinger(host)
-	if err != nil {
-		return pingResult{}, err
-	}
-	pinger.Count = count
-	pinger.Interval = pingInterval
-	pinger.Timeout = timeout
-	pinger.SetPrivileged(privileged)
-	if err := pinger.RunWithContext(ctx); err != nil {
-		return pingResult{}, err
-	}
-	stats := pinger.Statistics()
-	if stats == nil {
-		return pingResult{}, errors.New("no ping statistics")
-	}
-	pr := pingResult{Sent: stats.PacketsSent, Received: stats.PacketsRecv, RTTs: stats.Rtts}
-	if pr.Sent == 0 {
-		return pr, errors.New("no packets were sent")
-	}
-	return pr, nil
-}
-
+// isSocketPermissionError recognises the ways a kernel says "you may not open
+// that socket". It decides whether an ICMP socket failing to open is reported
+// as a permission problem, which is the one the reader can do something about.
 func isSocketPermissionError(err error) bool {
 	if err == nil {
 		return false
@@ -280,6 +295,14 @@ func parsePingOutput(out string) pingResult {
 // offered to callers outside this package (a subnet sweep, for one) so they
 // share its privilege fallbacks rather than growing their own.
 func PingHost(ctx context.Context, host string, count int, timeout time.Duration) (sent, received int, rtts []time.Duration, err error) {
+	return PingHostWith(ctx, host, count, timeout, "")
+}
+
+// PingHostWith is PingHost with a say in how the ping is sent: "auto",
+// "builtin", "system", or "" for the default ("auto"). A caller holding the
+// settings should pass General.PingMethod, so that a sweep obeys the same
+// choice the checks do.
+func PingHostWith(ctx context.Context, host string, count int, timeout time.Duration, method string) (sent, received int, rtts []time.Duration, err error) {
 	if count <= 0 {
 		count = defaultPingCount
 	}
@@ -289,6 +312,6 @@ func PingHost(ctx context.Context, host string, count int, timeout time.Duration
 	if timeout <= 0 {
 		timeout = 2 * time.Second
 	}
-	pr, err := pingFunc(ctx, host, count, timeout)
+	pr, err := pingFunc(ctx, host, count, timeout, resolvePingMethod("", method))
 	return pr.Sent, pr.Received, pr.RTTs, err
 }

@@ -248,6 +248,7 @@ CREATE TABLE IF NOT EXISTS results (
   min_ms REAL,
   max_ms REAL,
   jitter_ms REAL,
+  stddev_ms REAL,
   loss_pct REAL,
   attempts INTEGER NOT NULL DEFAULT 1,
   details TEXT NOT NULL DEFAULT '{}',
@@ -374,6 +375,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
 var addedColumns = []struct{ table, column, ddl string }{
 	{"endpoints", "allow_no_token", "ALTER TABLE endpoints ADD COLUMN allow_no_token INTEGER NOT NULL DEFAULT 0"},
 	{"events", "actor", "ALTER TABLE events ADD COLUMN actor TEXT NOT NULL DEFAULT ''"},
+	{"results", "stddev_ms", "ALTER TABLE results ADD COLUMN stddev_ms REAL"},
 }
 
 // currentSchemaVersion is the schema_version this build expects. Every

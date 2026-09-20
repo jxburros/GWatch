@@ -21,3 +21,20 @@ test('node editor (new node) starts from a blank draft', async (t) => {
   assert.equal(ctx.setTitleCalls[0].title, 'Add node');
   assert.equal(root.querySelector('.card[aria-label="Node"] input').value, '');
 });
+
+// #47: a ping check may override the global ping method, and #30 gave the
+// packet count its help text. Both live in the ping check's own fields.
+test('node editor offers the ping count and the ping method override', async (t) => {
+  const node = window.__gwatchMock.nodes.find((n) => (n.checks || []).some((c) => c.type === 'ping'));
+  const { root } = await mountView(nodeEditorView, { params: { id: String(node.id) } }, t);
+
+  const card = [...root.querySelectorAll('.editor-check')]
+    .find((el) => [...el.querySelectorAll('label, .field-label')].some((l) => l.textContent.includes('Packets per run')));
+  assert.ok(card, 'the ping check card is on the page');
+  assert.match(card.textContent, /default 4, max 20/);
+
+  const select = [...card.querySelectorAll('select')].find((el) => [...el.options].some((o) => o.value === 'system'));
+  assert.ok(select, 'the ping method override select is on the card');
+  assert.deepEqual([...select.options].map((o) => o.value), ['', 'builtin', 'system']);
+  assert.equal(select.value, ''); // no override stored, so it follows the global setting
+});

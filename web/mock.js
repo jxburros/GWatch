@@ -126,8 +126,16 @@
         const count = check.config.pingCount || 4;
         const rtts = failed ? [] : Array.from({ length: count }, () => +(latency * (0.8 + r() * 0.4)).toFixed(2));
         res.details = { packetsSent: count, packetsReceived: rtts.length, rtts };
-        if (!failed) { res.minMs = Math.min(...rtts); res.maxMs = Math.max(...rtts); res.jitterMs = +(res.maxMs - res.minMs).toFixed(2); res.lossPct = 0; res.message = res.message || `${count}/${count} replies, avg ${latency.toFixed(1)} ms`; }
-        else { res.lossPct = 100; res.minMs = null; }
+        if (!failed) {
+          res.minMs = Math.min(...rtts); res.maxMs = Math.max(...rtts);
+          res.jitterMs = +(res.maxMs - res.minMs).toFixed(2);
+          // Population standard deviation of the packets, the same figure the
+          // service computes, so the detail card shows something plausible.
+          const mean = rtts.reduce((a2, b2) => a2 + b2, 0) / rtts.length;
+          res.stddevMs = +Math.sqrt(rtts.reduce((a2, v) => a2 + (v - mean) ** 2, 0) / rtts.length).toFixed(2);
+          res.lossPct = 0;
+          res.message = res.message || `${count}/${count} replies, avg ${latency.toFixed(1)} ms`;
+        } else { res.lossPct = 100; res.minMs = null; }
         break;
       }
       case 'http': case 'keyword': case 'json': {
@@ -314,7 +322,7 @@
     { id: 'nodes-maintenance', name: 'In maintenance', enabled: true, colour: 'yellow', condition: { kind: 'nodesInStatus', status: 'maintenance', minCount: 1 } },
   ];
   let settings = {
-    general: { instanceName: 'Home monitor', defaultIntervalSeconds: 60, defaultTimeoutSeconds: 10, maxConcurrentChecks: 8, minIntervalSeconds: 10, wallboardRefreshSeconds: 15, latencyWarnMs: 0, packetLossWarnPct: 0, theme: 'dark', accentColor: '#43c9c0', remoteAccess: false, accessPassword: '', requireLoginLocally: false, updateRepo: 'jxburros/GWatch' },
+    general: { instanceName: 'Home monitor', defaultIntervalSeconds: 60, defaultTimeoutSeconds: 10, maxConcurrentChecks: 8, minIntervalSeconds: 10, wallboardRefreshSeconds: 15, latencyWarnMs: 0, packetLossWarnPct: 0, pingMethod: 'auto', theme: 'dark', accentColor: '#43c9c0', remoteAccess: false, accessPassword: '', requireLoginLocally: false, updateRepo: 'jxburros/GWatch' },
     alerts: { enabled: true, recipients: ['jeff@example.com', 'sam@example.com'], failureThreshold: 2, cooldownMinutes: 60, notifyRecovery: true, notifyWarnings: true, certWarnDays: 14, smtp: { host: 'smtp.example.com', port: 587, username: 'gwatch@example.com', password: '********', from: 'GWatch <gwatch@example.com>', security: 'starttls' } },
     retention: { rawDays: 30, fiveMinDays: 180, hourlyDays: 730, dailyDays: 0, eventDays: 730 },
     indicators: clone(DEFAULT_INDICATORS),

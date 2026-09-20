@@ -169,7 +169,8 @@ type CheckConfig struct {
 	Target string `json:"target,omitempty"`
 
 	// Ping
-	PingCount int `json:"pingCount,omitempty"` // packets per run (default 4, max 20)
+	PingCount  int    `json:"pingCount,omitempty"`  // packets per run (default 4, max 20)
+	PingMethod string `json:"pingMethod,omitempty"` // "" = use GeneralSettings.PingMethod, else "auto" | "builtin" | "system"
 
 	// HTTP / keyword / JSON
 	Method          string            `json:"method,omitempty"`          // default GET
@@ -266,21 +267,27 @@ type AlertOverride struct {
 
 // Result is a single observation produced by running a check.
 type Result struct {
-	ID        int64         `json:"id"`
-	CheckID   int64         `json:"checkId"`
-	Timestamp time.Time     `json:"ts"`
-	Success   bool          `json:"success"`
-	Status    Status        `json:"status"` // up, degraded or down
-	Message   string        `json:"message"`
-	Error     string        `json:"error,omitempty"`
-	LatencyMS *float64      `json:"latencyMs"` // primary metric: avg RTT, total HTTP time, connect time, resolve time
-	MinMS     *float64      `json:"minMs,omitempty"`
-	MaxMS     *float64      `json:"maxMs,omitempty"`
-	JitterMS  *float64      `json:"jitterMs,omitempty"`
-	LossPct   *float64      `json:"lossPct,omitempty"`
-	Details   ResultDetails `json:"details"`
-	Attempts  int           `json:"attempts"`
-	Warnings  []string      `json:"warnings,omitempty"` // degraded reasons
+	ID        int64     `json:"id"`
+	CheckID   int64     `json:"checkId"`
+	Timestamp time.Time `json:"ts"`
+	Success   bool      `json:"success"`
+	Status    Status    `json:"status"` // up, degraded or down
+	Message   string    `json:"message"`
+	Error     string    `json:"error,omitempty"`
+	LatencyMS *float64  `json:"latencyMs"` // primary metric: avg RTT, total HTTP time, connect time, resolve time
+	MinMS     *float64  `json:"minMs,omitempty"`
+	MaxMS     *float64  `json:"maxMs,omitempty"`
+	JitterMS  *float64  `json:"jitterMs,omitempty"`
+	// StdDevMS is the population standard deviation of the individual samples
+	// behind LatencyMS — for a ping check, of its per-packet RTTs. Jitter says
+	// how much consecutive packets differ from each other; this says how far
+	// the whole run spreads around its average, which is the figure most ping
+	// tools print beside min/avg/max.
+	StdDevMS *float64      `json:"stddevMs,omitempty"`
+	LossPct  *float64      `json:"lossPct,omitempty"`
+	Details  ResultDetails `json:"details"`
+	Attempts int           `json:"attempts"`
+	Warnings []string      `json:"warnings,omitempty"` // degraded reasons
 }
 
 // ResultDetails carries the type-specific diagnostics shown in the
@@ -578,6 +585,27 @@ type RetentionSettings struct {
 	HostDays int `json:"hostDays"` // default 90
 }
 
+// How a ping check sends its echo requests. "auto" tries GWatch's own ICMP
+// sender and falls back to the operating system's ping command; "builtin"
+// never runs an external program; "system" always uses the ping command, which
+// is the way out on a machine that will not hand out ICMP sockets.
+const (
+	PingMethodAuto    = "auto"
+	PingMethodBuiltin = "builtin"
+	PingMethodSystem  = "system"
+)
+
+// ValidPingMethod reports whether s names a ping method. The empty string is
+// not one: a check config uses it to mean "follow the global setting", and the
+// global setting itself is normalised to "auto" when it is saved empty.
+func ValidPingMethod(s string) bool {
+	switch s {
+	case PingMethodAuto, PingMethodBuiltin, PingMethodSystem:
+		return true
+	}
+	return false
+}
+
 // GeneralSettings are miscellaneous application settings.
 type GeneralSettings struct {
 	InstanceName         string  `json:"instanceName"`
@@ -588,6 +616,7 @@ type GeneralSettings struct {
 	WallboardRefreshSecs int     `json:"wallboardRefreshSeconds"`
 	LatencyWarnMS        float64 `json:"latencyWarnMs"`     // global default; 0 = off
 	PacketLossWarnPct    float64 `json:"packetLossWarnPct"` // global default; 0 = off
+	PingMethod           string  `json:"pingMethod"`        // "auto" (default) | "builtin" | "system"
 	Theme                string  `json:"theme"`             // "dark" | "light" | "system"
 	AccentColor          string  `json:"accentColor"`       // hex colour used for the accent, e.g. "#43c9c0"
 	RemoteAccess         bool    `json:"remoteAccess"`      // listen on every interface so other devices on the LAN can open the UI
@@ -810,6 +839,7 @@ func DefaultSettings() Settings {
 			WallboardRefreshSecs: 15,
 			LatencyWarnMS:        0,
 			PacketLossWarnPct:    0,
+			PingMethod:           PingMethodAuto,
 			Theme:                "dark",
 			AccentColor:          "#43c9c0",
 			UpdateRepo:           "jxburros/GWatch",

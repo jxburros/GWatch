@@ -90,6 +90,10 @@ export function resultInspector(result, check, { compact = false } = {}) {
   if (result.minMs != null) metrics.push(['Min', fmtMs(result.minMs), { mono: true }]);
   if (result.maxMs != null) metrics.push(['Max', fmtMs(result.maxMs), { mono: true }]);
   if (result.jitterMs != null) metrics.push(['Jitter', fmtMs(result.jitterMs), { mono: true }]);
+  // Jitter is the average step between consecutive packets; the standard
+  // deviation is how far the whole run spreads around its average. Both are
+  // useful and they answer different questions, so both are shown.
+  if (result.stddevMs != null) metrics.push(['Std deviation', fmtMs(result.stddevMs), { mono: true }]);
   if (result.lossPct != null) metrics.push(['Packet loss', pct(result.lossPct), { mono: true }]);
 
   // HTTP family
