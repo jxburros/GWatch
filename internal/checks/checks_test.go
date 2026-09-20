@@ -825,7 +825,7 @@ func TestValidate(t *testing.T) {
 
 func TestTemplates(t *testing.T) {
 	tpls := Templates()
-	if len(tpls) != 8 {
+	if len(tpls) != 9 {
 		t.Fatalf("got %d templates", len(tpls))
 	}
 	// A template whose check reads a registered machine cannot name one until

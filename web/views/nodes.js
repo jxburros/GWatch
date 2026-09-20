@@ -151,7 +151,7 @@ export async function mount(root, ctx) {
   return { refresh: load, destroy() { state.destroyed = true; } };
 }
 
-const TEMPLATE_ICONS = { website: 'globe', 'home-server': 'server', router: 'router', 'api-endpoint': 'api', 'tcp-service': 'link', dns: 'hash', blank: 'file' };
+const TEMPLATE_ICONS = { website: 'globe', 'home-server': 'server', router: 'router', ping: 'activity', 'api-endpoint': 'api', 'tcp-service': 'link', dns: 'hash', blank: 'file' };
 
 export async function openTemplatePicker(state, ctx) {
   const body = h('div', { class: 'stack-sm' }, h('p', null, 'Pick a starting point. Every setting can be changed afterwards.'), skeleton({ lines: 3 }));

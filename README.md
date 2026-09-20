@@ -38,7 +38,7 @@ brief that defines the scope lives in [`local-network-monitoring-product-brief.m
   that goes quiet is reported as down, which is the whole point. See
   [`docs/HARDWARE.md`](docs/HARDWARE.md).
 - **Nodes** group several checks (a Plex node with Ping + TCP 32400 + HTTP). Templates
-  prefill sensible defaults for a website, home server, router, API endpoint, TCP service,
+  prefill sensible defaults for a website, home server, network device, ping-only device, API endpoint, TCP service,
   DNS name, this computer's hardware or a machine running the agent. Everything stays editable. Nodes carry groups, tags, notes, importance,
   enable/disable, duplicate, and a dependency ("Plex depends on Gateway").
 - **Run now / test** any check and inspect the full result (timings, status code, final

@@ -274,3 +274,21 @@ func parsePingOutput(out string) pingResult {
 	}
 	return pr
 }
+
+// PingHost sends count echo requests to host and reports how many came back
+// and how long each took. It is the same exchange a ping check performs,
+// offered to callers outside this package (a subnet sweep, for one) so they
+// share its privilege fallbacks rather than growing their own.
+func PingHost(ctx context.Context, host string, count int, timeout time.Duration) (sent, received int, rtts []time.Duration, err error) {
+	if count <= 0 {
+		count = defaultPingCount
+	}
+	if count > maxPingCount {
+		count = maxPingCount
+	}
+	if timeout <= 0 {
+		timeout = 2 * time.Second
+	}
+	pr, err := pingFunc(ctx, host, count, timeout)
+	return pr.Sent, pr.Received, pr.RTTs, err
+}

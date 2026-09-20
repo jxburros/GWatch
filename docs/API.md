@@ -145,7 +145,7 @@ companion that lets an AI assistant use this API with a key, is documented in
 - `POST /api/nodes/{id}/duplicate` → new Node (name suffixed " (copy)", disabled).
 - `POST /api/nodes/{id}/run` → runs all enabled checks of the node now → `[Result]`.
 - `POST /api/nodes/{id}/silence` body `{ "minutes": 60 }` (0 = unsilence) → silences every check of the node → Node.
-- `GET /api/templates` → `[NodeTemplate]` (website, home-server, router, api-endpoint, tcp-service, dns).
+- `GET /api/templates` → `[NodeTemplate]` (website, home-server, router — shown as "Network device", ping, api, tcp-service, this-computer, agent-machine, dns).
 - `GET /api/groups` → `{ "groups": [{"name":"...","count":3}], "tags": [{"name":"...","count":2}] }`.
 
 - `POST /api/checks/test` body: `{ "check": Check, "nodeHost": "..." }` → `Result` (not recorded; for validating unsaved config).

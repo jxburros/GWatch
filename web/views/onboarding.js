@@ -38,7 +38,7 @@ const STEPS = [
     body: () => [
       h('p', null, 'Each node holds one or more checks, so "Plex" can be a ping, a TCP port and the web page all at once, and goes down as one thing rather than three.'),
       h('p', null, 'The check types you will reach for first: ', h('b', null, 'ping'), ' (is it reachable, and how fast), ', h('b', null, 'TCP'), ' (is a port open), ', h('b', null, 'HTTP/S'), ' (does the page answer with the status you expect), ', h('b', null, 'DNS'), ' (does the name resolve) and ', h('b', null, 'certificate'), ' (is the TLS certificate valid, and how long until it expires).'),
-      h('p', { class: 'note' }, 'Templates fill in sensible defaults for a website, a home server, a router, an API or a DNS name — everything stays editable afterwards.'),
+      h('p', { class: 'note' }, 'Templates fill in sensible defaults for a website, a home server, a network device, an API, a DNS name or a plain ping — everything stays editable afterwards.'),
     ],
     actions: () => [h('a', { class: 'btn', href: '#/nodes/new' }, icon('plus'), 'Add a node')],
   },
