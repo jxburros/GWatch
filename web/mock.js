@@ -300,10 +300,24 @@
   ];
 
   /* ---------- Settings / health / backups ---------- */
+  // The header indicators, as a fresh install has them. The mock network
+  // above is deliberately in a state that fires several at once — a down
+  // gateway, a degraded website with a late certificate, a camera nobody has
+  // checked yet and a server under maintenance — so the stacked header can be
+  // seen without having to break anything first.
+  const DEFAULT_INDICATORS = [
+    { id: 'nodes-down', name: 'Nodes down', enabled: true, colour: 'red', condition: { kind: 'nodesInStatus', status: 'down', minCount: 1 } },
+    { id: 'monitor-unwell', name: 'Monitor trouble', enabled: true, colour: 'red', condition: { kind: 'serviceHealth', minCount: 1 } },
+    { id: 'nodes-degraded', name: 'Nodes degraded', enabled: true, colour: 'orange', condition: { kind: 'nodesInStatus', status: 'degraded', minCount: 1 } },
+    { id: 'certs-expiring', name: 'Certificates expiring', enabled: true, colour: 'orange', condition: { kind: 'certWarnings', minCount: 1 } },
+    { id: 'nodes-unknown', name: 'Waiting for first results', enabled: true, colour: 'yellow', condition: { kind: 'nodesInStatus', status: 'unknown', minCount: 1 } },
+    { id: 'nodes-maintenance', name: 'In maintenance', enabled: true, colour: 'yellow', condition: { kind: 'nodesInStatus', status: 'maintenance', minCount: 1 } },
+  ];
   let settings = {
     general: { instanceName: 'Home monitor', defaultIntervalSeconds: 60, defaultTimeoutSeconds: 10, maxConcurrentChecks: 8, minIntervalSeconds: 10, wallboardRefreshSeconds: 15, latencyWarnMs: 0, packetLossWarnPct: 0, theme: 'dark', accentColor: '#43c9c0', remoteAccess: false, accessPassword: '', requireLoginLocally: false, updateRepo: 'jxburros/GWatch' },
     alerts: { enabled: true, recipients: ['jeff@example.com', 'sam@example.com'], failureThreshold: 2, cooldownMinutes: 60, notifyRecovery: true, notifyWarnings: true, certWarnDays: 14, smtp: { host: 'smtp.example.com', port: 587, username: 'gwatch@example.com', password: '********', from: 'GWatch <gwatch@example.com>', security: 'starttls' } },
     retention: { rawDays: 30, fiveMinDays: 180, hourlyDays: 730, dailyDays: 0, eventDays: 730 },
+    indicators: clone(DEFAULT_INDICATORS),
   };
   let retention = { lastRunAt: ago(1 * DAY + 2 * HOUR), lastDurationMs: 2140, lastError: '', rawRows: 412_880, rollupRows5m: 96_412, rollupRows1h: 18_207, rollupRows1d: 1_128, eventRows: 1_940, oldestRaw: ago(30 * DAY), deletedLastRun: 12_904, plan: ['Raw results older than 30 days are rolled up into 5-minute buckets and deleted.', '5-minute buckets older than 180 days are rolled up into hourly buckets and deleted.', 'Hourly buckets older than 730 days are rolled up into daily buckets and deleted.', 'Daily buckets are kept forever.', 'Events older than 730 days are deleted.'] };
   let backups = [
@@ -512,7 +526,7 @@
   on('GET', /^\/api\/version$/, () => ({ version: '0.4.1', platform: 'windows/amd64', apiVersion: 1 }));
   // The mock always plays an administrator on the machine GWatch runs on:
   // there is nothing to sign in to, so the sign-in screen never appears.
-  on('GET', /^\/api\/me$/, () => ({ kind: 'local', name: 'this computer', role: 'admin', isAdmin: true, canWrite: true, signedIn: false, theme: settings.general.theme, accentColor: settings.general.accentColor }));
+  on('GET', /^\/api\/me$/, () => ({ kind: 'local', name: 'this computer', role: 'admin', isAdmin: true, canWrite: true, signedIn: false, theme: settings.general.theme, accentColor: settings.general.accentColor, indicators: clone(settings.indicators || []) }));
   on('GET', /^\/api\/auth\/setup$/, () => ({ usersConfigured: false, loginRequired: false, accessPasswordSet: false, apiVersion: 1 }));
   on('GET', /^\/api\/users$/, () => []);
   on('GET', /^\/api\/apikeys$/, () => []);
@@ -610,7 +624,7 @@
   on('PUT', /^\/api\/dashboards\/(\d+)$/, (m, body) => { const d = dashboards.find((x) => x.id === Number(m[1])); if (!d) throw err(404, 'dashboard not found'); d.name = body.name ?? d.name; d.widgets = body.widgets ?? d.widgets; d.updatedAt = iso(Date.now()); return clone(d); });
   on('DELETE', /^\/api\/dashboards\/(\d+)$/, (m) => { const i = dashboards.findIndex((x) => x.id === Number(m[1])); if (i < 0) throw err(404, 'dashboard not found'); dashboards.splice(i, 1); return { ok: true }; });
   on('GET', /^\/api\/settings$/, () => clone(settings));
-  on('PUT', /^\/api\/settings$/, (m, body) => { settings = clone(body); if (settings.alerts?.smtp?.password) settings.alerts.smtp.password = '********'; if (settings.general?.accessPassword) settings.general.accessPassword = '********'; addEvent('config_changed', { title: 'Settings changed' }); return clone(settings); });
+  on('PUT', /^\/api\/settings$/, (m, body) => { settings = clone(body); if (settings.alerts?.smtp?.password) settings.alerts.smtp.password = '********'; if (settings.general?.accessPassword) settings.general.accessPassword = '********'; if (!settings.indicators?.length) settings.indicators = clone(DEFAULT_INDICATORS); addEvent('config_changed', { title: 'Settings changed' }); return clone(settings); });
   on('POST', /^\/api\/settings\/test-email$/, (m, body) => { if (!settings.alerts.smtp.host) throw err(400, 'SMTP host is not configured'); return { ok: true, message: `Test email sent to ${body?.to || settings.alerts.recipients.join(', ')} via ${settings.alerts.smtp.host}` }; });
   on('GET', /^\/api\/retention\/status$/, () => retention);
   on('POST', /^\/api\/retention\/run$/, () => { retention = { ...retention, lastRunAt: iso(Date.now()), lastDurationMs: 1830, deletedLastRun: 1043, rawRows: retention.rawRows - 1043, rollupRows5m: retention.rollupRows5m + 288 }; addEvent('retention', { title: 'Retention run finished', detail: 'Rolled up 1,043 raw results · 1.8 s' }); return retention; });

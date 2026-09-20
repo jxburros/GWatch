@@ -194,7 +194,7 @@ svg.icon { width: 1em; height: 1em; display: inline-block; vertical-align: -0.15
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
-  .view-enter, .view-enter > *, .view-enter .widget, .view-enter .node-row, .title-enter, .sdot, .tip { animation: none !important; }
+  .view-enter, .view-enter > *, .view-enter .widget, .view-enter .node-row, .title-enter, .indicator, .tip { animation: none !important; }
   .empty .empty-icon { animation: none !important; }
 }
 
@@ -347,34 +347,6 @@ html.rail-pinned .main, body.rail-pinned .main { margin-left: var(--rail-expande
 .topbar-actions .btn { padding: 0.25rem 0.7rem; min-height: 1.875rem; font-size: 0.78125rem; }
 .topbar-actions .btn .icon { font-size: 0.875rem; }
 .topbar-actions .icon-btn { width: 1.875rem; height: 1.875rem; }
-/* The live counts are colour bars, not boxes: a 3px stripe of the status
-   colour and the number beside it. Quieter than a row of chips, and it leaves
-   the glow to the orbs. */
-.status-dots { display: flex; align-items: center; gap: 1rem; min-width: 0; }
-.sdot {
-  display: inline-flex; align-items: center; gap: 0.5rem; height: 1.625rem;
-  color: var(--muted); font-family: var(--mono); font-size: 0.75rem; font-weight: 400; text-decoration: none;
-  animation: sdot-in 0.32s var(--ease) both;
-  transition: color var(--dur) var(--ease);
-}
-.sdot:hover { text-decoration: none; color: var(--text); }
-.sdot i {
-  --orb: var(--unknown-rgb);
-  width: 3px; height: 1.125rem; flex: none;
-  background: rgb(var(--orb));
-}
-.sdot.s-down i { --orb: var(--down-rgb); animation: bar-alert 1.8s ease-in-out infinite; }
-.sdot.s-degraded i { --orb: var(--warn-rgb); }
-.sdot.s-cert i { --orb: var(--maint-rgb); }
-.sdot.s-service i { --orb: var(--down-rgb); }
-.sdot.s-unknown i { --orb: var(--unknown-rgb); }
-.sdot.s-ok i { --orb: var(--up-rgb); }
-.sdot.s-down, .sdot.s-service, .sdot.s-degraded, .sdot.s-cert { color: var(--text); }
-/* The one bar that keeps a pulse: something is down. */
-@keyframes bar-alert {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--orb), 0.45); }
-  50% { box-shadow: 0 0 0 3px rgba(var(--orb), 0.14); }
-}
 .view { padding: 1.375rem var(--gutter) 3.5rem; flex: 1; }
 /* The page bar already supplies the space above the first panel. */
 .page-bar:not([hidden]) + .api-banner + .view, .page-bar:not([hidden]) ~ .view { padding-top: 0.875rem; }
@@ -520,7 +492,6 @@ html.rail-pinned .main, body.rail-pinned .main { margin-left: var(--rail-expande
   0%, 100% { box-shadow: 0 0 0 1px rgba(var(--orb), 0.35), 0 0 calc(7px * var(--glow-strength)) rgba(var(--orb), 0.65); }
   50% { box-shadow: 0 0 0 3px rgba(var(--orb), 0.16), 0 0 calc(18px * var(--glow-strength)) rgba(var(--orb), 1); }
 }
-@keyframes sdot-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 
 /* ---------- Motion ---------- */
 /* Everything below is short, single-shot and low-travel. `.view-enter` is put on
@@ -1526,7 +1497,6 @@ kbd { font-family: var(--mono); font-size: 0.71875rem; padding: 2px 6px; border:
   .topbar-btn { padding: 0 0.5rem; }
   .view { padding: 1rem 0.875rem 2.5rem; }
   .api-banner { margin: 0.625rem 0.875rem 0; }
-  .status-dots { gap: 0.75rem; }
   .filter-bar { padding: 0.75rem 0.8125rem; margin-bottom: 1rem; }
   .settings-layout { grid-template-columns: 1fr; gap: 0.75rem; }
   .settings-nav { position: static; flex-direction: row; flex-wrap: wrap; }
@@ -1573,9 +1543,6 @@ kbd { font-family: var(--mono); font-size: 0.71875rem; padding: 2px 6px; border:
 }
 @media (max-width: 43.75rem) {
   .health-cards { grid-template-columns: 1fr; }
-  /* The counts used to shed their labels here, because they were competing
-     with the page title for one header. They have their own bar now, which
-     wraps, so a bar of colour with no number beside it is only confusing. */
   .page-bar { align-items: flex-start; }
 }
 @media print {
@@ -1585,7 +1552,124 @@ kbd { font-family: var(--mono); font-size: 0.71875rem; padding: 2px 6px; border:
   body::before { display: none; }
   .card, .widget, .node-rows, .timeline, .filter-bar { box-shadow: none; background-image: none; }
   .card > .card-head:first-child, .widget-head { background: none; }
-  .orb, .sdot i { box-shadow: none; animation: none; }
+  .orb { box-shadow: none; animation: none; }
   .spine { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   .orb::after { display: none; }
+}
+
+/* ================================================================
+   Header indicators (issue #26)
+   Everything below is new; nothing above it is changed.
+
+   The indicators are the status orbs under the page title. They use the
+   orb language of the rest of the interface, because the rule has not
+   changed: a glow means status and nothing else. One orb when all is
+   well, blue when there is nothing to report on yet, one per firing
+   rule otherwise — reddest first, stacked left to right.
+   ================================================================ */
+
+/* Orange is not among the six status colours, because until now nothing in
+   GWatch sat between "slow" and "not answering". An indicator rule may, so
+   the colour is defined here rather than added to the status palette. */
+:root {
+  --ind-orange: #ff9838;
+  --ind-orange-rgb: 255, 152, 56;
+}
+/* On white the amber GWatch calls --warn has already been darkened to
+   #b26a00 to stay legible, which lands it close to any honest orange. So in
+   the light theme the orange is pushed the other way, towards red, far
+   enough that the two are told apart at orb size and still short of the red
+   itself. */
+:root[data-theme="light"] {
+  --ind-orange: #e05a00;
+  --ind-orange-rgb: 224, 90, 0;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]):not([data-theme="light"]) {
+    --ind-orange: #e05a00;
+    --ind-orange-rgb: 224, 90, 0;
+  }
+}
+
+/* The title and the orbs are one block in the header's left column. The two
+   lines fit inside the existing header height, so nothing below it moves and
+   every sticky offset measured from --topbar-h still lands where it did. */
+.topbar-lead { display: flex; flex-direction: column; justify-content: center; gap: 0.125rem; min-width: 0; flex: 1; }
+.topbar-lead .topbar-title { flex: none; line-height: 1.2; }
+
+.indicators { display: flex; align-items: center; gap: 0.5rem; min-width: 0; min-height: 1rem; }
+.indicators:empty { display: none; }
+.indicator {
+  display: inline-flex; align-items: center; gap: 0.3125rem;
+  height: 1rem; padding: 0 0.125rem;
+  color: var(--muted); font-family: var(--mono); font-size: 0.6875rem; line-height: 1;
+  text-decoration: none;
+  animation: indicator-in 0.32s var(--ease) both;
+  transition: color var(--dur) var(--ease);
+}
+.indicator:hover, .indicator:focus-visible { text-decoration: none; color: var(--text); }
+/* The count is only shown when it is more than one; one of something is
+   already said by the orb being there at all. */
+.indicator-count { font-variant-numeric: tabular-nums; }
+
+/* Each severity is only a value of --orb: the orb rules above do the rest. */
+.ind-red .orb { --orb: var(--down-rgb); animation: orb-alert 1.8s ease-in-out infinite; }
+.ind-orange .orb { --orb: var(--ind-orange-rgb); animation: orb-breathe 3s ease-in-out infinite; }
+.ind-yellow .orb { --orb: var(--warn-rgb); }
+.ind-ok .orb { --orb: var(--up-rgb); animation: orb-breathe 4.5s ease-in-out infinite; }
+/* Blue: nothing is connected yet. It is the one state that is neither good
+   news nor bad, so it neither breathes nor pulses — it just sits there. */
+.ind-idle .orb { --orb: var(--maint-rgb); }
+.ind-red, .ind-orange { color: var(--text); }
+
+/* The reduced-motion block near the top of this file already names
+   .indicator, so this animation and the orbs' own are stilled there. */
+@keyframes indicator-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+
+/* Phones: this is the width at which the rail lies down across the top, and
+   two stacked lines of chrome above a small screen is one line too many, so
+   the orbs tuck in beside the title instead. */
+@media (max-width: 56.25rem) {
+  /* justify-content centred the two lines vertically while this was a
+     column; laid on its side it has to go back to the left edge. */
+  .topbar-lead { flex-direction: row; align-items: center; justify-content: flex-start; gap: 0.625rem; }
+  .topbar-lead .topbar-title { flex: 0 1 auto; }
+  .indicators { flex: none; gap: 0.4375rem; }
+}
+
+/* ---------- Settings > Indicators ---------- */
+.ind-rules { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.875rem; }
+.ind-rule {
+  display: grid; align-items: center; gap: 0.625rem;
+  grid-template-columns: auto auto 1fr auto;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--line); background: var(--elev);
+}
+.ind-rule.off { opacity: 0.55; }
+/* Name, condition and count share one line while there is room for them,
+   and stack in that order when there is not. */
+.ind-rule-cond { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.ind-rule-name { flex: 1 1 10rem; min-width: 7rem; }
+.ind-rule-cond select { flex: 1 1 14rem; min-width: 11rem; }
+.ind-rule-cond .ind-rule-cond { flex: none; }
+.ind-rule-cond input[type="number"] { width: 4.5rem; }
+.ind-rule-actions { display: flex; align-items: center; gap: 0.25rem; justify-content: flex-end; }
+/* The three severities as swatches. Square like everything else, and the
+   chosen one is marked by the accent ring the rest of the interface uses for
+   a choice rather than by a glow, which would mean status. */
+.ind-swatches { display: inline-flex; gap: 0.25rem; }
+.ind-swatch {
+  width: 1.375rem; height: 1.375rem; flex: none; padding: 0;
+  border: 1px solid var(--line-strong); cursor: pointer;
+}
+.ind-swatch[aria-checked="true"] { box-shadow: var(--focus); border-color: var(--accent-line); }
+.ind-swatch-red { background: var(--down); }
+.ind-swatch-orange { background: var(--ind-orange); }
+.ind-swatch-yellow { background: var(--warn); }
+/* A row of orbs showing what the header would look like right now. */
+.ind-preview { display: flex; align-items: center; gap: 0.75rem; padding: 0.625rem 0.75rem; border: 1px solid var(--line); background: var(--band); }
+.ind-preview .indicators { min-height: 1rem; }
+@media (max-width: 68.75rem) {
+  .ind-rule { grid-template-columns: 1fr; align-items: stretch; }
+  .ind-rule-actions { justify-content: flex-start; }
 }

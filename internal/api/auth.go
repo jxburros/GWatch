@@ -354,7 +354,8 @@ func (s *Server) auditAuthFailure(ctx context.Context, title, detail, ip string)
 // ---- auth endpoints ----
 
 func (s *Server) principalDoc(ctx context.Context, p auth.Principal) model.Principal {
-	g := s.Engine.Settings().General
+	st := s.Engine.Settings()
+	g := st.General
 	return model.Principal{
 		Kind:        string(p.Kind),
 		Name:        p.Name,
@@ -366,6 +367,7 @@ func (s *Server) principalDoc(ctx context.Context, p auth.Principal) model.Princ
 		SignedIn:    p.Kind == auth.KindUser,
 		Theme:       g.Theme,
 		AccentColor: g.AccentColor,
+		Indicators:  model.NormalizeIndicators(st.Indicators),
 	}
 }
 

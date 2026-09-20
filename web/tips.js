@@ -44,10 +44,10 @@ export const TIPS = [
   {
     id: 'header-counts',
     route: /^\/(dashboard|nodes|incidents)/,
-    anchor: '#status-dots .sdot',
+    anchor: '#indicators .indicator',
     place: 'bottom',
-    title: 'The page counts are links',
-    body: 'Every circle in the bar above the page opens the list behind it — "2 down" goes straight to the nodes that are down. When there is nothing to report it collapses to a single all-clear.',
+    title: 'The indicators are links',
+    body: 'Every orb under the page name opens what it is about — a red one goes straight to the nodes that are down. One green orb means nothing is firing, blue means nothing has been checked yet, and which conditions light which colour is yours to set in Settings › Indicators.',
   },
   {
     id: 'service-health',
