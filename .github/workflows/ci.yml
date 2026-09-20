@@ -1,14 +1,21 @@
 name: CI
 
-# One job does everything GWatch needs on the platform it ships on: lint,
-# build, test, web-asset checks and PowerShell script parsing. Linux/macOS
-# runners are intentionally not used for now (see the `release` job for the
+# The Windows job does everything GWatch needs on the platform it ships on as
+# a service: lint, build, test, web-asset checks, PowerShell script parsing
+# and the two Inno Setup installers. Linux and macOS get their own jobs below
+# — lighter, since neither builds an installer — so that a platform-specific
+# regression (a build tag, a syscall, sysmetrics' darwin/linux paths) is
+# caught before it reaches a tag push (see the `release` job for the
 # cross-compiled artefacts).
 
 on:
   push:
     branches: ['**']
-    tags: ['v*']
+    # v* triggers the core release job below. mcp/v* is the MCP companion's
+    # own tag scheme (nested-module tags, so `go install .../mcp/...@latest`
+    # resolves — see docs/RELEASING.md#releasing-the-mcp-companion) and
+    # triggers only the mcp-tag guard job, not a second release.
+    tags: ['v*', 'mcp/v*']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -178,6 +185,80 @@ jobs:
             scripts/installer/Output/gwatch-agent-setup-*.exe
           if-no-files-found: error
 
+  # GWatch installs as a service only on Windows, but it builds and runs as a
+  # plain console process anywhere, and internal/sysmetrics has a real
+  # linux_amd64/linux_arm64 build-tagged file (collect_linux.go) that the
+  # Windows job never compiles. This job is the one that does.
+  linux:
+    name: Test (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt, go vet, go build, go test
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::These files are not gofmt'd:"; echo "$unformatted"; gofmt -d .; exit 1
+          fi
+          go vet ./...
+          go build ./...
+          go test -count=1 ./...
+
+      # The race detector is worth the extra time on the packages most likely
+      # to have one: the scheduler, the API server, the store's queued writer
+      # and the agent-facing hardware-monitoring code.
+      - name: Race tests
+        run: go test -race -count=1 ./internal/engine/... ./internal/api/... ./internal/store/... ./internal/hostmon/...
+
+      # The MCP companion is its own module (see the Windows job's comment on
+      # the same step) and gets the same treatment here.
+      - name: MCP companion — gofmt, go vet, go build, go test
+        working-directory: mcp
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::These files in mcp/ are not gofmt'd:"; echo "$unformatted"; gofmt -d .; exit 1
+          fi
+          go vet ./...
+          go build ./...
+          go test -count=1 ./...
+
+      # govulncheck's latest release tracks the latest Go toolchain rather
+      # than the one GWatch targets, so it is pinned to the newest release
+      # that still builds under go.mod's `go 1.24` with GOTOOLCHAIN=local
+      # (v1.2.0 and up require Go 1.25). Bump the pin once go.mod's Go version
+      # moves past what a newer govulncheck needs.
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+
+      - name: govulncheck
+        run: govulncheck ./...
+      - name: govulncheck (mcp)
+        working-directory: mcp
+        run: govulncheck ./...
+
+  # Exercises internal/sysmetrics/collect_darwin.go, the other platform-tagged
+  # file the Windows job cannot reach. Deliberately lean: no race tests, no
+  # govulncheck (the Linux job already runs both against the same source).
+  macos:
+    name: Test (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go vet, go test
+        run: |
+          go vet ./...
+          go test -count=1 ./...
+
   # Tagging v1.2.3 publishes a GitHub release with the binaries the in-app
   # updater (Settings › Updates) looks for: gwatch-<os>-<arch>[.exe] plus a
   # .sha256 checksum and an ed25519 .sig signature next to each. The updater
@@ -188,7 +269,7 @@ jobs:
   release:
     name: Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [ci]
+    needs: [ci, linux, macos]
     runs-on: windows-latest
     permissions:
       contents: write
@@ -321,3 +402,34 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+
+  # A `mcp/v1.2.3` tag exists only so `go install .../mcp/cmd/gwatch-mcp@latest`
+  # resolves — Go's nested-module resolution needs a tag prefixed with the
+  # module's subdirectory (see docs/RELEASING.md#releasing-the-mcp-companion).
+  # It does not publish a second GitHub release: the MCP companion's binaries
+  # already ship inside the core `v*` release above (the "Cross-compile the
+  # MCP companion" step), versioned from mcp/VERSION regardless of which core
+  # tag triggered it. This job only guards against tagging a version that was
+  # never committed to mcp/VERSION, and proves the module still builds.
+  mcp-tag:
+    name: MCP tag matches mcp/VERSION
+    if: startsWith(github.ref, 'refs/tags/mcp/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Tag matches mcp/VERSION
+        run: |
+          tag="${GITHUB_REF_NAME#mcp/v}"
+          file="$(tr -d ' \t\r\n' < mcp/VERSION)"
+          if [ "$tag" != "$file" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match mcp/VERSION (${file}). Update mcp/VERSION, commit, and re-tag."
+            exit 1
+          fi
+          echo "mcp/${file} tag verified"
+      - name: Build the MCP companion
+        working-directory: mcp
+        run: go build ./...
