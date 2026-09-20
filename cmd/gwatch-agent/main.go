@@ -16,8 +16,8 @@
 // shape: it is worth one enrolment, for a few minutes, and what it buys is the
 // token above, which is then kept on this machine and used from then on.
 //
-//	gwatch-agent pair --server https://gwatch.lan:8080 --code XXXX-XXXX
-//	gwatch-agent run --server https://gwatch.lan:8080 --token gwa_…
+//	gwatch-agent pair --server https://gwatch.lan:7230 --code XXXX-XXXX
+//	gwatch-agent run --server https://gwatch.lan:7230 --token gwa_…
 //	gwatch-agent install --server … --token …     install as a background service
 //	gwatch-agent install --server … --code …      pair, then install the service
 //	gwatch-agent once --server … --token …        send one reading and exit
@@ -136,7 +136,7 @@ func main() {
 	fs := flag.NewFlagSet("gwatch-agent", flag.ContinueOnError)
 	fs.Usage = usage
 	cfg := config{}
-	fs.StringVar(&cfg.server, "server", os.Getenv("GWATCH_SERVER"), "base URL of the GWatch server, e.g. https://gwatch.lan:8080")
+	fs.StringVar(&cfg.server, "server", os.Getenv("GWATCH_SERVER"), "base URL of the GWatch server, e.g. https://gwatch.lan:7230")
 	fs.StringVar(&cfg.token, "token", os.Getenv("GWATCH_AGENT_TOKEN"), "agent token from Settings › Hardware")
 	fs.StringVar(&cfg.code, "code", os.Getenv("GWATCH_AGENT_CODE"), "pairing code shown in GWatch (Hardware › Pair a machine), e.g. XXXX-XXXX")
 	fs.DurationVar(&cfg.interval, "interval", envDuration("GWATCH_AGENT_INTERVAL", defaultInterval), "how often to send a reading")
@@ -265,7 +265,7 @@ func (c config) validate(cmd string) error {
 		return nil
 	}
 	if c.server == "" {
-		return errors.New("a server URL is required, e.g. --server https://gwatch.lan:8080")
+		return errors.New("a server URL is required, e.g. --server https://gwatch.lan:7230")
 	}
 	if c.interval < minInterval {
 		return fmt.Errorf("--interval must be at least %s", minInterval)
@@ -515,7 +515,7 @@ func (c config) pairURL() string { return c.baseURL() + "/api/agents/pair" }
 // started with --code carries straight on as a token install.
 func pair(cfg *config) error {
 	if strings.TrimSpace(cfg.server) == "" {
-		return errors.New("a server URL is required, e.g. --server https://gwatch.lan:8080")
+		return errors.New("a server URL is required, e.g. --server https://gwatch.lan:7230")
 	}
 	code := tidyCode(cfg.code)
 	if code == "" {

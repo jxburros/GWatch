@@ -187,6 +187,56 @@ func ParseRange(name string) (RangeSpec, error) {
 	return RangeSpec{}, fmt.Errorf("unsupported range %q (use 1h, 24h, 7d, 30d, 1y)", name)
 }
 
+// HistoryMetric builds a chart series for one of a check's named metrics —
+// an SNMP check's OIDs — rather than for its latency.
+//
+// Such a series is always read from raw results. The rollup tables have a
+// column per built-in metric (latency, jitter, loss) and no room for one a
+// check invented, so a named metric only reaches as far back as raw results
+// are retained: 30 days by default, and whatever Settings › Retention says
+// otherwise. Beyond that window the series is empty rather than wrong.
+func (s *Store) HistoryMetric(ctx context.Context, check model.Check, nodeName string, rng RangeSpec, now time.Time, metric string) (model.HistorySeries, error) {
+	series := model.HistorySeries{
+		CheckID:   check.ID,
+		CheckName: check.Name,
+		NodeName:  nodeName,
+		CheckType: check.Type,
+		Range:     rng.Name,
+		Source:    "raw",
+		From:      now.Add(-rng.Duration),
+		To:        now,
+		Points:    []model.HistoryPoint{},
+		Metric:    metric,
+	}
+	for _, o := range check.Config.SNMPOIDs {
+		if o.Name == metric {
+			series.MetricUnit = o.Unit
+			break
+		}
+	}
+	results, err := s.ResultsBetween(ctx, check.ID, series.From, now)
+	if err != nil {
+		return series, err
+	}
+	for _, r := range results {
+		p := model.HistoryPoint{Timestamp: r.Timestamp, Count: 1, Availability: 100}
+		if !r.Success {
+			p.Failures = 1
+			p.Availability = 0
+		}
+		if v, ok := r.Metrics[metric]; ok {
+			// The latency fields carry the metric as well, so a chart drawn
+			// from a series' avgMs plots a named metric without having to
+			// know that this one is not a duration.
+			val := v
+			p.Value, p.AvgMS, p.MinMS, p.MaxMS = &val, &val, &val, &val
+		}
+		series.Points = append(series.Points, p)
+	}
+	series.Summary = summarize(series.Points)
+	return series, nil
+}
+
 // History builds a chart series for a check over a range, choosing raw
 // results or rollups depending on the range and on what is still retained.
 func (s *Store) History(ctx context.Context, check model.Check, nodeName string, rng RangeSpec, now time.Time) (model.HistorySeries, error) {
@@ -441,12 +491,13 @@ func (s *Store) ClearHistory(ctx context.Context) error {
 
 // CreateNodeWithID inserts a node keeping its original id (restore).
 func (s *Store) CreateNodeWithID(ctx context.Context, n model.Node) error {
+	n.SyncGroups()
 	if n.Tags == nil {
 		n.Tags = []string{}
 	}
 	return s.WriteTx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO nodes(id, name, host, group_name, tags, notes, importance, enabled, depends_on_node_id, template, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-			n.ID, n.Name, n.Host, n.Group, jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nil, n.Template, fmtTime(n.CreatedAt), fmtTime(n.UpdatedAt)); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO nodes(id, name, host, group_name, "groups", tags, notes, importance, enabled, depends_on_node_id, template, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			n.ID, n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nil, n.Template, fmtTime(n.CreatedAt), fmtTime(n.UpdatedAt)); err != nil {
 			return err
 		}
 		for _, c := range n.Checks {
@@ -454,8 +505,15 @@ func (s *Store) CreateNodeWithID(ctx context.Context, n model.Node) error {
 			if c.Alerts != nil {
 				alerts = jsonString(c.Alerts)
 			}
+			// A backup holds the secrets in the clear (it is encrypted as a
+			// whole, or it is not), so a restore seals them again on the way
+			// back in like any other write.
+			stored := c.Config
+			if err := s.sealCheckConfig(&stored); err != nil {
+				return err
+			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO checks(id, node_id, type, name, enabled, interval_seconds, timeout_seconds, retries, failure_threshold, config, alerts, sort_order, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-				c.ID, n.ID, string(c.Type), c.Name, boolInt(c.Enabled), c.IntervalSeconds, c.TimeoutSeconds, c.Retries, c.FailureThreshold, jsonString(c.Config), alerts, c.SortOrder, fmtTime(c.CreatedAt), fmtTime(c.UpdatedAt)); err != nil {
+				c.ID, n.ID, string(c.Type), c.Name, boolInt(c.Enabled), c.IntervalSeconds, c.TimeoutSeconds, c.Retries, c.FailureThreshold, jsonString(stored), alerts, c.SortOrder, fmtTime(c.CreatedAt), fmtTime(c.UpdatedAt)); err != nil {
 				return err
 			}
 			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO check_state(check_id, status) VALUES (?, 'unknown')`, c.ID); err != nil {

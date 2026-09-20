@@ -4,8 +4,12 @@
 
 import { api, getHistoryMulti, getHistoryAuto, qs } from '../api.js';
 import { h, icon, clear, replace, statusPill, statusSpine, statusWord, statusGlyph, checkChip, statusOrb, toast, confirmDialog, promptDialog, openModal, menuButton, field, textInput, numberInput, selectInput, checkbox, emptyState, skeleton, eventRow, rangeChips, statusMeta, uid } from '../components.js';
-import { relTime, bytes, plural, dateShort, duration } from '../fmt.js';
+import { relTime, bytes, plural, dateShort, duration, pct, nodeGroups, inGroup } from '../fmt.js';
 import { chartConfigEditor, renderConfiguredChart, normalizeChartConfig } from '../chart-config.js';
+// charts.js is already in the graph by way of chart-config.js, so naming these
+// here costs nothing and spares the availability widget an await it does not
+// need — the widget must be able to fill itself in one synchronous step.
+import { uptimeBar, uptimeLegend } from '../charts.js';
 
 export const COLS = 4;
 export const WIDGET_TYPES = [
@@ -93,9 +97,12 @@ export function resolve(items, moved) {
 export async function mount(root, ctx) {
   const state = {
     dashboards: [], current: null, overview: null, health: null, nodes: [], groups: { groups: [], tags: [] },
-    chartViews: new Map(), historyCache: new Map(), destroyed: false, layout: [], interacting: false,
+    chartViews: new Map(), historyCache: new Map(), uptimeLists: new Map(), destroyed: false, layout: [], interacting: false,
   };
   const now = () => Date.now();
+  // Widget id -> its card on the grid, so a live update can find a widget
+  // again instead of building a new one.
+  const widgetEls = new Map();
 
   const grid = h('div', { class: 'dash-grid' });
   const tabs = h('div', { class: 'dash-tabs', role: 'tablist', 'aria-label': 'Dashboards' });
@@ -121,7 +128,7 @@ export async function mount(root, ctx) {
     if (state.destroyed || state.interacting) return;
     state.overview = overview; state.health = health;
     state.historyCache.clear();
-    renderWidgets();
+    refreshWidgets();
   }
 
   /* ---------- Title / actions ---------- */
@@ -244,8 +251,34 @@ export async function mount(root, ctx) {
   /* ---------- Rendering ---------- */
   function render() { setTitle(); renderTabs(); renderWidgets(); }
 
+  /* A live update must not throw the grid away. Rebuilding it re-creates every
+     widget, and a chart built from scratch shows nothing at all until its
+     history request comes back — that gap is what flashed. So an update
+     refreshes each widget where it stands: the cheap ones by writing their
+     body again, which is synchronous and therefore invisible, and the charts
+     by asking the view they already have to reload, which swaps its contents
+     only once the new data is in hand. Anything structural — a widget added,
+     removed or moved — still goes through a full render. */
+  function refreshWidgets() {
+    if (state.interacting) return;
+    const list = state.current ? widgetsList() : [];
+    if (!list.length || list.length !== widgetEls.size || list.some((w) => !widgetEls.has(w.id))) { renderWidgets(); return; }
+    for (const w of list) {
+      const card = widgetEls.get(w.id);
+      if (!card || !card.isConnected) { renderWidgets(); return; }
+      const view = state.chartViews.get(w.id);
+      if (view) { view.refresh(); continue; }
+      if (w.type === 'uptime_chart') { fillUptime(state.uptimeLists.get(w.id), w); continue; }
+      clear(card._body);
+      replace(card._actions, card._actionKids);
+      try { renderWidgetBody(w, widgetConfig(w), card._body, card._actions); } catch (e) { console.error(e); card._body.append(h('div', { class: 'note' }, 'Could not render this widget.')); }
+    }
+  }
+
   function renderWidgets() {
     if (state.interacting) return;
+    widgetEls.clear();
+    state.uptimeLists.clear();
     clear(grid);
     if (!state.current) {
       grid.append(h('div', { class: 'card', style: { gridColumn: 'span 4' } }, emptyState({ icon: 'grid', title: 'No dashboards yet', text: 'Create a dashboard and add widgets for the groups you care about.', actions: h('button', { class: 'btn btn-primary admin-only', type: 'button', onclick: newDashboard }, icon('plus'), 'New dashboard') })));
@@ -259,7 +292,10 @@ export async function mount(root, ctx) {
     const ordered = [...state.layout].sort((a, b) => a.y - b.y || a.x - b.x);
     for (const l of ordered) {
       const w = list.find((x) => x.id === l.id);
-      if (w) grid.append(renderWidget(w, l));
+      if (!w) continue;
+      const card = renderWidget(w, l);
+      widgetEls.set(w.id, card);
+      grid.append(card);
     }
   }
 
@@ -290,6 +326,12 @@ export async function mount(root, ctx) {
     head.append(actions);
     const body = h('div', { class: 'widget-body' });
     card.append(head, body);
+    // Kept on the card so a live update can rewrite just this widget's body
+    // rather than the whole grid — see refreshWidgets(). The action bar is
+    // noted as it stands now, before the body is rendered, because a body may
+    // add a control of its own to it (Monitor health does) and a re-render
+    // would otherwise add a second one.
+    card._body = body; card._actions = actions; card._actionKids = [...actions.children];
     try { renderWidgetBody(w, cfg, body, actions); } catch (e) { console.error(e); body.append(h('div', { class: 'note' }, 'Could not render this widget.')); }
     // resize handles
     for (const dir of ['e', 's', 'se']) {
@@ -442,7 +484,7 @@ export async function mount(root, ctx) {
     const ov = state.overview?.nodes || [];
     return ov.filter((entry) => {
       const n = entry.node;
-      if (cfg.group && n.group !== cfg.group) return false;
+      if (cfg.group && !inGroup(n, cfg.group)) return false;
       if (cfg.tag && !(n.tags || []).includes(cfg.tag)) return false;
       if (cfg.nodeIds?.length && !cfg.nodeIds.map(Number).includes(Number(n.id))) return false;
       return true;
@@ -620,7 +662,7 @@ export async function mount(root, ctx) {
         h('td', null, h('a', { href: `#/nodes/${n.id}`, class: 'strong', style: { color: 'inherit' } }, n.name), r.affectedBy ? h('div', { class: 'affected-note' }, icon('link'), `affected by ${r.affectedBy}`) : null),
         h('td', null, statusPill(r.status)),
         h('td', { class: 'mono' }, n.host || ''),
-        h('td', null, n.group || h('span', { class: 'dim' }, '—')),
+        h('td', null, nodeGroups(n).join(', ') || h('span', { class: 'dim' }, '—')),
         h('td', null, chips),
         h('td', { class: 'muted nowrap' }, last ? relTime(last, now()) : '—')));
     }
@@ -651,30 +693,36 @@ export async function mount(root, ctx) {
   }
 
   function renderUptime(w, body) {
+    const list = h('div', null, h('div', { class: 'widget-loading' }, 'Loading…'));
+    body.append(list);
+    state.uptimeLists.set(w.id, list);
+    fillUptime(list, w);
+  }
+
+  /** Fill — or re-fill — an availability widget. The rows are built first and
+   *  put in place in a single step, so a refresh never empties the widget
+   *  while it waits for history to come back. */
+  function fillUptime(list, w) {
+    if (!list) return;
     const cfg = widgetConfig(w);
     const ids = (cfg.checkIds || []).map(Number).filter(Boolean);
     const range = cfg.range || '7d';
-    const list = h('div', null, h('div', { class: 'widget-loading' }, 'Loading…'));
-    body.append(list);
     fetchHistory(ids, range).then((series) => {
-      if (state.destroyed) return;
-      clear(list);
+      if (state.destroyed || !list.isConnected) return;
       const arr = Array.isArray(series) ? series : [series];
-      if (!arr.length) { list.append(emptyState({ icon: 'activity', title: 'Nothing to show yet', compact: true })); return; }
-      import('../charts.js').then(({ uptimeBar, uptimeLegend }) => {
-        import('../fmt.js').then(({ pct }) => {
-          for (const hs of arr) {
-            const avail = hs.summary?.availability;
-            const cls = avail == null ? '' : avail >= 99.9 ? 'text-up' : avail >= 95 ? 'text-degraded' : 'text-down';
-            list.append(h('div', { class: 'uptime-row' },
-              h('div', { class: 'uptime-name truncate' }, h('a', { href: `#/nodes/${findCheck(hs.checkId)?.node.id ?? ''}`, style: { color: 'inherit' } }, hs.nodeName || ''), h('div', { class: 'sub' }, hs.checkName)),
-              uptimeBar(hs.points, { bucketSeconds: hs.bucketSeconds, from: hs.from, to: hs.to }),
-              h('div', { class: `uptime-pct ${cls}` }, pct(avail, 2))));
-          }
-          list.append(uptimeLegend());
-        });
-      });
-    }).catch((e) => replace(list, h('div', { class: 'note' }, 'Could not load history: ' + e.message)));
+      if (!arr.length) { replace(list, emptyState({ icon: 'activity', title: 'Nothing to show yet', compact: true })); return; }
+      const rows = [];
+      for (const hs of arr) {
+        const avail = hs.summary?.availability;
+        const cls = avail == null ? '' : avail >= 99.9 ? 'text-up' : avail >= 95 ? 'text-degraded' : 'text-down';
+        rows.push(h('div', { class: 'uptime-row' },
+          h('div', { class: 'uptime-name truncate' }, h('a', { href: `#/nodes/${findCheck(hs.checkId)?.node.id ?? ''}`, style: { color: 'inherit' } }, hs.nodeName || ''), h('div', { class: 'sub' }, hs.checkName)),
+          uptimeBar(hs.points, { bucketSeconds: hs.bucketSeconds, from: hs.from, to: hs.to }),
+          h('div', { class: `uptime-pct ${cls}` }, pct(avail, 2))));
+      }
+      rows.push(uptimeLegend());
+      replace(list, rows);
+    }).catch((e) => { if (list.isConnected) replace(list, h('div', { class: 'note' }, 'Could not load history: ' + e.message)); });
   }
 
   /* ---------- Boot ---------- */

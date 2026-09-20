@@ -4,8 +4,9 @@
 // registered MCP tools and answers tools/call by handing the raw arguments to
 // the matching handler. The protocol itself — initialize, notifications,
 // tools/list, ping, JSON-RPC framing over stdio — is the official Go SDK's job
-// (github.com/modelcontextprotocol/go-sdk), pinned to a release that still
-// builds on the Go version GWatch targets.
+// (github.com/modelcontextprotocol/go-sdk). Its go.mod requirement decides
+// this module's own Go floor, and CI's govulncheck is what says when a newer
+// release is due.
 package mcpserver
 
 import (

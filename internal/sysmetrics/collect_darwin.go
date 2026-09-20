@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/jxburros/GWatch/internal/model"
 )
 
@@ -67,15 +69,13 @@ func collect(ctx context.Context) (*raw, error) {
 }
 
 // sysctlRaw returns a sysctl value as bytes, for the ones that hold a C struct
-// rather than a string.
+// rather than a string. It must not go through syscall.Sysctl: that one trims
+// a trailing NUL as a courtesy to strings, and a little-endian integer below
+// 2^56 (every hw.memsize there is) ends in exactly such a byte, so the total
+// came back seven bytes long and the length check refused it. CI on macOS was
+// what caught that.
 func sysctlRaw(name string) ([]byte, error) {
-	s, err := syscall.Sysctl(name)
-	if err != nil {
-		return nil, err
-	}
-	// syscall.Sysctl trims a trailing NUL, which a binary value may legitimately
-	// end with; every caller below reads from the front, so that is harmless.
-	return []byte(s), nil
+	return unix.SysctlRaw(name)
 }
 
 // darwinLoadAvg decodes struct loadavg: three fixed-point averages and the

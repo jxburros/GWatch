@@ -209,14 +209,19 @@ func (s *Server) accessControl(next http.Handler) http.Handler {
 			return
 		}
 
-		// A local client is an administrator without presenting anything, so a
-		// page the person merely visits could otherwise make their browser
-		// POST to 127.0.0.1 on their behalf. Every other kind of principal
-		// carries a credential a cross-site page cannot obtain (the session
-		// cookie is SameSite=Lax, so it is not sent on a cross-site write),
-		// and may sit behind a proxy that rewrites Host — so the check is
-		// applied only where it is both needed and safe.
-		if p.Kind == auth.KindLocal && r.Method != http.MethodGet && r.Method != http.MethodHead && crossSite(r) {
+		// Two kinds of principal are granted by something the browser supplies
+		// on its own, so a page the person merely visits could make their
+		// browser change things on their behalf. A local client is an
+		// administrator without presenting anything at all, and the legacy LAN
+		// access password travels in HTTP basic auth, which a browser attaches
+		// from its own cache to cross-origin requests once it has been asked
+		// for it. A session cookie is not in this company: it is SameSite=Lax,
+		// so the browser withholds it from a cross-site write. Neither is an
+		// API key, which a cross-site page has no way to obtain — and a key
+		// may well arrive through a proxy that rewrites Host, where this check
+		// would misfire. So it is applied exactly where it is both needed and
+		// safe.
+		if (p.Kind == auth.KindLocal || p.Kind == auth.KindPassword) && r.Method != http.MethodGet && r.Method != http.MethodHead && crossSite(r) {
 			s.deny(w, r, http.StatusForbidden, "this request came from another website; open GWatch directly to make changes", true)
 			return
 		}
@@ -354,7 +359,8 @@ func (s *Server) auditAuthFailure(ctx context.Context, title, detail, ip string)
 // ---- auth endpoints ----
 
 func (s *Server) principalDoc(ctx context.Context, p auth.Principal) model.Principal {
-	g := s.Engine.Settings().General
+	st := s.Engine.Settings()
+	g := st.General
 	return model.Principal{
 		Kind:        string(p.Kind),
 		Name:        p.Name,
@@ -366,6 +372,7 @@ func (s *Server) principalDoc(ctx context.Context, p auth.Principal) model.Princ
 		SignedIn:    p.Kind == auth.KindUser,
 		Theme:       g.Theme,
 		AccentColor: g.AccentColor,
+		Indicators:  model.NormalizeIndicators(st.Indicators),
 	}
 }
 
@@ -403,7 +410,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	ip := s.clientIP(r)
@@ -488,7 +495,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		New     string `json:"new"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	u, hash, err := s.Store.GetUserByName(ctx, p.Name)
@@ -544,7 +551,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		Role     string `json:"role"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	if err := validateUsername(body.Username); err != nil {
@@ -605,7 +612,7 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		Password *string `json:"password"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	var changes []string
@@ -731,7 +738,7 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		Scope string `json:"scope"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	name := strings.TrimSpace(body.Name)

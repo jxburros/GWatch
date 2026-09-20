@@ -28,7 +28,7 @@ func Templates() []model.NodeTemplate {
 		}
 	}
 	node := func(name, group, template string) model.Node {
-		return model.Node{
+		n := model.Node{
 			Name:       name,
 			Group:      group,
 			Tags:       []string{},
@@ -36,6 +36,10 @@ func Templates() []model.NodeTemplate {
 			Enabled:    true,
 			Template:   template,
 		}
+		// A template starts a node off in one group, but it is sent to the
+		// browser as a node, so it carries the group list every node does.
+		n.SyncGroups()
+		return n
 	}
 	return []model.NodeTemplate{
 		{
@@ -63,15 +67,27 @@ func Templates() []model.NodeTemplate {
 			},
 		},
 		{
+			// The ID stays "router" so nodes created from the old name keep
+			// their template reference; only what people see was renamed.
 			ID:          "router",
-			Name:        "Router",
-			Description: "Your internet router or gateway: check that it answers, that it can look up names on the internet, and that its admin page is up.",
+			Name:        "Network device",
+			Description: "A router, switch, access point or gateway: check that it answers, that it can look up names on the internet, and that its admin page is up.",
 			Icon:        "router",
-			Node:        node("Router", "Network", "router"),
+			Node:        node("Network device", "Network", "router"),
 			Checks: []model.Check{
 				mk(model.CheckPing, "Reachable (ping)", model.CheckConfig{PingCount: 4}),
 				mk(model.CheckDNS, "Internet name lookup", model.CheckConfig{Target: "google.com", RecordType: "A"}),
 				mk(model.CheckTCP, "Admin page port 80", model.CheckConfig{Port: 80}),
+			},
+		},
+		{
+			ID:          "ping",
+			Name:        "Ping only",
+			Description: "Just a reachability check: is the device answering on the network? The quickest way to add a printer, a camera or anything else that only needs to be there.",
+			Icon:        "activity",
+			Node:        node("Device", "Network", "ping"),
+			Checks: []model.Check{
+				mk(model.CheckPing, "Reachable (ping)", model.CheckConfig{PingCount: 4}),
 			},
 		},
 		{

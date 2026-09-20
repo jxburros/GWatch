@@ -8,8 +8,12 @@
   const iso = (t) => new Date(t).toISOString();
   const ago = (ms) => iso(NOW - ms);
   const ahead = (ms) => iso(NOW + ms);
-  const seq = { node: 20, check: 100, result: 90000, event: 5000, dash: 5, maint: 5, wall: 1 };
+  const seq = { node: 20, check: 100, result: 90000, event: 5000, dash: 5, maint: 5, wall: 1, discovery: 0 };
   const clone = (o) => JSON.parse(JSON.stringify(o));
+  // A node belongs to as many groups as it likes; group is the deprecated
+  // alias for the first of them, which is what an older client reads.
+  const groupsOf = (n) => (n.groups && n.groups.length ? n.groups : (n.group ? [n.group] : []));
+  const inGroup = (n, g) => groupsOf(n).some((x) => String(x).toLowerCase() === String(g || '').toLowerCase());
 
   function rng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 
@@ -27,7 +31,10 @@
   }
   function mkNode(o) {
     const id = ++seq.node;
-    return { id, name: o.name, host: o.host, group: o.group || '', tags: o.tags || [], notes: o.notes || '', importance: o.importance || 'normal', enabled: o.enabled !== false, dependsOnNodeId: o.dependsOnNodeId ?? null, template: o.template || '', createdAt: ago(40 * DAY), updatedAt: ago(2 * DAY), checks: [] };
+    // group is the deprecated alias for the first group, exactly as the
+    // server sends it.
+    const groups = (o.groups || (o.group ? [o.group] : [])).slice(0, 16);
+    return { id, name: o.name, host: o.host, groups, group: groups[0] || '', tags: o.tags || [], notes: o.notes || '', importance: o.importance || 'normal', enabled: o.enabled !== false, dependsOnNodeId: o.dependsOnNodeId ?? null, template: o.template || '', createdAt: ago(40 * DAY), updatedAt: ago(2 * DAY), checks: [] };
   }
 
   const nodes = [];
@@ -43,7 +50,7 @@
     mkCheck(plex.id, 'tcp', 'Plex port 32400', { config: { port: 32400 }, base: 2.1, noise: 0.4, status: 'down', message: 'dial tcp 192.168.1.20:32400: i/o timeout', downSince: 21 * MIN, affectedBy: 'Gateway' }),
     mkCheck(plex.id, 'http', 'Web app', { config: { target: 'http://192.168.1.20:32400/web/index.html', expectedStatus: '200-399', certCheck: false }, base: 48, noise: 0.5, status: 'down', message: 'Connection timed out after 10 s', downSince: 20 * MIN, affectedBy: 'Gateway', interval: 120 }),
   ];
-  const nas = mkNode({ name: 'NAS', host: 'nas.local', group: 'Servers', tags: ['storage', 'backup-target'], importance: 'high', template: 'home-server' });
+  const nas = mkNode({ name: 'NAS', host: 'nas.local', groups: ['Servers', 'Storage'], tags: ['storage', 'backup-target'], importance: 'high', template: 'home-server' });
   nas.checks = [
     mkCheck(nas.id, 'ping', 'Ping', { config: { pingCount: 4, latencyWarnMs: 20 }, base: 0.7, noise: 0.4, interval: 60 }),
     mkCheck(nas.id, 'tcp', 'SSH (22)', { config: { port: 22 }, base: 1.8, noise: 0.3 }),
@@ -69,7 +76,7 @@
   ];
   const printer = mkNode({ name: 'Printer', host: '192.168.1.50', group: 'Home Network', tags: ['office'], importance: 'low', enabled: false, notes: 'Only switched on when needed — monitoring paused.' });
   printer.checks = [mkCheck(printer.id, 'ping', 'Ping', { config: { pingCount: 2 }, base: 3, noise: 0.6, status: 'paused', interval: 300 })];
-  const pihole = mkNode({ name: 'Pi-hole', host: '192.168.1.2', group: 'Home Network', tags: ['dns', 'raspberry-pi'], importance: 'high', template: 'dns' });
+  const pihole = mkNode({ name: 'Pi-hole', host: '192.168.1.2', groups: ['Home Network', 'Servers'], tags: ['dns', 'raspberry-pi'], importance: 'high', template: 'dns' });
   pihole.checks = [
     mkCheck(pihole.id, 'ping', 'Ping', { config: { pingCount: 4, latencyWarnMs: 30 }, base: 0.8, noise: 0.5, interval: 30 }),
     mkCheck(pihole.id, 'dns', 'Resolves via Pi-hole', { config: { target: 'www.example.org', dnsServer: '192.168.1.2', recordType: 'A' }, base: 3.2, noise: 0.5 }),
@@ -80,9 +87,32 @@
     mkCheck(backupSrv.id, 'ping', 'Ping', { config: { pingCount: 4 }, base: 1.1, noise: 0.5 }),
     mkCheck(backupSrv.id, 'tcp', 'SMB (445)', { config: { port: 445 }, base: 2.4, noise: 0.3 }),
   ];
+  // A managed switch read over SNMP: the readings, not a round trip, are what
+  // the check is for, so it carries the per-OID rows the inspector renders.
+  const swtch = mkNode({ name: 'Office switch', host: '192.168.1.3', group: 'Home Network', tags: ['network', 'snmp'], importance: 'high', notes: 'Eight-port managed switch under the desk. Read over SNMP v2c with a read-only community.' });
+  swtch.checks = [
+    mkCheck(swtch.id, 'ping', 'Ping', { config: { pingCount: 4 }, base: 0.8, noise: 0.3, interval: 60 }),
+    mkCheck(swtch.id, 'snmp', 'SNMP readings', {
+      interval: 120,
+      config: {
+        snmpVersion: '2c', snmpPort: 161, snmpCommunity: '********',
+        snmpOids: [
+          { oid: '1.3.6.1.2.1.1.3.0', name: 'Uptime', kind: 'gauge', scale: 0.01, unit: 's' },
+          { oid: '1.3.6.1.2.1.1.1.0', name: 'Description', kind: 'gauge', scale: 1 },
+          { oid: '1.3.6.1.2.1.2.2.1.8.1', name: 'Uplink link', kind: 'gauge', scale: 1, critBelow: 1, critAbove: 1 },
+          { oid: '1.3.6.1.2.1.31.1.1.1.6.1', name: 'Uplink in', kind: 'counter', scale: 8, unit: 'bit/s' },
+          { oid: '1.3.6.1.2.1.31.1.1.1.10.1', name: 'Uplink out', kind: 'counter', scale: 8, unit: 'bit/s' },
+          { oid: '1.3.6.1.2.1.2.2.1.14.3', name: 'Port 3 errors in', kind: 'counter', scale: 1, unit: '/s', warnAbove: 0, critAbove: 5 },
+        ],
+      },
+      base: 9, noise: 0.3, status: 'degraded',
+      warn: 'Port 3 errors in (1.3.6.1.2.1.2.2.1.14.3) is 0.4 /s, above the warning threshold of 0 /s',
+      message: '6 readings read in 9 ms · Uptime 412350 s, Description MikroTik CRS310, Uplink link 1 and 3 more',
+    }),
+  ];
   const newHost = mkNode({ name: 'Garage camera', host: '192.168.1.71', group: 'Home Network', tags: ['camera'], importance: 'low' });
   newHost.checks = [mkCheck(newHost.id, 'ping', 'Ping', { config: { pingCount: 4 }, base: 5, noise: 0.5, status: 'unknown', message: '' })];
-  nodes.push(gateway, plex, nas, ha, site, weather, printer, pihole, backupSrv, newHost);
+  nodes.push(gateway, plex, nas, ha, site, weather, printer, pihole, backupSrv, swtch, newHost);
 
   /* ---------- Maintenance ---------- */
   const maintenance = [
@@ -102,7 +132,7 @@
     }
     return false;
   }
-  function nodeInMaintenance(n) { return maintenance.some((w) => windowActive(w) && (w.nodeId ? w.nodeId === n.id : w.group ? w.group === n.group : true)); }
+  function nodeInMaintenance(n) { return maintenance.some((w) => windowActive(w) && (w.nodeId ? w.nodeId === n.id : w.group ? inGroup(n, w.group) : true)); }
 
   /* ---------- Live state & results ---------- */
   const states = {}; // checkId -> CheckState
@@ -113,6 +143,25 @@
   function certInfo(days, host) {
     const subject = host.replace(/^https?:\/\//, '').replace(/[:/].*$/, '');
     return { subject: `CN=${subject}`, issuer: "CN=R11, O=Let's Encrypt, C=US", notBefore: ago((90 - days) * DAY), notAfter: ahead(days * DAY), daysRemaining: days, dnsNames: [subject, subject.replace(/^www\./, '')], serial: '04:AB:19:F2:7C:33:9E:1D', valid: true };
+  }
+
+  // snmpReading invents one plausible reading for an OID row: a gauge gets a
+  // value, a counter gets a rate, and an OID whose name says it is text gets
+  // text and no number at all — which is what the inspector has to cope with.
+  function snmpReading(o, t, r) {
+    const v = { oid: o.oid, name: o.name, unit: o.unit || '' };
+    const wave = (period, amp) => 1 + amp * Math.sin((t / period) * Math.PI * 2);
+    if (o.oid === '1.3.6.1.2.1.1.1.0') { v.raw = 'MikroTik CRS310, RouterOS 7.14'; return v; }
+    if (o.kind === 'counter') {
+      const base = o.name.includes('errors') ? 0.4 : (o.name.includes('out') ? 3.1e6 : 8.4e6);
+      v.rate = +(base * wave(6 * HOUR, 0.35) * (0.9 + r() * 0.2)).toFixed(2);
+      v.raw = String(Math.round(1.4e11 + t / 100));
+      return v;
+    }
+    if (o.oid === '1.3.6.1.2.1.1.3.0') { v.value = +((NOW - 41 * DAY - t % MIN) / 1000).toFixed(0); v.raw = String(Math.round(v.value * 100)); return v; }
+    v.value = 1;
+    v.raw = '1';
+    return v;
   }
 
   function makeResult(check, node, t, r, { failed, latency, statusOverride } = {}) {
@@ -126,8 +175,16 @@
         const count = check.config.pingCount || 4;
         const rtts = failed ? [] : Array.from({ length: count }, () => +(latency * (0.8 + r() * 0.4)).toFixed(2));
         res.details = { packetsSent: count, packetsReceived: rtts.length, rtts };
-        if (!failed) { res.minMs = Math.min(...rtts); res.maxMs = Math.max(...rtts); res.jitterMs = +(res.maxMs - res.minMs).toFixed(2); res.lossPct = 0; res.message = res.message || `${count}/${count} replies, avg ${latency.toFixed(1)} ms`; }
-        else { res.lossPct = 100; res.minMs = null; }
+        if (!failed) {
+          res.minMs = Math.min(...rtts); res.maxMs = Math.max(...rtts);
+          res.jitterMs = +(res.maxMs - res.minMs).toFixed(2);
+          // Population standard deviation of the packets, the same figure the
+          // service computes, so the detail card shows something plausible.
+          const mean = rtts.reduce((a2, b2) => a2 + b2, 0) / rtts.length;
+          res.stddevMs = +Math.sqrt(rtts.reduce((a2, v) => a2 + (v - mean) ** 2, 0) / rtts.length).toFixed(2);
+          res.lossPct = 0;
+          res.message = res.message || `${count}/${count} replies, avg ${latency.toFixed(1)} ms`;
+        } else { res.lossPct = 100; res.minMs = null; }
         break;
       }
       case 'http': case 'keyword': case 'json': {
@@ -158,6 +215,18 @@
       case 'dns': {
         if (!failed) { const vals = check.config.expectedIps?.length ? check.config.expectedIps : ['93.184.215.14', '2606:2800:21f:cb07:6820:80da:af6b:8b2c']; res.details = { resolvedValues: vals, expectedMatch: check.config.expectedIps?.length ? true : null, resolver: check.config.dnsServer || 'system' }; res.message = res.message || `Resolved to ${vals[0]} in ${latency.toFixed(1)} ms`; }
         else { res.error = p.message; res.details = { resolver: check.config.dnsServer || 'system', resolvedValues: [] }; }
+        break;
+      }
+      case 'snmp': {
+        if (failed) { res.error = p.message || 'no response'; break; }
+        res.details = { snmp: (check.config.snmpOids || []).map((o) => snmpReading(o, t, r)) };
+        res.metrics = {};
+        for (const v of res.details.snmp) {
+          const measured = v.value != null ? v.value : v.rate;
+          if (measured != null) res.metrics[v.name] = measured;
+        }
+        res.message = res.message || `${res.details.snmp.length} readings read in ${latency.toFixed(0)} ms`;
+        if (p.warn) res.warnings = [p.warn];
         break;
       }
     }
@@ -233,7 +302,7 @@
     const n = o.node; const c = o.check;
     events.push({ id: 0, ts: ago(msAgo), type, nodeId: n ? n.id : null, checkId: c ? c.id : null, nodeName: n ? n.name : undefined, checkName: c ? c.name : undefined, title: o.title || '', detail: o.detail || '', meta: o.meta ? JSON.stringify(o.meta) : undefined });
   }
-  ev(3 * DAY + 2 * HOUR, 'service_started', { title: 'GWatch service started', detail: 'Version 0.4.1 · windows/amd64 · listening on 127.0.0.1:8080' });
+  ev(3 * DAY + 2 * HOUR, 'service_started', { title: 'GWatch service started', detail: 'Version 0.4.1 · windows/amd64 · listening on 127.0.0.1:7230' });
   ev(3 * DAY + 2 * HOUR + 40 * MIN, 'service_stopped', { title: 'GWatch service stopped', detail: 'Stopped for upgrade to 0.4.1' });
   ev(3 * DAY + 2 * HOUR + 41 * MIN, 'backup', { title: 'Backup created', detail: 'gwatch-2026-09-15-0713.gwbackup · 12.4 MB · configuration + history' });
   ev(2 * DAY + 6 * HOUR, 'monitor_gap', { title: 'Monitoring gap of 45 minutes', detail: 'The computer was asleep or offline from 01:10 to 01:55. No checks ran during this time.' });
@@ -300,10 +369,24 @@
   ];
 
   /* ---------- Settings / health / backups ---------- */
+  // The header indicators, as a fresh install has them. The mock network
+  // above is deliberately in a state that fires several at once — a down
+  // gateway, a degraded website with a late certificate, a camera nobody has
+  // checked yet and a server under maintenance — so the stacked header can be
+  // seen without having to break anything first.
+  const DEFAULT_INDICATORS = [
+    { id: 'nodes-down', name: 'Nodes down', enabled: true, colour: 'red', condition: { kind: 'nodesInStatus', status: 'down', minCount: 1 } },
+    { id: 'monitor-unwell', name: 'Monitor trouble', enabled: true, colour: 'red', condition: { kind: 'serviceHealth', minCount: 1 } },
+    { id: 'nodes-degraded', name: 'Nodes degraded', enabled: true, colour: 'orange', condition: { kind: 'nodesInStatus', status: 'degraded', minCount: 1 } },
+    { id: 'certs-expiring', name: 'Certificates expiring', enabled: true, colour: 'orange', condition: { kind: 'certWarnings', minCount: 1 } },
+    { id: 'nodes-unknown', name: 'Waiting for first results', enabled: true, colour: 'yellow', condition: { kind: 'nodesInStatus', status: 'unknown', minCount: 1 } },
+    { id: 'nodes-maintenance', name: 'In maintenance', enabled: true, colour: 'yellow', condition: { kind: 'nodesInStatus', status: 'maintenance', minCount: 1 } },
+  ];
   let settings = {
-    general: { instanceName: 'Home monitor', defaultIntervalSeconds: 60, defaultTimeoutSeconds: 10, maxConcurrentChecks: 8, minIntervalSeconds: 10, wallboardRefreshSeconds: 15, latencyWarnMs: 0, packetLossWarnPct: 0, theme: 'dark', accentColor: '#43c9c0', remoteAccess: false, accessPassword: '', requireLoginLocally: false, updateRepo: 'jxburros/GWatch' },
+    general: { instanceName: 'Home monitor', defaultIntervalSeconds: 60, defaultTimeoutSeconds: 10, maxConcurrentChecks: 8, minIntervalSeconds: 10, wallboardRefreshSeconds: 15, latencyWarnMs: 0, packetLossWarnPct: 0, pingMethod: 'auto', theme: 'dark', accentColor: '#43c9c0', remoteAccess: false, accessPassword: '', requireLoginLocally: false, updateRepo: 'jxburros/GWatch' },
     alerts: { enabled: true, recipients: ['jeff@example.com', 'sam@example.com'], failureThreshold: 2, cooldownMinutes: 60, notifyRecovery: true, notifyWarnings: true, certWarnDays: 14, smtp: { host: 'smtp.example.com', port: 587, username: 'gwatch@example.com', password: '********', from: 'GWatch <gwatch@example.com>', security: 'starttls' } },
     retention: { rawDays: 30, fiveMinDays: 180, hourlyDays: 730, dailyDays: 0, eventDays: 730 },
+    indicators: clone(DEFAULT_INDICATORS),
   };
   let retention = { lastRunAt: ago(1 * DAY + 2 * HOUR), lastDurationMs: 2140, lastError: '', rawRows: 412_880, rollupRows5m: 96_412, rollupRows1h: 18_207, rollupRows1d: 1_128, eventRows: 1_940, oldestRaw: ago(30 * DAY), deletedLastRun: 12_904, plan: ['Raw results older than 30 days are rolled up into 5-minute buckets and deleted.', '5-minute buckets older than 180 days are rolled up into hourly buckets and deleted.', 'Hourly buckets older than 730 days are rolled up into daily buckets and deleted.', 'Daily buckets are kept forever.', 'Events older than 730 days are deleted.'] };
   let backups = [
@@ -322,8 +405,8 @@
       lastCheckAt: runs[runs.length - 1] || null, lastSuccessAt: runs[runs.length - 1] || null, nextCheckAt: nexts[0] || null,
       checksTotal: all.length, checksEnabled: all.filter((c) => c.enabled && findNode(c.nodeId).enabled).length, checksRunning: 0,
       lastGap: { from: ago(2 * DAY + 6 * HOUR + 45 * MIN), to: ago(2 * DAY + 6 * HOUR), seconds: 2700 },
-      databasePath: 'C:\\ProgramData\\GWatch\\gwatch.db', databaseBytes: 48_300_000, dataDir: 'C:\\ProgramData\\GWatch', retention, backup: backupStatus,
-      recentErrors: events.filter((e) => e.type === 'internal_error').slice(0, 5), alertsEnabled: settings.alerts.enabled, smtpConfigured: !!settings.alerts.smtp.host, lastAlertAt: ago(21 * MIN + 30e3), lastAlertError: '', listenAddress: '127.0.0.1:8080', platform: 'windows/amd64',
+      databasePath: 'C:\\ProgramData\\GWatch\\gwatch.db', databaseBytes: 48_300_000, dataDir: 'C:\\ProgramData\\GWatch', keyPath: 'C:\\ProgramData\\GWatch\\gwatch.key', backupDir: 'C:\\ProgramData\\GWatch\\backups', retention, backup: backupStatus,
+      recentErrors: events.filter((e) => e.type === 'internal_error').slice(0, 5), alertsEnabled: settings.alerts.enabled, smtpConfigured: !!settings.alerts.smtp.host, lastAlertAt: ago(21 * MIN + 30e3), lastAlertError: '', listenAddress: '127.0.0.1:7230', platform: 'windows/amd64',
     };
   }
 
@@ -357,7 +440,7 @@
     out.push(`${fmt(t0)} INFO  gwatch 0.4.1 starting (service mode) data=C:\\ProgramData\\GWatch`);
     out.push(`${fmt(t0 + 120)} INFO  database opened gwatch.db (WAL) size=46.1MB`);
     out.push(`${fmt(t0 + 300)} INFO  scheduler started: 24 checks, 22 enabled, max concurrency 8`);
-    out.push(`${fmt(t0 + 900)} INFO  http listening on 127.0.0.1:8080`);
+    out.push(`${fmt(t0 + 900)} INFO  http listening on 127.0.0.1:7230`);
     for (let i = 0; i < 60; i++) {
       const t = NOW - (60 - i) * 4 * MIN;
       const c = nodes[i % nodes.length].checks[0];
@@ -371,6 +454,24 @@
   })();
 
   /* ---------- History ---------- */
+  // metricHistory serves one of an SNMP check's OIDs, the way the server does:
+  // raw points only, with the metric's value repeated in avgMs so the chart
+  // helpers can plot it without knowing it is not a latency.
+  function metricHistory(checkId, range, metric) {
+    const base = history(checkId, range);
+    const { c } = findCheck(checkId);
+    const o = (c.config?.snmpOids || []).find((x) => x.name === metric);
+    if (!o) throw Object.assign(new Error(`check ${checkId} does not measure "${metric}"`), { status: 400 });
+    const r = rng(c.id * 977 + metric.length);
+    const points = base.points.map((p) => {
+      if (p.avgMs == null) return { ...p, avgMs: null, minMs: null, maxMs: null, value: null };
+      const reading = snmpReading(o, +new Date(p.ts), r);
+      const v = reading.value != null ? reading.value : reading.rate;
+      return { ...p, value: v ?? null, avgMs: v ?? null, minMs: v ?? null, maxMs: v ?? null, jitterMs: null, lossPct: null };
+    });
+    return { ...base, source: 'raw', bucketSeconds: 0, metric, metricUnit: o.unit || '', points };
+  }
+
   function history(checkId, range) {
     const found = findCheck(checkId);
     if (!found) throw Object.assign(new Error('check not found'), { status: 404 });
@@ -426,8 +527,12 @@
     for (const n of nodes) {
       const status = nodeStatus(n);
       summary[status] = (summary[status] || 0) + 1;
-      const g = groupsMap.get(n.group || 'Ungrouped') || { name: n.group || 'Ungrouped', status: 'paused', up: 0, degraded: 0, down: 0, unknown: 0, paused: 0, maintenance: 0, total: 0 };
-      g[status]++; g.total++; if (SEV[status] > SEV[g.status]) g.status = status; groupsMap.set(g.name, g);
+      // A node counts in every group it is in, so the group totals can come
+      // to more than the number of nodes.
+      for (const name of (groupsOf(n).length ? groupsOf(n) : ['Ungrouped'])) {
+        const g = groupsMap.get(name) || { name, status: 'paused', up: 0, degraded: 0, down: 0, unknown: 0, paused: 0, maintenance: 0, total: 0 };
+        g[status]++; g.total++; if (SEV[status] > SEV[g.status]) g.status = status; groupsMap.set(g.name, g);
+      }
       const affectedBy = n.checks.map((c) => states[c.id]?.affectedByNodeName).find(Boolean) || '';
       const checks = n.checks.map((c) => ({ check: clone(c), state: stateFor(n, c), lastResult: lastResults[c.id] ? clone(lastResults[c.id]) : null }));
       outNodes.push({ node: clone(n), status, checks, inMaintenance: nodeInMaintenance(n), affectedBy });
@@ -512,7 +617,7 @@
   on('GET', /^\/api\/version$/, () => ({ version: '0.4.1', platform: 'windows/amd64', apiVersion: 1 }));
   // The mock always plays an administrator on the machine GWatch runs on:
   // there is nothing to sign in to, so the sign-in screen never appears.
-  on('GET', /^\/api\/me$/, () => ({ kind: 'local', name: 'this computer', role: 'admin', isAdmin: true, canWrite: true, signedIn: false, theme: settings.general.theme, accentColor: settings.general.accentColor }));
+  on('GET', /^\/api\/me$/, () => ({ kind: 'local', name: 'this computer', role: 'admin', isAdmin: true, canWrite: true, signedIn: false, theme: settings.general.theme, accentColor: settings.general.accentColor, indicators: clone(settings.indicators || []) }));
   on('GET', /^\/api\/auth\/setup$/, () => ({ usersConfigured: false, loginRequired: false, accessPasswordSet: false, apiVersion: 1 }));
   on('GET', /^\/api\/users$/, () => []);
   on('GET', /^\/api\/apikeys$/, () => []);
@@ -542,7 +647,7 @@
   on('GET', /^\/api\/templates$/, () => templates);
   on('GET', /^\/api\/groups$/, () => {
     const g = new Map(); const t = new Map();
-    for (const n of nodes) { if (n.group) g.set(n.group, (g.get(n.group) || 0) + 1); for (const tag of n.tags || []) t.set(tag, (t.get(tag) || 0) + 1); }
+    for (const n of nodes) { for (const name of groupsOf(n)) g.set(name, (g.get(name) || 0) + 1); for (const tag of n.tags || []) t.set(tag, (t.get(tag) || 0) + 1); }
     return { groups: [...g].map(([name, count]) => ({ name, count })).sort((a, b) => a.name.localeCompare(b.name)), tags: [...t].map(([name, count]) => ({ name, count })).sort((a, b) => a.name.localeCompare(b.name)) };
   });
   on('GET', /^\/api\/nodes$/, () => nodes.map((n) => nodeOut(n)));
@@ -557,7 +662,8 @@
   });
   on('PUT', /^\/api\/nodes\/(\d+)$/, (m, body) => {
     const n = findNode(m[1]); if (!n) throw err(404, 'node not found');
-    Object.assign(n, { name: body.name, host: body.host, group: body.group || '', tags: body.tags || [], notes: body.notes || '', importance: body.importance || 'normal', enabled: body.enabled !== false, dependsOnNodeId: body.dependsOnNodeId ?? null, updatedAt: iso(Date.now()) });
+    const groups = (body.groups && body.groups.length ? body.groups : (body.group ? [body.group] : [])).slice(0, 16);
+    Object.assign(n, { name: body.name, host: body.host, groups, group: groups[0] || '', tags: body.tags || [], notes: body.notes || '', importance: body.importance || 'normal', enabled: body.enabled !== false, dependsOnNodeId: body.dependsOnNodeId ?? null, updatedAt: iso(Date.now()) });
     const keep = new Set();
     const next = (body.checks || []).map((c, i) => {
       const existing = c.id ? n.checks.find((x) => x.id === c.id) : null;
@@ -569,6 +675,90 @@
     addEvent('config_changed', { nodeId: n.id, nodeName: n.name, title: 'Node updated', detail: `${n.checks.length} checks` });
     return nodeOut(n, { withResults: true });
   });
+  // Bulk edit. It mirrors internal/api/bulk.go closely enough that the screen
+  // behaves the same here as against the service: the same selection rules,
+  // the same whitelist, the same shape of answer.
+  const BULK_CONFIG_KEYS = ['certWarnDays', 'latencyWarnMs', 'packetLossWarnPct', 'pingMethod'];
+  on('PATCH', /^\/api\/nodes\/bulk$/, (m, body) => {
+    const nodeIds = body?.nodeIds || [];
+    const checkIds = body?.checkIds || [];
+    if (!nodeIds.length && !checkIds.length) throw err(400, 'choose at least one node or check to change');
+    const np = body?.node, cp = body?.check;
+    const hasNode = np && Object.keys(np).length, hasCheck = cp && Object.keys(cp).length;
+    if (!hasNode && !hasCheck) throw err(400, 'choose at least one setting to change');
+    if (hasCheck) for (const k of Object.keys(cp.config || {})) {
+      if (!BULK_CONFIG_KEYS.includes(k)) throw err(400, `unknown config key(s) "${k}"; a bulk edit may set ${BULK_CONFIG_KEYS.map((x) => `"${x}"`).join(', ')}`);
+    }
+    const types = body?.checkFilter?.types || [];
+    const wanted = new Set(types);
+    const picked = [];
+    const seen = new Set();
+    const take = (c) => { if (seen.has(c.id) || (wanted.size && !wanted.has(c.type))) return; seen.add(c.id); picked.push(c); };
+    for (const id of checkIds) { const f = findCheck(id); if (!f) throw err(404, `check ${id} no longer exists`); take(f.c); }
+    const pickedNodes = [];
+    for (const id of nodeIds) {
+      const n = findNode(id); if (!n) throw err(400, `node ${id} no longer exists`);
+      if (!pickedNodes.includes(n)) pickedNodes.push(n);
+      for (const c of n.checks) take(c);
+    }
+    if (hasNode && !pickedNodes.length) throw err(400, 'the node settings have no nodes to apply to: select some nodes as well as checks');
+    if (hasCheck && !picked.length) throw err(400, wanted.size ? 'nothing to change: the selection holds no checks of the chosen type(s)' : 'nothing to change: the selected nodes have no checks');
+    const changes = [];
+    if (hasNode) {
+      const fold = (list, drop) => list.filter((x) => !(drop || []).some((d) => String(d).toLowerCase() === String(x).toLowerCase()));
+      const dedupe = (list) => { const out = [], seenL = new Set(); for (const v of list) { const k = String(v).trim().toLowerCase(); if (!k || seenL.has(k)) continue; seenL.add(k); out.push(String(v).trim()); } return out; };
+      for (const n of pickedNodes) {
+        let groups = np.groups ? [...np.groups] : groupsOf(n);
+        groups = dedupe(fold(groups, np.removeGroups).concat(np.addGroups || [])).slice(0, 16);
+        n.groups = groups; n.group = groups[0] || '';
+        let tags = np.tags ? [...np.tags] : (n.tags || []);
+        n.tags = dedupe(fold(tags, np.removeTags).concat(np.addTags || []));
+        if (np.importance != null) n.importance = np.importance;
+        if (np.enabled != null) n.enabled = !!np.enabled;
+        if ('dependsOnNodeId' in np) n.dependsOnNodeId = np.dependsOnNodeId || null;
+        n.updatedAt = iso(Date.now());
+      }
+      if (np.groups) changes.push(np.groups.length ? `groups → ${np.groups.join(', ')}` : 'groups cleared');
+      if (np.addGroups?.length) changes.push(`groups +${np.addGroups.join(', +')}`);
+      if (np.removeGroups?.length) changes.push(`groups −${np.removeGroups.join(', −')}`);
+      if (np.tags) changes.push(np.tags.length ? `tags → ${np.tags.join(', ')}` : 'tags cleared');
+      if (np.addTags?.length) changes.push(`tags +${np.addTags.join(', +')}`);
+      if (np.removeTags?.length) changes.push(`tags −${np.removeTags.join(', −')}`);
+      if (np.importance != null) changes.push(`importance → ${np.importance}`);
+      if (np.enabled != null) changes.push(np.enabled ? 'enabled' : 'disabled');
+      if ('dependsOnNodeId' in np) changes.push(np.dependsOnNodeId ? `depends on → ${findNode(np.dependsOnNodeId)?.name || np.dependsOnNodeId}` : 'dependency cleared');
+    }
+    if (hasCheck) {
+      for (const c of picked) {
+        if (cp.intervalSeconds != null) c.intervalSeconds = cp.intervalSeconds;
+        if (cp.timeoutSeconds != null) c.timeoutSeconds = cp.timeoutSeconds;
+        if (cp.retries != null) c.retries = cp.retries;
+        if (cp.failureThreshold != null) c.failureThreshold = cp.failureThreshold;
+        if (cp.enabled != null) c.enabled = !!cp.enabled;
+        if ('alerts' in cp) c.alerts = cp.alerts ? { ...cp.alerts } : null;
+        if (cp.config) Object.assign(c.config, cp.config);
+        c.updatedAt = iso(Date.now());
+        if (cp.intervalSeconds != null && states[c.id]) states[c.id].nextRunAt = iso(Date.now() + c.intervalSeconds * 1000);
+      }
+      if (cp.intervalSeconds != null) changes.push(`interval → ${cp.intervalSeconds} s`);
+      if (cp.timeoutSeconds != null) changes.push(`timeout → ${cp.timeoutSeconds} s`);
+      if (cp.retries != null) changes.push(`retries → ${cp.retries}`);
+      if (cp.failureThreshold != null) changes.push(cp.failureThreshold === 0 ? 'failures before down → global default' : `failures before down → ${cp.failureThreshold}`);
+      if (cp.enabled != null) changes.push(cp.enabled ? 'enabled' : 'disabled');
+      if ('alerts' in cp) changes.push(cp.alerts ? 'alert overrides replaced' : 'alert overrides cleared');
+      for (const k of BULK_CONFIG_KEYS) {
+        if (!cp.config || !(k in cp.config)) continue;
+        const v = cp.config[k];
+        if (k === 'latencyWarnMs') changes.push(`latency warning → ${v} ms`);
+        else if (k === 'packetLossWarnPct') changes.push(`packet loss warning → ${v} %`);
+        else if (k === 'certWarnDays') changes.push(`certificate warning → ${v} days`);
+        else changes.push(`ping method → ${v || 'global setting'}`);
+      }
+    }
+    const counts = { nodes: hasNode ? pickedNodes.length : 0, checks: hasCheck ? picked.length : 0 };
+    addEvent('config_changed', { title: `Bulk edit: ${changes.join('; ')}`, detail: `Applied to ${counts.nodes} node(s) and ${counts.checks} check(s).` });
+    return { ...counts, changes };
+  });
   on('DELETE', /^\/api\/nodes\/(\d+)$/, (m) => { const i = nodes.findIndex((n) => n.id === Number(m[1])); if (i < 0) throw err(404, 'node not found'); const [n] = nodes.splice(i, 1); addEvent('config_changed', { title: `Node "${n.name}" deleted` }); return { ok: true }; });
   on('POST', /^\/api\/nodes\/(\d+)\/enable$/, (m, body) => { const n = findNode(m[1]); if (!n) throw err(404, 'node not found'); n.enabled = !!body.enabled; addEvent('config_changed', { nodeId: n.id, nodeName: n.name, title: `Node ${n.enabled ? 'enabled' : 'disabled'}` }); return nodeOut(n); });
   on('POST', /^\/api\/nodes\/(\d+)\/duplicate$/, (m) => { const n = findNode(m[1]); if (!n) throw err(404, 'node not found'); const copy = mkNode({ ...n, name: `${n.name} (copy)`, enabled: false }); copy.checks = n.checks.map((c, i) => mkCheck(copy.id, c.type, c.name, { interval: c.intervalSeconds, timeout: c.timeoutSeconds, config: clone(c.config), alerts: c.alerts, enabled: c.enabled, sortOrder: i, base: CHECK_PROFILES[c.id]?.base ?? 20, status: 'unknown' })); nodes.push(copy); return nodeOut(copy); });
@@ -579,8 +769,29 @@
   on('POST', /^\/api\/checks\/(\d+)\/silence$/, (m, body) => { const f = findCheck(m[1]); if (!f) throw err(404, 'check not found'); const mins = Number(body.minutes) || 0; if (mins > 0) { silences[f.c.id] = Date.now() + mins * MIN; addEvent('silenced', { nodeId: f.n.id, nodeName: f.n.name, checkId: f.c.id, checkName: f.c.name, title: `Alerts silenced for ${mins} minutes` }); } else { delete silences[f.c.id]; addEvent('unsilenced', { nodeId: f.n.id, nodeName: f.n.name, checkId: f.c.id, checkName: f.c.name, title: 'Silence removed' }); } return stateFor(f.n, f.c); });
   on('GET', /^\/api\/checks\/(\d+)\/results$/, (m, body, u) => { const f = findCheck(m[1]); if (!f) throw err(404, 'check not found'); const limit = Number(u.searchParams.get('limit')) || 50; return (resultLog[f.c.id] || []).slice(0, limit); });
   on('GET', /^\/api\/checks\/(\d+)\/state$/, (m) => { const f = findCheck(m[1]); if (!f) throw err(404, 'check not found'); return stateFor(f.n, f.c); });
-  on('GET', /^\/api\/history$/, (m, body, u) => { const ids = u.searchParams.getAll('checkId'); const range = u.searchParams.get('range') || '24h'; if (ids.length === 1) return history(ids[0], range); return ids.map((id) => history(id, range)); });
+  on('GET', /^\/api\/history$/, (m, body, u) => { const ids = u.searchParams.getAll('checkId'); const range = u.searchParams.get('range') || '24h'; const metric = u.searchParams.get('metric'); if (ids.length === 1) return metric ? metricHistory(ids[0], range, metric) : history(ids[0], range); return ids.map((id) => history(id, range)); });
   on('GET', /^\/api\/history\/multi$/, (m, body, u) => { const ids = u.searchParams.getAll('checkId'); const range = u.searchParams.get('range') || '24h'; return ids.map((id) => history(id, range)); });
+
+  // "Walk this device": a plausible mib-2 subtree for a four-port switch, so
+  // the editor's picker can be seen without a real device on the network.
+  on('POST', /^\/api\/snmp\/walk$/, (m, body) => {
+    if (!body?.host) throw err(400, 'a host is required');
+    const rows = [
+      { oid: '1.3.6.1.2.1.1.1.0', type: 'OctetString', value: 'MikroTik CRS310, RouterOS 7.14', name: 'Description', kind: 'gauge' },
+      { oid: '1.3.6.1.2.1.1.3.0', type: 'TimeTicks', value: '41235000', name: 'Uptime', kind: 'gauge' },
+      { oid: '1.3.6.1.2.1.1.5.0', type: 'OctetString', value: 'office-switch', name: 'Device name', kind: 'gauge' },
+    ];
+    const ports = ['ether1-wan', 'ether2-office', 'ether3-loft', 'sfp-uplink'];
+    ports.forEach((label, i) => {
+      const n = i + 1;
+      rows.push({ oid: `1.3.6.1.2.1.2.2.1.2.${n}`, type: 'OctetString', value: label, name: `Port ${n} name`, kind: 'gauge' });
+      rows.push({ oid: `1.3.6.1.2.1.2.2.1.8.${n}`, type: 'Integer', value: n === 3 ? '2' : '1', name: `Port ${n} link`, kind: 'gauge' });
+      rows.push({ oid: `1.3.6.1.2.1.31.1.1.1.6.${n}`, type: 'Counter64', value: String(1.4e11 + n * 7e8), name: `Port ${n} in`, kind: 'counter' });
+      rows.push({ oid: `1.3.6.1.2.1.31.1.1.1.10.${n}`, type: 'Counter64', value: String(9.2e10 + n * 3e8), name: `Port ${n} out`, kind: 'counter' });
+      rows.push({ oid: `1.3.6.1.2.1.2.2.1.14.${n}`, type: 'Counter32', value: n === 3 ? '1842' : '0', name: `Port ${n} errors in`, kind: 'counter' });
+    });
+    return { rows, truncated: false, max: 500 };
+  });
   on('GET', /^\/api\/events$/, (m, body, u) => {
     const q = (u.searchParams.get('q') || '').toLowerCase();
     const until = u.searchParams.get('until');
@@ -610,7 +821,7 @@
   on('PUT', /^\/api\/dashboards\/(\d+)$/, (m, body) => { const d = dashboards.find((x) => x.id === Number(m[1])); if (!d) throw err(404, 'dashboard not found'); d.name = body.name ?? d.name; d.widgets = body.widgets ?? d.widgets; d.updatedAt = iso(Date.now()); return clone(d); });
   on('DELETE', /^\/api\/dashboards\/(\d+)$/, (m) => { const i = dashboards.findIndex((x) => x.id === Number(m[1])); if (i < 0) throw err(404, 'dashboard not found'); dashboards.splice(i, 1); return { ok: true }; });
   on('GET', /^\/api\/settings$/, () => clone(settings));
-  on('PUT', /^\/api\/settings$/, (m, body) => { settings = clone(body); if (settings.alerts?.smtp?.password) settings.alerts.smtp.password = '********'; if (settings.general?.accessPassword) settings.general.accessPassword = '********'; addEvent('config_changed', { title: 'Settings changed' }); return clone(settings); });
+  on('PUT', /^\/api\/settings$/, (m, body) => { settings = clone(body); if (settings.alerts?.smtp?.password) settings.alerts.smtp.password = '********'; if (settings.general?.accessPassword) settings.general.accessPassword = '********'; if (!settings.indicators?.length) settings.indicators = clone(DEFAULT_INDICATORS); addEvent('config_changed', { title: 'Settings changed' }); return clone(settings); });
   on('POST', /^\/api\/settings\/test-email$/, (m, body) => { if (!settings.alerts.smtp.host) throw err(400, 'SMTP host is not configured'); return { ok: true, message: `Test email sent to ${body?.to || settings.alerts.recipients.join(', ')} via ${settings.alerts.smtp.host}` }; });
   on('GET', /^\/api\/retention\/status$/, () => retention);
   on('POST', /^\/api\/retention\/run$/, () => { retention = { ...retention, lastRunAt: iso(Date.now()), lastDurationMs: 1830, deletedLastRun: 1043, rawRows: retention.rawRows - 1043, rollupRows5m: retention.rollupRows5m + 288 }; addEvent('retention', { title: 'Retention run finished', detail: 'Rolled up 1,043 raw results · 1.8 s' }); return retention; });
@@ -632,7 +843,95 @@
   const endpoints = [{ id: 1, name: 'Router rebooted', slug: 'router-rebooted', description: 'Called by the router after a reboot', enabled: true, method: 'POST', token: 'abc123', action: { type: 'run_node', nodeId: gateway.id }, lastCalledAt: ago(5 * DAY), lastStatus: 'ok', lastOutput: 'Ran the checks of node 21.', callCount: 4, createdAt: ago(20 * DAY), updatedAt: ago(20 * DAY) }];
   let updateStatus = { last: null, applying: false, applied: false, restarting: false, lastApplyAt: null, lastError: '', executable: 'C:\\Program Files\\GWatch\\gwatch.exe', canApply: true };
   on('GET', /^\/api\/status$/, () => { const ov = overview(); return { down: ov.summary.down, degraded: ov.summary.degraded, unknown: ov.summary.unknown, up: ov.summary.up, total: ov.summary.total, certWarnings: ov.certWarnings.length, maintenance: ov.summary.maintenance, serviceOk: true, serviceIssues: [], attention: ov.attention.length, generatedAt: iso(Date.now()) }; });
-  on('GET', /^\/api\/network$/, () => ({ listenAddress: settings.general.remoteAccess ? ':8080' : '127.0.0.1:8080', remoteAccess: !!settings.general.remoteAccess, passwordSet: !!settings.general.accessPassword, port: 8080, localUrl: 'http://127.0.0.1:8080', lanUrls: settings.general.remoteAccess ? ['http://192.168.1.10:8080', 'http://desktop-pc:8080'] : [], hostname: 'desktop-pc', restartNeeded: false }));
+  on('GET', /^\/api\/network$/, () => ({ listenAddress: settings.general.remoteAccess ? ':7230' : '127.0.0.1:7230', remoteAccess: !!settings.general.remoteAccess, passwordSet: !!settings.general.accessPassword, port: 7230, localUrl: 'http://127.0.0.1:7230', lanUrls: settings.general.remoteAccess ? ['http://192.168.1.10:7230', 'http://desktop-pc:7230'] : [], hostname: 'desktop-pc', restartNeeded: false }));
+  /* ---------- Discovery ---------- */
+  // A sweep that finds three devices over about two seconds. The progress is
+  // derived from the clock rather than from a timer, so the run advances
+  // whether the modal is watching the stream or polling — and a test that
+  // drives it can simply wait.
+  const DISCOVERY_MS = 2000;
+  const DISCOVERY_FOUND = [
+    { ip: '192.168.1.1', hostname: 'gateway.lan', rttMs: 1.8, openPorts: [80, 443], template: 'router', note: 'Only a web interface answered — looks like a router, switch or access point.' },
+    { ip: '192.168.1.23', hostname: 'pi.lan', rttMs: 0.9, openPorts: [22, 80], template: 'home-server', note: 'SSH and a web interface — looks like a server or NAS.' },
+    { ip: '192.168.1.64', hostname: '', rttMs: 5.4, openPorts: [9100], template: 'tcp-service', note: 'Port 9100 is open — this looks like a network printer.' },
+  ];
+  let discoveryJob = null;
+  // The last add, so a test can prove the request was made.
+  window.__gwatchMockDiscoveryAdds = [];
+
+  function discoveryView() {
+    if (!discoveryJob) return null;
+    const j = discoveryJob;
+    if (j.state === 'running') {
+      const elapsed = Date.now() - +new Date(j.startedAt);
+      const ratio = Math.min(1, elapsed / DISCOVERY_MS);
+      j.scanned = Math.round(j.total * ratio);
+      j.responders = Math.floor(DISCOVERY_FOUND.length * ratio);
+      if (ratio >= 1) {
+        j.state = 'done';
+        j.scanned = j.total;
+        j.results = clone(DISCOVERY_FOUND);
+        j.responders = j.results.length;
+        j.finishedAt = iso(Date.now());
+        addEvent('discovery', { title: `Discovery scanned ${j.total} addresses in ${j.ranges.join(', ')}: ${j.responders} responded` });
+      }
+    }
+    return clone(j);
+  }
+
+  on('GET', /^\/api\/discovery$/, () => { const j = discoveryView(); if (!j) throw err(404, 'no discovery has been run yet'); return j; });
+  on('POST', /^\/api\/discovery$/, (m, body) => {
+    const current = discoveryView();
+    if (current && current.state === 'running') throw err(409, 'a discovery run is already going; wait for it to finish or cancel it first');
+    const ranges = (body?.ranges || []).map((s) => String(s).trim()).filter(Boolean);
+    if (!ranges.length) throw err(400, 'give at least one range, such as 192.168.1.0/24 or 192.168.1.10-50');
+    if (ranges.some((r) => r.includes(':'))) throw err(400, `${ranges[0]} is IPv6; discovery sweeps IPv4 only for now`);
+    discoveryJob = {
+      // As on the server: no ports field means the defaults, an empty one
+      // means probe nothing.
+      id: `mock-${++seq.discovery}`, ranges, ports: body?.ports === undefined ? [22, 80, 443, 445, 3389, 8080, 8443, 9100, 32400, 1883] : body.ports,
+      state: 'running', total: 254, scanned: 0, responders: 0, results: [], startedAt: iso(Date.now()), finishedAt: null,
+    };
+    // The real service pushes progress over the stream several times a second
+    // while a sweep runs, so the mock does too — otherwise the bar would only
+    // move on the modal's two-second poll and the demo would look stuck.
+    const ticker = setInterval(() => {
+      const j = discoveryView();
+      if (!j) { clearInterval(ticker); return; }
+      pushUpdate({ kind: 'discovery', discovery: { id: j.id, state: j.state, scanned: j.scanned, total: j.total, responders: j.responders } });
+      if (j.state !== 'running') clearInterval(ticker);
+    }, 200);
+    return clone(discoveryJob);
+  });
+  on('GET', /^\/api\/discovery\/([^/]+)$/, (m) => { const j = discoveryView(); if (!j || j.id !== m[1]) throw err(404, 'no discovery run with that id'); return j; });
+  on('POST', /^\/api\/discovery\/([^/]+)\/cancel$/, (m) => {
+    const j = discoveryView();
+    if (!j || j.id !== m[1]) throw err(404, 'no discovery run with that id');
+    if (discoveryJob.state === 'running') { discoveryJob.state = 'cancelled'; discoveryJob.finishedAt = iso(Date.now()); }
+    return clone(discoveryJob);
+  });
+  on('POST', /^\/api\/discovery\/([^/]+)\/add$/, (m, body) => {
+    const j = discoveryView();
+    if (!j || j.id !== m[1]) throw err(404, 'no discovery run with that id');
+    window.__gwatchMockDiscoveryAdds.push(clone(body || {}));
+    const items = body?.items || [];
+    if (!items.length) throw err(400, 'choose at least one device to add');
+    const created = []; const skipped = [];
+    for (const item of items) {
+      const found = (j.results || []).find((r) => r.ip === item.ip);
+      if (!found) { skipped.push({ ip: item.ip, reason: "this address was not one of the run's responders" }); continue; }
+      const existing = nodes.find((n) => (n.host || '').toLowerCase() === String(item.ip).toLowerCase());
+      if (existing) { skipped.push({ ip: item.ip, reason: `already monitored as "${existing.name}"` }); continue; }
+      const tmpl = templates.find((t) => t.id === (item.template || found.template)) || templates[0];
+      const n = mkNode({ name: item.name || found.hostname || item.ip, host: item.ip, group: body.group || tmpl.node.group, tags: [], template: tmpl.id });
+      n.checks = tmpl.checks.map((c, i) => mkCheck(n.id, c.type, c.name, { interval: c.intervalSeconds, timeout: c.timeoutSeconds, config: clone(c.config), enabled: c.enabled, sortOrder: i, base: c.type === 'ping' ? 3 : 40, status: 'unknown' }));
+      nodes.push(n);
+      created.push(nodeOut(n));
+    }
+    if (created.length) addEvent('discovery', { title: `Added ${created.length} node${created.length === 1 ? '' : 's'} from discovery`, detail: created.map((c) => `${c.name} (${c.host})`).join(', ') });
+    return { created, skipped };
+  });
+
   on('GET', /^\/api\/charts$/, () => clone(savedCharts));
   on('PUT', /^\/api\/charts$/, (m, body) => { savedCharts = (body || []).map((c, i) => ({ ...c, id: c.id || `chart-${Date.now()}${i}`, name: c.name || `Chart ${i + 1}`, updatedAt: iso(Date.now()) })); return clone(savedCharts); });
   on('GET', /^\/api\/automation\/meta$/, () => ({ conditions: ['down', 'recovered', 'degraded', 'warning_cleared', 'cert_warning', 'content_changed', 'affected_by_parent', 'status_change', 'any_failure', 'any_success', 'latency_over'], interpreters: ['sh', 'bash', 'powershell', 'cmd', 'python', 'node', 'custom'], defaultInterpreter: 'powershell', placeholders: [] }));
@@ -800,9 +1099,18 @@
   };
 
   /* ---------- Event stream ---------- */
+  // Every open stream, so something outside the tick loop — a discovery sweep,
+  // which has news several times a second — can push to all of them.
+  const liveStreams = new Set();
+  function pushUpdate(data) {
+    const e = new MessageEvent('update', { data: JSON.stringify(data) });
+    for (const s of liveStreams) s.dispatchEvent(e);
+  }
+
   class MockEventSource extends EventTarget {
     constructor(url) {
       super();
+      liveStreams.add(this);
       this.url = url; this.readyState = 0;
       setTimeout(() => { this.readyState = 1; this.dispatchEvent(new Event('open')); if (this.onopen) this.onopen(new Event('open')); }, 50);
       this.timer = setInterval(() => this.tick(), 12000);
@@ -825,10 +1133,47 @@
       const e = new MessageEvent('update', { data });
       this.dispatchEvent(e);
     }
-    close() { clearInterval(this.timer); this.readyState = 2; }
+    close() { clearInterval(this.timer); liveStreams.delete(this); this.readyState = 2; }
   }
   window.EventSource = MockEventSource;
 
   window.__gwatchMock = { nodes, events, dashboards, states, overview, history };
   console.info('[GWatch] mock API enabled (?mock=1)');
+
+  /* ---------- Unmistakable "this is fake" banner ---------- */
+  // The mock backend ships inside the release binary (it is genuinely useful
+  // for support), so anyone who lands on ?mock=1 — by a stray bookmark, a
+  // shared link, or poking around — needs to know at a glance that nothing
+  // on the screen is their actual network. This cannot be dismissed: there
+  // is no close button, and it is reinstalled on every load, on purpose.
+  const MOCK_BANNER_TEXT = 'Mock data — this is not your network';
+  document.title = '[MOCK] ' + document.title;
+
+  function paintMockBanner() {
+    const bar = document.createElement('div');
+    bar.id = 'gwatch-mock-banner';
+    bar.setAttribute('role', 'status');
+    bar.textContent = MOCK_BANNER_TEXT + ' (?mock=1)';
+    // Inline via the CSSOM, not a style="" attribute or a <style> block, so
+    // this survives a strict Content-Security-Policy. Colours are hard-coded
+    // rather than pulled from the app's CSS variables on purpose: the banner
+    // must stay legible and obviously "not the app" even if the stylesheet
+    // fails to load.
+    bar.style.cssText = [
+      'position:fixed', 'top:0', 'left:0', 'right:0', 'z-index:2147483647',
+      'display:flex', 'align-items:center', 'justify-content:center', 'gap:0.5em',
+      'padding:0.5em 1em', 'background:#b45309', 'color:#fff',
+      'font:600 13px/1.3 system-ui, -apple-system, "Segoe UI", sans-serif',
+      'letter-spacing:0.02em', 'text-align:center',
+      'box-shadow:0 1px 6px rgba(0,0,0,0.4)', 'pointer-events:none',
+    ].join(';');
+    document.body.prepend(bar);
+    // Push the app down by the banner's own height so it is never covered.
+    const push = () => { document.body.style.paddingTop = bar.offsetHeight + 'px'; };
+    push();
+    window.addEventListener('resize', push);
+  }
+
+  if (document.body) paintMockBanner();
+  else document.addEventListener('DOMContentLoaded', paintMockBanner);
 })();

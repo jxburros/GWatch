@@ -7,6 +7,7 @@ package model
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -24,10 +25,11 @@ const (
 	CheckJSON    CheckType = "json"    // HTTP/S JSON response has expected value at a path
 	CheckCustom  CheckType = "custom"  // user-supplied command/script, output parsed for status/metrics
 	CheckSystem  CheckType = "system"  // hardware health of a machine: processor, memory, disk space, throughput
+	CheckSNMP    CheckType = "snmp"    // SNMP readings from a network device: interfaces, processor, uptime
 )
 
 // AllCheckTypes lists the supported check types in display order.
-var AllCheckTypes = []CheckType{CheckPing, CheckHTTP, CheckCert, CheckTCP, CheckDNS, CheckKeyword, CheckJSON, CheckCustom, CheckSystem}
+var AllCheckTypes = []CheckType{CheckPing, CheckHTTP, CheckCert, CheckTCP, CheckDNS, CheckKeyword, CheckJSON, CheckCustom, CheckSystem, CheckSNMP}
 
 // Valid reports whether the type is one the engine can run.
 func (t CheckType) Valid() bool {
@@ -60,6 +62,8 @@ func (t CheckType) Label() string {
 		return "Custom script"
 	case CheckSystem:
 		return "Hardware health"
+	case CheckSNMP:
+		return "SNMP"
 	}
 	return string(t)
 }
@@ -113,12 +117,22 @@ const (
 	ImportanceCritical Importance = "critical"
 )
 
+// MaxNodeGroups caps how many groups one node may belong to. A node that
+// appears in a dozen places is already hard to reason about; the cap exists so
+// a bad import cannot turn one node into a hundred group sections.
+const MaxNodeGroups = 16
+
 // Node is a device, service, website, endpoint, router, NAS, server,
 // application or API. A node owns zero or more checks.
 type Node struct {
-	ID            int64      `json:"id"`
-	Name          string     `json:"name"`
-	Host          string     `json:"host"` // default target for checks (hostname, IP or URL)
+	ID     int64    `json:"id"`
+	Name   string   `json:"name"`
+	Host   string   `json:"host"` // default target for checks (hostname, IP or URL)
+	Groups []string `json:"groups"`
+	// Group is the first entry of Groups, kept for one release so clients
+	// written against the single-group API keep working. It is filled in on
+	// every read; on a write it is used only when Groups is absent or empty.
+	// Deprecated: read and write Groups.
 	Group         string     `json:"group"`
 	Tags          []string   `json:"tags"`
 	Notes         string     `json:"notes"`
@@ -131,6 +145,78 @@ type Node struct {
 
 	// Checks is populated by the API when returning a full node.
 	Checks []Check `json:"checks"`
+}
+
+// NormalizeGroups cleans a list of group names: blanks are dropped, duplicates
+// that differ only in case are folded onto the first spelling seen (so "Home"
+// and "home" are one group, named the way it was first typed), and the result
+// is capped at MaxNodeGroups. It always returns a non-nil slice, because the
+// wire format promises a list rather than null.
+func NormalizeGroups(groups []string) []string {
+	out := make([]string, 0, len(groups))
+	seen := map[string]bool{}
+	for _, g := range groups {
+		g = strings.TrimSpace(g)
+		if g == "" || seen[strings.ToLower(g)] {
+			continue
+		}
+		seen[strings.ToLower(g)] = true
+		out = append(out, g)
+		if len(out) == MaxNodeGroups {
+			break
+		}
+	}
+	return out
+}
+
+// SyncGroups normalises the node's groups and keeps Group in step with them.
+// A body that carries only the old Group field is read as a one-group node, so
+// an older client (or an older database row) still says what it meant; every
+// other case is decided by Groups, and Group comes back out of it as the first
+// group. Call this wherever a node arrives from outside: the API, the store
+// and the restore path all do.
+func (n *Node) SyncGroups() {
+	n.Groups = NormalizeGroups(n.Groups)
+	if len(n.Groups) == 0 {
+		if g := strings.TrimSpace(n.Group); g != "" {
+			n.Groups = []string{g}
+		}
+	}
+	if len(n.Groups) > 0 {
+		n.Group = n.Groups[0]
+	} else {
+		n.Group = ""
+	}
+}
+
+// InGroup reports whether the node belongs to the named group, matching any of
+// its groups and ignoring case. An empty name matches nothing: "no group
+// filter" is the caller's decision to make, not a group a node can be in.
+func (n Node) InGroup(group string) bool {
+	group = strings.TrimSpace(group)
+	if group == "" {
+		return false
+	}
+	for _, g := range n.Groups {
+		if strings.EqualFold(strings.TrimSpace(g), group) {
+			return true
+		}
+	}
+	// A node that came from somewhere that only filled Group in (a hand-built
+	// literal in a test, say) is still in that group.
+	return len(n.Groups) == 0 && strings.EqualFold(strings.TrimSpace(n.Group), group)
+}
+
+// GroupList returns the groups the node belongs to, falling back to Group for
+// a node whose Groups was never filled in.
+func (n Node) GroupList() []string {
+	if len(n.Groups) > 0 {
+		return n.Groups
+	}
+	if g := strings.TrimSpace(n.Group); g != "" {
+		return []string{g}
+	}
+	return nil
 }
 
 // Check is one monitor attached to a node.
@@ -168,7 +254,8 @@ type CheckConfig struct {
 	Target string `json:"target,omitempty"`
 
 	// Ping
-	PingCount int `json:"pingCount,omitempty"` // packets per run (default 4, max 20)
+	PingCount  int    `json:"pingCount,omitempty"`  // packets per run (default 4, max 20)
+	PingMethod string `json:"pingMethod,omitempty"` // "" = use GeneralSettings.PingMethod, else "auto" | "builtin" | "system"
 
 	// HTTP / keyword / JSON
 	Method          string            `json:"method,omitempty"`          // default GET
@@ -228,6 +315,66 @@ type CheckConfig struct {
 	// StaleAfterSeconds is how old a reading may be before the check reports
 	// the machine as down. 0 means three times the check interval.
 	StaleAfterSeconds int `json:"staleAfterSeconds,omitempty"`
+
+	// SNMP: readings taken straight off a router, switch or access point.
+	// The community string and the v3 passwords are credentials, so the store
+	// seals them before they reach disk and the API never echoes them back —
+	// an editor that sends the field back blank keeps what is stored.
+	SNMPVersion   string    `json:"snmpVersion,omitempty"`   // "2c" (default) or "3"
+	SNMPPort      int       `json:"snmpPort,omitempty"`      // default 161
+	SNMPCommunity string    `json:"snmpCommunity,omitempty"` // v2c community string
+	SNMPUser      string    `json:"snmpUser,omitempty"`      // v3 security name
+	SNMPAuthProto string    `json:"snmpAuthProto,omitempty"` // "" (noAuth) | MD5 | SHA | SHA224 | SHA256 | SHA384 | SHA512
+	SNMPAuthPass  string    `json:"snmpAuthPass,omitempty"`
+	SNMPPrivProto string    `json:"snmpPrivProto,omitempty"` // "" (noPriv) | DES | AES | AES192 | AES256 | AES192C | AES256C
+	SNMPPrivPass  string    `json:"snmpPrivPass,omitempty"`
+	SNMPOIDs      []SNMPOID `json:"snmpOids,omitempty"`
+}
+
+// SNMPOID is one reading an SNMP check takes, with the thresholds that decide
+// the check's verdict. A "counter" is an ever-increasing total (bytes seen on
+// an interface, errors counted), so it is evaluated as the per-second rate of
+// change between consecutive runs rather than as the number itself; a "gauge"
+// is a value that already means something on its own (a temperature, a
+// percentage, an operational status).
+type SNMPOID struct {
+	OID  string `json:"oid"`            // dotted numeric OID, e.g. 1.3.6.1.2.1.1.3.0
+	Name string `json:"name"`           // the metric name, unique within the check
+	Kind string `json:"kind,omitempty"` // "gauge" (default) or "counter"
+	// Scale multiplies the reading (or the rate) before it is compared and
+	// charted. 0 and 1 both mean "as read"; 8 turns a bytes-per-second rate
+	// into bits per second.
+	Scale     float64  `json:"scale,omitempty"`
+	Unit      string   `json:"unit,omitempty"` // shown beside the value, e.g. "bit/s", "%", "s"
+	WarnAbove *float64 `json:"warnAbove,omitempty"`
+	CritAbove *float64 `json:"critAbove,omitempty"`
+	WarnBelow *float64 `json:"warnBelow,omitempty"`
+	CritBelow *float64 `json:"critBelow,omitempty"`
+}
+
+// Scaled applies Scale to a reading. A missing or zero scale means "as read"
+// rather than "multiply by nothing".
+func (o SNMPOID) Scaled(v float64) float64 {
+	if o.Scale == 0 || o.Scale == 1 {
+		return v
+	}
+	return v * o.Scale
+}
+
+// SNMPValue is one OID as the last run read it.
+type SNMPValue struct {
+	OID  string `json:"oid"`
+	Name string `json:"name"`
+	Raw  string `json:"raw,omitempty"` // the value as the device reported it
+	// Value is the numeric reading after Scale, for a gauge. It is nil when
+	// the device answered with something that is not a number (sysDescr, a MAC
+	// address), which is reported as Raw and never thresholded.
+	Value *float64 `json:"value,omitempty"`
+	// Rate is the per-second rate of change after Scale, for a counter. It is
+	// nil on the first run after a restart, when there is no previous sample
+	// to compare against.
+	Rate *float64 `json:"rate,omitempty"`
+	Unit string   `json:"unit,omitempty"`
 }
 
 // SystemDefaults are the thresholds a new hardware check starts with. They are
@@ -265,21 +412,33 @@ type AlertOverride struct {
 
 // Result is a single observation produced by running a check.
 type Result struct {
-	ID        int64         `json:"id"`
-	CheckID   int64         `json:"checkId"`
-	Timestamp time.Time     `json:"ts"`
-	Success   bool          `json:"success"`
-	Status    Status        `json:"status"` // up, degraded or down
-	Message   string        `json:"message"`
-	Error     string        `json:"error,omitempty"`
-	LatencyMS *float64      `json:"latencyMs"` // primary metric: avg RTT, total HTTP time, connect time, resolve time
-	MinMS     *float64      `json:"minMs,omitempty"`
-	MaxMS     *float64      `json:"maxMs,omitempty"`
-	JitterMS  *float64      `json:"jitterMs,omitempty"`
-	LossPct   *float64      `json:"lossPct,omitempty"`
-	Details   ResultDetails `json:"details"`
-	Attempts  int           `json:"attempts"`
-	Warnings  []string      `json:"warnings,omitempty"` // degraded reasons
+	ID        int64     `json:"id"`
+	CheckID   int64     `json:"checkId"`
+	Timestamp time.Time `json:"ts"`
+	Success   bool      `json:"success"`
+	Status    Status    `json:"status"` // up, degraded or down
+	Message   string    `json:"message"`
+	Error     string    `json:"error,omitempty"`
+	LatencyMS *float64  `json:"latencyMs"` // primary metric: avg RTT, total HTTP time, connect time, resolve time
+	MinMS     *float64  `json:"minMs,omitempty"`
+	MaxMS     *float64  `json:"maxMs,omitempty"`
+	JitterMS  *float64  `json:"jitterMs,omitempty"`
+	// StdDevMS is the population standard deviation of the individual samples
+	// behind LatencyMS — for a ping check, of its per-packet RTTs. Jitter says
+	// how much consecutive packets differ from each other; this says how far
+	// the whole run spreads around its average, which is the figure most ping
+	// tools print beside min/avg/max.
+	StdDevMS *float64      `json:"stddevMs,omitempty"`
+	LossPct  *float64      `json:"lossPct,omitempty"`
+	Details  ResultDetails `json:"details"`
+	Attempts int           `json:"attempts"`
+	Warnings []string      `json:"warnings,omitempty"` // degraded reasons
+	// Metrics carries the extra numbers a check measured beyond the latency
+	// every check reports, keyed by a name the check's configuration chose —
+	// for an SNMP check, one entry per OID holding its value or rate after
+	// Scale. They are stored with the result and charted by asking
+	// /api/history for metric=<name>.
+	Metrics map[string]float64 `json:"metrics,omitempty"`
 }
 
 // ResultDetails carries the type-specific diagnostics shown in the
@@ -326,6 +485,9 @@ type ResultDetails struct {
 	// System: the hardware reading the check evaluated, and how old it was.
 	Host       *HostMetrics `json:"host,omitempty"`
 	HostAgeSec *float64     `json:"hostAgeSeconds,omitempty"`
+
+	// SNMP: every OID the run asked for, in the order the check lists them.
+	SNMP []SNMPValue `json:"snmp,omitempty"`
 }
 
 // CertInfo describes the leaf certificate presented by a TLS server.
@@ -398,6 +560,7 @@ const (
 	EventEndpointCalled     EventType = "endpoint_called" // a custom endpoint was invoked
 	EventUpdate             EventType = "update"          // application update checked / applied
 	EventAuth               EventType = "auth"            // sign-in, sign-out, account or API-key change
+	EventDiscovery          EventType = "discovery"       // a subnet was swept, or nodes were added from a sweep
 )
 
 // Event is one entry in the incident/event timeline.
@@ -458,6 +621,10 @@ type Principal struct {
 	SignedIn    bool   `json:"signedIn"`
 	Theme       string `json:"theme,omitempty"`
 	AccentColor string `json:"accentColor,omitempty"`
+	// Indicators are the header's status-orb rules, already normalised. They
+	// travel with the identity for the same reason the theme does: a viewer
+	// may not read settings, and every account should see the same header.
+	Indicators []IndicatorRule `json:"indicators,omitempty"`
 }
 
 // MaintenanceWindow silences alerts for a node, a group or everything.
@@ -573,6 +740,27 @@ type RetentionSettings struct {
 	HostDays int `json:"hostDays"` // default 90
 }
 
+// How a ping check sends its echo requests. "auto" tries GWatch's own ICMP
+// sender and falls back to the operating system's ping command; "builtin"
+// never runs an external program; "system" always uses the ping command, which
+// is the way out on a machine that will not hand out ICMP sockets.
+const (
+	PingMethodAuto    = "auto"
+	PingMethodBuiltin = "builtin"
+	PingMethodSystem  = "system"
+)
+
+// ValidPingMethod reports whether s names a ping method. The empty string is
+// not one: a check config uses it to mean "follow the global setting", and the
+// global setting itself is normalised to "auto" when it is saved empty.
+func ValidPingMethod(s string) bool {
+	switch s {
+	case PingMethodAuto, PingMethodBuiltin, PingMethodSystem:
+		return true
+	}
+	return false
+}
+
 // GeneralSettings are miscellaneous application settings.
 type GeneralSettings struct {
 	InstanceName         string  `json:"instanceName"`
@@ -583,6 +771,7 @@ type GeneralSettings struct {
 	WallboardRefreshSecs int     `json:"wallboardRefreshSeconds"`
 	LatencyWarnMS        float64 `json:"latencyWarnMs"`     // global default; 0 = off
 	PacketLossWarnPct    float64 `json:"packetLossWarnPct"` // global default; 0 = off
+	PingMethod           string  `json:"pingMethod"`        // "auto" (default) | "builtin" | "system"
 	Theme                string  `json:"theme"`             // "dark" | "light" | "system"
 	AccentColor          string  `json:"accentColor"`       // hex colour used for the accent, e.g. "#43c9c0"
 	RemoteAccess         bool    `json:"remoteAccess"`      // listen on every interface so other devices on the LAN can open the UI
@@ -611,6 +800,11 @@ type Settings struct {
 	Retention RetentionSettings `json:"retention"`
 	Backups   BackupSettings    `json:"backups"`
 	Updates   UpdateSettings    `json:"updates"`
+	// Indicators are the rules behind the status orbs in the header. They sit
+	// beside the other sections rather than inside General because they are a
+	// list: describeSettingsChange and the tests compare GeneralSettings with
+	// ==, which only works while every field in it is comparable.
+	Indicators []IndicatorRule `json:"indicators"`
 }
 
 // UpdateSettings controls how GWatch looks for new releases of itself. It is
@@ -622,6 +816,170 @@ type UpdateSettings struct {
 	CheckIntervalHours int  `json:"checkIntervalHours"` // default 24, 1-720 (30 days)
 	IncludePrerelease  bool `json:"includePrerelease"`  // offer pre-releases as well as stable releases
 	PromptOnOpen       bool `json:"promptOnOpen"`       // offer the update in a dialog when the interface is opened
+}
+
+// ---- header indicators ----
+
+// The three severities an indicator rule may carry. Green and blue are not
+// among them on purpose: those two are the states GWatch works out for itself
+// — green when nothing fires, blue when there is nothing to report on yet —
+// and neither is anything a rule could usefully be pointed at.
+const (
+	IndicatorYellow = "yellow"
+	IndicatorOrange = "orange"
+	IndicatorRed    = "red"
+)
+
+// The conditions a rule may test. The list is short because the rules are
+// evaluated in the browser against the one summary document GET /api/status
+// already returns; anything not answerable from that summary would need a
+// second request on every poll, for every viewer.
+const (
+	// IndicatorNodesInStatus counts nodes sitting in one status.
+	IndicatorNodesInStatus = "nodesInStatus"
+	// IndicatorCertWarnings counts certificates that are expiring or invalid.
+	IndicatorCertWarnings = "certWarnings"
+	// IndicatorAttention counts the entries on the attention list: the checks
+	// that are down or degraded right now.
+	IndicatorAttention = "attention"
+	// IndicatorServiceHealth fires when the monitor itself is unwell — the
+	// scheduler stopped, retention failed, a backup failed, alerts bounced.
+	IndicatorServiceHealth = "serviceHealth"
+)
+
+// IndicatorCondition is what a rule tests. Which fields mean anything depends
+// on Kind: only nodesInStatus reads Status, and serviceHealth reads neither.
+type IndicatorCondition struct {
+	Kind string `json:"kind"`
+	// Status is one of down, degraded, unknown or maintenance. "unknown" is
+	// the useful one on a young install: it means a node exists but has not
+	// produced a result yet.
+	Status string `json:"status,omitempty"`
+	// MinCount is how many it takes before the rule fires. Zero means one.
+	MinCount int `json:"minCount,omitempty"`
+}
+
+// IndicatorRule is one configurable orb in the header. A rule that fires puts
+// an orb of its colour under the page title; several firing at once stack side
+// by side, reddest first.
+type IndicatorRule struct {
+	ID        string             `json:"id"`
+	Name      string             `json:"name"`
+	Enabled   bool               `json:"enabled"`
+	Colour    string             `json:"colour"`
+	Condition IndicatorCondition `json:"condition"`
+}
+
+// DefaultIndicators is the set every install starts with, so that the header
+// says something useful before anybody has opened the settings. The severities
+// follow how much of an answer the monitor has: red for a node that is
+// definitely not answering and for the monitor being broken itself, orange for
+// something answering badly or about to expire, yellow for what it simply does
+// not know yet or has been told to ignore.
+func DefaultIndicators() []IndicatorRule {
+	return []IndicatorRule{
+		{ID: "nodes-down", Name: "Nodes down", Enabled: true, Colour: IndicatorRed, Condition: IndicatorCondition{Kind: IndicatorNodesInStatus, Status: string(StatusDown), MinCount: 1}},
+		{ID: "monitor-unwell", Name: "Monitor trouble", Enabled: true, Colour: IndicatorRed, Condition: IndicatorCondition{Kind: IndicatorServiceHealth}},
+		{ID: "nodes-degraded", Name: "Nodes degraded", Enabled: true, Colour: IndicatorOrange, Condition: IndicatorCondition{Kind: IndicatorNodesInStatus, Status: string(StatusDegraded), MinCount: 1}},
+		{ID: "certs-expiring", Name: "Certificates expiring", Enabled: true, Colour: IndicatorOrange, Condition: IndicatorCondition{Kind: IndicatorCertWarnings, MinCount: 1}},
+		{ID: "nodes-unknown", Name: "Waiting for first results", Enabled: true, Colour: IndicatorYellow, Condition: IndicatorCondition{Kind: IndicatorNodesInStatus, Status: string(StatusUnknown), MinCount: 1}},
+		{ID: "nodes-maintenance", Name: "In maintenance", Enabled: true, Colour: IndicatorYellow, Condition: IndicatorCondition{Kind: IndicatorNodesInStatus, Status: string(StatusMaintenance), MinCount: 1}},
+	}
+}
+
+// ValidIndicatorColour reports whether c is one of the three severities.
+func ValidIndicatorColour(c string) bool {
+	switch c {
+	case IndicatorYellow, IndicatorOrange, IndicatorRed:
+		return true
+	}
+	return false
+}
+
+// ValidIndicatorStatus reports whether s is a status nodesInStatus can count.
+// Up is missing deliberately: an indicator that fires when things are well
+// would be a second green, and green is not a rule's to give.
+func ValidIndicatorStatus(s string) bool {
+	switch Status(s) {
+	case StatusDown, StatusDegraded, StatusUnknown, StatusMaintenance:
+		return true
+	}
+	return false
+}
+
+// ValidateIndicators reports the first rule the server will not store. It is
+// strict about the closed vocabulary — an unknown kind would simply never fire
+// in the browser, which looks like a bug rather than a rejected setting — and
+// lenient about everything a normalisation can fix.
+func ValidateIndicators(rules []IndicatorRule) error {
+	seen := make(map[string]bool, len(rules))
+	for i, r := range rules {
+		where := strings.TrimSpace(r.Name)
+		if where == "" {
+			where = fmt.Sprintf("indicator %d", i+1)
+		}
+		if !ValidIndicatorColour(r.Colour) {
+			return fmt.Errorf("%s: colour must be yellow, orange or red", where)
+		}
+		switch r.Condition.Kind {
+		case IndicatorNodesInStatus:
+			if !ValidIndicatorStatus(r.Condition.Status) {
+				return fmt.Errorf("%s: status must be down, degraded, unknown or maintenance", where)
+			}
+		case IndicatorCertWarnings, IndicatorAttention, IndicatorServiceHealth:
+		default:
+			return fmt.Errorf("%s: %q is not a condition GWatch can evaluate", where, r.Condition.Kind)
+		}
+		if r.Condition.MinCount < 0 || r.Condition.MinCount > 100000 {
+			return fmt.Errorf("%s: the count must be between 1 and 100000", where)
+		}
+		if id := strings.TrimSpace(r.ID); id != "" {
+			if seen[id] {
+				return fmt.Errorf("%s: two indicators share the id %q", where, id)
+			}
+			seen[id] = true
+		}
+	}
+	return nil
+}
+
+// NormalizeIndicators fills in what a rule may leave out and seeds the
+// defaults when there are none. It runs when settings are loaded as well as
+// when they are saved, so an install that predates indicators picks them up
+// without anybody having to visit the settings page.
+func NormalizeIndicators(rules []IndicatorRule) []IndicatorRule {
+	if len(rules) == 0 {
+		return DefaultIndicators()
+	}
+	out := make([]IndicatorRule, 0, len(rules))
+	used := make(map[string]bool, len(rules))
+	for i, r := range rules {
+		r.Name = strings.TrimSpace(r.Name)
+		if r.Name == "" {
+			r.Name = "Indicator"
+		}
+		r.ID = strings.TrimSpace(r.ID)
+		if r.ID == "" || used[r.ID] {
+			r.ID = fmt.Sprintf("indicator-%d", i+1)
+			for used[r.ID] {
+				r.ID += "x"
+			}
+		}
+		used[r.ID] = true
+		if r.Condition.MinCount < 1 {
+			r.Condition.MinCount = 1
+		}
+		if r.Condition.Kind != IndicatorNodesInStatus {
+			r.Condition.Status = ""
+		}
+		if r.Condition.Kind == IndicatorServiceHealth {
+			// It is either unwell or it is not; a count would suggest the
+			// number of complaints matters, and it does not.
+			r.Condition.MinCount = 1
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // DefaultSettings returns the settings used on first run.
@@ -636,6 +994,7 @@ func DefaultSettings() Settings {
 			WallboardRefreshSecs: 15,
 			LatencyWarnMS:        0,
 			PacketLossWarnPct:    0,
+			PingMethod:           PingMethodAuto,
 			Theme:                "dark",
 			AccentColor:          "#43c9c0",
 			UpdateRepo:           "jxburros/GWatch",
@@ -670,6 +1029,7 @@ func DefaultSettings() Settings {
 			IncludePrerelease:  false,
 			PromptOnOpen:       true,
 		},
+		Indicators: DefaultIndicators(),
 	}
 }
 
@@ -700,6 +1060,11 @@ type HistoryPoint struct {
 	Availability float64   `json:"availability"`
 	Count        int       `json:"count"`
 	Failures     int       `json:"failures"`
+	// Value is the named metric this point carries when the series was asked
+	// for one (see HistorySeries.Metric). AvgMS, MinMS and MaxMS carry the
+	// same number, so a chart drawn from the latency fields plots a named
+	// metric without knowing it is not a latency.
+	Value *float64 `json:"value,omitempty"`
 }
 
 // HistorySeries is the response of the history endpoint.
@@ -715,6 +1080,12 @@ type HistorySeries struct {
 	To         time.Time      `json:"to"`
 	Points     []HistoryPoint `json:"points"`
 	Summary    HistorySummary `json:"summary"`
+	// Metric names the per-check metric this series carries instead of
+	// latency, empty for the usual latency series. Such a series is always
+	// read from raw results: the rollup tables have columns for latency,
+	// jitter and loss and nowhere to put a metric a check invented.
+	Metric     string `json:"metric,omitempty"`
+	MetricUnit string `json:"metricUnit,omitempty"`
 }
 
 // HistorySummary aggregates a series for stat tiles.
@@ -789,6 +1160,8 @@ type Health struct {
 	DatabasePath     string          `json:"databasePath"`
 	DatabaseBytes    int64           `json:"databaseBytes"`
 	DataDir          string          `json:"dataDir"`
+	KeyPath          string          `json:"keyPath"`
+	BackupDir        string          `json:"backupDir"`
 	Retention        RetentionStatus `json:"retention"`
 	Backup           BackupStatus    `json:"backup"`
 	RecentErrors     []Event         `json:"recentErrors"`

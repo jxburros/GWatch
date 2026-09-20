@@ -1,7 +1,10 @@
-// Hardware readings for one machine, shown inside the node that machine is.
-// A machine is not a separate kind of thing in GWatch: it is a node with a
-// hardware check, so this file has no page of its own — it hands the node
-// detail view a panel, and hands the node list the pairing flow.
+// Machines: a machine is not a separate kind of thing in GWatch, it is a node
+// with a hardware check. So this is a helper module, not a page or a route —
+// there is no #/machines URL and nothing in app.js imports it as a view. It
+// hands the node list the pairing flow (pairMachine) and hands the node
+// detail view the readings panel for that node's machine (hardwarePanel).
+// The old #/hardware/<key> URLs still work: app.js redirects them to the
+// owning node.
 
 import { api, subscribeUpdates } from '../api.js';
 import {

@@ -1,5 +1,5 @@
-// GWatch web UI entry: hash router, shell (rail / topbar / status dots),
-// theme + accent handling and live updates.
+// GWatch web UI entry: hash router, shell (rail / topbar / header
+// indicators), theme + accent handling and live updates.
 
 import { api, onConnection, connection, subscribeUpdates, debounce, refreshMe, signOut, getAuthSetup, onAuthChallenge, onDenied } from './api.js';
 import { h, icon, clear, toast, closeMenus, replace, applyTheme, applyAccent, onThemeChange, openModal } from './components.js';
@@ -9,6 +9,7 @@ import { notifyRoute as tipsRoute, closeTip, onboardingDone } from './tips.js';
 const routes = [
   { pattern: /^\/dashboard(?:\/(\d+))?$/, view: () => import('./views/dashboard.js'), params: ['id'], nav: 'dashboard' },
   { pattern: /^\/nodes$/, view: () => import('./views/nodes.js'), nav: 'nodes' },
+  { pattern: /^\/nodes\/bulk$/, view: () => import('./views/bulk-edit.js'), nav: 'nodes' },
   { pattern: /^\/nodes\/new$/, view: () => import('./views/node-editor.js'), nav: 'nodes' },
   { pattern: /^\/nodes\/(\d+)\/edit$/, view: () => import('./views/node-editor.js'), params: ['id'], nav: 'nodes' },
   { pattern: /^\/nodes\/(\d+)$/, view: () => import('./views/node-detail.js'), params: ['id'], nav: 'nodes' },
@@ -29,7 +30,7 @@ const actionsEl = document.getElementById('page-actions');
 const pageBar = document.getElementById('page-bar');
 const banner = document.getElementById('api-banner');
 const healthLink = document.getElementById('service-health');
-const dotsEl = document.getElementById('status-dots');
+const dotsEl = document.getElementById('indicators');
 const rail = document.getElementById('rail');
 const railPin = document.getElementById('rail-pin');
 
@@ -68,13 +69,15 @@ rail.addEventListener('mouseleave', dropRailFocus);
 
 /* ---------- Theme / accent from settings ---------- */
 /** The theme lives in settings, which only an administrator may read, so it is
- *  served alongside the identity in /api/me and every account gets styled. */
+ *  served alongside the identity in /api/me and every account gets styled. The
+ *  header's indicator rules travel the same road, for the same reason. */
 async function loadAppearance() {
   try {
     const me = await refreshMe();
     applyTheme(me.theme || 'dark');
     applyAccent(me.accentColor || '#43c9c0');
     applyIdentity(me);
+    setIndicatorRules(me.indicators);
   } catch { /* keep the cached theme */ }
 }
 
@@ -205,7 +208,18 @@ function enterView() {
   void viewRoot.offsetWidth;
   viewRoot.classList.add('view-enter');
   clearTimeout(enterTimer);
-  enterTimer = setTimeout(() => viewRoot.classList.remove('view-enter'), 900);
+  enterTimer = setTimeout(endEnterAnimation, 900);
+}
+
+/** Entrance animations belong to navigation and to nothing else. The timer
+ *  above is not enough on its own: an update arriving inside that window would
+ *  hand freshly built elements to `.view-enter`, and they would fade in from
+ *  nothing under content that was already on screen. So a refresh ends the
+ *  animation first — anything it renders is then simply there. */
+function endEnterAnimation() {
+  clearTimeout(enterTimer);
+  enterTimer = 0;
+  viewRoot.classList.remove('view-enter');
 }
 
 function setNav(name) {
@@ -216,10 +230,12 @@ function setNav(name) {
   });
 }
 
-/** The page bar is only there when it has something in it. */
+/** The page bar is only there when this page has controls to put in it. The
+ *  status indicators moved up into the header, so on a page that offers
+ *  nothing the bar would otherwise be an empty stripe. */
 function syncPageBar() {
   if (!pageBar) return;
-  pageBar.hidden = !dotsEl.childElementCount && !actionsEl.childElementCount;
+  pageBar.hidden = !actionsEl.childElementCount;
 }
 
 /* ---------- Connection banner ---------- */
@@ -257,21 +273,111 @@ function renderHealth() {
 }
 export function getHealth() { return lastHealth; }
 
-/* ---------- Header status circles ---------- */
-async function refreshStatus() {
-  let st;
-  try { st = await api.get('/api/status'); } catch { clear(dotsEl); syncPageBar(); return; }
+/* ---------- Header indicators ---------- */
+/** The orbs under the page name. Which ones appear is decided by rules the
+ *  administrator configures in Settings › Indicators; because a viewer may not
+ *  read settings, the effective list arrives with the identity from /api/me,
+ *  exactly as the theme does, so every account evaluates the same rules.
+ *
+ *  Evaluation is done here rather than on the server so that the whole thing
+ *  costs no more than the one /api/status poll the header already made. */
+let indicatorRules = [];
+
+// Reddest first: an orb that is only telling you something is unknown should
+// never sit in front of one telling you something is down.
+const INDICATOR_RANK = { red: 0, orange: 1, yellow: 2 };
+
+/** How many things the rule's condition currently counts. Every kind here is
+ *  answerable from the one summary document, which is the whole reason the
+ *  vocabulary is this short. */
+function indicatorCount(st, cond) {
+  switch (cond.kind) {
+    case 'nodesInStatus': return Number({ down: st.down, degraded: st.degraded, unknown: st.unknown, maintenance: st.maintenance }[cond.status]) || 0;
+    case 'certWarnings': return Number(st.certWarnings) || 0;
+    case 'attention': return Number(st.attention) || 0;
+    // Unwell or not; the number of complaints is for the tooltip, not the rule.
+    case 'serviceHealth': return st.serviceOk ? 0 : Math.max(1, (st.serviceIssues || []).length);
+    default: return 0;
+  }
+}
+
+/** Whether there is anything for the header to report on at all: a node that
+ *  exists, is being watched, and has produced at least one result. A fresh
+ *  install, one whose nodes are all paused, and one where the first round of
+ *  checks has not finished yet all answer no — and all three are honestly
+ *  described by the blue orb rather than by a green "all clear" nobody has
+ *  earned or a yellow warning about something that is merely young. */
+function anythingConnected(st) {
+  return (Number(st.total) || 0) > 0 && ((Number(st.up) || 0) + (Number(st.degraded) || 0) + (Number(st.down) || 0)) > 0;
+}
+
+/** Where an orb leads when it is clicked: to the thing it is complaining
+ *  about, filtered down to it where the page can be. */
+function indicatorHref(cond) {
+  switch (cond.kind) {
+    case 'nodesInStatus': return `#/nodes?status=${encodeURIComponent(cond.status || 'down')}`;
+    case 'certWarnings': return '#/incidents?type=cert_warning';
+    case 'attention': return '#/incidents';
+    case 'serviceHealth': return '#/settings/health';
+    default: return '#/dashboard';
+  }
+}
+
+function indicatorOrb({ colour, label, href, count }) {
+  return h('a', { class: `indicator ind-${colour}`, href, title: label, 'aria-label': label },
+    h('span', { class: 'orb', 'aria-hidden': 'true' }),
+    count > 1 ? h('span', { class: 'indicator-count', 'aria-hidden': 'true' }, String(count)) : null);
+}
+
+function renderIndicators(st) {
   clear(dotsEl);
-  const dot = (cls, n, label, href, title) => h('a', { class: `sdot ${cls}`, href, title }, h('i'), h('span', null, n != null ? `${n} ${label}` : label));
-  const items = [];
-  if (st.down > 0) items.push(dot('s-down', st.down, 'down', '#/nodes?status=down', 'Nodes that are down'));
-  if (st.degraded > 0) items.push(dot('s-degraded', st.degraded, 'degraded', '#/nodes?status=degraded', 'Nodes that are degraded'));
-  if (st.certWarnings > 0) items.push(dot('s-cert', st.certWarnings, st.certWarnings === 1 ? 'cert' : 'certs', '#/incidents?type=cert_warning', 'Certificates expiring soon or invalid'));
-  if (!st.serviceOk) items.push(dot('s-service', null, 'service', '#/settings/health', (st.serviceIssues || []).join(', ') || 'Service issue'));
-  if (st.unknown > 0 && !items.length) items.push(dot('s-unknown', st.unknown, 'waiting', '#/nodes?status=unknown', 'Waiting for first results'));
-  if (!items.length) items.push(dot('s-ok', null, st.total ? 'all clear' : 'no nodes', '#/dashboard', st.total ? `${st.up} of ${st.total} nodes healthy` : 'Add a node to start monitoring'));
-  dotsEl.append(...items);
-  syncPageBar();
+  const connected = anythingConnected(st);
+  const firing = [];
+  for (const rule of indicatorRules) {
+    if (!rule || !rule.enabled) continue;
+    const cond = rule.condition || {};
+    // With nothing connected there is no node state worth reporting: the blue
+    // orb already says so, and a yellow "waiting for first results" beside it
+    // would only say it again in a more alarming colour. The monitor's own
+    // health is a different matter and is still worth hearing about.
+    if (!connected && cond.kind !== 'serviceHealth') continue;
+    const n = indicatorCount(st, cond);
+    if (n < Math.max(1, Number(cond.minCount) || 1)) continue;
+    firing.push({ rule, count: n });
+  }
+  if (firing.length) {
+    firing.sort((a, b) => (INDICATOR_RANK[a.rule.colour] ?? 9) - (INDICATOR_RANK[b.rule.colour] ?? 9));
+    for (const f of firing) {
+      const detail = f.rule.condition?.kind === 'serviceHealth' ? (st.serviceIssues || []).join(', ') : `${f.count}`;
+      dotsEl.append(indicatorOrb({
+        colour: INDICATOR_RANK[f.rule.colour] != null ? f.rule.colour : 'yellow',
+        label: detail ? `${f.rule.name} — ${detail}` : f.rule.name,
+        href: indicatorHref(f.rule.condition || {}),
+        count: f.count,
+      }));
+    }
+  } else if (!connected) {
+    dotsEl.append(indicatorOrb({
+      colour: 'idle',
+      label: st.total ? 'Nothing connected yet — waiting for the first results' : 'No nodes yet — add one to start monitoring',
+      href: st.total ? '#/nodes' : '#/nodes/new',
+    }));
+  } else {
+    dotsEl.append(indicatorOrb({ colour: 'ok', label: `All clear — ${st.up} of ${st.total} nodes healthy`, href: '#/dashboard' }));
+  }
+}
+
+let lastStatus = null;
+async function refreshStatus() {
+  try { lastStatus = await api.get('/api/status'); } catch { clear(dotsEl); return; }
+  renderIndicators(lastStatus);
+}
+
+/** Called when /api/me lands, and again whenever the configuration changes,
+ *  so that saving a rule relights the header without a reload. */
+function setIndicatorRules(rules) {
+  indicatorRules = Array.isArray(rules) ? rules : [];
+  if (lastStatus) renderIndicators(lastStatus);
 }
 
 /* ---------- Application updates ---------- */
@@ -356,6 +462,7 @@ async function refreshUpdates({ open = false } = {}) {
 /* ---------- Live updates ---------- */
 const refreshCurrent = debounce(() => {
   if (current?.instance?.refresh) {
+    endEnterAnimation();
     Promise.resolve(current.instance.refresh()).catch((e) => console.warn('refresh failed', e));
   }
 }, 500);
@@ -368,6 +475,9 @@ subscribeUpdates((update) => {
   if (!update || update.kind === 'state' || update.kind === 'config' || update.kind === 'event' || update.kind === 'health') refreshHealthDebounced();
   if (update && update.kind === 'config') loadAppearance();
 });
+// Saving the Indicators tab relights the header there and then, rather than
+// leaving the author of the rule to wonder until the next update arrives.
+window.addEventListener('gw:indicators-changed', () => { loadAppearance().then(refreshStatus); });
 setInterval(refreshHealth, 60000);
 setInterval(refreshStatus, 30000);
 // Half-hourly, so a check the service made in the background reaches the

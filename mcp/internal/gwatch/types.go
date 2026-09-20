@@ -2,6 +2,7 @@ package gwatch
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -45,9 +46,13 @@ type CheckState struct {
 // Node is a device, service or endpoint with its checks. The API adds live
 // state (status, stateByCheck, inMaintenance) to the stored record.
 type Node struct {
-	ID           int64                 `json:"id"`
-	Name         string                `json:"name"`
-	Host         string                `json:"host"`
+	ID     int64    `json:"id"`
+	Name   string   `json:"name"`
+	Host   string   `json:"host"`
+	Groups []string `json:"groups"`
+	// Group is the first of Groups. GWatch keeps sending it for one release
+	// so clients written before a node could be in several groups still work.
+	// Deprecated: read Groups.
 	Group        string                `json:"group"`
 	Tags         []string              `json:"tags"`
 	Notes        string                `json:"notes,omitempty"`
@@ -58,6 +63,33 @@ type Node struct {
 	Status       string                `json:"status"`
 	StateByCheck map[string]CheckState `json:"stateByCheck,omitempty"`
 	Maintenance  bool                  `json:"inMaintenance"`
+}
+
+// GroupList returns the groups the node belongs to. An older GWatch answers
+// with group alone, and this reads that as the one group it is.
+func (n Node) GroupList() []string {
+	if len(n.Groups) > 0 {
+		return n.Groups
+	}
+	if g := strings.TrimSpace(n.Group); g != "" {
+		return []string{g}
+	}
+	return nil
+}
+
+// InGroup reports whether the node is in the named group, matching any of its
+// groups and ignoring case.
+func (n Node) InGroup(group string) bool {
+	group = strings.TrimSpace(group)
+	if group == "" {
+		return false
+	}
+	for _, g := range n.GroupList() {
+		if strings.EqualFold(strings.TrimSpace(g), group) {
+			return true
+		}
+	}
+	return false
 }
 
 // Result is one observation produced by running a check.

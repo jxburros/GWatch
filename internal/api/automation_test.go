@@ -489,3 +489,80 @@ func TestUpdaterBackgroundChecks(t *testing.T) {
 		t.Fatal("prompt should be off when automatic checks are off")
 	}
 }
+
+// A /hook/ token is the only thing standing between the outside world and
+// whatever the endpoint does, so guessing at one has to cost the guesser the
+// same per-IP failure budget as guessing at a password.
+func TestHookTokenAttemptsAreRateLimited(t *testing.T) {
+	ts, srv := newTestServer(t)
+	action := map[string]any{"type": "http", "url": "http://127.0.0.1:1/never"}
+	var ep model.Endpoint
+	if code := call(t, ts, "POST", "/api/endpoints", map[string]any{
+		"name": "Reboot", "slug": "reboot", "enabled": true, "method": "ANY",
+		"token": "the-real-token", "action": action,
+	}, &ep); code != 200 {
+		t.Fatalf("create endpoint: %d", code)
+	}
+
+	// hook calls one /hook/ URL and reports the status and any Retry-After.
+	hook := func(path, token string) (int, string) {
+		t.Helper()
+		req, err := http.NewRequest("POST", ts.URL+path, strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			req.Header.Set("X-GWatch-Token", token)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		io.Copy(io.Discard, resp.Body)
+		return resp.StatusCode, resp.Header.Get("Retry-After")
+	}
+
+	// 1. Wrong tokens run out of attempts, and the 429 says when to come back.
+	limited := false
+	for i := 0; i < failureLimit+2; i++ {
+		status, retry := hook("/hook/reboot", "not-the-token")
+		if status == http.StatusTooManyRequests {
+			if retry == "" {
+				t.Error("a 429 must carry Retry-After so a caller knows how long to wait")
+			}
+			limited = true
+			break
+		}
+		if status != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: expected 401, got %d", i, status)
+		}
+	}
+	if !limited {
+		t.Fatalf("guessing a hook token should run out within %d tries", failureLimit+2)
+	}
+
+	// 2. A slug nobody recognises answers 404 — a mistyped URL has to stay
+	//    diagnosable — but it is charged for all the same, so the slug space
+	//    cannot be swept for free. The address is already out of budget here,
+	//    which is how we can tell the unknown slug went through the limiter.
+	if status, _ := hook("/hook/no-such-endpoint", ""); status != http.StatusTooManyRequests {
+		t.Errorf("an unknown slug must consume the budget too, got %d", status)
+	}
+
+	// 3. The right token gets in and hands the budget straight back, so an
+	//    endpoint called on a schedule is never throttled by its own traffic.
+	srv.failLimiter.Reset("127.0.0.1")
+	for i := 0; i < failureLimit*3; i++ {
+		// 502 = the action ran and nothing was listening on port 1, which
+		// means the token was accepted.
+		if status, _ := hook("/hook/reboot", "the-real-token"); status != http.StatusBadGateway {
+			t.Fatalf("call %d with the right token: %d", i, status)
+		}
+	}
+	// With the budget intact, an unknown slug is a plain 404 again.
+	if status, _ := hook("/hook/no-such-endpoint", ""); status != http.StatusNotFound {
+		t.Fatalf("an unknown slug on a full budget should be a 404, got %d", status)
+	}
+}

@@ -124,6 +124,9 @@ var policies = []routePolicy{
 	// ---- monitoring writes: a readwrite key may do these ----
 	{"POST", "/api/nodes", levelAdmin, keyWrite},
 	{"PUT", "/api/nodes/{id}", levelAdmin, keyWrite},
+	// One patch across many nodes and checks. It changes nothing a PUT could
+	// not, so it sits at the same standing as the single-node write.
+	{"PATCH", "/api/nodes/bulk", levelAdmin, keyWrite},
 	{"DELETE", "/api/nodes/{id}", levelAdmin, keyWrite},
 	{"POST", "/api/nodes/{id}/enable", levelAdmin, keyWrite},
 	{"POST", "/api/nodes/{id}/duplicate", levelAdmin, keyWrite},
@@ -149,7 +152,21 @@ var policies = []routePolicy{
 	{"PUT", "/api/charts", levelAdmin, keyWrite},
 
 	// ---- administration: never through an API key ----
+	// Walking a device takes a credential and an address and makes GWatch
+	// talk to whatever is there. That is a probe, and it belongs to the
+	// administrator in front of the machine rather than to any integration,
+	// however wide its key.
+	{"POST", "/api/snmp/walk", levelAdmin, keyDeny},
 	{"GET", "/api/network", levelAdmin, keyDeny},
+	// Discovery pings a few thousand addresses and then creates monitors from
+	// what answered. Both halves are an administrator's decision, and reading
+	// a sweep's results is a map of the network, so even the GETs are held to
+	// the same standing as the sweep itself.
+	{"GET", "/api/discovery", levelAdmin, keyDeny},
+	{"POST", "/api/discovery", levelAdmin, keyDeny},
+	{"GET", "/api/discovery/{id}", levelAdmin, keyDeny},
+	{"POST", "/api/discovery/{id}/cancel", levelAdmin, keyDeny},
+	{"POST", "/api/discovery/{id}/add", levelAdmin, keyDeny},
 	{"GET", "/api/settings", levelAdmin, keyDeny},
 	{"PUT", "/api/settings", levelAdmin, keyDeny},
 	{"POST", "/api/settings/test-email", levelAdmin, keyDeny},
@@ -242,6 +259,14 @@ func matchPattern(pattern, path string) (score int, ok bool) {
 		if strings.HasPrefix(path, pattern) {
 			return len(pattern), true
 		}
+		return 0, false
+	}
+	// A trailing slash is a segment of its own to net/http's mux: /api/nodes/
+	// does not reach "GET /api/nodes", it falls through to the /api/ catch-all
+	// and 404s. Matching it here would authorize against a route that is never
+	// going to run — harmless today, but the kind of drift this table exists
+	// to avoid. A "{rest...}" pattern is the exception: it swallows the slash.
+	if strings.HasSuffix(path, "/") && !strings.Contains(pattern, "...}") {
 		return 0, false
 	}
 	pp := strings.Split(strings.Trim(pattern, "/"), "/")

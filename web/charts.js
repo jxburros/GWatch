@@ -123,7 +123,7 @@ export class LineChart {
     this.container = container;
     this.opts = { unit: 'ms', height: null, yMin: null, yMax: null, legend: true, shadeFailures: true, area: true, style: null, smooth: false, points: false, lineWidth: 1.75, threshold: null, thresholdLabel: '', grid: true, minTickPx: 76, ...opts };
     if (this.opts.style == null) this.opts.style = this.opts.area ? 'area' : 'line';
-    this._themeOff = onThemeChange(() => this.scheduleDraw());
+    this._themeOff = onThemeChange(() => { this._surface = null; this.scheduleDraw(); });
     this.el = h('div', { class: 'chart', style: this.opts.height ? { height: `${this.opts.height}px` } : null });
     this.canvas = h('canvas', { role: 'img', 'aria-label': opts.ariaLabel || 'Chart' });
     this.tooltip = h('div', { class: 'chart-tooltip', hidden: true });
@@ -141,9 +141,26 @@ export class LineChart {
     this.canvas.addEventListener('mouseleave', this._onLeave);
     this.canvas.addEventListener('touchstart', (e) => { if (e.touches[0]) this._handleMove(e.touches[0]); }, { passive: true });
     this._raf = 0;
+    // Resolved lazily from the canvas's own computed background, so a chart on
+    // a wallboard panel paints that panel's colour rather than a card's.
+    this._surface = null;
     this.ro = new ResizeObserver(() => this.scheduleDraw());
     this.ro.observe(this.el);
     this.draw();
+  }
+
+  /** The colour the canvas sits on. A canvas bitmap is transparent until it is
+   *  painted, and a transparent canvas shows whatever the browser has behind
+   *  it — which on a fresh or just-resized bitmap is the page default, not the
+   *  theme. Painting this first makes every frame opaque and on-theme. */
+  _surfaceColor() {
+    if (this._surface) return this._surface;
+    let c = '';
+    try { c = getComputedStyle(this.canvas).backgroundColor || ''; } catch { c = ''; }
+    // An unstyled canvas computes to transparent; fall back to the card token.
+    const transparent = !c || c === 'transparent' || /rgba\(\s*0\s*,\s*0\s*,\s*0\s*,\s*0\s*\)/.test(c);
+    this._surface = transparent ? CSS.bg : c;
+    return this._surface;
   }
 
   scheduleDraw() {
@@ -222,12 +239,20 @@ export class LineChart {
     const h = Math.max(10, Math.floor(this.opts.height || rect.height || 220));
     const dpr = window.devicePixelRatio || 1;
     if (ctx === this.ctx) {
-      if (this.canvas.width !== Math.round(w * dpr) || this.canvas.height !== Math.round(h * dpr)) {
-        this.canvas.width = Math.round(w * dpr); this.canvas.height = Math.round(h * dpr);
+      // Only when the device-pixel size really changed: assigning width or
+      // height reallocates the bitmap and wipes it, and an unpainted bitmap is
+      // a hole in the page for the rest of the frame.
+      const cw = Math.round(w * dpr), ch = Math.round(h * dpr);
+      if (this.canvas.width !== cw || this.canvas.height !== ch) {
+        this.canvas.width = cw; this.canvas.height = ch;
+        this._surface = null;
       }
       if (this.canvas.style.height !== `${h}px`) this.canvas.style.height = `${h}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, w, h);
+      // Fill rather than clear: clearing leaves the bitmap transparent, which
+      // is what made the charts flash the page default between redraws.
+      ctx.fillStyle = this._surfaceColor();
+      ctx.fillRect(0, 0, w, h);
     }
     this._size = { w, h };
     const hasData = this.data.series.some((s) => s.points.some((p) => p.v != null));
@@ -514,7 +539,10 @@ export function sparkline(values, { width = 120, height = 28, color = null } = {
   color = color || CSS.accent;
   const canvas = h('canvas', { class: 'sparkline', width, height, 'aria-hidden': 'true' });
   const dpr = window.devicePixelRatio || 1;
-  canvas.width = width * dpr; canvas.height = height * dpr;
+  // Same rule as the line chart: size the bitmap only when it is not already
+  // the size we want, so a redraw never wipes a bitmap it could have kept.
+  if (canvas.width !== Math.round(width * dpr)) canvas.width = Math.round(width * dpr);
+  if (canvas.height !== Math.round(height * dpr)) canvas.height = Math.round(height * dpr);
   canvas.style.width = `${width}px`; canvas.style.height = `${height}px`;
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);

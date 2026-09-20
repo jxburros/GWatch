@@ -46,7 +46,7 @@ read your SMTP password.
 `gwatch-<os>-<arch>` binaries, with a `.sha256` and an ed25519 `.sig` beside each. Grab the one for
 your platform, rename it to `gwatch-mcp` (`.exe` on Windows) and put it somewhere on your `PATH`.
 
-**Or build it with Go** (1.24 or newer):
+**Or build it with Go** (1.26 or newer):
 
 ```sh
 go install github.com/jxburros/GWatch/mcp/cmd/gwatch-mcp@latest
@@ -54,6 +54,14 @@ go install github.com/jxburros/GWatch/mcp/cmd/gwatch-mcp@latest
 
 The main package lives at `mcp/cmd/gwatch-mcp` rather than at the module root so that `go install`
 produces a binary called `gwatch-mcp`; installing the module root would name the binary `mcp`.
+
+`gwatch-mcp` is released with its own **nested-module tags**, `mcp/v<version>` (not the root
+module's `v<version>`), which is what makes `@latest` above resolve at all — Go's module
+resolution needs a tag prefixed with the module's own subdirectory to find a version of code that
+lives under `mcp/` rather than at the repository root. Its binaries still ship inside the *core*
+GitHub release, cross-compiled from whatever `mcp/VERSION` says at the time; see
+[`docs/RELEASING.md`](../docs/RELEASING.md#releasing-the-mcp-companion) for the full release
+process.
 
 **Or from a checkout:**
 
@@ -73,12 +81,12 @@ monitoring, and see the trust model above first.
 ## Check the setup
 
 ```sh
-gwatch-mcp check --url http://127.0.0.1:8080 --api-key gw_…
+gwatch-mcp check --url http://127.0.0.1:7230 --api-key gw_…
 ```
 
 ```
 gwatch-mcp 0.1.0
-GWatch:      http://127.0.0.1:8080/api/v1
+GWatch:      http://127.0.0.1:7230/api/v1
 Connection:  ok
 Principal:   API key "Claude Desktop" (scope read)
 Scope:       read
@@ -103,7 +111,7 @@ The server speaks MCP over **stdio**, so a client just needs the command and the
     "gwatch": {
       "command": "/usr/local/bin/gwatch-mcp",
       "env": {
-        "GWATCH_URL": "http://127.0.0.1:8080",
+        "GWATCH_URL": "http://127.0.0.1:7230",
         "GWATCH_API_KEY": "gw_your_read_key_here"
       }
     }
@@ -115,7 +123,7 @@ The server speaks MCP over **stdio**, so a client just needs the command and the
 
 ```sh
 claude mcp add gwatch /usr/local/bin/gwatch-mcp \
-  -e GWATCH_URL=http://127.0.0.1:8080 \
+  -e GWATCH_URL=http://127.0.0.1:7230 \
   -e GWATCH_API_KEY=gw_your_read_key_here
 ```
 
@@ -132,7 +140,7 @@ variables, or with `--url` and `--api-key` as arguments. Putting the key in `env
       "command": "/usr/local/bin/gwatch-mcp",
       "args": ["--allow-write"],
       "env": {
-        "GWATCH_URL": "http://127.0.0.1:8080",
+        "GWATCH_URL": "http://127.0.0.1:7230",
         "GWATCH_API_KEY": "gw_your_readwrite_key_here"
       }
     }
@@ -148,7 +156,7 @@ do not control.
 
 | Flag | Environment | Default | Meaning |
 | --- | --- | --- | --- |
-| `--url` | `GWATCH_URL` | `http://127.0.0.1:8080` | Base URL of the GWatch instance. |
+| `--url` | `GWATCH_URL` | `http://127.0.0.1:7230` | Base URL of the GWatch instance. |
 | `--api-key` | `GWATCH_API_KEY` | — | **Required.** The `gw_…` key. The server refuses to start without one. |
 | `--allow-write` | `GWATCH_MCP_ALLOW_WRITE=1` | off | Register the write tools. Still refused by GWatch unless the key is `readwrite`. |
 | `--timeout` | `GWATCH_MCP_TIMEOUT` | `30s` | Timeout for each request to GWatch. |
@@ -168,20 +176,20 @@ and GWatch's own `error` message.
 | Tool | What it does |
 | --- | --- |
 | `gwatch_overview` | The whole picture: up/degraded/down tally, per-group status, what needs attention, open incidents, expiring certificates. Start here. |
-| `gwatch_list_nodes` | The monitored nodes with their status and a line per check. Optional `group`, `tag`, `status` and `q` filters. |
+| `gwatch_list_nodes` | The monitored nodes with their status and a line per check. Optional `group`, `tag`, `status` and `q` filters; a node may be in several groups and `group` matches any of them. |
 | `gwatch_get_node` | One node in full: stored configuration, every check's config, and live state. |
 | `gwatch_check_results` | The most recent individual runs of one check (`checkId`, `limit`). |
 | `gwatch_history` | Availability and latency over `1h`/`24h`/`7d`/`30d`/`1y` for one or several checks, downsampled to ~200 points per series by even striding. |
 | `gwatch_events` | The incident timeline, filtered by `nodeId`, `checkId`, `type`, `q`, `since`, `until`, `limit`. |
 | `gwatch_health` | The health of the GWatch service itself — scheduler, last check, database size, recent internal errors. |
 | `gwatch_templates` | The node templates GWatch ships, with the checks each creates. |
-| `gwatch_groups` | The groups and tags in use, with counts. |
+| `gwatch_groups` | The groups and tags in use, with counts. A node in several groups is counted in each. |
 
 ### Write (only with `--allow-write` and a `readwrite` key)
 
 | Tool | What it does |
 | --- | --- |
-| `gwatch_create_node` | Create a node and its checks (`name`, `host`, `group`, `tags`, `importance`, `checks[]`). |
+| `gwatch_create_node` | Create a node and its checks (`name`, `host`, `groups[]`, `tags`, `importance`, `checks[]`). `group` is still accepted as a one-group shorthand. |
 | `gwatch_update_node` | Change a node. Only the fields given change; giving `checks` replaces the whole check list. |
 | `gwatch_delete_node` | Delete a node and its history. Requires `confirm: true`. |
 | `gwatch_set_node_enabled` | Pause or resume a node's checks. |
@@ -210,9 +218,17 @@ policy, including the 403 a read key gets on a write. There is also an end-to-en
 real instance, skipped unless you ask for it:
 
 ```sh
-GWATCH_E2E_URL=http://127.0.0.1:8080 GWATCH_E2E_KEY=gw_… go test ./internal/e2e -v
+GWATCH_E2E_URL=http://127.0.0.1:7230 GWATCH_E2E_KEY=gw_… go test ./internal/e2e -v
 ```
 
 The layering is worth keeping: `internal/gwatch` is the HTTP client, `internal/tools` is the tool
 layer and knows nothing about MCP, and `internal/mcpserver` is the only package that touches the
 protocol. Adding a tool means adding it to `internal/tools`; the transport does not change.
+
+**On the `github.com/modelcontextprotocol/go-sdk` version**: `mcp/go.mod` requires whatever
+Go the SDK release it uses requires (1.25 today), and CI builds it with the root module's
+toolchain (Go 1.26) under `GOTOOLCHAIN=local`, so an SDK whose `go` directive outruns that
+fails the build outright rather than quietly downloading a toolchain. The SDK is bumped when
+CI's `govulncheck` reports a reachable fix in it, or when a tool here needs something newer; a
+bump deserves its own change with the e2e and stdio tests re-run. See also the comment at the
+top of `internal/mcpserver/server.go`.

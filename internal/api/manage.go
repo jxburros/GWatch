@@ -46,7 +46,7 @@ func (s *Server) handleListMaintenance(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSaveMaintenance(w http.ResponseWriter, r *http.Request) {
 	var m model.MaintenanceWindow
 	if err := decodeJSON(r, &m); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	if r.Method == http.MethodPut {
@@ -154,7 +154,7 @@ func (s *Server) handleGetDashboard(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSaveDashboard(w http.ResponseWriter, r *http.Request) {
 	var d model.Dashboard
 	if err := decodeJSON(r, &d); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	if r.Method == http.MethodPut {
@@ -248,7 +248,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	current := s.Engine.Settings()
 	var st model.Settings
 	if err := decodeJSON(r, &st); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	if st.Alerts.SMTP.Password == passwordMask {
@@ -298,6 +298,16 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if g.LatencyWarnMS < 0 || g.PacketLossWarnPct < 0 || g.PacketLossWarnPct > 100 {
 		writeError(w, http.StatusBadRequest, "warning thresholds must be positive (packet loss up to 100%)")
+		return
+	}
+	// An empty ping method is how every settings document written before this
+	// setting existed looks, so it means the default rather than an error.
+	g.PingMethod = strings.TrimSpace(g.PingMethod)
+	if g.PingMethod == "" {
+		g.PingMethod = def.General.PingMethod
+	}
+	if !model.ValidPingMethod(g.PingMethod) {
+		writeError(w, http.StatusBadRequest, `ping method must be "auto", "builtin" or "system"`)
 		return
 	}
 	switch g.Theme {
@@ -403,6 +413,14 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "the update check interval must be between 1 and 720 hours")
 		return
 	}
+	// An unknown condition or colour would simply never light up in the
+	// browser, which reads as a bug rather than as a setting that was not
+	// taken, so it is refused here with the reason.
+	if err := model.ValidateIndicators(st.Indicators); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	st.Indicators = model.NormalizeIndicators(st.Indicators)
 	if err := s.Store.SaveSettings(r.Context(), st); err != nil {
 		s.fail(w, err)
 		return
@@ -437,6 +455,11 @@ func describeSettingsChange(before, after model.Settings) string {
 	if before.General.Theme != after.General.Theme || before.General.AccentColor != after.General.AccentColor {
 		parts = append(parts, "appearance changed")
 	}
+	// How a ping is sent decides whether GWatch runs an external program, so
+	// it gets a line rather than disappearing into "general settings changed".
+	if before.General.PingMethod != after.General.PingMethod {
+		parts = append(parts, "ping method set to "+after.General.PingMethod)
+	}
 	if before.General != after.General {
 		parts = append(parts, "general settings changed")
 	}
@@ -452,6 +475,9 @@ func describeSettingsChange(before, after model.Settings) string {
 	if before.Updates != after.Updates {
 		parts = append(parts, "update settings changed")
 	}
+	if !sameIndicators(before.Indicators, after.Indicators) {
+		parts = append(parts, "header indicators changed")
+	}
 	if len(parts) == 0 {
 		return "No effective change."
 	}
@@ -464,7 +490,7 @@ func (s *Server) handleTestEmail(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.ContentLength != 0 {
 		if err := decodeJSON(r, &body); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeDecodeError(w, err)
 			return
 		}
 	}
@@ -508,7 +534,7 @@ func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
 		IncludeHistory bool   `json:"includeHistory"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	if strings.TrimSpace(body.Password) == "" {
@@ -599,7 +625,7 @@ func (s *Server) handleRestoreExisting(w http.ResponseWriter, r *http.Request) {
 		IncludeHistory bool   `json:"includeHistory"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	p, ok := s.backupPath(body.FileName)
@@ -662,7 +688,7 @@ func (s *Server) handleExportHistory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "checkId is required")
 		return
 	}
-	series, err := s.historyFor(r.Context(), *id, r.URL.Query().Get("range"))
+	series, err := s.historyFor(r.Context(), *id, r.URL.Query().Get("range"), r.URL.Query().Get("metric"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -687,13 +713,13 @@ func (s *Server) handleExportResults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cw := csvWriter(w, fmt.Sprintf("gwatch-results-%d.csv", *id))
-	_ = cw.Write([]string{"timestamp", "success", "status", "message", "error", "latency_ms", "min_ms", "max_ms", "jitter_ms", "loss_pct", "http_status", "final_url", "attempts"})
+	_ = cw.Write([]string{"timestamp", "success", "status", "message", "error", "latency_ms", "min_ms", "max_ms", "jitter_ms", "stddev_ms", "loss_pct", "http_status", "final_url", "attempts"})
 	for _, res := range results {
 		code := ""
 		if res.Details.StatusCode != 0 {
 			code = strconv.Itoa(res.Details.StatusCode)
 		}
-		_ = cw.Write([]string{res.Timestamp.Format(time.RFC3339), strconv.FormatBool(res.Success), string(res.Status), res.Message, res.Error, fmtFloat(res.LatencyMS), fmtFloat(res.MinMS), fmtFloat(res.MaxMS), fmtFloat(res.JitterMS), fmtFloat(res.LossPct), code, res.Details.FinalURL, strconv.Itoa(res.Attempts)})
+		_ = cw.Write([]string{res.Timestamp.Format(time.RFC3339), strconv.FormatBool(res.Success), string(res.Status), res.Message, res.Error, fmtFloat(res.LatencyMS), fmtFloat(res.MinMS), fmtFloat(res.MaxMS), fmtFloat(res.JitterMS), fmtFloat(res.StdDevMS), fmtFloat(res.LossPct), code, res.Details.FinalURL, strconv.Itoa(res.Attempts)})
 	}
 	cw.Flush()
 }
@@ -727,6 +753,15 @@ func (s *Server) handleExportConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg.Settings.Alerts.SMTP.Password = ""
 	cfg.Settings.Backups.Password = ""
+	// A configuration export is meant to be readable and shareable, so the
+	// checks' credentials come out empty for the same reason the passwords do.
+	for i := range cfg.Nodes {
+		for j := range cfg.Nodes[i].Checks {
+			for _, field := range checkSecretFields(&cfg.Nodes[i].Checks[j].Config) {
+				*field = ""
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="gwatch-config.json"`)
 	enc := json.NewEncoder(w)
@@ -789,3 +824,17 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 }
 
 var _ = engine.Update{}
+
+// sameIndicators compares two indicator lists. IndicatorRule is comparable
+// all the way down, so this is == over the slice rather than reflection.
+func sameIndicators(a, b []model.IndicatorRule) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

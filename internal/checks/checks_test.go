@@ -671,7 +671,7 @@ func TestPingCheck(t *testing.T) {
 	defer func() { pingFunc = orig }()
 
 	ms := func(v float64) time.Duration { return time.Duration(v * float64(time.Millisecond)) }
-	pingFunc = func(ctx context.Context, host string, count int, timeout time.Duration) (pingResult, error) {
+	pingFunc = func(ctx context.Context, host string, count int, timeout time.Duration, method string) (pingResult, error) {
 		if host != "192.168.1.1" {
 			t.Errorf("host = %q", host)
 		}
@@ -691,11 +691,15 @@ func TestPingCheck(t *testing.T) {
 	if *res.JitterMS != 2.3 {
 		t.Errorf("jitter = %v", *res.JitterMS)
 	}
+	// Population stddev around the mean of 12: (4+0+1+9)/4 = 3.5, sqrt = 1.87.
+	if *res.StdDevMS != 1.9 {
+		t.Errorf("stddev = %v", *res.StdDevMS)
+	}
 	if res.Message != "4/4 replies, avg 12 ms" || res.Details.PacketsSent != 4 || len(res.Details.RTTs) != 4 {
 		t.Errorf("message/details: %q %+v", res.Message, res.Details)
 	}
 
-	pingFunc = func(ctx context.Context, host string, count int, timeout time.Duration) (pingResult, error) {
+	pingFunc = func(ctx context.Context, host string, count int, timeout time.Duration, method string) (pingResult, error) {
 		return pingResult{Sent: 4, Received: 3, RTTs: []time.Duration{ms(10), ms(10), ms(10)}}, nil
 	}
 	res = run(t, httpCheck(model.CheckPing, "192.168.1.1", model.CheckConfig{}), Options{PacketLossWarnPct: 20})
@@ -714,7 +718,7 @@ func TestPingCheck(t *testing.T) {
 		t.Errorf("latency warning: %+v", res)
 	}
 
-	pingFunc = func(ctx context.Context, host string, count int, timeout time.Duration) (pingResult, error) {
+	pingFunc = func(ctx context.Context, host string, count int, timeout time.Duration, method string) (pingResult, error) {
 		return pingResult{Sent: 4, Received: 0}, nil
 	}
 	c := httpCheck(model.CheckPing, "192.168.1.1", model.CheckConfig{})
@@ -727,14 +731,14 @@ func TestPingCheck(t *testing.T) {
 		t.Errorf("no RTT stats expected without replies")
 	}
 
-	pingFunc = func(ctx context.Context, host string, count int, timeout time.Duration) (pingResult, error) {
+	pingFunc = func(ctx context.Context, host string, count int, timeout time.Duration, method string) (pingResult, error) {
 		return pingResult{}, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
 	}
 	res = run(t, httpCheck(model.CheckPing, "192.168.1.1", model.CheckConfig{}), Options{})
 	if res.Success || !strings.HasPrefix(res.Error, "DNS lookup failed") {
 		t.Errorf("dns failure: %+v", res)
 	}
-	pingFunc = func(ctx context.Context, host string, count int, timeout time.Duration) (pingResult, error) {
+	pingFunc = func(ctx context.Context, host string, count int, timeout time.Duration, method string) (pingResult, error) {
 		return pingResult{}, errors.New("operation not permitted")
 	}
 	res = run(t, httpCheck(model.CheckPing, "192.168.1.1", model.CheckConfig{}), Options{})
@@ -785,7 +789,7 @@ func TestValidate(t *testing.T) {
 		host    string
 		wantErr string
 	}{
-		{"unsupported type", model.Check{Type: "snmp"}, "h", "unsupported check type"},
+		{"unsupported type", model.Check{Type: "telnet"}, "h", "unsupported check type"},
 		{"missing target", model.Check{Type: model.CheckPing}, "", "target"},
 		{"node host fallback ok", model.Check{Type: model.CheckPing}, "192.168.1.1", ""},
 		{"interval too small", model.Check{Type: model.CheckPing, IntervalSeconds: 5}, "h", "interval"},
@@ -825,7 +829,7 @@ func TestValidate(t *testing.T) {
 
 func TestTemplates(t *testing.T) {
 	tpls := Templates()
-	if len(tpls) != 8 {
+	if len(tpls) != 9 {
 		t.Fatalf("got %d templates", len(tpls))
 	}
 	// A template whose check reads a registered machine cannot name one until

@@ -1,7 +1,11 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -357,6 +361,243 @@ func TestWrongKeyFileYieldsEmptySecrets(t *testing.T) {
 	}
 }
 
+// rawOldShapeDB creates a database by hand, exactly the way a version-1
+// GWatch database (every database shipped before this migration mechanism
+// existed) looks: the schema as it is defined today minus the columns
+// addedColumns bolts on, schema_version pinned at 1, and — to exercise the
+// data migrations — a check with no matching check_state row (the gap the
+// version-2 step closes) and a node whose group is only in group_name, with
+// no groups list (what the version-3 step fills in).
+func rawOldShapeDB(t *testing.T, path string) {
+	t.Helper()
+	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=temp_store(MEMORY)", filepath.ToSlash(path))
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	defer db.Close()
+	for _, stmt := range []string{schema, automationSchema, hostSchema} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("apply schema: %v", err)
+		}
+	}
+	if _, err := db.Exec("INSERT INTO schema_version(version) VALUES (1)"); err != nil {
+		t.Fatalf("seed schema_version: %v", err)
+	}
+	now := fmtTime(time.Now())
+	if _, err := db.Exec(`INSERT INTO nodes(id, name, group_name, created_at, updated_at) VALUES (1, 'Router', 'Home Network', ?, ?)`, now, now); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO checks(id, node_id, type, name, created_at, updated_at) VALUES (1, 1, 'ping', 'Ping', ?, ?)`, now, now); err != nil {
+		t.Fatalf("seed check: %v", err)
+	}
+	// Deliberately no check_state row for check 1.
+}
+
+func TestOldDatabaseMigratesAndBacksUp(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	rawOldShapeDB(t, dbPath)
+
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+
+	v, err := s.SchemaVersion(ctx)
+	if err != nil {
+		t.Fatalf("schema version: %v", err)
+	}
+	if v != currentSchemaVersion {
+		t.Fatalf("schema version = %d, want %d", v, currentSchemaVersion)
+	}
+
+	// The data migration's observable effect: check 1 now has a state row.
+	var status string
+	if err := s.Reader().QueryRowContext(ctx, "SELECT status FROM check_state WHERE check_id = 1").Scan(&status); err != nil {
+		t.Fatalf("backfilled check_state row missing: %v", err)
+	}
+	if status != "unknown" {
+		t.Fatalf("status = %q, want %q", status, "unknown")
+	}
+
+	// And the version-3 step's: the node's single group is now its group list.
+	n, err := s.GetNode(ctx, 1)
+	if err != nil {
+		t.Fatalf("get migrated node: %v", err)
+	}
+	if len(n.Groups) != 1 || n.Groups[0] != "Home Network" {
+		t.Fatalf("groups not backfilled from group_name: %+v", n.Groups)
+	}
+	if n.Group != "Home Network" {
+		t.Fatalf("group alias = %q, want the first group", n.Group)
+	}
+
+	backupPath := fmt.Sprintf("%s.before-v%d", dbPath, currentSchemaVersion)
+	if fi, err := os.Stat(backupPath); err != nil || fi.Size() == 0 {
+		t.Fatalf("pre-migration backup missing or empty: %v", err)
+	}
+
+	rep := s.LastMigration()
+	if rep == nil {
+		t.Fatal("expected a migration report")
+	}
+	if rep.FromVersion != 1 || rep.ToVersion != currentSchemaVersion || rep.BackupPath != backupPath {
+		t.Fatalf("migration report = %+v", rep)
+	}
+	if len(rep.Applied) != currentSchemaVersion-1 {
+		t.Fatalf("migration report should name every step that ran: %+v", rep)
+	}
+	for _, name := range rep.Applied {
+		if name == "" {
+			t.Fatalf("migration report has an unnamed step: %+v", rep)
+		}
+	}
+}
+
+// TestNodeGroupsRoundTripAndCount covers the multi-group shape end to end: a
+// node keeps every group it was given, group_name keeps the first one so an
+// older binary still reads something sensible, and GroupCounts counts the node
+// once in each of its groups.
+func TestNodeGroupsRoundTripAndCount(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+
+	n, err := s.CreateNode(ctx, model.Node{Name: "NAS", Host: "nas.local", Enabled: true,
+		Groups: []string{" Servers ", "Storage", "storage", ""}})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if len(n.Groups) != 2 || n.Groups[0] != "Servers" || n.Groups[1] != "Storage" {
+		t.Fatalf("groups not normalised on write: %+v", n.Groups)
+	}
+	if n.Group != "Servers" {
+		t.Fatalf("group alias = %q, want the first group", n.Group)
+	}
+
+	got, err := s.GetNode(ctx, n.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got.Groups) != 2 || got.Groups[1] != "Storage" || got.Group != "Servers" {
+		t.Fatalf("groups did not survive the round trip: %+v", got)
+	}
+	var groupName string
+	if err := s.Reader().QueryRowContext(ctx, "SELECT group_name FROM nodes WHERE id = ?", n.ID).Scan(&groupName); err != nil {
+		t.Fatalf("read group_name: %v", err)
+	}
+	if groupName != "Servers" {
+		t.Fatalf("group_name = %q, want the first group so older binaries still read one", groupName)
+	}
+
+	// A node written with only the old single group is read as being in it.
+	legacy, err := s.CreateNode(ctx, model.Node{Name: "Printer", Enabled: true, Group: "Office"})
+	if err != nil {
+		t.Fatalf("create legacy: %v", err)
+	}
+	if len(legacy.Groups) != 1 || legacy.Groups[0] != "Office" {
+		t.Fatalf("a node given only group should end up in that one group: %+v", legacy.Groups)
+	}
+
+	groups, _, err := s.GroupCounts(ctx)
+	if err != nil {
+		t.Fatalf("group counts: %v", err)
+	}
+	if groups["Servers"] != 1 || groups["Storage"] != 1 || groups["Office"] != 1 {
+		t.Fatalf("a node should be counted once in each of its groups: %v", groups)
+	}
+
+	// Dropping a group takes the node out of that group's count.
+	got.Groups = []string{"Servers"}
+	if _, _, err := s.UpdateNode(ctx, got); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	groups, _, err = s.GroupCounts(ctx)
+	if err != nil {
+		t.Fatalf("group counts after update: %v", err)
+	}
+	if _, ok := groups["Storage"]; ok {
+		t.Fatalf("Storage should be gone once no node is in it: %v", groups)
+	}
+}
+
+func TestOpenFreshDatabaseIsAtCurrentVersionWithNoBackup(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+
+	v, err := s.SchemaVersion(context.Background())
+	if err != nil {
+		t.Fatalf("schema version: %v", err)
+	}
+	if v != currentSchemaVersion {
+		t.Fatalf("schema version = %d, want %d", v, currentSchemaVersion)
+	}
+	if rep := s.LastMigration(); rep != nil {
+		t.Fatalf("fresh database should not report a migration: %+v", rep)
+	}
+	matches, _ := filepath.Glob(dbPath + ".before-v*")
+	if len(matches) != 0 {
+		t.Fatalf("fresh database should not get a pre-migration backup: %v", matches)
+	}
+}
+
+// TestOpenRefusesNewerSchemaVersion covers the rollback scenario the version
+// check exists for: an in-app update writes a newer schema, the operator
+// puts the previous exe back (the documented rollback), and that older
+// build must fail closed instead of touching the file.
+func TestOpenRefusesNewerSchemaVersion(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	ctx := context.Background()
+	future := currentSchemaVersion + 1
+	if _, err := s.Exec(ctx, "UPDATE schema_version SET version = ?", future); err != nil {
+		t.Fatalf("bump version: %v", err)
+	}
+	if err := s.Checkpoint(ctx); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	before, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read before: %v", err)
+	}
+
+	if _, err := Open(dbPath); err == nil {
+		t.Fatal("expected Open to refuse a newer-schema database")
+	} else {
+		msg := err.Error()
+		if !strings.Contains(msg, fmt.Sprintf("%d", future)) || !strings.Contains(msg, fmt.Sprintf("%d", currentSchemaVersion)) {
+			t.Fatalf("error should mention both schema versions: %v", err)
+		}
+	}
+
+	after, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read after: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("refused open modified the database file")
+	}
+	matches, _ := filepath.Glob(dbPath + ".before-v*")
+	if len(matches) != 0 {
+		t.Fatalf("refused open should not create a backup: %v", matches)
+	}
+}
+
 func TestKeyFileCreatedNextToDatabase(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(filepath.Join(dir, "test.db"))
@@ -370,5 +611,269 @@ func TestKeyFileCreatedNextToDatabase(t *testing.T) {
 	}
 	if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Fatalf("key file perms = %v, want 0600", fi.Mode().Perm())
+	}
+}
+
+// A ping result carries a spread of numbers around its average, and #30 added
+// the standard deviation to them. They are stored in columns of their own, so
+// this guards the column list as much as the values.
+func TestResultSpreadFieldsRoundTrip(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	n, err := s.CreateNode(ctx, model.Node{Name: "Router", Host: "192.168.1.1", Enabled: true, Checks: []model.Check{{Type: model.CheckPing, Name: "Ping", Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := model.Result{
+		CheckID: n.Checks[0].ID, Timestamp: time.Now(), Success: true, Status: model.StatusUp,
+		LatencyMS: f(12), MinMS: f(10), MaxMS: f(15), JitterMS: f(2.3), StdDevMS: f(1.9), LossPct: f(0),
+		Attempts: 1,
+		Details:  model.ResultDetails{PacketsSent: 4, PacketsReceived: 4, RTTs: []float64{10, 12, 11, 15}},
+	}
+	if _, err := s.InsertResult(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.RecentResults(ctx, n.Checks[0].ID, 1)
+	if err != nil || len(out) != 1 {
+		t.Fatalf("recent results: %v %d", err, len(out))
+	}
+	got := out[0]
+	for _, c := range []struct {
+		name      string
+		got, want *float64
+	}{
+		{"latency", got.LatencyMS, in.LatencyMS},
+		{"min", got.MinMS, in.MinMS},
+		{"max", got.MaxMS, in.MaxMS},
+		{"jitter", got.JitterMS, in.JitterMS},
+		{"stddev", got.StdDevMS, in.StdDevMS},
+		{"loss", got.LossPct, in.LossPct},
+	} {
+		if c.got == nil || *c.got != *c.want {
+			t.Errorf("%s = %v, want %v", c.name, c.got, *c.want)
+		}
+	}
+	if got.Details.PacketsReceived != 4 || len(got.Details.RTTs) != 4 {
+		t.Errorf("details = %+v", got.Details)
+	}
+}
+
+func rawCheckConfig(t *testing.T, s *Store, checkID int64) string {
+	t.Helper()
+	var raw string
+	if err := s.Reader().QueryRow("SELECT config FROM checks WHERE id = ?", checkID).Scan(&raw); err != nil {
+		t.Fatalf("read raw check config: %v", err)
+	}
+	return raw
+}
+
+func TestCheckSecretsSealedAtRest(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	n, err := s.CreateNode(ctx, model.Node{Name: "Gateway", Host: "192.168.1.1", Enabled: true, Checks: []model.Check{{
+		Type:            model.CheckSNMP,
+		Name:            "SNMP",
+		Enabled:         true,
+		IntervalSeconds: 60,
+		Config: model.CheckConfig{
+			SNMPVersion:   "2c",
+			SNMPCommunity: "n0t-public",
+			SNMPAuthPass:  "auth-s3cret",
+			MetricsToken:  "token-s3cret",
+			SNMPOIDs:      []model.SNMPOID{{OID: "1.3.6.1.2.1.1.3.0", Name: "Uptime"}},
+		},
+	}}})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	id := n.Checks[0].ID
+
+	raw := rawCheckConfig(t, s, id)
+	for _, secret := range []string{"n0t-public", "auth-s3cret", "token-s3cret"} {
+		if strings.Contains(raw, secret) {
+			t.Fatalf("%q stored in cleartext: %s", secret, raw)
+		}
+	}
+	if strings.Count(raw, secrets.Prefix) != 3 {
+		t.Fatalf("expected three sealed values in the row: %s", raw)
+	}
+	// The check handed back to the caller keeps the plaintext it was given:
+	// the engine has to be able to talk to the device with it.
+	if n.Checks[0].Config.SNMPCommunity != "n0t-public" {
+		t.Fatalf("create returned a sealed community: %q", n.Checks[0].Config.SNMPCommunity)
+	}
+
+	got, err := s.GetCheck(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Config.SNMPCommunity != "n0t-public" || got.Config.SNMPAuthPass != "auth-s3cret" || got.Config.MetricsToken != "token-s3cret" {
+		t.Fatalf("round trip lost secrets: %+v", got.Config)
+	}
+	if err := s.SecretsHealthy(); err != nil {
+		t.Fatalf("SecretsHealthy: %v", err)
+	}
+}
+
+func TestPlaintextCheckSecretsMigratedOnOpen(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	ctx := context.Background()
+
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	n, err := s.CreateNode(ctx, model.Node{Name: "NAS", Host: "nas.local", Enabled: true, Checks: []model.Check{{
+		Type: model.CheckSystem, Name: "Hardware", Enabled: true, IntervalSeconds: 60,
+	}}})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	id := n.Checks[0].ID
+	// Write the row the way a build from before check secrets were sealed
+	// would have written it.
+	if _, err := s.Exec(ctx, "UPDATE checks SET config = ? WHERE id = ?", `{"metricsToken":"legacy-token"}`, id); err != nil {
+		t.Fatalf("plant plaintext: %v", err)
+	}
+	s.Close()
+
+	s2, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+	if raw := rawCheckConfig(t, s2, id); strings.Contains(raw, "legacy-token") {
+		t.Fatalf("plaintext survived migration: %s", raw)
+	}
+	got, err := s2.GetCheck(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Config.MetricsToken != "legacy-token" {
+		t.Fatalf("migration lost the value: %q", got.Config.MetricsToken)
+	}
+}
+
+func TestResultMetricsRoundTripAndChart(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	check := model.Check{
+		Type: model.CheckSNMP, Name: "SNMP", Enabled: true, IntervalSeconds: 60,
+		Config: model.CheckConfig{SNMPOIDs: []model.SNMPOID{{OID: "1.3.6.1.2.1.2.2.1.10.1", Name: "WAN in", Kind: "counter", Unit: "bit/s"}}},
+	}
+	n, err := s.CreateNode(ctx, model.Node{Name: "Gateway", Host: "192.168.1.1", Enabled: true, Checks: []model.Check{check}})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	saved := n.Checks[0]
+
+	now := time.Now()
+	for i, v := range []float64{100, 250} {
+		if _, err := s.InsertResult(ctx, model.Result{
+			CheckID: saved.ID, Timestamp: now.Add(time.Duration(i-2) * time.Minute), Success: true,
+			Status: model.StatusUp, LatencyMS: f(4), Metrics: map[string]float64{"WAN in": v},
+		}); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+
+	results, err := s.RecentResults(ctx, saved.ID, 10)
+	if err != nil {
+		t.Fatalf("recent: %v", err)
+	}
+	if len(results) != 2 || results[0].Metrics["WAN in"] != 250 {
+		t.Fatalf("metrics did not survive the round trip: %+v", results)
+	}
+
+	rng, _ := ParseRange("24h")
+	series, err := s.HistoryMetric(ctx, saved, n.Name, rng, now, "WAN in")
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	if series.Metric != "WAN in" || series.MetricUnit != "bit/s" || series.Source != "raw" {
+		t.Fatalf("series does not describe the metric: %+v", series)
+	}
+	if len(series.Points) != 2 {
+		t.Fatalf("points = %d, want 2", len(series.Points))
+	}
+	for i, want := range []float64{100, 250} {
+		p := series.Points[i]
+		if p.Value == nil || *p.Value != want {
+			t.Fatalf("point %d value = %v, want %v", i, p.Value, want)
+		}
+		// The latency fields carry the same number, so a chart drawn from
+		// avgMs plots a named metric unchanged.
+		if p.AvgMS == nil || *p.AvgMS != want {
+			t.Fatalf("point %d avgMs = %v, want %v", i, p.AvgMS, want)
+		}
+	}
+}
+
+// A bulk edit is one transaction or it is nothing. Half of thirty nodes
+// carrying a new interval, with no way to tell which half from the screen, is
+// worse than the edit never having happened.
+func TestBulkUpdateRollsBackTheWholeBatch(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	mk := func(name string) model.Node {
+		n, err := s.CreateNode(ctx, model.Node{Name: name, Host: "10.0.0.1", Groups: []string{"Home"}, Enabled: true,
+			Checks: []model.Check{{Type: model.CheckPing, Name: name + " ping", Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5}}})
+		if err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+		return n
+	}
+	a, b := mk("Alpha"), mk("Beta")
+
+	// The happy path first, so the failure below is telling us something.
+	a.Importance = model.ImportanceHigh
+	ca := a.Checks[0]
+	ca.IntervalSeconds = 300
+	res, err := s.BulkUpdate(ctx, []model.Node{a}, []model.Check{ca})
+	if err != nil || res.Nodes != 1 || res.Checks != 1 {
+		t.Fatalf("bulk update: %v %+v", err, res)
+	}
+	if got, _ := s.GetNode(ctx, a.ID); got.Importance != model.ImportanceHigh || got.Checks[0].IntervalSeconds != 300 {
+		t.Fatalf("nothing was written: %+v", got)
+	}
+
+	// Now a batch whose last item names a check that is not there. Everything
+	// before it in the batch has to go back with it.
+	b.Importance = model.ImportanceCritical
+	good := b.Checks[0]
+	good.IntervalSeconds = 900
+	missing := good
+	missing.ID = good.ID + 9999
+	if _, err := s.BulkUpdate(ctx, []model.Node{b}, []model.Check{good, missing}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a missing check should fail the batch: %v", err)
+	}
+	after, err := s.GetNode(ctx, b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Importance == model.ImportanceCritical {
+		t.Error("the node write survived a rolled-back batch")
+	}
+	if after.Checks[0].IntervalSeconds != 60 {
+		t.Errorf("the check write survived a rolled-back batch: interval %d", after.Checks[0].IntervalSeconds)
+	}
+
+	// A node that is gone fails the batch the same way, and takes the checks
+	// named alongside it with it.
+	gone := a
+	gone.ID = a.ID + 9999
+	cb := b.Checks[0]
+	cb.IntervalSeconds = 1800
+	if _, err := s.BulkUpdate(ctx, []model.Node{gone}, []model.Check{cb}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a missing node should fail the batch: %v", err)
+	}
+	if got, _ := s.GetNode(ctx, b.ID); got.Checks[0].IntervalSeconds != 60 {
+		t.Errorf("a check was written despite a missing node in the batch: %d", got.Checks[0].IntervalSeconds)
+	}
+
+	// Nothing to do is not an error, and writes nothing.
+	if res, err := s.BulkUpdate(ctx, nil, nil); err != nil || res.Nodes != 0 || res.Checks != 0 {
+		t.Fatalf("empty batch: %v %+v", err, res)
 	}
 }

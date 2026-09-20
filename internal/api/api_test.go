@@ -44,7 +44,11 @@ func newTestServer(t *testing.T) (*httptest.Server, *Server) {
 		t.Fatal(err)
 	}
 	t.Cleanup(eng.Stop)
-	web := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html>app</html>")}, "app.js": &fstest.MapFile{Data: []byte("//js")}}
+	web := fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte("<html>app</html>")},
+		"app.js":     &fstest.MapFile{Data: []byte("//js")},
+		"wall.html":  &fstest.MapFile{Data: []byte("<html>wall</html>")},
+	}
 	srv := &Server{Engine: eng, Store: st, Log: log, Web: web, BackupDir: filepath.Join(dir, "backups"), Version: "test", Updater: &Updater{Client: &update.Client{}, Version: "test", Log: log}}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -218,6 +222,25 @@ func TestSettingsDashboardsMaintenanceBackups(t *testing.T) {
 	if code := call(t, ts, "PUT", "/api/settings", bad, nil); code != 400 {
 		t.Fatalf("expected 400 for bad recipient, got %d", code)
 	}
+	// The ping method is one of three words. An empty one is what every
+	// settings document written before the setting existed looks like, so it
+	// becomes the default instead of an error.
+	badPing := saved
+	badPing.General.PingMethod = "telepathy"
+	if code := call(t, ts, "PUT", "/api/settings", badPing, nil); code != 400 {
+		t.Fatalf("expected 400 for an unknown ping method, got %d", code)
+	}
+	emptyPing := saved
+	emptyPing.General.PingMethod = ""
+	var back model.Settings
+	if code := call(t, ts, "PUT", "/api/settings", emptyPing, &back); code != 200 || back.General.PingMethod != model.PingMethodAuto {
+		t.Fatalf("empty ping method: %d %q", code, back.General.PingMethod)
+	}
+	okPing := saved
+	okPing.General.PingMethod = model.PingMethodSystem
+	if code := call(t, ts, "PUT", "/api/settings", okPing, &back); code != 200 || back.General.PingMethod != model.PingMethodSystem {
+		t.Fatalf("system ping method: %d %q", code, back.General.PingMethod)
+	}
 	if code := call(t, ts, "POST", "/api/settings/test-email", map[string]string{}, nil); code != 200 {
 		t.Fatalf("test email: %d", code)
 	}
@@ -379,5 +402,268 @@ func TestStreamEmitsUpdates(t *testing.T) {
 	}
 	if !strings.Contains(got, `"kind":"config"`) && !strings.Contains(got, `"kind":"event"`) {
 		t.Fatalf("unexpected stream payload: %q", got)
+	}
+}
+
+// The security headers are the browser's half of the bargain, so they go on
+// every response — the app shell, the API and each static asset alike. A
+// header only some responses carry is a header an attacker aims at the rest.
+func TestSecurityHeadersOnEveryResponse(t *testing.T) {
+	ts, _ := newTestServer(t)
+	head := func(path string) http.Header {
+		t.Helper()
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return resp.Header
+	}
+
+	for _, path := range []string{"/", "/api/health", "/app.js", "/api/no-such-endpoint", "/#/nodes"} {
+		h := head(path)
+		csp := h.Get("Content-Security-Policy")
+		if csp == "" {
+			t.Errorf("%s: no Content-Security-Policy", path)
+			continue
+		}
+		for _, want := range []string{"default-src 'self'", "script-src 'self'", "object-src 'none'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'none'"} {
+			if !strings.Contains(csp, want) {
+				t.Errorf("%s: policy is missing %q: %s", path, want, csp)
+			}
+		}
+		if got := h.Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Errorf("%s: X-Content-Type-Options = %q", path, got)
+		}
+		if got := h.Get("X-Frame-Options"); got != "DENY" {
+			t.Errorf("%s: X-Frame-Options = %q", path, got)
+		}
+		if got := h.Get("Referrer-Policy"); got != "same-origin" {
+			t.Errorf("%s: Referrer-Policy = %q", path, got)
+		}
+	}
+
+	// The wallboard is the one page meant to be embedded — a screen in a Home
+	// Assistant dashboard is a real use, and the page is read-only and gated
+	// on its own share token, so there is nothing for clickjacking to steal.
+	// It says so with frame-ancestors, and stays silent on X-Frame-Options,
+	// which has no way to express "anyone".
+	for _, path := range []string{"/wall", "/wall/", "/wall.html", "/wall?id=2&token=abc"} {
+		h := head(path)
+		csp := h.Get("Content-Security-Policy")
+		if !strings.Contains(csp, "frame-ancestors *") {
+			t.Errorf("%s: the wallboard should be framable: %s", path, csp)
+		}
+		if got := h.Get("X-Frame-Options"); got != "" {
+			t.Errorf("%s: X-Frame-Options must not contradict frame-ancestors, got %q", path, got)
+		}
+		// Everything else about the policy is the same as anywhere else.
+		if !strings.Contains(csp, "script-src 'self'") || h.Get("X-Content-Type-Options") != "nosniff" {
+			t.Errorf("%s: the rest of the policy should be unchanged: %s", path, csp)
+		}
+	}
+
+	// A path that merely starts with the same letters is not the wallboard.
+	for _, path := range []string{"/wallboards", "/api/wallboards", "/wall.html.bak"} {
+		if csp := head(path).Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'none'") {
+			t.Errorf("%s: only the wallboard page itself may be framed: %s", path, csp)
+		}
+	}
+}
+
+// Nodes can be in several groups. The API takes the new list, still takes the
+// old single group from a client that has not been updated, and always answers
+// with both so neither kind of client has to guess.
+func TestNodeGroupsOverTheAPI(t *testing.T) {
+	ts, _ := newTestServer(t)
+
+	var multi nodeDoc
+	body := map[string]any{"name": "NAS", "host": "nas.local", "enabled": true,
+		"groups": []string{"Servers", " Storage ", "servers"}, "checks": []map[string]any{}}
+	if code := call(t, ts, "POST", "/api/nodes", body, &multi); code != 201 {
+		t.Fatalf("create with groups: %d", code)
+	}
+	if len(multi.Groups) != 2 || multi.Groups[0] != "Servers" || multi.Groups[1] != "Storage" {
+		t.Fatalf("groups not normalised: %+v", multi.Groups)
+	}
+	if multi.Group != "Servers" {
+		t.Fatalf("group alias = %q, want the first group", multi.Group)
+	}
+
+	var legacy nodeDoc
+	old := map[string]any{"name": "Printer", "host": "printer", "enabled": true, "group": "Office", "checks": []map[string]any{}}
+	if code := call(t, ts, "POST", "/api/nodes", old, &legacy); code != 201 {
+		t.Fatalf("create with the legacy group: %d", code)
+	}
+	if len(legacy.Groups) != 1 || legacy.Groups[0] != "Office" || legacy.Group != "Office" {
+		t.Fatalf("a client sending only group should get a one-group node: %+v", legacy)
+	}
+
+	// The list carries both fields, and groups is a list even when empty.
+	var raw []map[string]any
+	if code := call(t, ts, "GET", "/api/nodes", nil, &raw); code != 200 || len(raw) != 2 {
+		t.Fatalf("list nodes: %d %d", code, len(raw))
+	}
+	for _, n := range raw {
+		if _, ok := n["groups"].([]any); !ok {
+			t.Fatalf("groups should always be a list: %v", n["groups"])
+		}
+		if _, ok := n["group"].(string); !ok {
+			t.Fatalf("the deprecated group alias should still be sent: %v", n["group"])
+		}
+	}
+
+	// /api/groups counts a node once per group it is in.
+	var groups struct {
+		Groups []struct {
+			Name  string `json:"name"`
+			Count int    `json:"count"`
+		} `json:"groups"`
+	}
+	if code := call(t, ts, "GET", "/api/groups", nil, &groups); code != 200 || len(groups.Groups) != 3 {
+		t.Fatalf("groups: %d %+v", code, groups.Groups)
+	}
+
+	// And the overview tallies it in each of them: three group rows for two
+	// nodes, which is why the group totals can exceed the node count.
+	var ov struct {
+		Summary struct {
+			Total int `json:"total"`
+		} `json:"summary"`
+		Groups []struct {
+			Name  string `json:"name"`
+			Total int    `json:"total"`
+		} `json:"groups"`
+	}
+	if code := call(t, ts, "GET", "/api/overview", nil, &ov); code != 200 {
+		t.Fatalf("overview: %d", code)
+	}
+	tally := map[string]int{}
+	for _, g := range ov.Groups {
+		tally[g.Name] = g.Total
+	}
+	if tally["Servers"] != 1 || tally["Storage"] != 1 || tally["Office"] != 1 {
+		t.Fatalf("per-group tally = %v", tally)
+	}
+	if ov.Summary.Total != 2 {
+		t.Fatalf("summary total = %d, want the number of nodes", ov.Summary.Total)
+	}
+
+	// An update replaces the whole list.
+	multi.Groups = []string{"Storage"}
+	var updated nodeDoc
+	if code := call(t, ts, "PUT", fmt.Sprintf("/api/nodes/%d", multi.ID), multi.Node, &updated); code != 200 {
+		t.Fatalf("update: %d", code)
+	}
+	if len(updated.Groups) != 1 || updated.Groups[0] != "Storage" || updated.Group != "Storage" {
+		t.Fatalf("update should replace the group list: %+v", updated)
+	}
+}
+
+// A check's credentials are not monitoring data: reading a node hands back a
+// mask, and saving the node back with the field blank keeps what is stored.
+func TestCheckSecretsAreMaskedAndKept(t *testing.T) {
+	ts, srv := newTestServer(t)
+	ctx := context.Background()
+
+	node := model.Node{Name: "Gateway", Host: "192.168.1.1", Enabled: true, Importance: model.ImportanceNormal, Checks: []model.Check{{
+		Type: model.CheckSNMP, Name: "SNMP", Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5,
+		Config: model.CheckConfig{
+			SNMPVersion: "2c", SNMPPort: 161, SNMPCommunity: "n0t-public",
+			SNMPOIDs: []model.SNMPOID{{OID: "1.3.6.1.2.1.1.3.0", Name: "Uptime", Kind: "gauge", Scale: 0.01, Unit: "s"}},
+		},
+	}}}
+	var created nodeDoc
+	if code := call(t, ts, "POST", "/api/nodes", node, &created); code != 201 {
+		t.Fatalf("create = %d", code)
+	}
+	if got := created.Checks[0].Config.SNMPCommunity; got != passwordMask {
+		t.Fatalf("community echoed as %q, want the mask", got)
+	}
+
+	var fetched nodeDoc
+	if code := call(t, ts, "GET", fmt.Sprintf("/api/nodes/%d", created.ID), nil, &fetched); code != 200 {
+		t.Fatalf("get = %d", code)
+	}
+	if got := fetched.Checks[0].Config.SNMPCommunity; got != passwordMask {
+		t.Fatalf("reading a node handed out %q", got)
+	}
+
+	// Saving it back the way the editor does — with the credential left
+	// blank — must not wipe the stored one.
+	back := fetched.Node
+	back.Checks[0].Config.SNMPCommunity = ""
+	var saved nodeDoc
+	if code := call(t, ts, "PUT", fmt.Sprintf("/api/nodes/%d", created.ID), back, &saved); code != 200 {
+		t.Fatalf("update = %d", code)
+	}
+	stored, err := srv.Store.GetCheck(ctx, created.Checks[0].ID)
+	if err != nil {
+		t.Fatalf("get check: %v", err)
+	}
+	if stored.Config.SNMPCommunity != "n0t-public" {
+		t.Fatalf("stored community = %q, want it kept", stored.Config.SNMPCommunity)
+	}
+
+	// The overview is readable by viewers and read-only API keys, so it must
+	// not hand the credential out either.
+	var ov engine.Overview
+	if code := call(t, ts, "GET", "/api/overview", nil, &ov); code != 200 {
+		t.Fatalf("overview = %d", code)
+	}
+	for _, nv := range ov.Nodes {
+		for _, c := range nv.Node.Checks {
+			if c.Config.SNMPCommunity == "n0t-public" {
+				t.Fatal("the overview handed out a community string")
+			}
+		}
+		for _, cv := range nv.Checks {
+			if cv.Check.Config.SNMPCommunity == "n0t-public" {
+				t.Fatal("the overview's check views handed out a community string")
+			}
+		}
+	}
+}
+
+// An SNMP check's per-OID readings are charted like any other metric.
+func TestHistoryServesANamedMetric(t *testing.T) {
+	ts, srv := newTestServer(t)
+	ctx := context.Background()
+
+	node := model.Node{Name: "Gateway", Host: "192.168.1.1", Enabled: true, Importance: model.ImportanceNormal, Checks: []model.Check{{
+		Type: model.CheckSNMP, Name: "SNMP", Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5,
+		Config: model.CheckConfig{
+			SNMPVersion: "2c", SNMPPort: 161, SNMPCommunity: "public",
+			SNMPOIDs: []model.SNMPOID{{OID: "1.3.6.1.2.1.2.2.1.10.1", Name: "WAN in", Kind: "counter", Scale: 8, Unit: "bit/s"}},
+		},
+	}}}
+	var created nodeDoc
+	if code := call(t, ts, "POST", "/api/nodes", node, &created); code != 201 {
+		t.Fatalf("create = %d", code)
+	}
+	checkID := created.Checks[0].ID
+	if _, err := srv.Store.InsertResult(ctx, model.Result{
+		CheckID: checkID, Timestamp: time.Now().Add(-time.Minute), Success: true, Status: model.StatusUp,
+		Metrics: map[string]float64{"WAN in": 1600},
+	}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	var series model.HistorySeries
+	if code := call(t, ts, "GET", fmt.Sprintf("/api/history?checkId=%d&range=24h&metric=WAN+in", checkID), nil, &series); code != 200 {
+		t.Fatalf("history = %d", code)
+	}
+	if series.Metric != "WAN in" || series.MetricUnit != "bit/s" {
+		t.Fatalf("series = %+v, want it to describe the metric", series)
+	}
+	if len(series.Points) != 1 || series.Points[0].Value == nil || *series.Points[0].Value != 1600 {
+		t.Fatalf("points = %+v, want the stored reading", series.Points)
+	}
+
+	// A name the check does not measure is refused rather than served empty,
+	// so /api/history cannot be used to fish for names in stored results.
+	if code := call(t, ts, "GET", fmt.Sprintf("/api/history?checkId=%d&metric=whatever", checkID), nil, nil); code != 400 {
+		t.Fatalf("unknown metric = %d, want 400", code)
 	}
 }

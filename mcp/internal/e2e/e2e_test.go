@@ -4,7 +4,7 @@
 // never runs in CI and never needs a live service to be green. Use it when
 // setting an install up, or after changing the client:
 //
-//	GWATCH_E2E_URL=http://127.0.0.1:8080 GWATCH_E2E_KEY=gw_… go test ./internal/e2e -v
+//	GWATCH_E2E_URL=http://127.0.0.1:7230 GWATCH_E2E_KEY=gw_… go test ./internal/e2e -v
 //
 // A read-only key is enough; the test only reads. Set GWATCH_E2E_WRITE=1 as
 // well to also assert that the key's scope is readwrite (it still writes

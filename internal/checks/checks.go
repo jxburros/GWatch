@@ -30,6 +30,7 @@ type Options struct {
 	DefaultCertWarn   int     // global cert warn days (used when Config.CertWarnDays == 0; default 14)
 	LatencyWarnMS     float64 // global latency warning threshold (used when Config.LatencyWarnMS == 0; 0 = off)
 	PacketLossWarnPct float64 // global packet loss warning threshold (used when Config.PacketLossWarnPct == 0; 0 = off)
+	PingMethod        string  // global ping method (used when Config.PingMethod == ""; "" = auto)
 
 	// Hosts supplies hardware readings taken elsewhere — by the engine's
 	// sampler for this computer, or by an agent that pushed them in. It is nil
@@ -120,6 +121,8 @@ func runOnce(ctx context.Context, check model.Check, opts Options) (res model.Re
 		return runDNSCheck(ctx, check, target)
 	case model.CheckCustom:
 		return runCustomCheck(ctx, check, target)
+	case model.CheckSNMP:
+		return runSNMPCheck(ctx, check, target, opts)
 	}
 	return failResult(fmt.Sprintf("unsupported check type %q", check.Type))
 }
@@ -206,6 +209,9 @@ func Validate(check model.Check, nodeHost string) error {
 		if cfg.PingCount < 0 || cfg.PingCount > maxPingCount {
 			return fmt.Errorf("ping count must be between 1 and %d", maxPingCount)
 		}
+		if cfg.PingMethod != "" && !model.ValidPingMethod(cfg.PingMethod) {
+			return errors.New(`ping method must be "auto", "builtin" or "system" (or empty to follow the global setting)`)
+		}
 		if _, err := hostOnly(target); err != nil {
 			return err
 		}
@@ -274,6 +280,13 @@ func Validate(check model.Check, nodeHost string) error {
 		}
 	case model.CheckCustom:
 		if err := validateCustomCheck(cfg); err != nil {
+			return err
+		}
+	case model.CheckSNMP:
+		if _, _, err := hostPort(target, cfg.SNMPPort, defaultSNMPPort); err != nil {
+			return err
+		}
+		if err := validateSNMPCheck(cfg); err != nil {
 			return err
 		}
 	}

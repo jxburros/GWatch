@@ -3,7 +3,7 @@
 // monitor health. Logs moved to the Audit tab.
 
 import { api, qs } from '../api.js';
-import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, openModal, emptyState, skeleton, banner, eventRow, busy, applyTheme, applyAccent, ACCENT_PRESETS, hexToRgb } from '../components.js';
+import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, openModal, emptyState, skeleton, banner, eventRow, busy, applyTheme, applyAccent, ACCENT_PRESETS, hexToRgb, applyDensity, currentDensity } from '../components.js';
 import { relTime, dateTime, bytes, num, duration, retentionSpan, toLocalInput, fromLocalInput, weekdayShort, timeShort, plural, isBeta } from '../fmt.js';
 import { openEndpointEditor, endpointRow, triggerRow, openTriggerEditor } from './automation.js';
 import { tipsEnabled, setTipsEnabled, resetTips, seenCount, resetOnboarding, TIPS } from '../tips.js';
@@ -12,12 +12,21 @@ import { tipsEnabled, setTipsEnabled, resetTips, seenCount, resetOnboarding, TIP
 // open. Everything else reads or writes settings, which the server refuses to
 // a viewer, so those tabs are not offered at all.
 const TABS = [
-  { id: 'general', label: 'General' }, { id: 'appearance', label: 'Appearance', viewer: true }, { id: 'users', label: 'Users & access' },
+  { id: 'general', label: 'General' }, { id: 'appearance', label: 'Appearance', viewer: true },
+  { id: 'indicators', label: 'Indicators' }, { id: 'users', label: 'Users & access' },
   { id: 'network', label: 'Network access' }, { id: 'alerts', label: 'Alerts' },
   { id: 'automation', label: 'Automation' }, { id: 'hardware', label: 'Hardware' },
   { id: 'retention', label: 'Retention' }, { id: 'maintenance', label: 'Maintenance' },
   { id: 'backups', label: 'Backups' }, { id: 'updates', label: 'Updates' }, { id: 'health', label: 'Monitor health', viewer: true },
   { id: 'about', label: 'About', viewer: true },
+];
+
+// The ping methods GeneralSettings.PingMethod accepts. A check may override
+// the global choice with the same values, plus "" for "follow the setting".
+const PING_METHODS = [
+  { value: 'auto', label: 'Auto (recommended)' },
+  { value: 'builtin', label: 'Built-in sender' },
+  { value: 'system', label: 'System ping command' },
 ];
 
 const REPO_URL = 'https://github.com/jxburros/GWatch';
@@ -26,7 +35,6 @@ const GWATCH_COPYRIGHT = 'Copyright (c) 2026 JX Holdings. Original developers: J
 // module's LICENSE file under $(go env GOMODCACHE).
 const DEPENDENCIES = [
   { name: 'kardianos/service', use: 'runs GWatch as a background service on Windows, macOS and Linux', license: 'zlib' },
-  { name: 'prometheus-community/pro-bing', use: 'sends the ICMP pings used by ping checks', license: 'MIT' },
   { name: 'modernc.org/sqlite', use: 'the embedded database that stores history, events and settings', license: 'BSD-3-Clause' },
   { name: 'golang.org/x/crypto', use: 'password hashing for accounts and the access password', license: 'BSD-3-Clause' },
 ];
@@ -66,7 +74,7 @@ export async function mount(root, ctx) {
     replace(panel, skeleton({ lines: 5 }));
     state.panelRefresh = null;
     try {
-      const fn = { general: tabGeneral, appearance: tabAppearance, users: tabUsers, network: tabNetwork, alerts: tabAlerts, automation: tabAutomation, hardware: tabHardware, retention: tabRetention, maintenance: tabMaintenance, backups: tabBackups, updates: tabUpdates, health: tabHealth, about: tabAbout }[state.tab];
+      const fn = { general: tabGeneral, appearance: tabAppearance, indicators: tabIndicators, users: tabUsers, network: tabNetwork, alerts: tabAlerts, automation: tabAutomation, hardware: tabHardware, retention: tabRetention, maintenance: tabMaintenance, backups: tabBackups, updates: tabUpdates, health: tabHealth, about: tabAbout }[state.tab];
       const el = await fn();
       if (state.destroyed) return;
       replace(panel, isAdmin ? el : h('div', { class: 'stack' }, readOnlyNotice(), el));
@@ -90,6 +98,7 @@ export async function mount(root, ctx) {
     const s = state.settings || await loadSettings();
     const g = s.general;
     const name = textInput({ value: g.instanceName || '', placeholder: 'GWatch', oninput: () => { g.instanceName = name.value; } });
+    const pingMethod = selectInput({ options: PING_METHODS, value: g.pingMethod || 'auto', onchange: () => { g.pingMethod = pingMethod.value; } });
     return h('form', { class: 'stack', onsubmit: (e) => { e.preventDefault(); saveSettings(); } },
       h('section', { class: 'card' }, h('h2', null, 'General'), h('p', { class: 'lead' }, 'Defaults for new checks and protection against overloading the machine.'),
         h('div', { class: 'form-grid' },
@@ -101,6 +110,19 @@ export async function mount(root, ctx) {
           numField(g, 'maxConcurrentChecks', 'Max concurrent checks', { min: 1, help: 'How many checks may run at the same time.' }),
           numField(g, 'latencyWarnMs', 'Latency warning default', { unitLabel: 'ms', help: '0 = off. Marks checks degraded when slower than this.' }),
           numField(g, 'packetLossWarnPct', 'Packet-loss warning default', { unitLabel: '%', help: '0 = off. Applies to ping checks.' }),
+        )),
+      // Ping is the one check type whose mechanics a reader may have to take a
+      // hand in: sending an echo request needs a socket the operating system
+      // may refuse to hand out. The setting sits here with the other defaults,
+      // and any individual check can override it.
+      h('section', { class: 'card' }, h('h2', null, 'Ping'),
+        h('p', { class: 'lead' }, 'How ping checks send their echo requests. Any individual check can override this.'),
+        h('div', { class: 'form-grid' },
+          field({
+            label: 'Ping method',
+            input: pingMethod,
+            help: 'Auto tries the built-in sender and falls back to the system ping command. Built-in never runs an external program. System ping uses the operating system\'s ping command, which is the way out where raw sockets are not permitted.',
+          }),
         ),
         h('hr', { class: 'divider' }), saveBar()));
   }
@@ -125,6 +147,24 @@ export async function mount(root, ctx) {
       }
     };
     renderThemes();
+    // #32: density is a per-browser preference, like the pinned sidebar — it
+    // never touches state.settings and there is nothing here for a viewer to
+    // be locked out of, so it renders the same way for both roles.
+    const densities = [
+      { value: 'compact', label: 'Compact (default)', desc: 'Tighter rows, so a long node list scrolls easily.' },
+      { value: 'comfortable', label: 'Breathing room', desc: 'The roomier spacing GWatch used to ship with.' },
+    ];
+    const densityWrap = h('div', { class: 'theme-options density-options', role: 'radiogroup', 'aria-label': 'List density' });
+    const renderDensities = () => {
+      clear(densityWrap);
+      const current = currentDensity();
+      for (const d of densities) {
+        densityWrap.append(h('button', { type: 'button', role: 'radio', class: `theme-option ${current === d.value ? 'active' : ''}`, 'aria-checked': current === d.value ? 'true' : 'false', onclick: () => { applyDensity(d.value); renderDensities(); } },
+          h('div', { class: `density-preview ${d.value === 'comfortable' ? 'is-comfortable' : ''}` }, h('i'), h('i'), h('i')),
+          h('b', null, d.label), h('span', null, d.desc)));
+      }
+    };
+    renderDensities();
     const swatches = h('div', { class: 'swatches', role: 'radiogroup', 'aria-label': 'Accent colour' });
     const custom = h('input', { type: 'color', value: g.accentColor || '#43c9c0', 'aria-label': 'Custom accent colour', oninput: () => { g.accentColor = custom.value; applyAccent(custom.value); renderSwatches(); } });
     const hex = textInput({ value: g.accentColor || '#43c9c0', class: 'mono', style: { maxWidth: '110px' }, 'aria-label': 'Accent hex', oninput: () => { if (hexToRgb(hex.value)) { g.accentColor = hex.value.toLowerCase(); custom.value = g.accentColor; applyAccent(g.accentColor); renderSwatches(); } } });
@@ -140,6 +180,9 @@ export async function mount(root, ctx) {
           ? 'Changes apply immediately; press Save to keep them for every browser that opens this GWatch.'
           : 'Changes apply immediately and are remembered by this browser. Only an administrator can change the theme for everyone.'),
         themeWrap),
+      h('section', { class: 'card' }, h('h2', null, 'Density'),
+        h('p', { class: 'lead' }, 'How tightly node rows, checks and lists are packed. Remembered by this browser only — there is no shared setting for it.'),
+        densityWrap),
       h('section', { class: 'card' }, h('h2', null, 'Accent colour'), h('p', { class: 'lead' }, 'Used for buttons, highlights, the active navigation item and the first chart line.'), swatches,
         h('div', { class: 'row', style: { marginTop: '14px', gap: '8px' } }, h('button', { class: 'btn btn-primary', type: 'button' }, 'Primary button'), h('button', { class: 'btn', type: 'button' }, 'Button'), h('span', { class: 'chip active' }, 'Active chip'), h('a', { href: '#/settings/appearance' }, 'A link')),
         isAdmin ? h('hr', { class: 'divider' }) : null, isAdmin ? saveBar() : null),
@@ -161,6 +204,160 @@ export async function mount(root, ctx) {
           h('button', { class: 'btn', type: 'button', onclick: () => { resetTips(); refresh(); toast('Tips reset', { kind: 'success' }); } }, icon('refresh'), 'Reset tips'),
           h('button', { class: 'btn', type: 'button', onclick: () => { resetOnboarding(); ctx.navigate('/onboarding'); } }, icon('play'), 'Restart onboarding'),
           h('a', { class: 'btn', href: '#/help' }, icon('help'), 'Open Help'))));
+  }
+
+  /* ---------- Indicators ---------- */
+  // The conditions a rule may test, flattened into one list because
+  // "nodes down" and "nodes degraded" are one choice to a reader even though
+  // they are one kind and two statuses to the server. Anything offered here
+  // has to be answerable from GET /api/status, which is the one document the
+  // header already polls; see model.IndicatorCondition.
+  const INDICATOR_CONDITIONS = [
+    { value: 'nodesInStatus:down', kind: 'nodesInStatus', status: 'down', label: 'Nodes that are down', counted: 'nodes' },
+    { value: 'nodesInStatus:degraded', kind: 'nodesInStatus', status: 'degraded', label: 'Nodes that are degraded', counted: 'nodes' },
+    { value: 'nodesInStatus:unknown', kind: 'nodesInStatus', status: 'unknown', label: 'Nodes waiting for a first result', counted: 'nodes' },
+    { value: 'nodesInStatus:maintenance', kind: 'nodesInStatus', status: 'maintenance', label: 'Nodes in maintenance', counted: 'nodes' },
+    { value: 'certWarnings:', kind: 'certWarnings', status: '', label: 'Certificates expiring or invalid', counted: 'certificates' },
+    { value: 'attention:', kind: 'attention', status: '', label: 'Checks needing attention', counted: 'checks' },
+    { value: 'serviceHealth:', kind: 'serviceHealth', status: '', label: 'The monitor itself is unwell', counted: '' },
+  ];
+  const INDICATOR_COLOURS = [
+    { value: 'red', label: 'Red — needs looking at now' },
+    { value: 'orange', label: 'Orange — worth knowing about' },
+    { value: 'yellow', label: 'Yellow — for information' },
+  ];
+  const condKey = (c = {}) => `${c.kind || 'nodesInStatus'}:${c.kind === 'nodesInStatus' ? (c.status || 'down') : ''}`;
+  const condOf = (key) => INDICATOR_CONDITIONS.find((c) => c.value === key) || INDICATOR_CONDITIONS[0];
+
+  async function tabIndicators() {
+    // `s` is re-pointed after every save, because saveSettings replaces
+    // state.settings with the document the server sends back — normalised,
+    // with the ids and counts it filled in.
+    let s = state.settings || await loadSettings();
+    if (!Array.isArray(s.indicators)) s.indicators = [];
+    const wrap = h('div', { class: 'stack' });
+    // A rule the browser has never seen a server id for gets one here, so
+    // that a freshly added row is as complete as a stored one.
+    const newId = () => `indicator-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e4)}`;
+
+    const render = () => {
+      clear(wrap);
+      const rules = h('div', { class: 'ind-rules' });
+      s.indicators.forEach((rule, i) => rules.append(ruleRow(rule, i)));
+      const card = h('section', { class: 'card' },
+        h('div', { class: 'card-head' }, h('h2', null, 'Indicators'),
+          h('button', { class: 'btn', type: 'button', onclick: () => { s.indicators.push({ id: newId(), name: 'New indicator', enabled: true, colour: 'yellow', condition: { kind: 'nodesInStatus', status: 'down', minCount: 1 } }); render(); } }, icon('plus'), 'Add indicator')),
+        h('p', { class: 'lead' }, 'The circles under the page name in the header. One green circle means nothing here is firing; blue means there is nothing to report on yet — no nodes, or none that has produced a result. When a rule fires, green gives way to one circle per firing rule, reddest first, and clicking one opens what it is about.'),
+        s.indicators.length ? rules : emptyState({ icon: 'alert', title: 'No indicators', text: 'With no rules the header only ever shows the green or blue circle. Add one, or restore the defaults below.', compact: true }),
+        h('hr', { class: 'divider' }),
+        h('div', { class: 'form-actions' },
+          h('button', { class: 'btn btn-primary', type: 'button', onclick: (e) => save(e.currentTarget) }, icon('save'), 'Save changes'),
+          h('button', { class: 'btn', type: 'button', onclick: async () => {
+            if (!await confirmDialog({ title: 'Restore the default indicators?', message: 'The rules you have added or changed here are replaced by the six GWatch ships with. Nothing is saved until you press Save changes.', confirmLabel: 'Restore' })) return;
+            // An empty list is what the server reads as "seed the defaults",
+            // so saving is what fetches them back: this one button does not
+            // wait for Save changes, because there is nothing to review.
+            s.indicators = [];
+            await saveSettings();
+            adopt();
+            window.dispatchEvent(new CustomEvent('gw:indicators-changed'));
+            render();
+          } }, icon('refresh'), 'Restore defaults')));
+      wrap.append(card, previewCard(), h('section', { class: 'card' }, h('h2', null, 'Notes'),
+        h('div', { class: 'stack-sm', style: { marginTop: '8px' } },
+          h('p', { class: 'note' }, h('b', null, 'Who sees them: '), 'everyone. The rules are read from settings, which only an administrator may open, so the effective list is served to every account alongside the theme — a viewer’s header shows exactly what yours does.'),
+          h('p', { class: 'note' }, h('b', null, 'Where they are evaluated: '), 'in the browser, against the same status summary the header already fetches. That is why the list of conditions is short: each one has to be answerable from that one summary, without a second request on every poll.'),
+          h('p', { class: 'note' }, h('b', null, 'Green and blue: '), 'neither is a rule. Green is what is left when nothing fires, and blue says GWatch has nothing to go on yet — while it is blue, only the monitor’s own health can still light a circle.'))));
+    };
+
+    const previewCard = () => {
+      const row = h('div', { class: 'indicators' });
+      const note = h('span', { class: 'muted tiny' }, 'Loading the current status…');
+      api.get('/api/status').then((st) => {
+        const firing = s.indicators.filter((r) => r.enabled && count(st, r.condition || {}) >= Math.max(1, Number(r.condition?.minCount) || 1));
+        clear(row);
+        const rank = { red: 0, orange: 1, yellow: 2 };
+        firing.sort((a, b) => (rank[a.colour] ?? 9) - (rank[b.colour] ?? 9));
+        for (const r of firing) row.append(h('span', { class: `indicator ind-${r.colour}`, title: r.name }, h('span', { class: 'orb' })));
+        if (!firing.length) row.append(h('span', { class: 'indicator ind-ok' }, h('span', { class: 'orb' })));
+        note.textContent = firing.length ? `${firing.map((r) => r.name).join(', ')} — as your rules stand, unsaved changes included.` : 'Nothing is firing right now, so the header shows the single all-clear circle.';
+      }).catch(() => { note.textContent = 'The current status could not be read.'; });
+      const count = (st, c) => {
+        switch (c.kind) {
+          case 'nodesInStatus': return Number({ down: st.down, degraded: st.degraded, unknown: st.unknown, maintenance: st.maintenance }[c.status]) || 0;
+          case 'certWarnings': return Number(st.certWarnings) || 0;
+          case 'attention': return Number(st.attention) || 0;
+          case 'serviceHealth': return st.serviceOk ? 0 : 1;
+          default: return 0;
+        }
+      };
+      return h('section', { class: 'card' }, h('h2', null, 'Right now'),
+        h('p', { class: 'lead' }, 'What the header would show with these rules.'),
+        h('div', { class: 'ind-preview' }, row, note));
+    };
+
+    const ruleRow = (rule, i) => {
+      rule.condition = rule.condition || { kind: 'nodesInStatus', status: 'down', minCount: 1 };
+      const row = h('div', { class: `ind-rule ${rule.enabled ? '' : 'off'}` });
+      const on = toggle({ checked: rule.enabled !== false, ariaLabel: `Enable ${rule.name || 'indicator'}`, onChange: (v) => { rule.enabled = v; row.classList.toggle('off', !v); } });
+      const swatches = h('div', { class: 'ind-swatches', role: 'radiogroup', 'aria-label': 'Severity' });
+      const renderSwatches = () => {
+        clear(swatches);
+        for (const c of INDICATOR_COLOURS) {
+          swatches.append(h('button', { type: 'button', role: 'radio', class: `ind-swatch ind-swatch-${c.value}`, title: c.label, 'aria-label': c.label, 'aria-checked': rule.colour === c.value ? 'true' : 'false', onclick: () => { rule.colour = c.value; renderSwatches(); } }));
+        }
+      };
+      renderSwatches();
+      const name = textInput({ value: rule.name || '', class: 'ind-rule-name', 'aria-label': 'Indicator name', placeholder: 'What it means', oninput: () => { rule.name = name.value; } });
+      const cond = selectInput({ options: INDICATOR_CONDITIONS.map((c) => ({ value: c.value, label: c.label })), value: condKey(rule.condition), 'aria-label': 'Condition' });
+      const min = numberInput({ value: rule.condition.minCount || 1, min: 1, step: 1, 'aria-label': 'How many it takes', oninput: () => { rule.condition.minCount = Math.max(1, Number(min.value) || 1); } });
+      const minWrap = h('span', { class: 'ind-rule-cond' }, h('span', { class: 'muted tiny' }, 'at least'), min, h('span', { class: 'muted tiny' }, ''));
+      const syncCond = () => {
+        const c = condOf(cond.value);
+        rule.condition.kind = c.kind;
+        rule.condition.status = c.status;
+        // The monitor is unwell or it is not, so a count would be a fiction.
+        minWrap.hidden = c.kind === 'serviceHealth';
+        minWrap.lastChild.textContent = c.counted;
+        if (minWrap.hidden) rule.condition.minCount = 1;
+      };
+      cond.addEventListener('change', syncCond);
+      syncCond();
+      const move = (delta) => {
+        const to = i + delta;
+        if (to < 0 || to >= s.indicators.length) return;
+        const [moved] = s.indicators.splice(i, 1);
+        s.indicators.splice(to, 0, moved);
+        render();
+      };
+      row.append(on, swatches,
+        h('div', { class: 'ind-rule-cond' }, name, cond, minWrap),
+        h('div', { class: 'ind-rule-actions' },
+          h('button', { class: 'btn btn-sm', type: 'button', 'aria-label': 'Move up', title: 'Move up', disabled: i === 0, onclick: () => move(-1) }, '↑'),
+          h('button', { class: 'btn btn-sm', type: 'button', 'aria-label': 'Move down', title: 'Move down', disabled: i === s.indicators.length - 1, onclick: () => move(1) }, '↓'),
+          h('button', { class: 'btn btn-sm btn-danger', type: 'button', 'aria-label': `Remove ${rule.name || 'indicator'}`, title: 'Remove', onclick: () => { s.indicators.splice(i, 1); render(); } }, icon('trash'))));
+      return row;
+    };
+
+    /** Take up the document the server sent back in place of the one edited
+     *  here, so the next edit starts from what is actually stored. */
+    function adopt() {
+      s = state.settings;
+      if (!Array.isArray(s.indicators)) s.indicators = [];
+    }
+
+    async function save(btn) {
+      for (const r of s.indicators) { if (!r.id) r.id = newId(); if (!String(r.name || '').trim()) r.name = 'Indicator'; }
+      await saveSettings(btn);
+      adopt();
+      // Relight the header at once; otherwise the author of the rule waits
+      // for the next configuration update to come down the stream.
+      window.dispatchEvent(new CustomEvent('gw:indicators-changed'));
+      render();
+    }
+
+    render();
+    return wrap;
   }
 
   /* ---------- Network access ---------- */
@@ -204,7 +401,7 @@ export async function mount(root, ctx) {
         h('p', { class: 'note' }, 'It still works, so nothing breaks on upgrade, and scripts using it keep going. Leave it empty once you have accounts.'),
         h('div', { class: 'form-grid' }, field({ label: 'Access password', input: h('div', { class: 'input-with-unit' }, pw, clearPw), help: 'Other devices are asked for it (any user name). This computer is not, unless you require a sign-in here as well.' })),
         h('hr', { class: 'divider' }), saveBar()),
-      h('section', { class: 'card' }, h('h2', null, 'Command-line alternative'), h('p', { class: 'note' }, 'You can also start the service with ', h('code', null, '--listen 0.0.0.0:8080'), ' (or set ', h('code', null, 'GWATCH_LISTEN'), ') to bind every interface regardless of this setting.')));
+      h('section', { class: 'card' }, h('h2', null, 'Command-line alternative'), h('p', { class: 'note' }, 'You can also start the service with ', h('code', null, '--listen 0.0.0.0:7230'), ' (or set ', h('code', null, 'GWATCH_LISTEN'), ') to bind every interface regardless of this setting.')));
   }
 
   /* ---------- Alerts ---------- */
@@ -468,6 +665,8 @@ export async function mount(root, ctx) {
         st.plan?.length ? h('ul', { class: 'note', style: { marginTop: '12px', paddingLeft: '18px' } }, st.plan.map((p) => h('li', null, p))) : null);
     };
     api.get('/api/retention/status').then(renderStatus).catch((e) => replace(statusBox, h('p', { class: 'note' }, e.message)));
+    const pathsBox = h('div', null, skeleton({ lines: 2 }));
+    loadDataPaths(pathsBox);
     state.panelRefresh = () => api.get('/api/retention/status').then(renderStatus).catch(() => {});
     return h('form', { class: 'stack', onsubmit: (e) => { e.preventDefault(); saveSettings(); } },
       h('section', { class: 'card' }, h('h2', null, 'History retention'), h('p', { class: 'lead' }, 'Recent data stays detailed; older data is summarised so the database never grows without limit. 0 = keep forever.'),
@@ -476,10 +675,28 @@ export async function mount(root, ctx) {
           f('rawDays', 'Keep every result for'), f('fiveMinDays', 'Keep 5-minute summaries for'), f('hourlyDays', 'Keep hourly summaries for'), f('dailyDays', 'Keep daily summaries for'), f('eventDays', 'Keep events for'),
           f('hostDays', 'Keep hardware readings for', 'Each reading is a whole snapshot of a machine rather than a single number, so these are kept for less time than check results.')),
         h('hr', { class: 'divider' }), saveBar()),
-      h('section', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', null, 'Current storage'), runBtn), statusBox));
+      h('section', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', null, 'Current storage'), runBtn), statusBox, h('hr', { class: 'divider' }), pathsBox));
   }
 
   function hcard(value, label, sub) { return h('div', { class: 'health-card' }, h('div', { class: 'hv' }, value), h('div', { class: 'hl' }, label), sub ? h('div', { class: 'hs' }, sub) : null); }
+
+  // dataPathsBlock shows where GWatch's files actually live, in a read-only
+  // monospace block. Used on both the Retention and Backups tabs, since that
+  // is where people go looking for "where is my data".
+  function dataPathsBlock(hl) {
+    const dl = h('dl', { class: 'kv' });
+    const row = (k, v) => { if (v) dl.append(h('dt', null, k), h('dd', { class: 'mono' }, v)); };
+    row('Data directory', hl.dataDir);
+    row('Database', hl.databasePath);
+    row('Key file', hl.keyPath);
+    row('Backups folder', hl.backupDir);
+    return h('div', { style: { marginTop: '10px' } }, dl,
+      h('p', { class: 'note', style: { marginTop: '8px' } },
+        'These are ordinary files on this computer’s own disk, in a permanent folder — never a temp directory the OS can clear on reboot or under disk pressure.'));
+  }
+  function loadDataPaths(box) {
+    api.get('/api/health').then((hl) => replace(box, dataPathsBlock(hl))).catch(() => clear(box));
+  }
 
   /* ---------- Maintenance ---------- */
   async function tabMaintenance() {
@@ -649,13 +866,16 @@ export async function mount(root, ctx) {
       done();
       load();
     } }, icon('save'), 'Save automatic backup settings');
+    const pathsBox = h('div', null, skeleton({ lines: 2 }));
+    loadDataPaths(pathsBox);
     const autoCard = h('section', { class: 'card' }, h('h2', null, 'Automatic backups'), h('p', { class: 'lead' }, 'Runs unattended in the background on the schedule below, using the same encrypted format as a manual backup. Archives older than the number to keep are deleted automatically.'),
       autoEnabled,
       h('div', { class: 'form-grid', style: { marginTop: '12px' } },
         autoInterval, autoKeep, h('div', { class: 'span-2' }, autoHist),
         field({ label: 'Password', input: autoPw, help: bk.password ? 'A password is already saved; leave blank to keep it.' : 'Backups are always encrypted, so a password is required to enable this.' }),
         field({ label: 'Confirm password', input: autoPw2 })),
-      h('div', { class: 'form-actions', style: { marginTop: '12px' } }, autoSaveBtn), nextLine);
+      h('div', { class: 'form-actions', style: { marginTop: '12px' } }, autoSaveBtn), nextLine,
+      h('hr', { class: 'divider' }), h('p', { class: 'lead' }, 'Where archives land, alongside the database itself:'), pathsBox);
     await load();
     state.panelRefresh = load;
     return h('div', { class: 'stack' }, statusLine, createCard, autoCard, listCard, restoreCard);

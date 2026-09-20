@@ -25,9 +25,9 @@ computer** already satisfies step 2-3; download the newest one instead.
 
 ## 2. Install GWatch on the new machine
 
-Follow the normal install steps for the platform (see the main
-[`README.md`](../README.md#install-on-windows) for Windows, or build/run the
-binary directly on Linux/macOS). Start the service once so it creates its data
+Follow the normal install steps for the platform: [`docs/INSTALL.md`](INSTALL.md)
+for Windows, or build/run the binary directly on Linux/macOS (see the main
+[`README.md`](../README.md#install)). Start the service once so it creates its data
 directory (`gwatch.db`, `logs/`, `backups/`) and finishes first-run setup, then
 open the web interface.
 
@@ -47,7 +47,7 @@ open the web interface.
 ### Via the API
 
 ```sh
-curl -sS -X POST http://127.0.0.1:8080/api/backups/restore \
+curl -sS -X POST http://127.0.0.1:7230/api/backups/restore \
   -F "file=@gwatch-backup-20260101-020000-full.gwbackup" \
   -F "password=your-backup-password" \
   -F "includeHistory=true"

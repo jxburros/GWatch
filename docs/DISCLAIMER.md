@@ -23,7 +23,7 @@ cross the wire in the clear unless you put a reverse proxy with TLS in front.
 
 **Binding to `0.0.0.0` exposes all of it.** Turning on Settings › Network
 access, checking the installer's "Allow other devices on my network" box, or
-passing `--listen 0.0.0.0:8080` makes every device on your LAN able to reach
+passing `--listen 0.0.0.0:7230` makes every device on your LAN able to reach
 GWatch. If you have not created an account by then, every device on your LAN is
 an administrator: it can read your entire network map, change checks, read your
 audit log, create a trigger that runs arbitrary commands on that machine, and

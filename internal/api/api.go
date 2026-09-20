@@ -8,17 +8,20 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"mime"
 	"net"
 	"net/http"
 	"path"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jxburros/GWatch/internal/auth"
 	"github.com/jxburros/GWatch/internal/backup"
 	"github.com/jxburros/GWatch/internal/checks"
+	"github.com/jxburros/GWatch/internal/discovery"
 	"github.com/jxburros/GWatch/internal/engine"
 	"github.com/jxburros/GWatch/internal/logging"
 	"github.com/jxburros/GWatch/internal/model"
@@ -44,6 +47,13 @@ type Server struct {
 	failLimiter *auth.Limiter
 	apiLimiter  *auth.Limiter
 
+	// discoveryJobs holds the subnet sweep in flight and the last one that
+	// finished. It lives here rather than in the store because a sweep is a
+	// question about the network as it is right now: an answer that survived a
+	// restart would be an answer about a network that has moved on.
+	discoveryJobs *discovery.Registry
+	discoveryOnce sync.Once
+
 	// routes records every pattern Handler() registered, so the authorization
 	// tests can prove the router and the policy table describe the same surface.
 	routes []routeSpec
@@ -64,6 +74,7 @@ func (s *Server) Handler() http.Handler {
 	if s.apiLimiter == nil {
 		s.apiLimiter = auth.NewLimiter(remoteRequestLimit, remoteRequestWindow)
 	}
+	s.discovery()
 
 	s.route(mux, "GET /api/health", s.handleHealth)
 	s.route(mux, "GET /api/status", s.handleStatus)
@@ -75,6 +86,7 @@ func (s *Server) Handler() http.Handler {
 
 	s.route(mux, "GET /api/nodes", s.handleListNodes)
 	s.route(mux, "POST /api/nodes", s.handleCreateNode)
+	s.route(mux, "PATCH /api/nodes/bulk", s.handleBulkUpdateNodes)
 	s.route(mux, "GET /api/nodes/{id}", s.handleGetNode)
 	s.route(mux, "PUT /api/nodes/{id}", s.handleUpdateNode)
 	s.route(mux, "DELETE /api/nodes/{id}", s.handleDeleteNode)
@@ -85,12 +97,20 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "GET /api/templates", s.handleTemplates)
 	s.route(mux, "GET /api/groups", s.handleGroups)
 
+	s.route(mux, "GET /api/discovery", s.handleLatestDiscovery)
+	s.route(mux, "POST /api/discovery", s.handleStartDiscovery)
+	s.route(mux, "GET /api/discovery/{id}", s.handleGetDiscovery)
+	s.route(mux, "POST /api/discovery/{id}/cancel", s.handleCancelDiscovery)
+	s.route(mux, "POST /api/discovery/{id}/add", s.handleAddFromDiscovery)
+
 	s.route(mux, "POST /api/checks/test", s.handleTestCheck)
 	s.route(mux, "POST /api/checks/{id}/run", s.handleRunCheck)
 	s.route(mux, "POST /api/checks/{id}/enable", s.handleEnableCheck)
 	s.route(mux, "POST /api/checks/{id}/silence", s.handleSilenceCheck)
 	s.route(mux, "GET /api/checks/{id}/results", s.handleCheckResults)
 	s.route(mux, "GET /api/checks/{id}/state", s.handleCheckState)
+
+	s.route(mux, "POST /api/snmp/walk", s.handleSNMPWalk)
 
 	s.route(mux, "GET /api/history", s.handleHistory)
 	s.route(mux, "GET /api/history/multi", s.handleHistoryMulti)
@@ -208,7 +228,7 @@ func (s *Server) Handler() http.Handler {
 	if s.Web != nil {
 		mux.Handle("/", s.staticHandler())
 	}
-	return versionAlias(noCache(s.accessControl(mux)))
+	return securityHeaders(versionAlias(noCache(s.accessControl(mux))))
 }
 
 func isLoopbackRemote(addr string) bool {
@@ -218,6 +238,65 @@ func isLoopbackRemote(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// contentSecurityPolicy is the policy every response carries. GWatch serves
+// its own bundle and talks to nothing but itself, so each source list is
+// 'self' and the few exceptions are named one at a time:
+//
+//   - img-src also allows data: for the one inline SVG in app.css (the select
+//     arrow) and blob: for a chart exported as a PNG.
+//   - style-src is plain 'self': the markup carries no style attributes (the
+//     sidebar's stagger index moved into app.css for exactly this reason),
+//     and the interface sets styles through the CSSOM, which the policy does
+//     not govern.
+//   - script-src needs no hash or nonce: what used to be inline in index.html
+//     now lives in boot.js and entry.js.
+//
+// frame-ancestors is filled in per request by securityHeaders.
+const contentSecurityPolicy = "default-src 'self'; " +
+	"script-src 'self'; " +
+	"style-src 'self'; " +
+	"img-src 'self' data: blob:; " +
+	"font-src 'self'; " +
+	"connect-src 'self'; " +
+	"base-uri 'none'; " +
+	"object-src 'none'; " +
+	"form-action 'self'; " +
+	"frame-ancestors "
+
+// securityHeaders puts the response headers a browser needs in order to hold
+// GWatch to its own origin on every response, static assets included.
+//
+// The wallboard is the one page allowed into someone else's frame. It is
+// read-only, it is reached with a board's own share token rather than with
+// whatever credential the viewer happens to hold, and putting one in a Home
+// Assistant dashboard is a thing people actually do. Framing it therefore
+// costs nothing that clickjacking could take. Every other page — the
+// application, where a click does change something — refuses to be framed at
+// all, and says so twice: X-Frame-Options for browsers that predate
+// frame-ancestors, and frame-ancestors for the rest.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		if isWallboardPage(r.URL.Path) {
+			h.Set("Content-Security-Policy", contentSecurityPolicy+"*")
+		} else {
+			h.Set("Content-Security-Policy", contentSecurityPolicy+"'none'")
+			h.Set("X-Frame-Options", "DENY")
+		}
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "same-origin")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// isWallboardPage reports whether a path addresses the projected wallboard.
+// It recognises the same spellings staticHandler does, and is applied to the
+// path as it arrived, before that rewrite.
+func isWallboardPage(p string) bool {
+	p = path.Clean(p)
+	return p == "/wall" || p == "/wall.html"
 }
 
 func noCache(next http.Handler) http.Handler {
@@ -286,7 +365,59 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 	}
 }
 
+// decodeError is a body that could not be read, carrying the status it should
+// be answered with. A malformed document is a 400 as it always was; a body in
+// some other format entirely is a 415, and only the error knows which of the
+// two happened. Handlers pass it to writeDecodeError rather than deciding.
+type decodeError struct {
+	status int
+	msg    string
+}
+
+func (e *decodeError) Error() string { return e.msg }
+
+// writeDecodeError answers a request whose body could not be read.
+func writeDecodeError(w http.ResponseWriter, err error) {
+	var de *decodeError
+	if errors.As(err, &de) {
+		writeError(w, de.status, de.msg)
+		return
+	}
+	writeError(w, http.StatusBadRequest, err.Error())
+}
+
+// requireJSONBody refuses a body that is not announced as JSON.
+//
+// Without this, a form post from another website — which a browser will send
+// cross-origin with no preflight, because text/plain, form-urlencoded and
+// multipart are "simple" content types — is indistinguishable from the UI's
+// own fetch() once it reaches a handler. Demanding a JSON content type puts
+// every write behind a preflight the other site cannot pass. An empty body
+// with no content type is still allowed: a handler that treats a missing body
+// as "nothing to change" is not being asked to parse anything.
+func requireJSONBody(r *http.Request) error {
+	ct := strings.TrimSpace(r.Header.Get("Content-Type"))
+	if ct == "" {
+		if r.ContentLength == 0 {
+			return nil
+		}
+		return &decodeError{http.StatusUnsupportedMediaType, "this endpoint needs a Content-Type of application/json"}
+	}
+	mediaType, _, err := mime.ParseMediaType(ct)
+	if err != nil {
+		return &decodeError{http.StatusUnsupportedMediaType, "unreadable Content-Type; this endpoint needs application/json"}
+	}
+	mediaType = strings.ToLower(mediaType)
+	if mediaType == "application/json" || strings.HasSuffix(mediaType, "+json") {
+		return nil
+	}
+	return &decodeError{http.StatusUnsupportedMediaType, fmt.Sprintf("this endpoint needs a Content-Type of application/json, not %s", mediaType)}
+}
+
 func decodeJSON(r *http.Request, v any) error {
+	if err := requireJSONBody(r); err != nil {
+		return err
+	}
 	dec := json.NewDecoder(io.LimitReader(r.Body, 4<<20))
 	if err := dec.Decode(v); err != nil {
 		return fmt.Errorf("invalid JSON body: %w", err)
@@ -298,6 +429,11 @@ func decodeJSON(r *http.Request, v any) error {
 // and for every check when the field is omitted (JSON would otherwise make
 // them false).
 func decodeNode(r *http.Request) (model.Node, error) {
+	// This one reads the body itself rather than going through decodeJSON, so
+	// it has to insist on the content type itself too.
+	if err := requireJSONBody(r); err != nil {
+		return model.Node{}, err
+	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
 	if err != nil {
 		return model.Node{}, fmt.Errorf("invalid JSON body: %w", err)
@@ -390,7 +526,25 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, ov)
+	writeJSON(w, http.StatusOK, maskOverview(ov))
+}
+
+// maskOverview hides the checks' credentials in the overview, which every
+// viewer and every read-only API key may read.
+func maskOverview(ov engine.Overview) engine.Overview {
+	nodes := make([]engine.NodeView, len(ov.Nodes))
+	copy(nodes, ov.Nodes)
+	for i := range nodes {
+		nodes[i].Node = maskNodeChecks(nodes[i].Node)
+		views := make([]engine.CheckView, len(nodes[i].Checks))
+		copy(views, nodes[i].Checks)
+		for j := range views {
+			views[j].Check = maskCheck(views[j].Check)
+		}
+		nodes[i].Checks = views
+	}
+	ov.Nodes = nodes
+	return ov
 }
 
 type wallboardDoc struct {
@@ -405,7 +559,7 @@ func (s *Server) handleWallboard(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	doc := wallboardDoc{Overview: ov, Health: s.Engine.Health(r.Context()), Trends: []model.HistorySeries{}}
+	doc := wallboardDoc{Overview: maskOverview(ov), Health: s.Engine.Health(r.Context()), Trends: []model.HistorySeries{}}
 	rng, _ := store.ParseRange("24h")
 	for _, c := range autoChecks(ov, 6) {
 		series, err := s.Store.History(r.Context(), c.check, c.node.Name, rng, time.Now())
@@ -474,7 +628,66 @@ type nodeDoc struct {
 	InMaintenance bool                       `json:"inMaintenance"`
 }
 
+// checkSecretFields points at the credentials inside a check configuration.
+// They are masked on the way out and restored on the way in, the same way the
+// settings screen handles the SMTP password, so that reading a node — which
+// any viewer and any read-only API key may do — never hands out a community
+// string, an SNMP v3 password or a metrics token.
+func checkSecretFields(cfg *model.CheckConfig) []*string {
+	return []*string{&cfg.MetricsToken, &cfg.SNMPCommunity, &cfg.SNMPAuthPass, &cfg.SNMPPrivPass}
+}
+
+// maskNodeChecks returns the node with its checks' credentials replaced by the
+// mask. The checks are copied first: the caller's slice comes from the store
+// or the engine and must keep the values the runners need.
+func maskNodeChecks(n model.Node) model.Node {
+	if len(n.Checks) == 0 {
+		return n
+	}
+	checks := make([]model.Check, len(n.Checks))
+	copy(checks, n.Checks)
+	for i := range checks {
+		checks[i] = maskCheck(checks[i])
+	}
+	n.Checks = checks
+	return n
+}
+
+func maskCheck(c model.Check) model.Check {
+	for _, field := range checkSecretFields(&c.Config) {
+		if *field != "" {
+			*field = passwordMask
+		}
+	}
+	return c
+}
+
+// restoreCheckSecrets puts back the credentials of an incoming node's checks
+// when the editor sent them masked or blank, which is what "leave blank to
+// keep the stored value" means on the wire. A check the caller has not saved
+// before has nothing to restore from.
+func restoreCheckSecrets(n *model.Node, existing model.Node) {
+	stored := map[int64]model.CheckConfig{}
+	for _, c := range existing.Checks {
+		stored[c.ID] = c.Config
+	}
+	for i := range n.Checks {
+		prev, ok := stored[n.Checks[i].ID]
+		if !ok {
+			continue
+		}
+		before := checkSecretFields(&prev)
+		now := checkSecretFields(&n.Checks[i].Config)
+		for j := range now {
+			if *now[j] == "" || *now[j] == passwordMask {
+				*now[j] = *before[j]
+			}
+		}
+	}
+}
+
 func (s *Server) decorateNode(n model.Node, states map[int64]model.CheckState, last map[int64]model.Result) nodeDoc {
+	n = maskNodeChecks(n)
 	doc := nodeDoc{Node: n, StateByCheck: map[int64]model.CheckState{}}
 	for _, c := range n.Checks {
 		if st, ok := states[c.ID]; ok {
@@ -528,12 +741,31 @@ func (s *Server) handleGetNode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.decorateNode(n, s.Engine.States(), last))
 }
 
+// normalizeTags cleans a tag list: blanks go, surrounding space goes, and two
+// tags that differ only in case are one tag under the spelling first given.
+// The bulk-edit path applies the same rule, so a tag added to thirty nodes at
+// once reads the same as one typed into the editor.
+func normalizeTags(tags []string) []string {
+	out := make([]string, 0, len(tags))
+	seen := map[string]bool{}
+	for _, t := range tags {
+		t = strings.TrimSpace(t)
+		if t != "" && !seen[strings.ToLower(t)] {
+			seen[strings.ToLower(t)] = true
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // normalizeNode validates and fills defaults on a node and its checks.
 func (s *Server) normalizeNode(n *model.Node) error {
 	settings := s.Engine.Settings()
 	n.Name = strings.TrimSpace(n.Name)
 	n.Host = strings.TrimSpace(n.Host)
-	n.Group = strings.TrimSpace(n.Group)
+	// A body may carry groups, the older single group, or both; SyncGroups
+	// settles which wins and leaves the two fields agreeing with each other.
+	n.SyncGroups()
 	if n.Name == "" {
 		return fmt.Errorf("name is required")
 	}
@@ -545,16 +777,7 @@ func (s *Server) normalizeNode(n *model.Node) error {
 	default:
 		return fmt.Errorf("invalid importance %q", n.Importance)
 	}
-	tags := make([]string, 0, len(n.Tags))
-	seen := map[string]bool{}
-	for _, t := range n.Tags {
-		t = strings.TrimSpace(t)
-		if t != "" && !seen[strings.ToLower(t)] {
-			seen[strings.ToLower(t)] = true
-			tags = append(tags, t)
-		}
-	}
-	n.Tags = tags
+	n.Tags = normalizeTags(n.Tags)
 	if n.DependsOnNode != nil && (*n.DependsOnNode <= 0 || *n.DependsOnNode == n.ID) {
 		n.DependsOnNode = nil
 	}
@@ -598,6 +821,29 @@ func (s *Server) normalizeNode(n *model.Node) error {
 				c.Config.LoadWarnPerCore = d.LoadWarnPerCore
 			}
 		}
+		if c.Type == model.CheckSNMP {
+			// Version and port are what every device answers on unless it was
+			// deliberately changed, so a check saved without them is filled in
+			// rather than refused.
+			if strings.TrimSpace(c.Config.SNMPVersion) == "" {
+				c.Config.SNMPVersion = "2c"
+			}
+			if c.Config.SNMPPort == 0 {
+				c.Config.SNMPPort = 161
+			}
+			for i := range c.Config.SNMPOIDs {
+				o := &c.Config.SNMPOIDs[i]
+				o.OID = strings.TrimSpace(o.OID)
+				o.Name = strings.TrimSpace(o.Name)
+				o.Kind = strings.ToLower(strings.TrimSpace(o.Kind))
+				if o.Kind == "" {
+					o.Kind = "gauge"
+				}
+				if o.Scale == 0 {
+					o.Scale = 1
+				}
+			}
+		}
 		if c.FailureThreshold < 0 {
 			c.FailureThreshold = 0
 		}
@@ -611,10 +857,19 @@ func (s *Server) normalizeNode(n *model.Node) error {
 func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 	n, err := decodeNode(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	n.ID = 0
+	for i := range n.Checks {
+		// A new node's checks are new too, so a masked credential here came
+		// from a duplicated node rather than from something stored.
+		for _, field := range checkSecretFields(&n.Checks[i].Config) {
+			if *field == passwordMask {
+				*field = ""
+			}
+		}
+	}
 	if err := s.normalizeNode(&n); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -670,10 +925,11 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 	}
 	n, err := decodeNode(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	n.ID = id
+	restoreCheckSecrets(&n, existing)
 	if err := s.normalizeNode(&n); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -689,6 +945,11 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	for _, id := range deleted {
+		// Drop the in-memory state of a check that no longer exists, so a
+		// later check handed the same id cannot inherit its counter reading.
+		checks.ForgetCheck(id)
+	}
 	detail := describeNodeChange(existing, updated, len(deleted))
 	s.configChanged(r.Context(), &updated, fmt.Sprintf("Updated node %s", updated.Name), detail)
 	writeJSON(w, http.StatusOK, s.decorateNode(updated, s.Engine.States(), nil))
@@ -702,8 +963,8 @@ func describeNodeChange(before, after model.Node, deletedChecks int) string {
 	if before.Host != after.Host {
 		parts = append(parts, fmt.Sprintf("host %s → %s", before.Host, after.Host))
 	}
-	if before.Group != after.Group {
-		parts = append(parts, fmt.Sprintf("group %q → %q", before.Group, after.Group))
+	if beforeGroups, afterGroups := strings.Join(before.GroupList(), ", "), strings.Join(after.GroupList(), ", "); beforeGroups != afterGroups {
+		parts = append(parts, fmt.Sprintf("groups %q → %q", beforeGroups, afterGroups))
 	}
 	if before.Enabled != after.Enabled {
 		parts = append(parts, map[bool]string{true: "enabled", false: "disabled"}[after.Enabled])
@@ -766,6 +1027,9 @@ func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	for _, c := range n.Checks {
+		checks.ForgetCheck(c.ID)
+	}
 	s.configChanged(r.Context(), nil, fmt.Sprintf("Deleted node %s", n.Name), fmt.Sprintf("Removed %d check(s) and their history.", len(n.Checks)))
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
@@ -780,7 +1044,7 @@ func (s *Server) handleEnableNode(w http.ResponseWriter, r *http.Request) {
 		Enabled bool `json:"enabled"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	if err := s.Store.SetNodeEnabled(r.Context(), id, body.Enabled); err != nil {
@@ -847,7 +1111,7 @@ func (s *Server) handleSilenceNode(w http.ResponseWriter, r *http.Request) {
 		Minutes int `json:"minutes"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	n, err := s.Store.GetNode(r.Context(), id)
@@ -906,7 +1170,7 @@ func (s *Server) handleTestCheck(w http.ResponseWriter, r *http.Request) {
 		NodeHost string      `json:"nodeHost"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	settings := s.Engine.Settings()
@@ -919,6 +1183,21 @@ func (s *Server) handleTestCheck(w http.ResponseWriter, r *http.Request) {
 	if !body.Check.Type.Valid() {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("unsupported check type %q", body.Check.Type))
 		return
+	}
+	// The editor never holds the credentials of a saved check, so testing one
+	// straight after opening it sends them masked or blank. Fill them back in
+	// from the stored check, or the test would fail for a reason that has
+	// nothing to do with the device.
+	if body.Check.ID != 0 {
+		if stored, err := s.Store.GetCheck(r.Context(), body.Check.ID); err == nil {
+			before := checkSecretFields(&stored.Config)
+			now := checkSecretFields(&body.Check.Config)
+			for i := range now {
+				if *now[i] == "" || *now[i] == passwordMask {
+					*now[i] = *before[i]
+				}
+			}
+		}
 	}
 	if err := checks.Validate(body.Check, body.NodeHost); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -955,7 +1234,7 @@ func (s *Server) handleEnableCheck(w http.ResponseWriter, r *http.Request) {
 		Enabled bool `json:"enabled"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	if err := s.Store.SetCheckEnabled(r.Context(), id, body.Enabled); err != nil {
@@ -982,7 +1261,7 @@ func (s *Server) handleSilenceCheck(w http.ResponseWriter, r *http.Request) {
 		Minutes int `json:"minutes"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	st, err := s.Engine.Silence(r.Context(), id, time.Duration(body.Minutes)*time.Minute)
@@ -1023,7 +1302,9 @@ func (s *Server) handleCheckState(w http.ResponseWriter, r *http.Request) {
 
 // ---- history ----
 
-func (s *Server) historyFor(ctx context.Context, checkID int64, rangeName string) (model.HistorySeries, error) {
+// historyFor builds one check's series. A metric name asks for one of the
+// check's own measurements (an SNMP check's OIDs) instead of its latency.
+func (s *Server) historyFor(ctx context.Context, checkID int64, rangeName, metric string) (model.HistorySeries, error) {
 	rng, err := store.ParseRange(rangeName)
 	if err != nil {
 		return model.HistorySeries{}, err
@@ -1036,7 +1317,25 @@ func (s *Server) historyFor(ctx context.Context, checkID int64, rangeName string
 	if err != nil {
 		return model.HistorySeries{}, err
 	}
+	if metric = strings.TrimSpace(metric); metric != "" {
+		if !checkHasMetric(c, metric) {
+			return model.HistorySeries{}, fmt.Errorf("check %d does not measure %q", checkID, metric)
+		}
+		return s.Store.HistoryMetric(ctx, c, n.Name, rng, time.Now(), metric)
+	}
 	return s.Store.History(ctx, c, n.Name, rng, time.Now())
+}
+
+// checkHasMetric reports whether a check is configured to measure a named
+// metric. Asking is what keeps /api/history from turning into a way to probe
+// for arbitrary names in stored results.
+func checkHasMetric(c model.Check, metric string) bool {
+	for _, o := range c.Config.SNMPOIDs {
+		if o.Name == metric {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
@@ -1054,7 +1353,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid checkId")
 		return
 	}
-	series, err := s.historyFor(r.Context(), id, r.URL.Query().Get("range"))
+	series, err := s.historyFor(r.Context(), id, r.URL.Query().Get("range"), r.URL.Query().Get("metric"))
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			s.fail(w, err)
@@ -1084,7 +1383,7 @@ func (s *Server) handleHistoryMulti(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		series, err := s.historyFor(r.Context(), id, r.URL.Query().Get("range"))
+		series, err := s.historyFor(r.Context(), id, r.URL.Query().Get("range"), r.URL.Query().Get("metric"))
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				continue
@@ -1114,7 +1413,7 @@ func (s *Server) handleNote(w http.ResponseWriter, r *http.Request) {
 		Text   string `json:"text"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	body.Text = strings.TrimSpace(body.Text)

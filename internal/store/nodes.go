@@ -13,20 +13,26 @@ import (
 	"github.com/jxburros/GWatch/internal/secrets"
 )
 
-const nodeCols = `id, name, host, group_name, tags, notes, importance, enabled, depends_on_node_id, template, created_at, updated_at`
+// group_name holds the node's first group. It stays in the row next to the
+// groups list because older binaries and the existing indexes still read it.
+const nodeCols = `id, name, host, group_name, "groups", tags, notes, importance, enabled, depends_on_node_id, template, created_at, updated_at`
 
 func scanNode(sc interface{ Scan(...any) error }) (model.Node, error) {
 	var n model.Node
-	var tags, created, updated string
+	var groups, tags, created, updated string
 	var enabled int
 	var dep sql.NullInt64
-	if err := sc.Scan(&n.ID, &n.Name, &n.Host, &n.Group, &tags, &n.Notes, &n.Importance, &enabled, &dep, &n.Template, &created, &updated); err != nil {
+	if err := sc.Scan(&n.ID, &n.Name, &n.Host, &n.Group, &groups, &tags, &n.Notes, &n.Importance, &enabled, &dep, &n.Template, &created, &updated); err != nil {
 		return n, err
 	}
 	n.Enabled = enabled == 1
 	n.DependsOnNode = int64Ptr(dep)
 	n.CreatedAt = mustTime(created)
 	n.UpdatedAt = mustTime(updated)
+	_ = json.Unmarshal([]byte(groups), &n.Groups)
+	// A row written before the groups column existed still says what it meant
+	// through group_name, and SyncGroups reads it that way.
+	n.SyncGroups()
 	_ = json.Unmarshal([]byte(tags), &n.Tags)
 	if n.Tags == nil {
 		n.Tags = []string{}
@@ -92,6 +98,7 @@ func (s *Store) GetNode(ctx context.Context, id int64) (model.Node, error) {
 func (s *Store) CreateNode(ctx context.Context, n model.Node) (model.Node, error) {
 	now := time.Now()
 	n.CreatedAt, n.UpdatedAt = now, now
+	n.SyncGroups()
 	if n.Tags == nil {
 		n.Tags = []string{}
 	}
@@ -99,9 +106,9 @@ func (s *Store) CreateNode(ctx context.Context, n model.Node) (model.Node, error
 		n.Importance = model.ImportanceNormal
 	}
 	err := s.WriteTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `INSERT INTO nodes(name, host, group_name, tags, notes, importance, enabled, depends_on_node_id, template, created_at, updated_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			n.Name, n.Host, n.Group, jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), n.Template, fmtTime(now), fmtTime(now))
+		res, err := tx.ExecContext(ctx, `INSERT INTO nodes(name, host, group_name, "groups", tags, notes, importance, enabled, depends_on_node_id, template, created_at, updated_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+			n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), n.Template, fmtTime(now), fmtTime(now))
 		if err != nil {
 			return err
 		}
@@ -112,7 +119,7 @@ func (s *Store) CreateNode(ctx context.Context, n model.Node) (model.Node, error
 			if n.Checks[i].SortOrder == 0 {
 				n.Checks[i].SortOrder = i
 			}
-			c, err := insertCheck(ctx, tx, n.Checks[i])
+			c, err := s.insertCheck(ctx, tx, n.Checks[i])
 			if err != nil {
 				return err
 			}
@@ -129,6 +136,7 @@ func (s *Store) CreateNode(ctx context.Context, n model.Node) (model.Node, error
 func (s *Store) UpdateNode(ctx context.Context, n model.Node) (model.Node, []int64, error) {
 	now := time.Now()
 	n.UpdatedAt = now
+	n.SyncGroups()
 	if n.Tags == nil {
 		n.Tags = []string{}
 	}
@@ -140,8 +148,8 @@ func (s *Store) UpdateNode(ctx context.Context, n model.Node) (model.Node, []int
 	}
 	var deleted []int64
 	err := s.WriteTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `UPDATE nodes SET name=?, host=?, group_name=?, tags=?, notes=?, importance=?, enabled=?, depends_on_node_id=?, template=?, updated_at=? WHERE id=?`,
-			n.Name, n.Host, n.Group, jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), n.Template, fmtTime(now), n.ID)
+		res, err := tx.ExecContext(ctx, `UPDATE nodes SET name=?, host=?, group_name=?, "groups"=?, tags=?, notes=?, importance=?, enabled=?, depends_on_node_id=?, template=?, updated_at=? WHERE id=?`,
+			n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), n.Template, fmtTime(now), n.ID)
 		if err != nil {
 			return err
 		}
@@ -168,10 +176,10 @@ func (s *Store) UpdateNode(ctx context.Context, n model.Node) (model.Node, []int
 			c.NodeID = n.ID
 			c.SortOrder = i
 			if c.ID != 0 && existing[c.ID] {
-				c, err = updateCheck(ctx, tx, c)
+				c, err = s.updateCheck(ctx, tx, c)
 			} else {
 				c.ID = 0
-				c, err = insertCheck(ctx, tx, c)
+				c, err = s.insertCheck(ctx, tx, c)
 			}
 			if err != nil {
 				return err
@@ -216,7 +224,9 @@ func (s *Store) DeleteNode(ctx context.Context, id int64) error {
 	return nil
 }
 
-// GroupCounts returns groups and tags with node counts.
+// GroupCounts returns groups and tags with node counts. A node that belongs to
+// several groups is counted once in each of them, so the group counts can add
+// up to more than the number of nodes.
 func (s *Store) GroupCounts(ctx context.Context) (groups map[string]int, tags map[string]int, err error) {
 	nodes, err := s.ListNodes(ctx)
 	if err != nil {
@@ -225,8 +235,10 @@ func (s *Store) GroupCounts(ctx context.Context) (groups map[string]int, tags ma
 	groups = map[string]int{}
 	tags = map[string]int{}
 	for _, n := range nodes {
-		if g := strings.TrimSpace(n.Group); g != "" {
-			groups[g]++
+		for _, g := range n.GroupList() {
+			if g = strings.TrimSpace(g); g != "" {
+				groups[g]++
+			}
 		}
 		for _, t := range n.Tags {
 			if t = strings.TrimSpace(t); t != "" {
@@ -237,11 +249,126 @@ func (s *Store) GroupCounts(ctx context.Context) (groups map[string]int, tags ma
 	return groups, tags, nil
 }
 
+// ---- bulk editing ----
+
+// BulkResult counts what a BulkUpdate wrote.
+type BulkResult struct {
+	Nodes  int `json:"nodes"`
+	Checks int `json:"checks"`
+}
+
+// BulkUpdate rewrites a set of node rows and a set of check rows in one
+// transaction. The caller hands over whole records it has already merged and
+// validated — the store's job here is atomicity, not interpretation.
+//
+// All or nothing is the point. A bulk edit that half applied would leave the
+// person guessing which of the thirty nodes they just changed actually took
+// the new interval, and there is nothing on the screen that could tell them.
+// So a row that has gone missing since the caller read it fails the whole
+// batch, and nothing is written.
+//
+// Only a node's own columns are touched and its Checks field is ignored, so a
+// bulk edit can never add, rename or remove a check as a side effect.
+func (s *Store) BulkUpdate(ctx context.Context, nodes []model.Node, checks []model.Check) (BulkResult, error) {
+	if len(nodes) == 0 && len(checks) == 0 {
+		return BulkResult{}, nil
+	}
+	now := time.Now()
+	res := BulkResult{}
+	err := s.WriteTx(ctx, func(tx *sql.Tx) error {
+		res = BulkResult{}
+		for _, n := range nodes {
+			n.SyncGroups()
+			if n.Tags == nil {
+				n.Tags = []string{}
+			}
+			if n.Importance == "" {
+				n.Importance = model.ImportanceNormal
+			}
+			if n.DependsOnNode != nil && *n.DependsOnNode == n.ID {
+				n.DependsOnNode = nil
+			}
+			out, err := tx.ExecContext(ctx, `UPDATE nodes SET group_name=?, "groups"=?, tags=?, importance=?, enabled=?, depends_on_node_id=?, updated_at=? WHERE id=?`,
+				n.Group, jsonString(n.Groups), jsonString(n.Tags), string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), fmtTime(now), n.ID)
+			if err != nil {
+				return err
+			}
+			if affected, _ := out.RowsAffected(); affected == 0 {
+				return fmt.Errorf("node %d: %w", n.ID, ErrNotFound)
+			}
+			res.Nodes++
+		}
+		for _, c := range checks {
+			if _, err := s.updateCheck(ctx, tx, c); err != nil {
+				return fmt.Errorf("check %d: %w", c.ID, err)
+			}
+			res.Checks++
+		}
+		return nil
+	})
+	if err != nil {
+		return BulkResult{}, err
+	}
+	return res, nil
+}
+
 // ---- checks ----
 
 const checkCols = `id, node_id, type, name, enabled, interval_seconds, timeout_seconds, retries, failure_threshold, config, alerts, sort_order, created_at, updated_at`
 
-func scanCheck(sc interface{ Scan(...any) error }) (model.Check, error) {
+// checkSecrets points at the fields of a check configuration that are
+// credentials rather than settings. They are sealed with the same machine
+// key as the settings document, so a copy of gwatch.db carries no readable
+// community string, SNMP v3 password or metrics token.
+//
+// Request headers are deliberately not in this list: they are free-form
+// key/value pairs the editor shows back as typed, and sealing some of them by
+// guessing at their names would be worse than saying plainly (as docs/API.md
+// does) that a header is stored as written.
+func checkSecrets(cfg *model.CheckConfig) []*string {
+	return []*string{&cfg.MetricsToken, &cfg.SNMPCommunity, &cfg.SNMPAuthPass, &cfg.SNMPPrivPass}
+}
+
+// sealCheckConfig encrypts a check's secret fields in place. A value that is
+// already sealed is left alone, so re-saving an untouched check does not
+// re-encrypt it.
+func (s *Store) sealCheckConfig(cfg *model.CheckConfig) error {
+	for _, field := range checkSecrets(cfg) {
+		if *field == "" || secrets.IsSealed(*field) {
+			continue
+		}
+		v, err := s.secrets.Seal(*field)
+		if err != nil {
+			return fmt.Errorf("seal check secret: %w", err)
+		}
+		*field = v
+	}
+	return nil
+}
+
+// openCheckConfig decrypts a check's secret fields in place. Values written
+// before sealing existed are not sealed and come back unchanged; one that
+// cannot be decrypted (a replaced key file) is emptied rather than failing
+// the whole load, and the reason is reported by SecretsHealthy.
+func (s *Store) openCheckConfig(cfg *model.CheckConfig) {
+	var firstErr error
+	for _, field := range checkSecrets(cfg) {
+		v, err := s.secrets.Open(*field)
+		if err != nil {
+			*field = ""
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		*field = v
+	}
+	if firstErr != nil {
+		s.setSecretsErr(fmt.Errorf("check configuration: %w", firstErr))
+	}
+}
+
+func (s *Store) scanCheck(sc interface{ Scan(...any) error }) (model.Check, error) {
 	var c model.Check
 	var enabled int
 	var cfg, created, updated string
@@ -251,6 +378,7 @@ func scanCheck(sc interface{ Scan(...any) error }) (model.Check, error) {
 	}
 	c.Enabled = enabled == 1
 	_ = json.Unmarshal([]byte(cfg), &c.Config)
+	s.openCheckConfig(&c.Config)
 	if alerts.Valid && alerts.String != "" && alerts.String != "null" {
 		var a model.AlertOverride
 		if err := json.Unmarshal([]byte(alerts.String), &a); err == nil {
@@ -262,16 +390,23 @@ func scanCheck(sc interface{ Scan(...any) error }) (model.Check, error) {
 	return c, nil
 }
 
-func insertCheck(ctx context.Context, tx *sql.Tx, c model.Check) (model.Check, error) {
+func (s *Store) insertCheck(ctx context.Context, tx *sql.Tx, c model.Check) (model.Check, error) {
 	now := time.Now()
 	c.CreatedAt, c.UpdatedAt = now, now
 	var alerts any
 	if c.Alerts != nil {
 		alerts = jsonString(c.Alerts)
 	}
+	// The row is written with sealed secrets while the check that is returned
+	// to the caller keeps the plaintext it was given: the engine has to be
+	// able to run it.
+	stored := c.Config
+	if err := s.sealCheckConfig(&stored); err != nil {
+		return c, err
+	}
 	res, err := tx.ExecContext(ctx, `INSERT INTO checks(node_id, type, name, enabled, interval_seconds, timeout_seconds, retries, failure_threshold, config, alerts, sort_order, created_at, updated_at)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		c.NodeID, string(c.Type), c.Name, boolInt(c.Enabled), c.IntervalSeconds, c.TimeoutSeconds, c.Retries, c.FailureThreshold, jsonString(c.Config), alerts, c.SortOrder, fmtTime(now), fmtTime(now))
+		c.NodeID, string(c.Type), c.Name, boolInt(c.Enabled), c.IntervalSeconds, c.TimeoutSeconds, c.Retries, c.FailureThreshold, jsonString(stored), alerts, c.SortOrder, fmtTime(now), fmtTime(now))
 	if err != nil {
 		return c, err
 	}
@@ -280,17 +415,27 @@ func insertCheck(ctx context.Context, tx *sql.Tx, c model.Check) (model.Check, e
 	return c, err
 }
 
-func updateCheck(ctx context.Context, tx *sql.Tx, c model.Check) (model.Check, error) {
+func (s *Store) updateCheck(ctx context.Context, tx *sql.Tx, c model.Check) (model.Check, error) {
 	now := time.Now()
 	c.UpdatedAt = now
 	var alerts any
 	if c.Alerts != nil {
 		alerts = jsonString(c.Alerts)
 	}
-	_, err := tx.ExecContext(ctx, `UPDATE checks SET node_id=?, type=?, name=?, enabled=?, interval_seconds=?, timeout_seconds=?, retries=?, failure_threshold=?, config=?, alerts=?, sort_order=?, updated_at=? WHERE id=?`,
-		c.NodeID, string(c.Type), c.Name, boolInt(c.Enabled), c.IntervalSeconds, c.TimeoutSeconds, c.Retries, c.FailureThreshold, jsonString(c.Config), alerts, c.SortOrder, fmtTime(now), c.ID)
+	stored := c.Config
+	if err := s.sealCheckConfig(&stored); err != nil {
+		return c, err
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE checks SET node_id=?, type=?, name=?, enabled=?, interval_seconds=?, timeout_seconds=?, retries=?, failure_threshold=?, config=?, alerts=?, sort_order=?, updated_at=? WHERE id=?`,
+		c.NodeID, string(c.Type), c.Name, boolInt(c.Enabled), c.IntervalSeconds, c.TimeoutSeconds, c.Retries, c.FailureThreshold, jsonString(stored), alerts, c.SortOrder, fmtTime(now), c.ID)
 	if err != nil {
 		return c, err
+	}
+	// A caller that names a check which is no longer there gets told so rather
+	// than a silent no-op; UpdateNode only ever updates ids it has just read
+	// back, so this is the bulk path speaking.
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		return c, ErrNotFound
 	}
 	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO check_state(check_id, status) VALUES (?, 'unknown')`, c.ID)
 	return c, err
@@ -305,7 +450,7 @@ func (s *Store) ListChecks(ctx context.Context) ([]model.Check, error) {
 	defer rows.Close()
 	var out []model.Check
 	for rows.Next() {
-		c, err := scanCheck(rows)
+		c, err := s.scanCheck(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -326,7 +471,7 @@ func (s *Store) ListChecksForNode(ctx context.Context, nodeID int64) ([]model.Ch
 	defer rows.Close()
 	out := []model.Check{}
 	for rows.Next() {
-		c, err := scanCheck(rows)
+		c, err := s.scanCheck(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -338,7 +483,7 @@ func (s *Store) ListChecksForNode(ctx context.Context, nodeID int64) ([]model.Ch
 // GetCheck returns one check.
 func (s *Store) GetCheck(ctx context.Context, id int64) (model.Check, error) {
 	row := s.reader.QueryRowContext(ctx, "SELECT "+checkCols+" FROM checks WHERE id = ?", id)
-	c, err := scanCheck(row)
+	c, err := s.scanCheck(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, ErrNotFound
 	}
@@ -435,22 +580,28 @@ func saveStateTx(ctx context.Context, tx *sql.Tx, st model.CheckState) error {
 
 // ---- results ----
 
-const resultCols = `id, check_id, ts, success, status, message, error, latency_ms, min_ms, max_ms, jitter_ms, loss_pct, attempts, details, warnings`
+const resultCols = `id, check_id, ts, success, status, message, error, latency_ms, min_ms, max_ms, jitter_ms, stddev_ms, loss_pct, attempts, details, warnings, metrics`
 
 func scanResult(sc interface{ Scan(...any) error }) (model.Result, error) {
 	var r model.Result
 	var ts int64
 	var success int
-	var lat, min, max, jit, loss sql.NullFloat64
-	var details, warnings string
-	if err := sc.Scan(&r.ID, &r.CheckID, &ts, &success, &r.Status, &r.Message, &r.Error, &lat, &min, &max, &jit, &loss, &r.Attempts, &details, &warnings); err != nil {
+	var lat, min, max, jit, sd, loss sql.NullFloat64
+	var details, warnings, metrics string
+	if err := sc.Scan(&r.ID, &r.CheckID, &ts, &success, &r.Status, &r.Message, &r.Error, &lat, &min, &max, &jit, &sd, &loss, &r.Attempts, &details, &warnings, &metrics); err != nil {
 		return r, err
 	}
 	r.Timestamp = time.UnixMilli(ts).Local()
 	r.Success = success == 1
 	r.LatencyMS, r.MinMS, r.MaxMS, r.JitterMS, r.LossPct = floatPtr(lat), floatPtr(min), floatPtr(max), floatPtr(jit), floatPtr(loss)
+	r.StdDevMS = floatPtr(sd)
 	_ = json.Unmarshal([]byte(details), &r.Details)
 	_ = json.Unmarshal([]byte(warnings), &r.Warnings)
+	// Results written before named metrics existed have an empty column
+	// rather than "{}", which is not JSON; leaving Metrics nil is right.
+	if metrics != "" {
+		_ = json.Unmarshal([]byte(metrics), &r.Metrics)
+	}
 	return r, nil
 }
 
@@ -471,9 +622,13 @@ func insertResultTx(ctx context.Context, tx *sql.Tx, r model.Result) (model.Resu
 	if r.Warnings == nil {
 		r.Warnings = []string{}
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO results(check_id, ts, success, status, message, error, latency_ms, min_ms, max_ms, jitter_ms, loss_pct, attempts, details, warnings)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		r.CheckID, r.Timestamp.UnixMilli(), boolInt(r.Success), string(r.Status), r.Message, r.Error, nullFloat(r.LatencyMS), nullFloat(r.MinMS), nullFloat(r.MaxMS), nullFloat(r.JitterMS), nullFloat(r.LossPct), r.Attempts, jsonString(r.Details), jsonString(r.Warnings))
+	metrics := ""
+	if len(r.Metrics) > 0 {
+		metrics = jsonString(r.Metrics)
+	}
+	res, err := tx.ExecContext(ctx, `INSERT INTO results(check_id, ts, success, status, message, error, latency_ms, min_ms, max_ms, jitter_ms, stddev_ms, loss_pct, attempts, details, warnings, metrics)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		r.CheckID, r.Timestamp.UnixMilli(), boolInt(r.Success), string(r.Status), r.Message, r.Error, nullFloat(r.LatencyMS), nullFloat(r.MinMS), nullFloat(r.MaxMS), nullFloat(r.JitterMS), nullFloat(r.StdDevMS), nullFloat(r.LossPct), r.Attempts, jsonString(r.Details), jsonString(r.Warnings), metrics)
 	if err != nil {
 		return r, err
 	}
@@ -924,6 +1079,57 @@ func (s *Store) migrateSecrets(ctx context.Context) error {
 	return s.PutSetting(ctx, "settings", st)
 }
 
+// migrateCheckSecrets re-saves the check rows that still hold a cleartext
+// credential — a metrics token written before check secrets were sealed, or a
+// community string restored from an older backup — for the same reason
+// migrateSecrets re-saves the settings row: an upgraded install should stop
+// keeping cleartext credentials on disk without anyone having to edit a check.
+func (s *Store) migrateCheckSecrets(ctx context.Context) error {
+	type pending struct {
+		id  int64
+		cfg model.CheckConfig
+	}
+	var todo []pending
+	rows, err := s.reader.QueryContext(ctx, "SELECT id, config FROM checks")
+	if err != nil {
+		// A database this old may not have the table yet; that is not this
+		// migration's problem.
+		return nil
+	}
+	for rows.Next() {
+		var id int64
+		var raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			rows.Close()
+			return err
+		}
+		var cfg model.CheckConfig
+		if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+			continue
+		}
+		for _, field := range checkSecrets(&cfg) {
+			if *field != "" && !secrets.IsSealed(*field) {
+				todo = append(todo, pending{id: id, cfg: cfg})
+				break
+			}
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, p := range todo {
+		cfg := p.cfg
+		if err := s.sealCheckConfig(&cfg); err != nil {
+			return err
+		}
+		if _, err := s.Exec(ctx, "UPDATE checks SET config = ? WHERE id = ?", jsonString(cfg), p.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // LoadSettings returns the settings document, filling in defaults. Secret
 // fields are returned decrypted, exactly as callers stored them.
 func (s *Store) LoadSettings(ctx context.Context) (model.Settings, error) {
@@ -984,6 +1190,10 @@ func (s *Store) LoadSettings(ctx context.Context) (model.Settings, error) {
 	if st.General.UpdateRepo == "" {
 		st.General.UpdateRepo = def.General.UpdateRepo
 	}
+	// Installs older than the header indicators have no rules stored, and
+	// normalising on the way out seeds them the defaults without anybody
+	// having to open the settings page first.
+	st.Indicators = model.NormalizeIndicators(st.Indicators)
 	return st, nil
 }
 

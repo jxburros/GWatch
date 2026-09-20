@@ -5,6 +5,66 @@ binary can prove the file it just downloaded came from you. Every release asset
 is signed with an ed25519 key whose public half is compiled into the binary; an
 update that does not verify is refused, not installed with a warning.
 
+## Building and testing locally
+
+```bash
+make test                         # go vet + unit and integration tests
+make ci                           # everything CI runs: gofmt, vet, go mod tidy, race tests, mcp
+make cover                        # race tests plus a per-function coverage report
+make windows                      # cross-compile dist/gwatch.exe from Linux/macOS
+make agent                        # build dist/gwatch-agent for this platform
+make agent-all                    # build it for Windows, Linux and macOS, amd64/arm64/arm
+make mcp-build / mcp-test / mcp-fmt   # the same, for the mcp/ module (see mcp/README.md)
+```
+
+The test suite needs no external network: HTTP, TLS and DNS checks are exercised against
+local `httptest` servers and a fake in-process DNS resolver, and ping output is parsed
+from fixtures, so the tests are deterministic on a CI runner. See the [`Makefile`](../Makefile)
+for what each target actually runs.
+
+## Continuous integration
+
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on every push and pull
+request as three jobs:
+
+| Job | Runner | What it does |
+|---|---|---|
+| `ci` ("Lint, build, test (Windows)") | `windows-latest` | gofmt, vet, `go mod tidy`/`verify`, build + full test suite, the mcp/ module, web-asset `node --check`, PowerShell script parsing, and compiles both Inno Setup installers |
+| `linux` ("Test (Linux)") | `ubuntu-latest` | gofmt, vet, build, full test suite (root and mcp/), a `-race` pass over `internal/engine`, `internal/api`, `internal/store` and `internal/hostmon`, and `govulncheck` for both modules |
+| `macos` ("Test (macOS)") | `macos-latest` | vet + test only — deliberately lean, but this is what actually compiles and exercises `internal/sysmetrics/collect_darwin.go` |
+
+Windows is the only one that builds an installer or touches PowerShell, since that is the
+only platform GWatch installs itself onto as a service; Linux and macOS exist to catch a
+platform-specific regression (a build tag, a syscall, a platform-tagged file the Windows
+job never compiles) before it reaches a tag push. `release` needs all three.
+
+Pushing a tag such as `v0.1.0` additionally runs the `release` job (below), and pushing
+`mcp/v0.1.0` runs `mcp-tag`, a guard job — see
+["Releasing the MCP companion"](#releasing-the-mcp-companion).
+
+## Repository layout
+
+| Path | Purpose |
+|---|---|
+| `main.go` | CLI, Windows service wrapper (kardianos/service), HTTP server bound to localhost |
+| `internal/model` | Shared data types and JSON wire format |
+| `internal/store` | SQLite (modernc, pure Go) schema, single queued writer, rollups, history queries |
+| `internal/checks` | Check runners: ping, http, cert, tcp, dns, keyword, json; node templates |
+| `internal/engine` | Scheduler, result processing, alert rules, dependencies, maintenance, retention, health, triggers |
+| `internal/actions` | Automation actions: HTTP requests, git commands, custom scripts, run-node |
+| `internal/update` | GitHub release check, download, checksum, signature verification and executable swap |
+| `cmd/gwatch-sign` | Maintainer CLI: generate the release signing key, sign and verify release assets |
+| `internal/mailer` | SMTP delivery and alert email rendering |
+| `internal/backup` | Encrypted backup archives and restore |
+| `internal/api` | JSON API (see [`API.md`](API.md)) and static UI serving |
+| `web/` | The browser interface (vanilla HTML/CSS/JS, no build step, embedded into the binary; open with `?mock=1` for an in-browser demo backend) |
+| `web/fonts/` | Barlow and Kode Mono, latin subsets, self-hosted so the UI still requests nothing from the internet ([SIL OFL 1.1](../web/fonts/OFL.txt)) |
+| `scripts/` | Windows build / install / uninstall PowerShell scripts |
+| `VERSION` | The version every build reports; a release is the tag `v<VERSION>` |
+| `scripts/installer/` | The two Inno Setup scripts, their shared branding and the wizard artwork |
+| `cmd/gwatch-rsrc/` | Builds the `.syso` resource objects that put the GWatch icon inside the Windows executables (`make rsrc`) |
+| `mcp/` | The MCP companion, a separate Go module — see [`mcp/README.md`](../mcp/README.md) |
+
 ## One-time setup
 
 Do this once, on a machine you trust, before the first signed release.
@@ -151,6 +211,54 @@ to build them locally. Three things to keep in mind:
 The wizard artwork under `scripts/installer/assets/` is committed, not generated at
 release time, so a release needs no image tooling on the runner. If the mark ever
 changes, `web/logo.svg` and those assets have to be updated together.
+
+## Releasing the MCP companion
+
+`gwatch-mcp` ([`mcp/README.md`](../mcp/README.md)) is a separate Go module
+(`mcp/go.mod`) with its own version, in [`mcp/VERSION`](../mcp/VERSION). It
+does not share the core `VERSION` file or the core `v<VERSION>` tag scheme —
+it uses **nested-module tags**, `mcp/v<VERSION>`, which is the scheme Go's
+module resolution expects for a module that lives in a subdirectory of the
+repository: it is what makes
+
+```sh
+go install github.com/jxburros/GWatch/mcp/cmd/gwatch-mcp@latest
+```
+
+resolve to the right code. A plain `v<VERSION>` tag on the root module is
+invisible to `go install` for a path under `mcp/`.
+
+To cut an MCP release:
+
+```sh
+# 1. Bump the version and commit
+echo 0.2.0 > mcp/VERSION
+git commit -am "Release gwatch-mcp 0.2.0"
+git push
+
+# 2. Tag it, on the same commit
+git tag mcp/v0.2.0
+git push origin mcp/v0.2.0
+```
+
+Pushing an `mcp/v*` tag runs the `mcp-tag` job in
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml): it fails if the
+tag does not match `mcp/VERSION`, and builds the module, but it does **not**
+publish a separate GitHub release. `gwatch-mcp` binaries ship inside the
+*core* release instead — the `release` job's "Cross-compile the MCP
+companion" step builds `gwatch-mcp-<os>-<arch>[.exe]` from whatever
+`mcp/VERSION` says at the time a core `v*` tag is pushed, signs and
+checksums it alongside everything else, and attaches it to that release. In
+practice this means: bump `mcp/VERSION` and push an `mcp/v*` tag whenever
+`mcp/` changes and you want `go install ...@latest` to see it, and expect the
+built binary to actually reach users on the *next* core release rather than
+immediately — the two release trains are independent, and the mcp tag exists
+for `go install`, not for GitHub's release page.
+
+Bump `mcp/VERSION` (and push a matching tag) for any change under `mcp/`
+that a `go install` user should see reflected in `gwatch-mcp version` and in
+module resolution — not just user-visible tool changes, but also fixes to
+the HTTP client, the MCP transport layer or the SDK pin.
 
 ## Forks and private builds
 

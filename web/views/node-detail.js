@@ -1,16 +1,16 @@
 // Node detail: header, per-check cards with result inspector, charts, events.
 
-import { api, getHistoryMulti, qs } from '../api.js';
+import { api, getHistoryMulti, getHistoryMetric, qs } from '../api.js';
 import { h, icon, clear, replace, statusPill, statusGlyph, importanceBadge, tagList, banner, toast, confirmDialog, showMenu, menuButton, emptyState, skeleton, eventRow, rangeChips, checkTypeLabel } from '../components.js';
 import { LineChart, toSeries, uptimeBar, uptimeLegend, SERIES_COLORS } from '../charts.js';
-import { relTime, ms as fmtMs, pct, dateTime, interval, plural, timeShort } from '../fmt.js';
+import { relTime, ms as fmtMs, pct, dateTime, interval, plural, timeShort, nodeGroups } from '../fmt.js';
 import { resultInspector } from './inspector.js';
 import { openTriggerEditor, triggerRow } from './automation.js';
-import { hardwarePanel } from './hardware.js';
+import { hardwarePanel } from './machines.js';
 
 export async function mount(root, ctx) {
   const id = ctx.params.id;
-  const state = { node: null, events: [], triggers: [], nodes: [], range: '24h', charts: [], expanded: new Set(), results: new Map(), destroyed: false, history: null, hardware: new Map() };
+  const state = { node: null, events: [], triggers: [], nodes: [], range: '24h', charts: [], expanded: new Set(), results: new Map(), destroyed: false, history: null, hardware: new Map(), latChart: null, lossChart: null, uptimeEl: null, historyShape: '', snmpCharts: new Map() };
 
   const headEl = h('div');
   const bannersEl = h('div', { class: 'stack-sm', style: { marginBottom: '14px' } });
@@ -21,6 +21,11 @@ export async function mount(root, ctx) {
   const triggersEl = h('section', { class: 'card', 'aria-label': 'Triggers' });
   const chartsEl = h('section', { class: 'card', 'aria-label': 'History' });
   const eventsEl = h('section', { class: 'card', 'aria-label': 'Events' });
+  // The history card's frame is built once and kept for the life of the view.
+  // A live update swaps what is inside it, never the card itself, so the
+  // charts are never taken off the page while their new data is in flight.
+  const historyChips = h('div', { class: 'card-actions' });
+  const historyBody = h('div', { class: 'stack' });
   root.append(headEl, bannersEl, h('div', { class: 'stack' }, checksEl, hardwareEl, chartsEl, triggersEl, eventsEl));
   headEl.append(skeleton({ lines: 2 }));
 
@@ -74,7 +79,7 @@ export async function mount(root, ctx) {
         h('h1', null, statusPill(n.status || 'unknown', { large: true }), n.name),
         h('div', { class: 'd-meta' },
           n.host ? h('span', { class: 'host' }, n.host) : null,
-          n.group ? h('span', { class: 'tag tag-group' }, n.group) : null,
+          nodeGroups(n).map((g) => h('span', { class: 'tag tag-group' }, g)),
           ...(n.tags || []).map((t) => h('span', { class: 'tag' }, t)),
           importanceBadge(n.importance),
           n.template ? h('span', { class: 'dim small' }, `from ${n.template} template`) : null,
@@ -157,6 +162,10 @@ export async function mount(root, ctx) {
       stat(st.nextRunAt && c.enabled !== false ? relTime(st.nextRunAt) : '—', 'Next run', st.nextRunAt),
       stat(String(st.consecutiveFailures ?? 0), 'Consecutive failures', null, st.consecutiveFailures > 0 ? 'text-down' : ''),
       last?.lossPct != null ? stat(pct(last.lossPct), 'Packet loss', null, last.lossPct > 0 ? 'text-degraded' : '') : null,
+      // A ping run measures several packets, so min/max and the two spread
+      // figures say far more about the link than the average alone. They come
+      // from the last result rather than the state, which only keeps latency.
+      ...(c.type === 'ping' && last ? pingStats(last) : []),
       last?.details?.cert ? stat(plural(last.details.cert.daysRemaining, 'day'), 'Cert expires in', null, last.details.cert.daysRemaining <= 14 ? 'text-degraded' : '') : null,
       st.lastChangeAt ? stat(relTime(st.lastChangeAt), `${status[0].toUpperCase()}${status.slice(1)} since`, st.lastChangeAt) : null,
     );
@@ -168,6 +177,20 @@ export async function mount(root, ctx) {
       loadResults(c).then((rows) => { if (!state.destroyed) replace(recent, h('div', { class: 'section-title' }, 'Recent results'), resultsTable(rows, c)); }).catch((e) => replace(recent, h('div', { class: 'note' }, e.message)));
     }
     return card;
+  }
+
+  // pingStats renders the extra per-packet figures of a ping result. Jitter is
+  // the average step between consecutive packets; the standard deviation is how
+  // far the whole run spreads around its average.
+  function pingStats(r) {
+    const d = r.details || {};
+    const out = [];
+    if (r.minMs != null) out.push(stat(fmtMs(r.minMs), 'Min RTT'));
+    if (r.maxMs != null) out.push(stat(fmtMs(r.maxMs), 'Max RTT'));
+    if (r.jitterMs != null) out.push(stat(fmtMs(r.jitterMs), 'Jitter'));
+    if (r.stddevMs != null) out.push(stat(fmtMs(r.stddevMs), 'Std deviation'));
+    if (d.packetsSent) out.push(stat(`${d.packetsReceived ?? 0}/${d.packetsSent}`, 'Packets received'));
+    return out;
   }
 
   function stat(value, label, ts, cls = '') {
@@ -244,52 +267,141 @@ export async function mount(root, ctx) {
     const n = state.node;
     const checks = (n.checks || []);
     const ids = checks.map((c) => c.id);
-    clearCharts();
-    clear(chartsEl);
-    const head = h('div', { class: 'card-head' }, h('h2', null, 'History'), h('div', { class: 'card-actions' }, rangeChips(state.range, (r) => { state.range = r; loadHistory(); })));
-    chartsEl.append(head);
-    if (!ids.length) { chartsEl.append(h('p', { class: 'note' }, 'Charts appear once this node has checks.')); return; }
-    const body = h('div', { class: 'stack' }, skeleton({ height: 220 }));
-    chartsEl.append(body);
+    // Build the card's frame the first time and leave it alone afterwards.
+    if (!chartsEl.firstChild) {
+      chartsEl.append(h('div', { class: 'card-head' }, h('h2', null, 'History'), historyChips), historyBody);
+    }
+    replace(historyChips, rangeChips(state.range, (r) => { state.range = r; loadHistory(); }));
+    if (!ids.length) { clearCharts(); replace(historyBody, h('p', { class: 'note' }, 'Charts appear once this node has checks.')); return; }
+    // Only a first load has nothing to show. On every later pass the charts
+    // that are already up stay up, at full opacity, until the new data has
+    // arrived — a skeleton here is a pale block where a dark chart was, which
+    // is what read as a flash on every live update.
+    if (!historyBody.firstChild) historyBody.append(skeleton({ height: 220 }));
     let series;
-    try { series = await getHistoryMulti(ids, state.range); } catch (e) { replace(body, h('p', { class: 'note' }, 'Could not load history: ' + e.message)); return; }
+    try { series = await getHistoryMulti(ids, state.range); } catch (e) { clearCharts(); replace(historyBody, h('p', { class: 'note' }, 'Could not load history: ' + e.message)); return; }
     if (state.destroyed) return;
     state.history = series;
-    clear(body);
     const list = Array.isArray(series) ? series : [series];
     const from = list[0]?.from, to = list[0]?.to, bucket = list[0]?.bucketSeconds || 0;
     const latencySeries = list.filter((hs) => (hs.points || []).some((p) => p.avgMs != null));
-
-    // Latency / response time chart. A hardware check measures a machine
-    // rather than a round trip, so it is left out here — its readings are in
-    // the hardware panel above.
+    // A hardware check measures a machine rather than a round trip, so it is
+    // left out of the latency chart — its readings are in the hardware panel.
     const timed = ids.filter((id) => checks.find((c) => c.id === id)?.type !== 'system');
+    const pings = list.filter((hs) => hs.checkType === 'ping');
+
+    const latData = () => ({ series: latencySeries.map((hs, i) => ({ ...toSeries(hs, 'avg', SERIES_COLORS[i % SERIES_COLORS.length]), name: hs.checkName })), from, to, bucketSeconds: bucket });
+    const lossData = () => ({ series: pings.map((hs, i) => ({ ...toSeries(hs, 'loss', SERIES_COLORS[i % SERIES_COLORS.length]), name: hs.checkName })), from, to, bucketSeconds: bucket });
+
+    // Which charts the card holds, and with which series. While that is
+    // unchanged the existing canvases are handed the new points and redraw
+    // themselves; a new canvas would start life blank and unsized, which is
+    // the other half of the flash.
+    const snmpChecks = checks.filter((x) => x.type === 'snmp');
+    const shape = JSON.stringify([state.range, timed.length > 0, latencySeries.map((hs) => hs.checkName), pings.map((hs) => hs.checkName), snmpChecks.map((c) => [c.id, (c.config?.snmpOids || []).map((o) => o.name)])]);
+    if (shape === state.historyShape && state.uptimeEl && historyBody.contains(state.uptimeEl)) {
+      state.latChart?.setData(latData());
+      state.lossChart?.setData(lossData());
+      replace(state.uptimeEl, ...uptimeContent(list));
+      // An OID that has just produced its first reading has no chart yet, and
+      // that is the one case where the card's shape changes without any
+      // check being added — so it falls through to the rebuild below.
+      if (await refreshSNMPCharts(snmpChecks)) return;
+      if (state.destroyed) return;
+    }
+
+    // The shape did change, so the card is rebuilt — but off-screen and in one
+    // go, and only now that the data is in hand.
+    clearCharts();
+    const built = [];
     if (timed.length) {
       const latHost = h('div', null);
       const latChart = new LineChart(latHost, { unit: 'ms', height: 240, ariaLabel: 'Latency history', title: `${n.name} — latency (${state.range})` });
-      state.charts.push(latChart);
-      latChart.setData({ series: latencySeries.map((hs, i) => ({ ...toSeries(hs, 'avg', SERIES_COLORS[i % SERIES_COLORS.length]), name: hs.checkName })), from, to, bucketSeconds: bucket });
-      body.append(chartSection('Latency / response time', latHost, () => latChart.exportPNG(`${slug(n.name)}-latency-${state.range}.png`), timed));
+      state.charts.push(latChart); state.latChart = latChart;
+      latChart.setData(latData());
+      built.push(chartSection('Latency / response time', latHost, () => latChart.exportPNG(`${slug(n.name)}-latency-${state.range}.png`), timed));
     }
-    // Packet loss for ping checks
-    const pings = list.filter((hs) => hs.checkType === 'ping');
     if (pings.length) {
       const lossHost = h('div', null);
       const lossChart = new LineChart(lossHost, { unit: '%', height: 160, yMin: 0, yMax: 100, ariaLabel: 'Packet loss history', title: `${n.name} — packet loss (${state.range})` });
-      state.charts.push(lossChart);
-      lossChart.setData({ series: pings.map((hs, i) => ({ ...toSeries(hs, 'loss', SERIES_COLORS[i % SERIES_COLORS.length]), name: hs.checkName })), from, to, bucketSeconds: bucket });
-      body.append(chartSection('Packet loss', lossHost, () => lossChart.exportPNG(`${slug(n.name)}-loss-${state.range}.png`), pings.map((p) => p.checkId)));
+      state.charts.push(lossChart); state.lossChart = lossChart;
+      lossChart.setData(lossData());
+      built.push(chartSection('Packet loss', lossHost, () => lossChart.exportPNG(`${slug(n.name)}-loss-${state.range}.png`), pings.map((p) => p.checkId)));
     }
+    // SNMP readings. Each OID is its own metric with its own unit, so each
+    // one gets its own chart rather than sharing an axis with a rate in
+    // bits per second and a percentage.
+    for (const c of snmpChecks) {
+      const section = await renderSNMPCharts(c);
+      if (state.destroyed) return;
+      if (section) built.push(section);
+    }
+    state.uptimeEl = h('div', null, ...uptimeContent(list));
+    built.push(state.uptimeEl);
+    replace(historyBody, built);
+    state.historyShape = shape;
+  }
 
-    // Uptime bars
-    const up = h('div', null, h('div', { class: 'section-title' }, `Availability — ${state.range}`));
+  /** The availability bars under the charts: cheap, synchronous DOM, so they
+   *  are simply written afresh each time. */
+  function uptimeContent(list) {
+    const out = [h('div', { class: 'section-title' }, `Availability — ${state.range}`)];
     for (const hs of list) {
       const avail = hs.summary?.availability;
       const cls = avail == null ? '' : avail >= 99.9 ? 'text-up' : avail >= 95 ? 'text-degraded' : 'text-down';
-      up.append(h('div', { class: 'uptime-row' }, h('div', { class: 'uptime-name' }, hs.checkName, h('div', { class: 'sub' }, `${hs.summary?.count ?? 0} samples · ${hs.summary?.failures ?? 0} failures`)), uptimeBar(hs.points, { bucketSeconds: hs.bucketSeconds, from: hs.from, to: hs.to }), h('div', { class: `uptime-pct ${cls}` }, pct(avail, 2))));
+      out.push(h('div', { class: 'uptime-row' }, h('div', { class: 'uptime-name' }, hs.checkName, h('div', { class: 'sub' }, `${hs.summary?.count ?? 0} samples · ${hs.summary?.failures ?? 0} failures`)), uptimeBar(hs.points, { bucketSeconds: hs.bucketSeconds, from: hs.from, to: hs.to }), h('div', { class: `uptime-pct ${cls}` }, pct(avail, 2))));
     }
-    up.append(uptimeLegend());
-    body.append(up);
+    out.push(uptimeLegend());
+    return out;
+  }
+
+  // An SNMP check's OIDs are charted like any other metric: the server serves
+  // them from /api/history with metric=<name>, and only from raw results —
+  // the rollup tables have no column for a metric a check invented, so these
+  // charts reach back only as far as raw history is kept. Each chart is kept
+  // in state.snmpCharts so a later pass can hand it new points in place.
+  async function renderSNMPCharts(c) {
+    const oids = (c.config?.snmpOids || []).filter((o) => o.name);
+    if (!oids.length) return null;
+    const n = state.node;
+    const section = h('div', { class: 'stack-sm' }, h('div', { class: 'section-title' }, `${c.name} — SNMP readings`));
+    let drew = false;
+    for (const o of oids) {
+      let series;
+      try { series = await getHistoryMetric(c.id, state.range, o.name); } catch { continue; }
+      if (state.destroyed) return null;
+      if (!(series.points || []).some((p) => p.value != null)) continue;
+      const host = h('div', null);
+      const chart = new LineChart(host, { unit: o.unit || '', height: 180, ariaLabel: `${o.name} history`, title: `${n.name} — ${o.name} (${state.range})` });
+      state.charts.push(chart);
+      state.snmpCharts.set(`${c.id}:${o.name}`, chart);
+      chart.setData(snmpData(series, o));
+      section.append(h('div', null, h('div', { class: 'row-between', style: { marginBottom: '4px' } },
+        h('div', { class: 'small muted' }, o.name, o.unit ? ` (${o.unit})` : ''),
+        h('a', { class: 'btn btn-sm', href: `/api/export/history.csv${qs({ checkId: c.id, range: state.range, metric: o.name })}`, download: `${slug(o.name)}-${state.range}.csv` }, icon('download'), 'CSV')), host));
+      drew = true;
+    }
+    if (!drew) section.append(h('p', { class: 'note' }, 'No readings recorded in this period yet. A counter also needs two runs before it has a rate to chart.'));
+    return section;
+  }
+  function snmpData(series, o) {
+    return { series: [{ ...toSeries(series, 'avg', SERIES_COLORS[state.charts.length % SERIES_COLORS.length]), name: o.name }], from: series.from, to: series.to, bucketSeconds: 0 };
+  }
+  /** Hands every existing SNMP chart its new points. Returns false when an
+   *  OID has readings but no chart yet, which means the card must be rebuilt. */
+  async function refreshSNMPCharts(snmpChecks) {
+    for (const c of snmpChecks) {
+      for (const o of (c.config?.snmpOids || []).filter((x) => x.name)) {
+        let series;
+        try { series = await getHistoryMetric(c.id, state.range, o.name); } catch { continue; }
+        if (state.destroyed) return true;
+        const chart = state.snmpCharts.get(`${c.id}:${o.name}`);
+        const hasData = (series.points || []).some((p) => p.value != null);
+        if (chart) chart.setData(snmpData(series, o));
+        else if (hasData) return false;
+      }
+    }
+    return true;
   }
 
   function chartSection(title, host, onExportPng, ids) {
@@ -298,7 +410,10 @@ export async function mount(root, ctx) {
       h('div', { class: 'row-between', style: { marginBottom: '8px' } }, h('div', { class: 'section-title', style: { marginBottom: 0 } }, title), h('div', { class: 'btn-group' }, h('button', { class: 'btn btn-sm', type: 'button', onclick: onExportPng }, icon('image'), 'Export PNG'), csvBtn)),
       host);
   }
-  function clearCharts() { state.charts.forEach((c) => c.destroy()); state.charts = []; }
+  function clearCharts() {
+    state.charts.forEach((c) => c.destroy()); state.charts = []; state.snmpCharts.clear();
+    state.latChart = null; state.lossChart = null; state.uptimeEl = null; state.historyShape = '';
+  }
   const slug = (s) => String(s).toLowerCase().replace(/[^\w]+/g, '-');
 
   /* ---------- Events ---------- */

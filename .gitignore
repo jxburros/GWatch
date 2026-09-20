@@ -18,3 +18,6 @@ coverage.txt
 .claude/
 gwatch.key
 release.key
+# devDependencies for the web test suite (tests/web/) only — the shipped
+# binary embeds web/ as-is and never sees node_modules.
+node_modules/

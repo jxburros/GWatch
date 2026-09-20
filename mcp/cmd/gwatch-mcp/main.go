@@ -30,7 +30,7 @@ import (
 // companion versions independently of gwatch itself.
 var version = "dev"
 
-const defaultURL = "http://127.0.0.1:8080"
+const defaultURL = "http://127.0.0.1:7230"
 
 // howToGetAKey is printed whenever the server cannot start for want of a key.
 // It is the one piece of setup that cannot be automated from here.
