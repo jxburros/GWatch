@@ -1,7 +1,10 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -354,6 +357,159 @@ func TestWrongKeyFileYieldsEmptySecrets(t *testing.T) {
 	}
 	if s2.SecretsHealthy() == nil {
 		t.Fatalf("SecretsHealthy should report the decryption failure")
+	}
+}
+
+// rawOldShapeDB creates a database by hand, exactly the way a version-1
+// GWatch database (every database shipped before this migration mechanism
+// existed) looks: the schema as it is defined today minus the columns
+// addedColumns bolts on, schema_version pinned at 1, and — to exercise the
+// version-2 data migration — a check with no matching check_state row, the
+// gap that migration exists to close.
+func rawOldShapeDB(t *testing.T, path string) {
+	t.Helper()
+	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=temp_store(MEMORY)", filepath.ToSlash(path))
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	defer db.Close()
+	for _, stmt := range []string{schema, automationSchema, hostSchema} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("apply schema: %v", err)
+		}
+	}
+	if _, err := db.Exec("INSERT INTO schema_version(version) VALUES (1)"); err != nil {
+		t.Fatalf("seed schema_version: %v", err)
+	}
+	now := fmtTime(time.Now())
+	if _, err := db.Exec(`INSERT INTO nodes(id, name, created_at, updated_at) VALUES (1, 'Router', ?, ?)`, now, now); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO checks(id, node_id, type, name, created_at, updated_at) VALUES (1, 1, 'ping', 'Ping', ?, ?)`, now, now); err != nil {
+		t.Fatalf("seed check: %v", err)
+	}
+	// Deliberately no check_state row for check 1.
+}
+
+func TestOldDatabaseMigratesAndBacksUp(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	rawOldShapeDB(t, dbPath)
+
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+
+	v, err := s.SchemaVersion(ctx)
+	if err != nil {
+		t.Fatalf("schema version: %v", err)
+	}
+	if v != currentSchemaVersion {
+		t.Fatalf("schema version = %d, want %d", v, currentSchemaVersion)
+	}
+
+	// The data migration's observable effect: check 1 now has a state row.
+	var status string
+	if err := s.Reader().QueryRowContext(ctx, "SELECT status FROM check_state WHERE check_id = 1").Scan(&status); err != nil {
+		t.Fatalf("backfilled check_state row missing: %v", err)
+	}
+	if status != "unknown" {
+		t.Fatalf("status = %q, want %q", status, "unknown")
+	}
+
+	backupPath := fmt.Sprintf("%s.before-v%d", dbPath, currentSchemaVersion)
+	if fi, err := os.Stat(backupPath); err != nil || fi.Size() == 0 {
+		t.Fatalf("pre-migration backup missing or empty: %v", err)
+	}
+
+	rep := s.LastMigration()
+	if rep == nil {
+		t.Fatal("expected a migration report")
+	}
+	if rep.FromVersion != 1 || rep.ToVersion != currentSchemaVersion || rep.BackupPath != backupPath {
+		t.Fatalf("migration report = %+v", rep)
+	}
+	if len(rep.Applied) != 1 || rep.Applied[0] == "" {
+		t.Fatalf("migration report should name the step that ran: %+v", rep)
+	}
+}
+
+func TestOpenFreshDatabaseIsAtCurrentVersionWithNoBackup(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+
+	v, err := s.SchemaVersion(context.Background())
+	if err != nil {
+		t.Fatalf("schema version: %v", err)
+	}
+	if v != currentSchemaVersion {
+		t.Fatalf("schema version = %d, want %d", v, currentSchemaVersion)
+	}
+	if rep := s.LastMigration(); rep != nil {
+		t.Fatalf("fresh database should not report a migration: %+v", rep)
+	}
+	matches, _ := filepath.Glob(dbPath + ".before-v*")
+	if len(matches) != 0 {
+		t.Fatalf("fresh database should not get a pre-migration backup: %v", matches)
+	}
+}
+
+// TestOpenRefusesNewerSchemaVersion covers the rollback scenario the version
+// check exists for: an in-app update writes a newer schema, the operator
+// puts the previous exe back (the documented rollback), and that older
+// build must fail closed instead of touching the file.
+func TestOpenRefusesNewerSchemaVersion(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	ctx := context.Background()
+	future := currentSchemaVersion + 1
+	if _, err := s.Exec(ctx, "UPDATE schema_version SET version = ?", future); err != nil {
+		t.Fatalf("bump version: %v", err)
+	}
+	if err := s.Checkpoint(ctx); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	before, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read before: %v", err)
+	}
+
+	if _, err := Open(dbPath); err == nil {
+		t.Fatal("expected Open to refuse a newer-schema database")
+	} else {
+		msg := err.Error()
+		if !strings.Contains(msg, fmt.Sprintf("%d", future)) || !strings.Contains(msg, fmt.Sprintf("%d", currentSchemaVersion)) {
+			t.Fatalf("error should mention both schema versions: %v", err)
+		}
+	}
+
+	after, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read after: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("refused open modified the database file")
+	}
+	matches, _ := filepath.Glob(dbPath + ".before-v*")
+	if len(matches) != 0 {
+		t.Fatalf("refused open should not create a backup: %v", matches)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,6 +39,8 @@ type Store struct {
 
 	secmu      sync.RWMutex
 	secretsErr error
+
+	lastMigration *MigrationReport
 }
 
 // Open opens (creating if needed) the database at path and applies the schema.
@@ -364,13 +367,106 @@ CREATE TABLE IF NOT EXISTS api_keys (
 // before the column existed. CREATE TABLE IF NOT EXISTS leaves such a table
 // alone, so each one is added with ALTER TABLE when PRAGMA table_info shows it
 // missing. Adding an entry here is the way to extend an existing table.
+//
+// This runs before the numbered migrations below, on every open, regardless
+// of schema_version: it predates the version-tracked mechanism and a step may
+// depend on a column it adds existing.
 var addedColumns = []struct{ table, column, ddl string }{
 	{"endpoints", "allow_no_token", "ALTER TABLE endpoints ADD COLUMN allow_no_token INTEGER NOT NULL DEFAULT 0"},
 	{"events", "actor", "ALTER TABLE events ADD COLUMN actor TEXT NOT NULL DEFAULT ''"},
 }
 
+// currentSchemaVersion is the schema_version this build expects. Every
+// database ever shipped before this mechanism existed is version 1, which is
+// why the first numbered migration below is version 2.
+//
+// To add a data migration: bump this constant by one, then append a
+// {version, name, run} entry to migrations for the new version. run does
+// whatever the migration needs inside the *sql.Tx it is given (including
+// schema DDL, though additive columns usually belong in addedColumns
+// instead); migrate() takes care of backing up the file first, running the
+// step in its own transaction, and recording the new version once it
+// commits.
+const currentSchemaVersion = 2
+
+// migration is one numbered step that brings the database from version-1 to
+// version. Steps run in order, oldest first, each in its own transaction.
+type migration struct {
+	version int
+	name    string
+	run     func(ctx context.Context, tx *sql.Tx) error
+}
+
+// migrations must stay sorted by version, ascending, with no gaps from 2 up
+// to currentSchemaVersion: runMigrations walks it in order and stops once the
+// database is current.
+var migrations = []migration{
+	{
+		version: 2,
+		name:    "backfill missing check_state rows",
+		run:     migrateBackfillCheckState,
+	},
+}
+
+// migrateBackfillCheckState gives every check a check_state row. Every
+// current code path that inserts a check inserts its state alongside it
+// (CreateNode, UpdateNode, CreateNodeWithID), but that has not always been
+// true, and a check without a state row makes GetState and anything that
+// joins on it misbehave. This also serves as the migration mechanism's proof
+// of life: it is real, it is idempotent, and it is safe to run on any
+// database whether or not the gap it closes actually applies.
+func migrateBackfillCheckState(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO check_state(check_id, status)
+		SELECT id, 'unknown' FROM checks
+		WHERE id NOT IN (SELECT check_id FROM check_state)`)
+	return err
+}
+
+// MigrationReport summarises what Open did to bring an older database up to
+// date. It is nil when the database was freshly created or was already at
+// currentSchemaVersion, since neither case touches or backs up anything.
+type MigrationReport struct {
+	FromVersion int
+	ToVersion   int
+	BackupPath  string   // the gwatch.db.before-vN copy made before migrating, if any
+	Applied     []string // migration names, in the order they ran
+}
+
+// LastMigration returns the report from the migration Open ran, or nil if
+// none was needed.
+func (s *Store) LastMigration() *MigrationReport { return s.lastMigration }
+
+// SchemaVersion returns the schema_version currently recorded in the
+// database.
+func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
+	return s.storedSchemaVersion(ctx)
+}
+
 func (s *Store) migrate() error {
 	ctx := context.Background()
+
+	// Read-only, and first: a database from a newer GWatch must be refused
+	// without writing a single byte to it, so an operator who tried the new
+	// build and rolled back to this one finds the file exactly as they left
+	// it.
+	stored, err := s.storedSchemaVersion(ctx)
+	if err != nil {
+		return err
+	}
+	if stored > currentSchemaVersion {
+		return fmt.Errorf("this database (schema version %d) was written by a newer GWatch than this build (schema version %d) — upgrade GWatch, or restore a backup taken with this version", stored, currentSchemaVersion)
+	}
+	fresh := stored == 0
+
+	if !fresh && stored < currentSchemaVersion {
+		backupPath, err := s.backupBeforeMigration(currentSchemaVersion)
+		if err != nil {
+			return fmt.Errorf("back up database before migrating: %w", err)
+		}
+		s.lastMigration = &MigrationReport{FromVersion: stored, ToVersion: currentSchemaVersion, BackupPath: backupPath}
+	}
+
 	if err := s.WriteTx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, schema); err != nil {
 			return fmt.Errorf("apply schema: %w", err)
@@ -381,16 +477,133 @@ func (s *Store) migrate() error {
 		if _, err := tx.ExecContext(ctx, hostSchema); err != nil {
 			return fmt.Errorf("apply hardware schema: %w", err)
 		}
-		var version int
-		err := tx.QueryRowContext(ctx, "SELECT version FROM schema_version LIMIT 1").Scan(&version)
-		if errors.Is(err, sql.ErrNoRows) {
-			_, err = tx.ExecContext(ctx, "INSERT INTO schema_version(version) VALUES (1)")
+		if fresh {
+			_, err := tx.ExecContext(ctx, "INSERT INTO schema_version(version) VALUES (?)", currentSchemaVersion)
+			return err
 		}
-		return err
+		return nil
 	}); err != nil {
 		return err
 	}
-	return s.addMissingColumns(ctx)
+
+	if err := s.addMissingColumns(ctx); err != nil {
+		return err
+	}
+
+	if fresh || stored == currentSchemaVersion {
+		return nil
+	}
+	return s.runMigrations(ctx, stored)
+}
+
+// storedSchemaVersion reads the schema_version row without writing anything,
+// so it is safe to call before deciding whether the database may be opened
+// at all. It returns 0 for a database that has no schema_version table or
+// row yet, which migrate() treats as fresh.
+func (s *Store) storedSchemaVersion(ctx context.Context) (int, error) {
+	var haveTable int
+	if err := s.reader.QueryRowContext(ctx,
+		"SELECT count(*) FROM sqlite_master WHERE type='table' AND name='schema_version'").Scan(&haveTable); err != nil {
+		return 0, fmt.Errorf("check schema_version table: %w", err)
+	}
+	if haveTable == 0 {
+		return 0, nil
+	}
+	var version int
+	err := s.reader.QueryRowContext(ctx, "SELECT version FROM schema_version LIMIT 1").Scan(&version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read schema_version: %w", err)
+	}
+	return version, nil
+}
+
+// runMigrations applies every step after stored, in order, each in its own
+// transaction that commits the step's data changes together with the new
+// version number: a step that fails partway leaves schema_version exactly
+// where it started, not somewhere in between.
+func (s *Store) runMigrations(ctx context.Context, stored int) error {
+	for _, m := range migrations {
+		if m.version <= stored {
+			continue
+		}
+		if err := s.WriteTx(ctx, func(tx *sql.Tx) error {
+			if err := m.run(ctx, tx); err != nil {
+				return fmt.Errorf("migration %d (%s): %w", m.version, m.name, err)
+			}
+			if _, err := tx.ExecContext(ctx, "UPDATE schema_version SET version = ?", m.version); err != nil {
+				return fmt.Errorf("record schema version %d: %w", m.version, err)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		stored = m.version
+		if s.lastMigration != nil {
+			s.lastMigration.Applied = append(s.lastMigration.Applied, m.name)
+		}
+	}
+	return nil
+}
+
+// backupBeforeMigration checkpoints the WAL and copies the main database
+// file to a sibling gwatch.db.before-vN, so a migration that turns out to be
+// wrong can be undone by restoring that copy. The store keeps writes on a
+// single-connection writer pool and reads on a separate pool, so a plain file
+// copy after a checkpoint is a consistent snapshot without needing
+// VACUUM INTO or taking the database offline.
+func (s *Store) backupBeforeMigration(targetVersion int) (string, error) {
+	if err := s.Checkpoint(context.Background()); err != nil {
+		return "", fmt.Errorf("checkpoint: %w", err)
+	}
+	dest := fmt.Sprintf("%s.before-v%d", s.path, targetVersion)
+	if _, err := os.Stat(dest); err == nil {
+		// A backup from an earlier attempt is already there; do not clobber
+		// it, keep both.
+		dest = fmt.Sprintf("%s.%s", dest, time.Now().UTC().Format("20060102-150405"))
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("stat %s: %w", dest, err)
+	}
+	if err := copyFile(s.path, dest); err != nil {
+		return "", err
+	}
+	return dest, nil
+}
+
+// copyFile copies src to dst by way of a temporary file and a rename, so a
+// reader never sees a partially written backup.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", src, err)
+	}
+	defer in.Close()
+	tmp := dst + ".tmp"
+	out, err := os.Create(tmp)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", tmp, err)
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("copy to %s: %w", tmp, err)
+	}
+	if err := out.Sync(); err != nil {
+		out.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("sync %s: %w", tmp, err)
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("close %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("rename %s to %s: %w", tmp, dst, err)
+	}
+	return nil
 }
 
 func (s *Store) addMissingColumns(ctx context.Context) error {
