@@ -26,6 +26,8 @@ brief that defines the scope lives in [`local-network-monitoring-product-brief.m
   script (run your own command), and Hardware health (this computer, or any machine you
   install the small agent on — processor, memory, disk, network).
 - **Nodes** group several checks, with templates, groups, tags, dependencies and importance.
+- **Discovery**: ping a subnet, see what answers with its name and open ports, and add the
+  devices you tick as nodes — with a template suggested for each. No nmap, nothing to install.
 - **Alerts by email** after N consecutive failures, on recovery, or for warnings, with
   cooldowns, silencing, maintenance windows and dependency-aware suppression.
 - **Incident timeline**, **dashboards**, a **Charts** tab and an **Audit** tab with full

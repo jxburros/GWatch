@@ -8,7 +8,7 @@
   const iso = (t) => new Date(t).toISOString();
   const ago = (ms) => iso(NOW - ms);
   const ahead = (ms) => iso(NOW + ms);
-  const seq = { node: 20, check: 100, result: 90000, event: 5000, dash: 5, maint: 5, wall: 1 };
+  const seq = { node: 20, check: 100, result: 90000, event: 5000, dash: 5, maint: 5, wall: 1, discovery: 0 };
   const clone = (o) => JSON.parse(JSON.stringify(o));
   // A node belongs to as many groups as it likes; group is the deprecated
   // alias for the first of them, which is what an older client reads.
@@ -760,6 +760,94 @@
   let updateStatus = { last: null, applying: false, applied: false, restarting: false, lastApplyAt: null, lastError: '', executable: 'C:\\Program Files\\GWatch\\gwatch.exe', canApply: true };
   on('GET', /^\/api\/status$/, () => { const ov = overview(); return { down: ov.summary.down, degraded: ov.summary.degraded, unknown: ov.summary.unknown, up: ov.summary.up, total: ov.summary.total, certWarnings: ov.certWarnings.length, maintenance: ov.summary.maintenance, serviceOk: true, serviceIssues: [], attention: ov.attention.length, generatedAt: iso(Date.now()) }; });
   on('GET', /^\/api\/network$/, () => ({ listenAddress: settings.general.remoteAccess ? ':7230' : '127.0.0.1:7230', remoteAccess: !!settings.general.remoteAccess, passwordSet: !!settings.general.accessPassword, port: 7230, localUrl: 'http://127.0.0.1:7230', lanUrls: settings.general.remoteAccess ? ['http://192.168.1.10:7230', 'http://desktop-pc:7230'] : [], hostname: 'desktop-pc', restartNeeded: false }));
+  /* ---------- Discovery ---------- */
+  // A sweep that finds three devices over about two seconds. The progress is
+  // derived from the clock rather than from a timer, so the run advances
+  // whether the modal is watching the stream or polling — and a test that
+  // drives it can simply wait.
+  const DISCOVERY_MS = 2000;
+  const DISCOVERY_FOUND = [
+    { ip: '192.168.1.1', hostname: 'gateway.lan', rttMs: 1.8, openPorts: [80, 443], template: 'router', note: 'Only a web interface answered — looks like a router, switch or access point.' },
+    { ip: '192.168.1.23', hostname: 'pi.lan', rttMs: 0.9, openPorts: [22, 80], template: 'home-server', note: 'SSH and a web interface — looks like a server or NAS.' },
+    { ip: '192.168.1.64', hostname: '', rttMs: 5.4, openPorts: [9100], template: 'tcp-service', note: 'Port 9100 is open — this looks like a network printer.' },
+  ];
+  let discoveryJob = null;
+  // The last add, so a test can prove the request was made.
+  window.__gwatchMockDiscoveryAdds = [];
+
+  function discoveryView() {
+    if (!discoveryJob) return null;
+    const j = discoveryJob;
+    if (j.state === 'running') {
+      const elapsed = Date.now() - +new Date(j.startedAt);
+      const ratio = Math.min(1, elapsed / DISCOVERY_MS);
+      j.scanned = Math.round(j.total * ratio);
+      j.responders = Math.floor(DISCOVERY_FOUND.length * ratio);
+      if (ratio >= 1) {
+        j.state = 'done';
+        j.scanned = j.total;
+        j.results = clone(DISCOVERY_FOUND);
+        j.responders = j.results.length;
+        j.finishedAt = iso(Date.now());
+        addEvent('discovery', { title: `Discovery scanned ${j.total} addresses in ${j.ranges.join(', ')}: ${j.responders} responded` });
+      }
+    }
+    return clone(j);
+  }
+
+  on('GET', /^\/api\/discovery$/, () => { const j = discoveryView(); if (!j) throw err(404, 'no discovery has been run yet'); return j; });
+  on('POST', /^\/api\/discovery$/, (m, body) => {
+    const current = discoveryView();
+    if (current && current.state === 'running') throw err(409, 'a discovery run is already going; wait for it to finish or cancel it first');
+    const ranges = (body?.ranges || []).map((s) => String(s).trim()).filter(Boolean);
+    if (!ranges.length) throw err(400, 'give at least one range, such as 192.168.1.0/24 or 192.168.1.10-50');
+    if (ranges.some((r) => r.includes(':'))) throw err(400, `${ranges[0]} is IPv6; discovery sweeps IPv4 only for now`);
+    discoveryJob = {
+      // As on the server: no ports field means the defaults, an empty one
+      // means probe nothing.
+      id: `mock-${++seq.discovery}`, ranges, ports: body?.ports === undefined ? [22, 80, 443, 445, 3389, 8080, 8443, 9100, 32400, 1883] : body.ports,
+      state: 'running', total: 254, scanned: 0, responders: 0, results: [], startedAt: iso(Date.now()), finishedAt: null,
+    };
+    // The real service pushes progress over the stream several times a second
+    // while a sweep runs, so the mock does too — otherwise the bar would only
+    // move on the modal's two-second poll and the demo would look stuck.
+    const ticker = setInterval(() => {
+      const j = discoveryView();
+      if (!j) { clearInterval(ticker); return; }
+      pushUpdate({ kind: 'discovery', discovery: { id: j.id, state: j.state, scanned: j.scanned, total: j.total, responders: j.responders } });
+      if (j.state !== 'running') clearInterval(ticker);
+    }, 200);
+    return clone(discoveryJob);
+  });
+  on('GET', /^\/api\/discovery\/([^/]+)$/, (m) => { const j = discoveryView(); if (!j || j.id !== m[1]) throw err(404, 'no discovery run with that id'); return j; });
+  on('POST', /^\/api\/discovery\/([^/]+)\/cancel$/, (m) => {
+    const j = discoveryView();
+    if (!j || j.id !== m[1]) throw err(404, 'no discovery run with that id');
+    if (discoveryJob.state === 'running') { discoveryJob.state = 'cancelled'; discoveryJob.finishedAt = iso(Date.now()); }
+    return clone(discoveryJob);
+  });
+  on('POST', /^\/api\/discovery\/([^/]+)\/add$/, (m, body) => {
+    const j = discoveryView();
+    if (!j || j.id !== m[1]) throw err(404, 'no discovery run with that id');
+    window.__gwatchMockDiscoveryAdds.push(clone(body || {}));
+    const items = body?.items || [];
+    if (!items.length) throw err(400, 'choose at least one device to add');
+    const created = []; const skipped = [];
+    for (const item of items) {
+      const found = (j.results || []).find((r) => r.ip === item.ip);
+      if (!found) { skipped.push({ ip: item.ip, reason: "this address was not one of the run's responders" }); continue; }
+      const existing = nodes.find((n) => (n.host || '').toLowerCase() === String(item.ip).toLowerCase());
+      if (existing) { skipped.push({ ip: item.ip, reason: `already monitored as "${existing.name}"` }); continue; }
+      const tmpl = templates.find((t) => t.id === (item.template || found.template)) || templates[0];
+      const n = mkNode({ name: item.name || found.hostname || item.ip, host: item.ip, group: body.group || tmpl.node.group, tags: [], template: tmpl.id });
+      n.checks = tmpl.checks.map((c, i) => mkCheck(n.id, c.type, c.name, { interval: c.intervalSeconds, timeout: c.timeoutSeconds, config: clone(c.config), enabled: c.enabled, sortOrder: i, base: c.type === 'ping' ? 3 : 40, status: 'unknown' }));
+      nodes.push(n);
+      created.push(nodeOut(n));
+    }
+    if (created.length) addEvent('discovery', { title: `Added ${created.length} node${created.length === 1 ? '' : 's'} from discovery`, detail: created.map((c) => `${c.name} (${c.host})`).join(', ') });
+    return { created, skipped };
+  });
+
   on('GET', /^\/api\/charts$/, () => clone(savedCharts));
   on('PUT', /^\/api\/charts$/, (m, body) => { savedCharts = (body || []).map((c, i) => ({ ...c, id: c.id || `chart-${Date.now()}${i}`, name: c.name || `Chart ${i + 1}`, updatedAt: iso(Date.now()) })); return clone(savedCharts); });
   on('GET', /^\/api\/automation\/meta$/, () => ({ conditions: ['down', 'recovered', 'degraded', 'warning_cleared', 'cert_warning', 'content_changed', 'affected_by_parent', 'status_change', 'any_failure', 'any_success', 'latency_over'], interpreters: ['sh', 'bash', 'powershell', 'cmd', 'python', 'node', 'custom'], defaultInterpreter: 'powershell', placeholders: [] }));
@@ -927,9 +1015,18 @@
   };
 
   /* ---------- Event stream ---------- */
+  // Every open stream, so something outside the tick loop — a discovery sweep,
+  // which has news several times a second — can push to all of them.
+  const liveStreams = new Set();
+  function pushUpdate(data) {
+    const e = new MessageEvent('update', { data: JSON.stringify(data) });
+    for (const s of liveStreams) s.dispatchEvent(e);
+  }
+
   class MockEventSource extends EventTarget {
     constructor(url) {
       super();
+      liveStreams.add(this);
       this.url = url; this.readyState = 0;
       setTimeout(() => { this.readyState = 1; this.dispatchEvent(new Event('open')); if (this.onopen) this.onopen(new Event('open')); }, 50);
       this.timer = setInterval(() => this.tick(), 12000);
@@ -952,7 +1049,7 @@
       const e = new MessageEvent('update', { data });
       this.dispatchEvent(e);
     }
-    close() { clearInterval(this.timer); this.readyState = 2; }
+    close() { clearInterval(this.timer); liveStreams.delete(this); this.readyState = 2; }
   }
   window.EventSource = MockEventSource;
 

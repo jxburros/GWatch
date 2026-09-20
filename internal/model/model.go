@@ -560,6 +560,7 @@ const (
 	EventEndpointCalled     EventType = "endpoint_called" // a custom endpoint was invoked
 	EventUpdate             EventType = "update"          // application update checked / applied
 	EventAuth               EventType = "auth"            // sign-in, sign-out, account or API-key change
+	EventDiscovery          EventType = "discovery"       // a subnet was swept, or nodes were added from a sweep
 )
 
 // Event is one entry in the incident/event timeline.

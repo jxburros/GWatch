@@ -30,9 +30,25 @@ type SendFunc func(ctx context.Context, settings model.SMTPSettings, msg mailer.
 
 // Update is broadcast to API subscribers whenever something changes.
 type Update struct {
-	Kind    string `json:"kind"` // result | state | event | config | maintenance | health
+	Kind    string `json:"kind"` // result | state | event | config | maintenance | health | discovery
 	CheckID int64  `json:"checkId,omitempty"`
 	NodeID  int64  `json:"nodeId,omitempty"`
+	// Discovery carries a subnet sweep's progress. A sweep is the one thing
+	// the interface watches that has no check and no node behind it, so its
+	// counters ride on the update rather than sending the browser back to the
+	// API for them several times a second.
+	Discovery *DiscoveryProgress `json:"discovery,omitempty"`
+}
+
+// DiscoveryProgress is how far a discovery run has got. The engine neither
+// starts nor owns those runs — see internal/discovery — it only carries their
+// progress to whoever is watching the stream.
+type DiscoveryProgress struct {
+	ID         string `json:"id"`
+	State      string `json:"state"` // running | done | cancelled | failed
+	Scanned    int    `json:"scanned"`
+	Total      int    `json:"total"`
+	Responders int    `json:"responders"`
 }
 
 // Options configure the engine.
@@ -493,6 +509,11 @@ func (e *Engine) Unsubscribe(ch chan Update) {
 	delete(e.subs, ch)
 	e.subMu.Unlock()
 }
+
+// Broadcast sends an update to every subscriber. It is here for the things
+// that happen beside the monitoring loop rather than inside it — a discovery
+// sweep, so far — which have news for the interface but nothing to record.
+func (e *Engine) Broadcast(u Update) { e.broadcast(u) }
 
 func (e *Engine) broadcast(u Update) {
 	e.subMu.Lock()
