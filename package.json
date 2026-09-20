@@ -1,0 +1,12 @@
+{
+  "name": "gwatch-web-tests",
+  "private": true,
+  "type": "module",
+  "description": "Test-only tooling for the GWatch web interface (web/). Nothing here ships in the gwatch binary — the shipped web assets stay dependency-free, embedded straight from web/ with no build step.",
+  "scripts": {
+    "test": "node --test tests/web/*.test.mjs tests/web/views/*.test.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "30.1.0"
+  }
+}
