@@ -6,7 +6,7 @@ import { LineChart, toSeries, uptimeBar, uptimeLegend, SERIES_COLORS } from '../
 import { relTime, ms as fmtMs, pct, dateTime, interval, plural, timeShort } from '../fmt.js';
 import { resultInspector } from './inspector.js';
 import { openTriggerEditor, triggerRow } from './automation.js';
-import { hardwarePanel } from './hardware.js';
+import { hardwarePanel } from './machines.js';
 
 export async function mount(root, ctx) {
   const id = ctx.params.id;

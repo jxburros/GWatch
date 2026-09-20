@@ -116,7 +116,7 @@ companion that lets an AI assistant use this API with a key, is documented in
 
 ## Health & overview
 
-- `GET /api/health` → `model.Health` (service mode, scheduler, last/next check, db size, retention status, backup status, recent internal errors, alert config state).
+- `GET /api/health` → `model.Health` (service mode, scheduler, last/next check, db size, retention status, backup status, recent internal errors, alert config state). Also carries the on-disk paths: `dataDir` (the data directory), `databasePath` (`<dataDir>/gwatch.db`), `keyPath` (`<dataDir>/gwatch.key`) and `backupDir` (`<dataDir>/backups`) — see [`INSTALL.md`](INSTALL.md#where-your-data-lives).
 - `GET /api/overview` → 
   ```json
   {

@@ -789,6 +789,8 @@ type Health struct {
 	DatabasePath     string          `json:"databasePath"`
 	DatabaseBytes    int64           `json:"databaseBytes"`
 	DataDir          string          `json:"dataDir"`
+	KeyPath          string          `json:"keyPath"`
+	BackupDir        string          `json:"backupDir"`
 	Retention        RetentionStatus `json:"retention"`
 	Backup           BackupStatus    `json:"backup"`
 	RecentErrors     []Event         `json:"recentErrors"`

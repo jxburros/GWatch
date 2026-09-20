@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -310,6 +311,8 @@ func (e *Engine) Health(ctx context.Context) model.Health {
 		DatabasePath:     e.store.Path(),
 		DatabaseBytes:    e.store.SizeBytes(),
 		DataDir:          e.opts.DataDir,
+		KeyPath:          filepath.Join(e.opts.DataDir, store.KeyFileName),
+		BackupDir:        filepath.Join(e.opts.DataDir, "backups"),
 		Retention:        retention,
 		Backup:           e.backup,
 		RecentErrors:     errs,

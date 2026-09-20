@@ -109,6 +109,30 @@ folder from the program files, so upgrading or reinstalling never touches your
 monitoring history, nodes, checks or settings. `ProgramData` is a hidden folder by
 default; type the path directly into File Explorer's address bar to open it.
 
+That data directory is always a normal, permanent folder on this computer's disk —
+never a temp directory that the OS can clear on reboot or under disk pressure. The
+Windows installer and `scripts/install.ps1` both point the service at
+`C:\ProgramData\GWatch`; running GWatch directly (any OS, see the
+[README](../README.md#run-without-installing-any-os)) picks a per-platform default
+unless you override it:
+
+| Platform | Default data directory |
+| --- | --- |
+| Windows | `%ProgramData%\GWatch` (normally `C:\ProgramData\GWatch`) |
+| Linux | `$XDG_DATA_HOME/gwatch`, otherwise `~/.local/share/gwatch` |
+| macOS | `~/.local/share/gwatch` |
+
+Override it with `--data-dir DIR` on the command line or the `GWATCH_DATA_DIR`
+environment variable, on any platform. Inside that directory:
+
+- `gwatch.db` — the SQLite database;
+- `gwatch.key` — the key that encrypts secrets stored in the database;
+- `logs/` — the service log;
+- `backups/` — encrypted backup archives, if you make any.
+
+See [`PRIVACY.md`](PRIVACY.md#what-gwatch-stores-and-where) for what's stored inside
+`gwatch.db` and why.
+
 ## Upgrading
 
 Download the newer `gwatch-setup-<version>.exe` and run it the same way. The installer
