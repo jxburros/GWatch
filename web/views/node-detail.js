@@ -10,7 +10,7 @@ import { hardwarePanel } from './machines.js';
 
 export async function mount(root, ctx) {
   const id = ctx.params.id;
-  const state = { node: null, events: [], triggers: [], nodes: [], range: '24h', charts: [], expanded: new Set(), results: new Map(), destroyed: false, history: null, hardware: new Map() };
+  const state = { node: null, events: [], triggers: [], nodes: [], range: '24h', charts: [], expanded: new Set(), results: new Map(), destroyed: false, history: null, hardware: new Map(), latChart: null, lossChart: null, uptimeEl: null, historyShape: '' };
 
   const headEl = h('div');
   const bannersEl = h('div', { class: 'stack-sm', style: { marginBottom: '14px' } });
@@ -21,6 +21,11 @@ export async function mount(root, ctx) {
   const triggersEl = h('section', { class: 'card', 'aria-label': 'Triggers' });
   const chartsEl = h('section', { class: 'card', 'aria-label': 'History' });
   const eventsEl = h('section', { class: 'card', 'aria-label': 'Events' });
+  // The history card's frame is built once and kept for the life of the view.
+  // A live update swaps what is inside it, never the card itself, so the
+  // charts are never taken off the page while their new data is in flight.
+  const historyChips = h('div', { class: 'card-actions' });
+  const historyBody = h('div', { class: 'stack' });
   root.append(headEl, bannersEl, h('div', { class: 'stack' }, checksEl, hardwareEl, chartsEl, triggersEl, eventsEl));
   headEl.append(skeleton({ lines: 2 }));
 
@@ -244,52 +249,79 @@ export async function mount(root, ctx) {
     const n = state.node;
     const checks = (n.checks || []);
     const ids = checks.map((c) => c.id);
-    clearCharts();
-    clear(chartsEl);
-    const head = h('div', { class: 'card-head' }, h('h2', null, 'History'), h('div', { class: 'card-actions' }, rangeChips(state.range, (r) => { state.range = r; loadHistory(); })));
-    chartsEl.append(head);
-    if (!ids.length) { chartsEl.append(h('p', { class: 'note' }, 'Charts appear once this node has checks.')); return; }
-    const body = h('div', { class: 'stack' }, skeleton({ height: 220 }));
-    chartsEl.append(body);
+    // Build the card's frame the first time and leave it alone afterwards.
+    if (!chartsEl.firstChild) {
+      chartsEl.append(h('div', { class: 'card-head' }, h('h2', null, 'History'), historyChips), historyBody);
+    }
+    replace(historyChips, rangeChips(state.range, (r) => { state.range = r; loadHistory(); }));
+    if (!ids.length) { clearCharts(); replace(historyBody, h('p', { class: 'note' }, 'Charts appear once this node has checks.')); return; }
+    // Only a first load has nothing to show. On every later pass the charts
+    // that are already up stay up, at full opacity, until the new data has
+    // arrived — a skeleton here is a pale block where a dark chart was, which
+    // is what read as a flash on every live update.
+    if (!historyBody.firstChild) historyBody.append(skeleton({ height: 220 }));
     let series;
-    try { series = await getHistoryMulti(ids, state.range); } catch (e) { replace(body, h('p', { class: 'note' }, 'Could not load history: ' + e.message)); return; }
+    try { series = await getHistoryMulti(ids, state.range); } catch (e) { clearCharts(); replace(historyBody, h('p', { class: 'note' }, 'Could not load history: ' + e.message)); return; }
     if (state.destroyed) return;
     state.history = series;
-    clear(body);
     const list = Array.isArray(series) ? series : [series];
     const from = list[0]?.from, to = list[0]?.to, bucket = list[0]?.bucketSeconds || 0;
     const latencySeries = list.filter((hs) => (hs.points || []).some((p) => p.avgMs != null));
-
-    // Latency / response time chart. A hardware check measures a machine
-    // rather than a round trip, so it is left out here — its readings are in
-    // the hardware panel above.
+    // A hardware check measures a machine rather than a round trip, so it is
+    // left out of the latency chart — its readings are in the hardware panel.
     const timed = ids.filter((id) => checks.find((c) => c.id === id)?.type !== 'system');
+    const pings = list.filter((hs) => hs.checkType === 'ping');
+
+    const latData = () => ({ series: latencySeries.map((hs, i) => ({ ...toSeries(hs, 'avg', SERIES_COLORS[i % SERIES_COLORS.length]), name: hs.checkName })), from, to, bucketSeconds: bucket });
+    const lossData = () => ({ series: pings.map((hs, i) => ({ ...toSeries(hs, 'loss', SERIES_COLORS[i % SERIES_COLORS.length]), name: hs.checkName })), from, to, bucketSeconds: bucket });
+
+    // Which charts the card holds, and with which series. While that is
+    // unchanged the existing canvases are handed the new points and redraw
+    // themselves; a new canvas would start life blank and unsized, which is
+    // the other half of the flash.
+    const shape = JSON.stringify([state.range, timed.length > 0, latencySeries.map((hs) => hs.checkName), pings.map((hs) => hs.checkName)]);
+    if (shape === state.historyShape && state.uptimeEl && historyBody.contains(state.uptimeEl)) {
+      state.latChart?.setData(latData());
+      state.lossChart?.setData(lossData());
+      replace(state.uptimeEl, ...uptimeContent(list));
+      return;
+    }
+
+    // The shape did change, so the card is rebuilt — but off-screen and in one
+    // go, and only now that the data is in hand.
+    clearCharts();
+    const built = [];
     if (timed.length) {
       const latHost = h('div', null);
       const latChart = new LineChart(latHost, { unit: 'ms', height: 240, ariaLabel: 'Latency history', title: `${n.name} — latency (${state.range})` });
-      state.charts.push(latChart);
-      latChart.setData({ series: latencySeries.map((hs, i) => ({ ...toSeries(hs, 'avg', SERIES_COLORS[i % SERIES_COLORS.length]), name: hs.checkName })), from, to, bucketSeconds: bucket });
-      body.append(chartSection('Latency / response time', latHost, () => latChart.exportPNG(`${slug(n.name)}-latency-${state.range}.png`), timed));
+      state.charts.push(latChart); state.latChart = latChart;
+      latChart.setData(latData());
+      built.push(chartSection('Latency / response time', latHost, () => latChart.exportPNG(`${slug(n.name)}-latency-${state.range}.png`), timed));
     }
-    // Packet loss for ping checks
-    const pings = list.filter((hs) => hs.checkType === 'ping');
     if (pings.length) {
       const lossHost = h('div', null);
       const lossChart = new LineChart(lossHost, { unit: '%', height: 160, yMin: 0, yMax: 100, ariaLabel: 'Packet loss history', title: `${n.name} — packet loss (${state.range})` });
-      state.charts.push(lossChart);
-      lossChart.setData({ series: pings.map((hs, i) => ({ ...toSeries(hs, 'loss', SERIES_COLORS[i % SERIES_COLORS.length]), name: hs.checkName })), from, to, bucketSeconds: bucket });
-      body.append(chartSection('Packet loss', lossHost, () => lossChart.exportPNG(`${slug(n.name)}-loss-${state.range}.png`), pings.map((p) => p.checkId)));
+      state.charts.push(lossChart); state.lossChart = lossChart;
+      lossChart.setData(lossData());
+      built.push(chartSection('Packet loss', lossHost, () => lossChart.exportPNG(`${slug(n.name)}-loss-${state.range}.png`), pings.map((p) => p.checkId)));
     }
+    state.uptimeEl = h('div', null, ...uptimeContent(list));
+    built.push(state.uptimeEl);
+    replace(historyBody, built);
+    state.historyShape = shape;
+  }
 
-    // Uptime bars
-    const up = h('div', null, h('div', { class: 'section-title' }, `Availability — ${state.range}`));
+  /** The availability bars under the charts: cheap, synchronous DOM, so they
+   *  are simply written afresh each time. */
+  function uptimeContent(list) {
+    const out = [h('div', { class: 'section-title' }, `Availability — ${state.range}`)];
     for (const hs of list) {
       const avail = hs.summary?.availability;
       const cls = avail == null ? '' : avail >= 99.9 ? 'text-up' : avail >= 95 ? 'text-degraded' : 'text-down';
-      up.append(h('div', { class: 'uptime-row' }, h('div', { class: 'uptime-name' }, hs.checkName, h('div', { class: 'sub' }, `${hs.summary?.count ?? 0} samples · ${hs.summary?.failures ?? 0} failures`)), uptimeBar(hs.points, { bucketSeconds: hs.bucketSeconds, from: hs.from, to: hs.to }), h('div', { class: `uptime-pct ${cls}` }, pct(avail, 2))));
+      out.push(h('div', { class: 'uptime-row' }, h('div', { class: 'uptime-name' }, hs.checkName, h('div', { class: 'sub' }, `${hs.summary?.count ?? 0} samples · ${hs.summary?.failures ?? 0} failures`)), uptimeBar(hs.points, { bucketSeconds: hs.bucketSeconds, from: hs.from, to: hs.to }), h('div', { class: `uptime-pct ${cls}` }, pct(avail, 2))));
     }
-    up.append(uptimeLegend());
-    body.append(up);
+    out.push(uptimeLegend());
+    return out;
   }
 
   function chartSection(title, host, onExportPng, ids) {
@@ -298,7 +330,10 @@ export async function mount(root, ctx) {
       h('div', { class: 'row-between', style: { marginBottom: '8px' } }, h('div', { class: 'section-title', style: { marginBottom: 0 } }, title), h('div', { class: 'btn-group' }, h('button', { class: 'btn btn-sm', type: 'button', onclick: onExportPng }, icon('image'), 'Export PNG'), csvBtn)),
       host);
   }
-  function clearCharts() { state.charts.forEach((c) => c.destroy()); state.charts = []; }
+  function clearCharts() {
+    state.charts.forEach((c) => c.destroy()); state.charts = [];
+    state.latChart = null; state.lossChart = null; state.uptimeEl = null; state.historyShape = '';
+  }
   const slug = (s) => String(s).toLowerCase().replace(/[^\w]+/g, '-');
 
   /* ---------- Events ---------- */

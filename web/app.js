@@ -207,7 +207,18 @@ function enterView() {
   void viewRoot.offsetWidth;
   viewRoot.classList.add('view-enter');
   clearTimeout(enterTimer);
-  enterTimer = setTimeout(() => viewRoot.classList.remove('view-enter'), 900);
+  enterTimer = setTimeout(endEnterAnimation, 900);
+}
+
+/** Entrance animations belong to navigation and to nothing else. The timer
+ *  above is not enough on its own: an update arriving inside that window would
+ *  hand freshly built elements to `.view-enter`, and they would fade in from
+ *  nothing under content that was already on screen. So a refresh ends the
+ *  animation first — anything it renders is then simply there. */
+function endEnterAnimation() {
+  clearTimeout(enterTimer);
+  enterTimer = 0;
+  viewRoot.classList.remove('view-enter');
 }
 
 function setNav(name) {
@@ -450,6 +461,7 @@ async function refreshUpdates({ open = false } = {}) {
 /* ---------- Live updates ---------- */
 const refreshCurrent = debounce(() => {
   if (current?.instance?.refresh) {
+    endEnterAnimation();
     Promise.resolve(current.instance.refresh()).catch((e) => console.warn('refresh failed', e));
   }
 }, 500);
