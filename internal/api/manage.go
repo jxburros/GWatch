@@ -403,6 +403,14 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "the update check interval must be between 1 and 720 hours")
 		return
 	}
+	// An unknown condition or colour would simply never light up in the
+	// browser, which reads as a bug rather than as a setting that was not
+	// taken, so it is refused here with the reason.
+	if err := model.ValidateIndicators(st.Indicators); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	st.Indicators = model.NormalizeIndicators(st.Indicators)
 	if err := s.Store.SaveSettings(r.Context(), st); err != nil {
 		s.fail(w, err)
 		return
@@ -451,6 +459,9 @@ func describeSettingsChange(before, after model.Settings) string {
 	}
 	if before.Updates != after.Updates {
 		parts = append(parts, "update settings changed")
+	}
+	if !sameIndicators(before.Indicators, after.Indicators) {
+		parts = append(parts, "header indicators changed")
 	}
 	if len(parts) == 0 {
 		return "No effective change."
@@ -789,3 +800,17 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 }
 
 var _ = engine.Update{}
+
+// sameIndicators compares two indicator lists. IndicatorRule is comparable
+// all the way down, so this is == over the slice rather than reflection.
+func sameIndicators(a, b []model.IndicatorRule) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

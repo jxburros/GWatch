@@ -55,7 +55,14 @@
     </aside>
     <div class="main">
       <header class="topbar">
-        <h1 class="topbar-title" id="page-title">Dashboard</h1>
+        <div class="topbar-lead">
+          <h1 class="topbar-title" id="page-title">Dashboard</h1>
+          <!-- Status indicators, directly under the page name: one orb when
+               all is well, blue when there is nothing to report on yet, and
+               one orb per firing rule otherwise. The rules are configured in
+               Settings > Indicators and evaluated in app.js. -->
+          <div class="indicators" id="indicators" aria-label="Status indicators" aria-live="polite"></div>
+        </div>
         <div class="topbar-right">
           <!-- Shown only when a release newer than this build is waiting, and
                only to an administrator, who is the only one who can install it.
@@ -64,10 +71,9 @@
           <a class="topbar-btn nav-link" href="#/settings" data-nav="settings" id="settings-link" title="Settings" aria-label="Settings"><span class="nav-icon" data-icon="settings"></span><span class="topbar-btn-label">Settings</span></a>
         </div>
       </header>
-      <!-- Page bar: live state on the left, this page's controls on the right.
-           The header itself carries nothing but the page name and Settings. -->
+      <!-- Page bar: this page's own controls, and nothing else. It is absent
+           on the pages that offer none. -->
       <div class="page-bar" id="page-bar">
-        <div class="status-dots" id="status-dots" aria-label="Attention summary" aria-live="polite"></div>
         <div class="topbar-actions" id="page-actions"></div>
       </div>
       <div class="api-banner" id="api-banner" role="alert" hidden>

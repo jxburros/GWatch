@@ -984,6 +984,10 @@ func (s *Store) LoadSettings(ctx context.Context) (model.Settings, error) {
 	if st.General.UpdateRepo == "" {
 		st.General.UpdateRepo = def.General.UpdateRepo
 	}
+	// Installs older than the header indicators have no rules stored, and
+	// normalising on the way out seeds them the defaults without anybody
+	// having to open the settings page first.
+	st.Indicators = model.NormalizeIndicators(st.Indicators)
 	return st, nil
 }
 

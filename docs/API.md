@@ -48,8 +48,15 @@ has to sign in. The legacy access password keeps working for existing scripts.
 
 ```json
 {"kind":"user","name":"pat","role":"admin","isAdmin":true,"canWrite":true,"signedIn":true,
- "theme":"dark","accentColor":"#43c9c0"}
+ "theme":"dark","accentColor":"#43c9c0",
+ "indicators":[{"id":"nodes-down","name":"Nodes down","enabled":true,"colour":"red",
+                "condition":{"kind":"nodesInStatus","status":"down","minCount":1}}]}
 ```
+
+`theme`, `accentColor` and `indicators` come from settings, which a viewer may not
+read. They ride along here so that every account is styled the same and evaluates the
+same header indicators. `indicators` is the effective list: normalised, with ids and
+counts filled in, and seeded with the defaults when none are stored.
 
 **Roles.** `admin` may change anything. `viewer` may read the overview, status,
 wallboard, stream, nodes and checks, history, events, maintenance, dashboards, wallboards,
@@ -169,6 +176,7 @@ companion that lets an AI assistant use this API with a key, is documented in
   ```
 - `GET /api/wallboard` → same shape as overview plus `"health": Health` and `"trends": [HistorySeries...]` for up to 6 most important checks over 24h. This is the automatic board; a configured one is read from `/api/wallboards/{id}/view` (see Wallboards).
 - `GET /api/status` → header summary: `{ "down", "degraded", "unknown", "up", "total", "certWarnings", "maintenance", "attention", "serviceOk", "serviceIssues": [..] }`.
+  This one document is also what the header indicators are evaluated against, in the browser (see Indicators).
 - `GET /api/network` → `NetworkInfo`: effective listen address, whether other devices can reach it, LAN URLs, whether a password is set.
 
 ## Nodes and checks
@@ -491,10 +499,46 @@ The `<asset>.sha256` sidecar is still checked when the release publishes one (`c
 ## Settings
 
 - `GET /api/settings` → `Settings` (SMTP password, access password and the scheduled-backup password are returned masked as `"********"` when set).
-- `PUT /api/settings` body `Settings` → saved Settings (a masked password keeps the stored one). `general.theme` is `dark|light|system`, `general.accentColor` a hex colour, `general.remoteAccess` rebinds the listener to all interfaces live, `general.accessPassword` is the legacy shared password for other devices (user accounts replace it), `general.requireLoginLocally` makes a browser on this computer sign in too — it is refused while no administrator account exists, and ignored until one does, `general.updateRepo` is the GitHub repository checked for releases. `backups` configures scheduled automatic backups (see below); it cannot be saved with `enabled: true` and no password. `updates` is `{checkAutomatically, checkIntervalHours, includePrerelease, promptOnOpen}`: `checkAutomatically` governs every check GWatch makes on its own (the periodic one and the one made when the interface is opened), `checkIntervalHours` must be 1-720, `includePrerelease` lets a pre-release be offered as an update, and `promptOnOpen` offers a waiting update in a dialog when the interface is opened.
+- `PUT /api/settings` body `Settings` → saved Settings (a masked password keeps the stored one). `general.theme` is `dark|light|system`, `general.accentColor` a hex colour, `general.remoteAccess` rebinds the listener to all interfaces live, `general.accessPassword` is the legacy shared password for other devices (user accounts replace it), `general.requireLoginLocally` makes a browser on this computer sign in too — it is refused while no administrator account exists, and ignored until one does, `general.updateRepo` is the GitHub repository checked for releases. `backups` configures scheduled automatic backups (see below); it cannot be saved with `enabled: true` and no password. `updates` is `{checkAutomatically, checkIntervalHours, includePrerelease, promptOnOpen}`: `checkAutomatically` governs every check GWatch makes on its own (the periodic one and the one made when the interface is opened), `checkIntervalHours` must be 1-720, `includePrerelease` lets a pre-release be offered as an update, and `promptOnOpen` offers a waiting update in a dialog when the interface is opened. `indicators` configures the status circles in the header (see below).
 - All three passwords are stored encrypted in the database with the local `gwatch.key` file; the API request and response bodies are unchanged.
 - `POST /api/settings/test-email` body `{ "to": "optional@override" }` → `{ "ok": true, "message": "..." }` or error.
 - `GET /api/retention/status` → `RetentionStatus`. `POST /api/retention/run` → runs rollup+cleanup now → RetentionStatus.
+
+### Indicators
+
+`settings.indicators` is a list of rules behind the status circles under the page
+title in the web interface. Each rule is:
+
+```json
+{"id":"nodes-down","name":"Nodes down","enabled":true,"colour":"red",
+ "condition":{"kind":"nodesInStatus","status":"down","minCount":1}}
+```
+
+- `colour` is `yellow`, `orange` or `red`. Green and blue are not rule colours:
+  green is what the header shows when no rule fires, and blue when there is nothing
+  to report on yet — no nodes at all, or no node that has produced a result.
+- `condition.kind` is one of:
+  - `nodesInStatus` — counts nodes in `condition.status`, which is `down`,
+    `degraded`, `unknown` (no result yet) or `maintenance`. `up` is refused: an
+    indicator that fires when all is well would be a second green.
+  - `certWarnings` — counts certificates that are expiring or invalid.
+  - `attention` — counts the checks that are down or degraded right now.
+  - `serviceHealth` — fires when the monitor itself is unwell (stopped scheduler,
+    retention error, failed backup, bounced alert email). It takes no count.
+- `condition.minCount` is how many it takes to fire; it defaults to 1.
+
+The vocabulary is closed and short because the rules are evaluated in the browser
+against `GET /api/status`, so every condition has to be answerable from that one
+summary. An unknown `kind`, an unknown `colour` or an unknown `status` is refused
+with `400` and a message naming the rule. A missing `id` is assigned on save, a
+duplicate id is replaced, and an empty list is replaced by the defaults — which is
+also how a `PUT` asks for the defaults back. The defaults are: red for any node
+down and for the monitor being unwell, orange for any node degraded and for a
+certificate expiring, yellow for any node still waiting for a first result and for
+any node in maintenance.
+
+The effective list is served to every account through `GET /api/me`, because a
+viewer may not read settings but sees the same header.
 
 ## Backups
 

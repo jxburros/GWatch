@@ -7,6 +7,7 @@ package model
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -458,6 +459,10 @@ type Principal struct {
 	SignedIn    bool   `json:"signedIn"`
 	Theme       string `json:"theme,omitempty"`
 	AccentColor string `json:"accentColor,omitempty"`
+	// Indicators are the header's status-orb rules, already normalised. They
+	// travel with the identity for the same reason the theme does: a viewer
+	// may not read settings, and every account should see the same header.
+	Indicators []IndicatorRule `json:"indicators,omitempty"`
 }
 
 // MaintenanceWindow silences alerts for a node, a group or everything.
@@ -611,6 +616,11 @@ type Settings struct {
 	Retention RetentionSettings `json:"retention"`
 	Backups   BackupSettings    `json:"backups"`
 	Updates   UpdateSettings    `json:"updates"`
+	// Indicators are the rules behind the status orbs in the header. They sit
+	// beside the other sections rather than inside General because they are a
+	// list: describeSettingsChange and the tests compare GeneralSettings with
+	// ==, which only works while every field in it is comparable.
+	Indicators []IndicatorRule `json:"indicators"`
 }
 
 // UpdateSettings controls how GWatch looks for new releases of itself. It is
@@ -622,6 +632,170 @@ type UpdateSettings struct {
 	CheckIntervalHours int  `json:"checkIntervalHours"` // default 24, 1-720 (30 days)
 	IncludePrerelease  bool `json:"includePrerelease"`  // offer pre-releases as well as stable releases
 	PromptOnOpen       bool `json:"promptOnOpen"`       // offer the update in a dialog when the interface is opened
+}
+
+// ---- header indicators ----
+
+// The three severities an indicator rule may carry. Green and blue are not
+// among them on purpose: those two are the states GWatch works out for itself
+// — green when nothing fires, blue when there is nothing to report on yet —
+// and neither is anything a rule could usefully be pointed at.
+const (
+	IndicatorYellow = "yellow"
+	IndicatorOrange = "orange"
+	IndicatorRed    = "red"
+)
+
+// The conditions a rule may test. The list is short because the rules are
+// evaluated in the browser against the one summary document GET /api/status
+// already returns; anything not answerable from that summary would need a
+// second request on every poll, for every viewer.
+const (
+	// IndicatorNodesInStatus counts nodes sitting in one status.
+	IndicatorNodesInStatus = "nodesInStatus"
+	// IndicatorCertWarnings counts certificates that are expiring or invalid.
+	IndicatorCertWarnings = "certWarnings"
+	// IndicatorAttention counts the entries on the attention list: the checks
+	// that are down or degraded right now.
+	IndicatorAttention = "attention"
+	// IndicatorServiceHealth fires when the monitor itself is unwell — the
+	// scheduler stopped, retention failed, a backup failed, alerts bounced.
+	IndicatorServiceHealth = "serviceHealth"
+)
+
+// IndicatorCondition is what a rule tests. Which fields mean anything depends
+// on Kind: only nodesInStatus reads Status, and serviceHealth reads neither.
+type IndicatorCondition struct {
+	Kind string `json:"kind"`
+	// Status is one of down, degraded, unknown or maintenance. "unknown" is
+	// the useful one on a young install: it means a node exists but has not
+	// produced a result yet.
+	Status string `json:"status,omitempty"`
+	// MinCount is how many it takes before the rule fires. Zero means one.
+	MinCount int `json:"minCount,omitempty"`
+}
+
+// IndicatorRule is one configurable orb in the header. A rule that fires puts
+// an orb of its colour under the page title; several firing at once stack side
+// by side, reddest first.
+type IndicatorRule struct {
+	ID        string             `json:"id"`
+	Name      string             `json:"name"`
+	Enabled   bool               `json:"enabled"`
+	Colour    string             `json:"colour"`
+	Condition IndicatorCondition `json:"condition"`
+}
+
+// DefaultIndicators is the set every install starts with, so that the header
+// says something useful before anybody has opened the settings. The severities
+// follow how much of an answer the monitor has: red for a node that is
+// definitely not answering and for the monitor being broken itself, orange for
+// something answering badly or about to expire, yellow for what it simply does
+// not know yet or has been told to ignore.
+func DefaultIndicators() []IndicatorRule {
+	return []IndicatorRule{
+		{ID: "nodes-down", Name: "Nodes down", Enabled: true, Colour: IndicatorRed, Condition: IndicatorCondition{Kind: IndicatorNodesInStatus, Status: string(StatusDown), MinCount: 1}},
+		{ID: "monitor-unwell", Name: "Monitor trouble", Enabled: true, Colour: IndicatorRed, Condition: IndicatorCondition{Kind: IndicatorServiceHealth}},
+		{ID: "nodes-degraded", Name: "Nodes degraded", Enabled: true, Colour: IndicatorOrange, Condition: IndicatorCondition{Kind: IndicatorNodesInStatus, Status: string(StatusDegraded), MinCount: 1}},
+		{ID: "certs-expiring", Name: "Certificates expiring", Enabled: true, Colour: IndicatorOrange, Condition: IndicatorCondition{Kind: IndicatorCertWarnings, MinCount: 1}},
+		{ID: "nodes-unknown", Name: "Waiting for first results", Enabled: true, Colour: IndicatorYellow, Condition: IndicatorCondition{Kind: IndicatorNodesInStatus, Status: string(StatusUnknown), MinCount: 1}},
+		{ID: "nodes-maintenance", Name: "In maintenance", Enabled: true, Colour: IndicatorYellow, Condition: IndicatorCondition{Kind: IndicatorNodesInStatus, Status: string(StatusMaintenance), MinCount: 1}},
+	}
+}
+
+// ValidIndicatorColour reports whether c is one of the three severities.
+func ValidIndicatorColour(c string) bool {
+	switch c {
+	case IndicatorYellow, IndicatorOrange, IndicatorRed:
+		return true
+	}
+	return false
+}
+
+// ValidIndicatorStatus reports whether s is a status nodesInStatus can count.
+// Up is missing deliberately: an indicator that fires when things are well
+// would be a second green, and green is not a rule's to give.
+func ValidIndicatorStatus(s string) bool {
+	switch Status(s) {
+	case StatusDown, StatusDegraded, StatusUnknown, StatusMaintenance:
+		return true
+	}
+	return false
+}
+
+// ValidateIndicators reports the first rule the server will not store. It is
+// strict about the closed vocabulary — an unknown kind would simply never fire
+// in the browser, which looks like a bug rather than a rejected setting — and
+// lenient about everything a normalisation can fix.
+func ValidateIndicators(rules []IndicatorRule) error {
+	seen := make(map[string]bool, len(rules))
+	for i, r := range rules {
+		where := strings.TrimSpace(r.Name)
+		if where == "" {
+			where = fmt.Sprintf("indicator %d", i+1)
+		}
+		if !ValidIndicatorColour(r.Colour) {
+			return fmt.Errorf("%s: colour must be yellow, orange or red", where)
+		}
+		switch r.Condition.Kind {
+		case IndicatorNodesInStatus:
+			if !ValidIndicatorStatus(r.Condition.Status) {
+				return fmt.Errorf("%s: status must be down, degraded, unknown or maintenance", where)
+			}
+		case IndicatorCertWarnings, IndicatorAttention, IndicatorServiceHealth:
+		default:
+			return fmt.Errorf("%s: %q is not a condition GWatch can evaluate", where, r.Condition.Kind)
+		}
+		if r.Condition.MinCount < 0 || r.Condition.MinCount > 100000 {
+			return fmt.Errorf("%s: the count must be between 1 and 100000", where)
+		}
+		if id := strings.TrimSpace(r.ID); id != "" {
+			if seen[id] {
+				return fmt.Errorf("%s: two indicators share the id %q", where, id)
+			}
+			seen[id] = true
+		}
+	}
+	return nil
+}
+
+// NormalizeIndicators fills in what a rule may leave out and seeds the
+// defaults when there are none. It runs when settings are loaded as well as
+// when they are saved, so an install that predates indicators picks them up
+// without anybody having to visit the settings page.
+func NormalizeIndicators(rules []IndicatorRule) []IndicatorRule {
+	if len(rules) == 0 {
+		return DefaultIndicators()
+	}
+	out := make([]IndicatorRule, 0, len(rules))
+	used := make(map[string]bool, len(rules))
+	for i, r := range rules {
+		r.Name = strings.TrimSpace(r.Name)
+		if r.Name == "" {
+			r.Name = "Indicator"
+		}
+		r.ID = strings.TrimSpace(r.ID)
+		if r.ID == "" || used[r.ID] {
+			r.ID = fmt.Sprintf("indicator-%d", i+1)
+			for used[r.ID] {
+				r.ID += "x"
+			}
+		}
+		used[r.ID] = true
+		if r.Condition.MinCount < 1 {
+			r.Condition.MinCount = 1
+		}
+		if r.Condition.Kind != IndicatorNodesInStatus {
+			r.Condition.Status = ""
+		}
+		if r.Condition.Kind == IndicatorServiceHealth {
+			// It is either unwell or it is not; a count would suggest the
+			// number of complaints matters, and it does not.
+			r.Condition.MinCount = 1
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // DefaultSettings returns the settings used on first run.
@@ -670,6 +844,7 @@ func DefaultSettings() Settings {
 			IncludePrerelease:  false,
 			PromptOnOpen:       true,
 		},
+		Indicators: DefaultIndicators(),
 	}
 }
 
