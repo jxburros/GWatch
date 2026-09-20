@@ -452,3 +452,92 @@ func TestSecurityHeadersOnEveryResponse(t *testing.T) {
 		}
 	}
 }
+
+// Nodes can be in several groups. The API takes the new list, still takes the
+// old single group from a client that has not been updated, and always answers
+// with both so neither kind of client has to guess.
+func TestNodeGroupsOverTheAPI(t *testing.T) {
+	ts, _ := newTestServer(t)
+
+	var multi nodeDoc
+	body := map[string]any{"name": "NAS", "host": "nas.local", "enabled": true,
+		"groups": []string{"Servers", " Storage ", "servers"}, "checks": []map[string]any{}}
+	if code := call(t, ts, "POST", "/api/nodes", body, &multi); code != 201 {
+		t.Fatalf("create with groups: %d", code)
+	}
+	if len(multi.Groups) != 2 || multi.Groups[0] != "Servers" || multi.Groups[1] != "Storage" {
+		t.Fatalf("groups not normalised: %+v", multi.Groups)
+	}
+	if multi.Group != "Servers" {
+		t.Fatalf("group alias = %q, want the first group", multi.Group)
+	}
+
+	var legacy nodeDoc
+	old := map[string]any{"name": "Printer", "host": "printer", "enabled": true, "group": "Office", "checks": []map[string]any{}}
+	if code := call(t, ts, "POST", "/api/nodes", old, &legacy); code != 201 {
+		t.Fatalf("create with the legacy group: %d", code)
+	}
+	if len(legacy.Groups) != 1 || legacy.Groups[0] != "Office" || legacy.Group != "Office" {
+		t.Fatalf("a client sending only group should get a one-group node: %+v", legacy)
+	}
+
+	// The list carries both fields, and groups is a list even when empty.
+	var raw []map[string]any
+	if code := call(t, ts, "GET", "/api/nodes", nil, &raw); code != 200 || len(raw) != 2 {
+		t.Fatalf("list nodes: %d %d", code, len(raw))
+	}
+	for _, n := range raw {
+		if _, ok := n["groups"].([]any); !ok {
+			t.Fatalf("groups should always be a list: %v", n["groups"])
+		}
+		if _, ok := n["group"].(string); !ok {
+			t.Fatalf("the deprecated group alias should still be sent: %v", n["group"])
+		}
+	}
+
+	// /api/groups counts a node once per group it is in.
+	var groups struct {
+		Groups []struct {
+			Name  string `json:"name"`
+			Count int    `json:"count"`
+		} `json:"groups"`
+	}
+	if code := call(t, ts, "GET", "/api/groups", nil, &groups); code != 200 || len(groups.Groups) != 3 {
+		t.Fatalf("groups: %d %+v", code, groups.Groups)
+	}
+
+	// And the overview tallies it in each of them: three group rows for two
+	// nodes, which is why the group totals can exceed the node count.
+	var ov struct {
+		Summary struct {
+			Total int `json:"total"`
+		} `json:"summary"`
+		Groups []struct {
+			Name  string `json:"name"`
+			Total int    `json:"total"`
+		} `json:"groups"`
+	}
+	if code := call(t, ts, "GET", "/api/overview", nil, &ov); code != 200 {
+		t.Fatalf("overview: %d", code)
+	}
+	tally := map[string]int{}
+	for _, g := range ov.Groups {
+		tally[g.Name] = g.Total
+	}
+	if tally["Servers"] != 1 || tally["Storage"] != 1 || tally["Office"] != 1 {
+		t.Fatalf("per-group tally = %v", tally)
+	}
+	if ov.Summary.Total != 2 {
+		t.Fatalf("summary total = %d, want the number of nodes", ov.Summary.Total)
+	}
+
+	// An update replaces the whole list.
+	multi.Groups = []string{"Storage"}
+	var updated nodeDoc
+	if code := call(t, ts, "PUT", fmt.Sprintf("/api/nodes/%d", multi.ID), multi.Node, &updated); code != 200 {
+		t.Fatalf("update: %d", code)
+	}
+	if len(updated.Groups) != 1 || updated.Groups[0] != "Storage" || updated.Group != "Storage" {
+		t.Fatalf("update should replace the group list: %+v", updated)
+	}
+}

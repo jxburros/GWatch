@@ -2,7 +2,7 @@
 
 import { api } from '../api.js';
 import { h, icon, clear, replace, statusSpine, statusWord, checkChip, importanceBadge, tagList, toggle, menuButton, toast, confirmDialog, openModal, emptyState, skeleton } from '../components.js';
-import { relTime } from '../fmt.js';
+import { relTime, nodeGroups, inGroup } from '../fmt.js';
 import { pairMachine } from './machines.js';
 
 const STATUS_ORDER = ['down', 'degraded', 'unknown', 'maintenance', 'up', 'paused'];
@@ -58,12 +58,12 @@ export async function mount(root, ctx) {
   }
 
   function matches(n) {
-    if (state.group && n.group !== state.group) return false;
+    if (state.group && !inGroup(n, state.group)) return false;
     if (state.status && (n.status || 'unknown') !== state.status) return false;
     if (state.tag && !(n.tags || []).includes(state.tag)) return false;
     if (state.q) {
       const q = state.q.toLowerCase();
-      const hay = [n.name, n.host, n.group, ...(n.tags || []), ...(n.checks || []).map((c) => c.name)].filter((x) => x != null).join(' ').toLowerCase();
+      const hay = [n.name, n.host, ...nodeGroups(n), ...(n.tags || []), ...(n.checks || []).map((c) => c.name)].filter((x) => x != null).join(' ').toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -94,9 +94,17 @@ export async function mount(root, ctx) {
       listEl.append(h('div', { class: 'card' }, emptyState({ icon: 'search', title: 'No nodes match', text: 'Try a different search or clear the filters.', compact: true, actions: h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { state.q = ''; state.group = ''; state.status = ''; state.tag = ''; searchInput.value = ''; renderFilters(); renderList(); } }, 'Clear filters') })));
       return;
     }
-    // group sections
+    // Group sections. A node in several groups is listed once rather than
+    // once per group, so the section counts still add up to the node count;
+    // the groups it is in that are not the section's are chips on its row.
+    // Which section it sits in follows the filter: with a group filter on,
+    // every row shown belongs under the group that was asked for.
     const byGroup = new Map();
-    for (const n of rows) { const g = n.group || 'Ungrouped'; if (!byGroup.has(g)) byGroup.set(g, []); byGroup.get(g).push(n); }
+    for (const n of rows) {
+      const g = sectionFor(n);
+      if (!byGroup.has(g)) byGroup.set(g, []);
+      byGroup.get(g).push(n);
+    }
     const groupNames = [...byGroup.keys()].sort((a, b) => (a === 'Ungrouped') - (b === 'Ungrouped') || a.localeCompare(b));
 
     // Drop what the new data no longer has. A section taken out takes its rows
@@ -148,6 +156,16 @@ export async function mount(root, ctx) {
     for (const child of [...listEl.children]) if (!keep.has(child)) child.remove();
   }
 
+  /** The one section a node is listed under: the group the list is filtered
+   *  to when that filter is on, and otherwise its first group. */
+  function sectionFor(n) {
+    const groups = nodeGroups(n);
+    if (state.group && inGroup(n, state.group)) {
+      return groups.find((g) => g.trim().toLowerCase() === state.group.trim().toLowerCase()) || state.group;
+    }
+    return groups[0] || 'Ungrouped';
+  }
+
   /** Build a row's fixed frame. The controls that carry listeners are made
    *  once and read `row._node`, so a row reused across updates can never end
    *  up with a second listener on the same switch or menu. */
@@ -156,8 +174,9 @@ export async function mount(root, ctx) {
     const statusCell = h('div', { class: 'n-status' });
     const link = h('a');
     const host = h('span');
+    const groups = h('span');
     const tags = h('span');
-    const nameCell = h('div', { class: 'n-name' }, link, host, tags);
+    const nameCell = h('div', { class: 'n-name' }, link, host, groups, tags);
     const chips = h('div', { class: 'check-chips' });
     const meta = h('div', { class: 'n-meta' }, h('span'));
     // Left visible for a viewer — whether a node is paused is worth seeing —
@@ -166,7 +185,7 @@ export async function mount(root, ctx) {
     const menu = menuButton(() => rowMenu(row._node), { label: 'Actions' });
     const spine = statusSpine('unknown');
     row.append(spine, statusCell, nameCell, chips, meta, h('div', { class: 'n-actions' }, enabledToggle, menu));
-    row._parts = { spine, statusCell, link, host, tags, chips, meta, toggle: enabledToggle, menu };
+    row._parts = { spine, statusCell, link, host, groups, tags, chips, meta, toggle: enabledToggle, menu };
     return row;
   }
 
@@ -207,6 +226,21 @@ export async function mount(root, ctx) {
     const hostText = n.host || 'targets set per check';
     if (p.host.className !== hostCls) p.host.className = hostCls;
     if (p.host.textContent !== hostText) p.host.textContent = hostText;
+    // Only the groups the row is not filed under are worth a chip: the
+    // section heading already says the one it is sitting in.
+    const groups = nodeGroups(n);
+    const section = sectionFor(n);
+    const others = groups.filter((g) => g !== section);
+    const groupSig = `${section}\u0000${others.join('\u0000')}`;
+    if (sig.groups !== groupSig) {
+      sig.groups = groupSig;
+      const el = others.length
+        ? h('span', { class: 'n-groups', title: `Also in ${others.join(', ')}` }, others.map((g) => h('span', { class: 'tag tag-group' }, g)))
+        : h('span');
+      p.groups.replaceWith(el);
+      p.groups = el;
+    }
+
     const tagSig = (n.tags || []).join('\u0000');
     if (sig.tags !== tagSig) {
       sig.tags = tagSig;

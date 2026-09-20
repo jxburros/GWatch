@@ -176,20 +176,20 @@ and GWatch's own `error` message.
 | Tool | What it does |
 | --- | --- |
 | `gwatch_overview` | The whole picture: up/degraded/down tally, per-group status, what needs attention, open incidents, expiring certificates. Start here. |
-| `gwatch_list_nodes` | The monitored nodes with their status and a line per check. Optional `group`, `tag`, `status` and `q` filters. |
+| `gwatch_list_nodes` | The monitored nodes with their status and a line per check. Optional `group`, `tag`, `status` and `q` filters; a node may be in several groups and `group` matches any of them. |
 | `gwatch_get_node` | One node in full: stored configuration, every check's config, and live state. |
 | `gwatch_check_results` | The most recent individual runs of one check (`checkId`, `limit`). |
 | `gwatch_history` | Availability and latency over `1h`/`24h`/`7d`/`30d`/`1y` for one or several checks, downsampled to ~200 points per series by even striding. |
 | `gwatch_events` | The incident timeline, filtered by `nodeId`, `checkId`, `type`, `q`, `since`, `until`, `limit`. |
 | `gwatch_health` | The health of the GWatch service itself — scheduler, last check, database size, recent internal errors. |
 | `gwatch_templates` | The node templates GWatch ships, with the checks each creates. |
-| `gwatch_groups` | The groups and tags in use, with counts. |
+| `gwatch_groups` | The groups and tags in use, with counts. A node in several groups is counted in each. |
 
 ### Write (only with `--allow-write` and a `readwrite` key)
 
 | Tool | What it does |
 | --- | --- |
-| `gwatch_create_node` | Create a node and its checks (`name`, `host`, `group`, `tags`, `importance`, `checks[]`). |
+| `gwatch_create_node` | Create a node and its checks (`name`, `host`, `groups[]`, `tags`, `importance`, `checks[]`). `group` is still accepted as a one-group shorthand. |
 | `gwatch_update_node` | Change a node. Only the fields given change; giving `checks` replaces the whole check list. |
 | `gwatch_delete_node` | Delete a node and its history. Requires `confirm: true`. |
 | `gwatch_set_node_enabled` | Pause or resume a node's checks. |

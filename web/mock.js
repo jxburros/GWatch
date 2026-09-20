@@ -10,6 +10,10 @@
   const ahead = (ms) => iso(NOW + ms);
   const seq = { node: 20, check: 100, result: 90000, event: 5000, dash: 5, maint: 5, wall: 1 };
   const clone = (o) => JSON.parse(JSON.stringify(o));
+  // A node belongs to as many groups as it likes; group is the deprecated
+  // alias for the first of them, which is what an older client reads.
+  const groupsOf = (n) => (n.groups && n.groups.length ? n.groups : (n.group ? [n.group] : []));
+  const inGroup = (n, g) => groupsOf(n).some((x) => String(x).toLowerCase() === String(g || '').toLowerCase());
 
   function rng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 
@@ -27,7 +31,10 @@
   }
   function mkNode(o) {
     const id = ++seq.node;
-    return { id, name: o.name, host: o.host, group: o.group || '', tags: o.tags || [], notes: o.notes || '', importance: o.importance || 'normal', enabled: o.enabled !== false, dependsOnNodeId: o.dependsOnNodeId ?? null, template: o.template || '', createdAt: ago(40 * DAY), updatedAt: ago(2 * DAY), checks: [] };
+    // group is the deprecated alias for the first group, exactly as the
+    // server sends it.
+    const groups = (o.groups || (o.group ? [o.group] : [])).slice(0, 16);
+    return { id, name: o.name, host: o.host, groups, group: groups[0] || '', tags: o.tags || [], notes: o.notes || '', importance: o.importance || 'normal', enabled: o.enabled !== false, dependsOnNodeId: o.dependsOnNodeId ?? null, template: o.template || '', createdAt: ago(40 * DAY), updatedAt: ago(2 * DAY), checks: [] };
   }
 
   const nodes = [];
@@ -43,7 +50,7 @@
     mkCheck(plex.id, 'tcp', 'Plex port 32400', { config: { port: 32400 }, base: 2.1, noise: 0.4, status: 'down', message: 'dial tcp 192.168.1.20:32400: i/o timeout', downSince: 21 * MIN, affectedBy: 'Gateway' }),
     mkCheck(plex.id, 'http', 'Web app', { config: { target: 'http://192.168.1.20:32400/web/index.html', expectedStatus: '200-399', certCheck: false }, base: 48, noise: 0.5, status: 'down', message: 'Connection timed out after 10 s', downSince: 20 * MIN, affectedBy: 'Gateway', interval: 120 }),
   ];
-  const nas = mkNode({ name: 'NAS', host: 'nas.local', group: 'Servers', tags: ['storage', 'backup-target'], importance: 'high', template: 'home-server' });
+  const nas = mkNode({ name: 'NAS', host: 'nas.local', groups: ['Servers', 'Storage'], tags: ['storage', 'backup-target'], importance: 'high', template: 'home-server' });
   nas.checks = [
     mkCheck(nas.id, 'ping', 'Ping', { config: { pingCount: 4, latencyWarnMs: 20 }, base: 0.7, noise: 0.4, interval: 60 }),
     mkCheck(nas.id, 'tcp', 'SSH (22)', { config: { port: 22 }, base: 1.8, noise: 0.3 }),
@@ -69,7 +76,7 @@
   ];
   const printer = mkNode({ name: 'Printer', host: '192.168.1.50', group: 'Home Network', tags: ['office'], importance: 'low', enabled: false, notes: 'Only switched on when needed — monitoring paused.' });
   printer.checks = [mkCheck(printer.id, 'ping', 'Ping', { config: { pingCount: 2 }, base: 3, noise: 0.6, status: 'paused', interval: 300 })];
-  const pihole = mkNode({ name: 'Pi-hole', host: '192.168.1.2', group: 'Home Network', tags: ['dns', 'raspberry-pi'], importance: 'high', template: 'dns' });
+  const pihole = mkNode({ name: 'Pi-hole', host: '192.168.1.2', groups: ['Home Network', 'Servers'], tags: ['dns', 'raspberry-pi'], importance: 'high', template: 'dns' });
   pihole.checks = [
     mkCheck(pihole.id, 'ping', 'Ping', { config: { pingCount: 4, latencyWarnMs: 30 }, base: 0.8, noise: 0.5, interval: 30 }),
     mkCheck(pihole.id, 'dns', 'Resolves via Pi-hole', { config: { target: 'www.example.org', dnsServer: '192.168.1.2', recordType: 'A' }, base: 3.2, noise: 0.5 }),
@@ -102,7 +109,7 @@
     }
     return false;
   }
-  function nodeInMaintenance(n) { return maintenance.some((w) => windowActive(w) && (w.nodeId ? w.nodeId === n.id : w.group ? w.group === n.group : true)); }
+  function nodeInMaintenance(n) { return maintenance.some((w) => windowActive(w) && (w.nodeId ? w.nodeId === n.id : w.group ? inGroup(n, w.group) : true)); }
 
   /* ---------- Live state & results ---------- */
   const states = {}; // checkId -> CheckState
@@ -440,8 +447,12 @@
     for (const n of nodes) {
       const status = nodeStatus(n);
       summary[status] = (summary[status] || 0) + 1;
-      const g = groupsMap.get(n.group || 'Ungrouped') || { name: n.group || 'Ungrouped', status: 'paused', up: 0, degraded: 0, down: 0, unknown: 0, paused: 0, maintenance: 0, total: 0 };
-      g[status]++; g.total++; if (SEV[status] > SEV[g.status]) g.status = status; groupsMap.set(g.name, g);
+      // A node counts in every group it is in, so the group totals can come
+      // to more than the number of nodes.
+      for (const name of (groupsOf(n).length ? groupsOf(n) : ['Ungrouped'])) {
+        const g = groupsMap.get(name) || { name, status: 'paused', up: 0, degraded: 0, down: 0, unknown: 0, paused: 0, maintenance: 0, total: 0 };
+        g[status]++; g.total++; if (SEV[status] > SEV[g.status]) g.status = status; groupsMap.set(g.name, g);
+      }
       const affectedBy = n.checks.map((c) => states[c.id]?.affectedByNodeName).find(Boolean) || '';
       const checks = n.checks.map((c) => ({ check: clone(c), state: stateFor(n, c), lastResult: lastResults[c.id] ? clone(lastResults[c.id]) : null }));
       outNodes.push({ node: clone(n), status, checks, inMaintenance: nodeInMaintenance(n), affectedBy });
@@ -556,7 +567,7 @@
   on('GET', /^\/api\/templates$/, () => templates);
   on('GET', /^\/api\/groups$/, () => {
     const g = new Map(); const t = new Map();
-    for (const n of nodes) { if (n.group) g.set(n.group, (g.get(n.group) || 0) + 1); for (const tag of n.tags || []) t.set(tag, (t.get(tag) || 0) + 1); }
+    for (const n of nodes) { for (const name of groupsOf(n)) g.set(name, (g.get(name) || 0) + 1); for (const tag of n.tags || []) t.set(tag, (t.get(tag) || 0) + 1); }
     return { groups: [...g].map(([name, count]) => ({ name, count })).sort((a, b) => a.name.localeCompare(b.name)), tags: [...t].map(([name, count]) => ({ name, count })).sort((a, b) => a.name.localeCompare(b.name)) };
   });
   on('GET', /^\/api\/nodes$/, () => nodes.map((n) => nodeOut(n)));
@@ -571,7 +582,8 @@
   });
   on('PUT', /^\/api\/nodes\/(\d+)$/, (m, body) => {
     const n = findNode(m[1]); if (!n) throw err(404, 'node not found');
-    Object.assign(n, { name: body.name, host: body.host, group: body.group || '', tags: body.tags || [], notes: body.notes || '', importance: body.importance || 'normal', enabled: body.enabled !== false, dependsOnNodeId: body.dependsOnNodeId ?? null, updatedAt: iso(Date.now()) });
+    const groups = (body.groups && body.groups.length ? body.groups : (body.group ? [body.group] : [])).slice(0, 16);
+    Object.assign(n, { name: body.name, host: body.host, groups, group: groups[0] || '', tags: body.tags || [], notes: body.notes || '', importance: body.importance || 'normal', enabled: body.enabled !== false, dependsOnNodeId: body.dependsOnNodeId ?? null, updatedAt: iso(Date.now()) });
     const keep = new Set();
     const next = (body.checks || []).map((c, i) => {
       const existing = c.id ? n.checks.find((x) => x.id === c.id) : null;

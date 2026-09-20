@@ -4,7 +4,7 @@
 
 import { api, getHistoryMulti, getHistoryAuto, qs } from '../api.js';
 import { h, icon, clear, replace, statusPill, statusSpine, statusWord, statusGlyph, checkChip, statusOrb, toast, confirmDialog, promptDialog, openModal, menuButton, field, textInput, numberInput, selectInput, checkbox, emptyState, skeleton, eventRow, rangeChips, statusMeta, uid } from '../components.js';
-import { relTime, bytes, plural, dateShort, duration, pct } from '../fmt.js';
+import { relTime, bytes, plural, dateShort, duration, pct, nodeGroups, inGroup } from '../fmt.js';
 import { chartConfigEditor, renderConfiguredChart, normalizeChartConfig } from '../chart-config.js';
 // charts.js is already in the graph by way of chart-config.js, so naming these
 // here costs nothing and spares the availability widget an await it does not
@@ -484,7 +484,7 @@ export async function mount(root, ctx) {
     const ov = state.overview?.nodes || [];
     return ov.filter((entry) => {
       const n = entry.node;
-      if (cfg.group && n.group !== cfg.group) return false;
+      if (cfg.group && !inGroup(n, cfg.group)) return false;
       if (cfg.tag && !(n.tags || []).includes(cfg.tag)) return false;
       if (cfg.nodeIds?.length && !cfg.nodeIds.map(Number).includes(Number(n.id))) return false;
       return true;
@@ -662,7 +662,7 @@ export async function mount(root, ctx) {
         h('td', null, h('a', { href: `#/nodes/${n.id}`, class: 'strong', style: { color: 'inherit' } }, n.name), r.affectedBy ? h('div', { class: 'affected-note' }, icon('link'), `affected by ${r.affectedBy}`) : null),
         h('td', null, statusPill(r.status)),
         h('td', { class: 'mono' }, n.host || ''),
-        h('td', null, n.group || h('span', { class: 'dim' }, '—')),
+        h('td', null, nodeGroups(n).join(', ') || h('span', { class: 'dim' }, '—')),
         h('td', null, chips),
         h('td', { class: 'muted nowrap' }, last ? relTime(last, now()) : '—')));
     }

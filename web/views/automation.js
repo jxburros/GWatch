@@ -30,7 +30,7 @@ export const CONDITIONS = [
 export const INTERPRETERS = [
   { value: 'sh', label: 'sh' }, { value: 'bash', label: 'bash' }, { value: 'powershell', label: 'PowerShell (pwsh / powershell)' }, { value: 'cmd', label: 'cmd.exe' }, { value: 'python', label: 'Python' }, { value: 'node', label: 'Node.js' }, { value: 'custom', label: 'Custom command…' },
 ];
-const PLACEHOLDERS = ['node.name', 'node.host', 'node.group', 'check.name', 'check.type', 'target', 'status', 'prev_status', 'message', 'error', 'latencyMs', 'lossPct', 'statusCode', 'failures', 'event', 'ts', 'instance', 'body', 'query.<name>'];
+const PLACEHOLDERS = ['node.name', 'node.host', 'node.group', 'node.groups', 'check.name', 'check.type', 'target', 'status', 'prev_status', 'message', 'error', 'latencyMs', 'lossPct', 'statusCode', 'failures', 'event', 'ts', 'instance', 'body', 'query.<name>'];
 
 let metaCache = null;
 export async function automationMeta() {

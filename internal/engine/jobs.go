@@ -517,30 +517,40 @@ func (e *Engine) Overview(ctx context.Context) (Overview, error) {
 		default:
 			ov.Summary.Unknown++
 		}
-		gname := strings.TrimSpace(n.Group)
-		if gname == "" {
-			gname = "Ungrouped"
+		// A node counts in every group it belongs to, so the group tallies
+		// added together can come to more than the number of nodes. Each
+		// group answers "how is this group doing", which is the question the
+		// group cards on the dashboard and the wallboard ask.
+		gnames := n.GroupList()
+		if len(gnames) == 0 {
+			gnames = []string{"Ungrouped"}
 		}
-		g, ok := groups[gname]
-		if !ok {
-			g = &GroupView{Name: gname, Status: model.StatusPaused}
-			groups[gname] = g
-		}
-		g.Total++
-		g.Status = model.Worst(g.Status, status)
-		switch status {
-		case model.StatusUp:
-			g.Up++
-		case model.StatusDegraded:
-			g.Degraded++
-		case model.StatusDown:
-			g.Down++
-		case model.StatusPaused:
-			g.Paused++
-		case model.StatusMaintenance:
-			g.Maintenance++
-		default:
-			g.Unknown++
+		for _, gname := range gnames {
+			gname = strings.TrimSpace(gname)
+			if gname == "" {
+				continue
+			}
+			g, ok := groups[gname]
+			if !ok {
+				g = &GroupView{Name: gname, Status: model.StatusPaused}
+				groups[gname] = g
+			}
+			g.Total++
+			g.Status = model.Worst(g.Status, status)
+			switch status {
+			case model.StatusUp:
+				g.Up++
+			case model.StatusDegraded:
+				g.Degraded++
+			case model.StatusDown:
+				g.Down++
+			case model.StatusPaused:
+				g.Paused++
+			case model.StatusMaintenance:
+				g.Maintenance++
+			default:
+				g.Unknown++
+			}
 		}
 	}
 	sort.Slice(ov.Nodes, func(i, j int) bool {

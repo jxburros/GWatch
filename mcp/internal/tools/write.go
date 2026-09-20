@@ -98,11 +98,12 @@ func (s *Set) writeTools() []Tool {
 				"shapes GWatch ships, and gwatch_test_check to validate a check's configuration before saving it.",
 			Write: true,
 			InputSchema: object(map[string]any{
-				"name":  str("The display name of the node."),
-				"host":  str("The default target for its checks: a hostname, IP address or URL."),
-				"group": str("The group the node belongs to, e.g. \"Home Network\"."),
-				"tags":  arrayOf(map[string]any{"type": "string"}, "Free-form tags for filtering."),
-				"notes": str("Free-text notes stored with the node."),
+				"name":   str("The display name of the node."),
+				"host":   str("The default target for its checks: a hostname, IP address or URL."),
+				"groups": arrayOf(map[string]any{"type": "string"}, "The groups the node belongs to, e.g. [\"Home Network\", \"Critical\"]. A node may be in several."),
+				"group":  str("Deprecated: a single group, used only when groups is not given."),
+				"tags":   arrayOf(map[string]any{"type": "string"}, "Free-form tags for filtering."),
+				"notes":  str("Free-text notes stored with the node."),
 				"importance": enum("How much this node matters; it drives alert prioritisation.",
 					"low", "normal", "high", "critical"),
 				"enabled": boolean("Whether the node's checks run (default true)."),
@@ -117,12 +118,13 @@ func (s *Set) writeTools() []Tool {
 				"are created, and any existing check left out is deleted. Read the node with gwatch_get_node first.",
 			Write: true,
 			InputSchema: object(map[string]any{
-				"id":    integer("The node id."),
-				"name":  str("New display name."),
-				"host":  str("New default target."),
-				"group": str("New group."),
-				"tags":  arrayOf(map[string]any{"type": "string"}, "Replacement tag list."),
-				"notes": str("Replacement notes."),
+				"id":     integer("The node id."),
+				"name":   str("New display name."),
+				"host":   str("New default target."),
+				"groups": arrayOf(map[string]any{"type": "string"}, "Replacement list of groups the node belongs to."),
+				"group":  str("Deprecated: a single group, used only when groups is not given. It replaces the node's whole group list."),
+				"tags":   arrayOf(map[string]any{"type": "string"}, "Replacement tag list."),
+				"notes":  str("Replacement notes."),
 				"importance": enum("New importance.",
 					"low", "normal", "high", "critical"),
 				"enabled": boolean("Enable or disable the node."),
@@ -202,6 +204,7 @@ func (s *Set) createNode(ctx context.Context, args json.RawMessage) (Result, err
 	var in struct {
 		Name       string       `json:"name"`
 		Host       string       `json:"host"`
+		Groups     []string     `json:"groups"`
 		Group      string       `json:"group"`
 		Tags       []string     `json:"tags"`
 		Notes      string       `json:"notes"`
@@ -225,10 +228,17 @@ func (s *Set) createNode(ctx context.Context, args json.RawMessage) (Result, err
 		}
 		checks = append(checks, c.toAPI())
 	}
+	// groups is what GWatch reads; group is sent alongside it for an older
+	// GWatch, and is the one the caller gave if they used the old field.
+	groups := in.Groups
+	if len(groups) == 0 && strings.TrimSpace(in.Group) != "" {
+		groups = []string{in.Group}
+	}
 	body := map[string]any{
 		"name":       in.Name,
 		"host":       in.Host,
-		"group":      in.Group,
+		"groups":     orEmptySlice(groups),
+		"group":      firstOr(groups, in.Group),
 		"tags":       orEmptySlice(in.Tags),
 		"notes":      in.Notes,
 		"importance": orDefault(in.Importance, "normal"),
@@ -255,6 +265,7 @@ func (s *Set) updateNode(ctx context.Context, args json.RawMessage) (Result, err
 		ID         int64        `json:"id"`
 		Name       *string      `json:"name"`
 		Host       *string      `json:"host"`
+		Groups     *[]string    `json:"groups"`
 		Group      *string      `json:"group"`
 		Tags       *[]string    `json:"tags"`
 		Notes      *string      `json:"notes"`
@@ -287,8 +298,18 @@ func (s *Set) updateNode(ctx context.Context, args json.RawMessage) (Result, err
 	}
 	setStr("name", in.Name)
 	setStr("host", in.Host)
-	setStr("group", in.Group)
 	setStr("notes", in.Notes)
+	// Either field replaces the node's whole group list, so both are written:
+	// leaving the old group behind would let it win on a server that reads it.
+	if in.Groups != nil {
+		node["groups"] = orEmptySlice(*in.Groups)
+		node["group"] = firstOr(*in.Groups, "")
+		changed = append(changed, "groups")
+	} else if in.Group != nil {
+		node["groups"] = orEmptySlice(nonEmpty(*in.Group))
+		node["group"] = *in.Group
+		changed = append(changed, "group")
+	}
 	setStr("importance", in.Importance)
 	if in.Tags != nil {
 		node["tags"] = orEmptySlice(*in.Tags)
@@ -310,7 +331,7 @@ func (s *Set) updateNode(ctx context.Context, args json.RawMessage) (Result, err
 		changed = append(changed, fmt.Sprintf("checks (replaced with %d)", len(checks)))
 	}
 	if len(changed) == 0 {
-		return Result{}, usage("nothing to change: give at least one of name, host, group, tags, notes, importance, enabled or checks")
+		return Result{}, usage("nothing to change: give at least one of name, host, groups, tags, notes, importance, enabled or checks")
 	}
 
 	var updated map[string]any
@@ -489,6 +510,24 @@ func orEmptySlice(s []string) []string {
 		return []string{}
 	}
 	return s
+}
+
+// firstOr returns the first group of a list, or the fallback when it is empty.
+// It fills the deprecated single group field, which GWatch derives the same way.
+func firstOr(list []string, fallback string) string {
+	if len(list) > 0 {
+		return list[0]
+	}
+	return fallback
+}
+
+// nonEmpty turns one group name into a list of nought or one, so clearing a
+// node's group with an empty string clears the list rather than adding a blank.
+func nonEmpty(v string) []string {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	return []string{v}
 }
 
 func orDefault(v, def string) string {

@@ -364,8 +364,9 @@ func TestWrongKeyFileYieldsEmptySecrets(t *testing.T) {
 // GWatch database (every database shipped before this migration mechanism
 // existed) looks: the schema as it is defined today minus the columns
 // addedColumns bolts on, schema_version pinned at 1, and — to exercise the
-// version-2 data migration — a check with no matching check_state row, the
-// gap that migration exists to close.
+// data migrations — a check with no matching check_state row (the gap the
+// version-2 step closes) and a node whose group is only in group_name, with
+// no groups list (what the version-3 step fills in).
 func rawOldShapeDB(t *testing.T, path string) {
 	t.Helper()
 	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=temp_store(MEMORY)", filepath.ToSlash(path))
@@ -383,7 +384,7 @@ func rawOldShapeDB(t *testing.T, path string) {
 		t.Fatalf("seed schema_version: %v", err)
 	}
 	now := fmtTime(time.Now())
-	if _, err := db.Exec(`INSERT INTO nodes(id, name, created_at, updated_at) VALUES (1, 'Router', ?, ?)`, now, now); err != nil {
+	if _, err := db.Exec(`INSERT INTO nodes(id, name, group_name, created_at, updated_at) VALUES (1, 'Router', 'Home Network', ?, ?)`, now, now); err != nil {
 		t.Fatalf("seed node: %v", err)
 	}
 	if _, err := db.Exec(`INSERT INTO checks(id, node_id, type, name, created_at, updated_at) VALUES (1, 1, 'ping', 'Ping', ?, ?)`, now, now); err != nil {
@@ -421,6 +422,18 @@ func TestOldDatabaseMigratesAndBacksUp(t *testing.T) {
 		t.Fatalf("status = %q, want %q", status, "unknown")
 	}
 
+	// And the version-3 step's: the node's single group is now its group list.
+	n, err := s.GetNode(ctx, 1)
+	if err != nil {
+		t.Fatalf("get migrated node: %v", err)
+	}
+	if len(n.Groups) != 1 || n.Groups[0] != "Home Network" {
+		t.Fatalf("groups not backfilled from group_name: %+v", n.Groups)
+	}
+	if n.Group != "Home Network" {
+		t.Fatalf("group alias = %q, want the first group", n.Group)
+	}
+
 	backupPath := fmt.Sprintf("%s.before-v%d", dbPath, currentSchemaVersion)
 	if fi, err := os.Stat(backupPath); err != nil || fi.Size() == 0 {
 		t.Fatalf("pre-migration backup missing or empty: %v", err)
@@ -433,8 +446,79 @@ func TestOldDatabaseMigratesAndBacksUp(t *testing.T) {
 	if rep.FromVersion != 1 || rep.ToVersion != currentSchemaVersion || rep.BackupPath != backupPath {
 		t.Fatalf("migration report = %+v", rep)
 	}
-	if len(rep.Applied) != 1 || rep.Applied[0] == "" {
-		t.Fatalf("migration report should name the step that ran: %+v", rep)
+	if len(rep.Applied) != currentSchemaVersion-1 {
+		t.Fatalf("migration report should name every step that ran: %+v", rep)
+	}
+	for _, name := range rep.Applied {
+		if name == "" {
+			t.Fatalf("migration report has an unnamed step: %+v", rep)
+		}
+	}
+}
+
+// TestNodeGroupsRoundTripAndCount covers the multi-group shape end to end: a
+// node keeps every group it was given, group_name keeps the first one so an
+// older binary still reads something sensible, and GroupCounts counts the node
+// once in each of its groups.
+func TestNodeGroupsRoundTripAndCount(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+
+	n, err := s.CreateNode(ctx, model.Node{Name: "NAS", Host: "nas.local", Enabled: true,
+		Groups: []string{" Servers ", "Storage", "storage", ""}})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if len(n.Groups) != 2 || n.Groups[0] != "Servers" || n.Groups[1] != "Storage" {
+		t.Fatalf("groups not normalised on write: %+v", n.Groups)
+	}
+	if n.Group != "Servers" {
+		t.Fatalf("group alias = %q, want the first group", n.Group)
+	}
+
+	got, err := s.GetNode(ctx, n.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got.Groups) != 2 || got.Groups[1] != "Storage" || got.Group != "Servers" {
+		t.Fatalf("groups did not survive the round trip: %+v", got)
+	}
+	var groupName string
+	if err := s.Reader().QueryRowContext(ctx, "SELECT group_name FROM nodes WHERE id = ?", n.ID).Scan(&groupName); err != nil {
+		t.Fatalf("read group_name: %v", err)
+	}
+	if groupName != "Servers" {
+		t.Fatalf("group_name = %q, want the first group so older binaries still read one", groupName)
+	}
+
+	// A node written with only the old single group is read as being in it.
+	legacy, err := s.CreateNode(ctx, model.Node{Name: "Printer", Enabled: true, Group: "Office"})
+	if err != nil {
+		t.Fatalf("create legacy: %v", err)
+	}
+	if len(legacy.Groups) != 1 || legacy.Groups[0] != "Office" {
+		t.Fatalf("a node given only group should end up in that one group: %+v", legacy.Groups)
+	}
+
+	groups, _, err := s.GroupCounts(ctx)
+	if err != nil {
+		t.Fatalf("group counts: %v", err)
+	}
+	if groups["Servers"] != 1 || groups["Storage"] != 1 || groups["Office"] != 1 {
+		t.Fatalf("a node should be counted once in each of its groups: %v", groups)
+	}
+
+	// Dropping a group takes the node out of that group's count.
+	got.Groups = []string{"Servers"}
+	if _, _, err := s.UpdateNode(ctx, got); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	groups, _, err = s.GroupCounts(ctx)
+	if err != nil {
+		t.Fatalf("group counts after update: %v", err)
+	}
+	if _, ok := groups["Storage"]; ok {
+		t.Fatalf("Storage should be gone once no node is in it: %v", groups)
 	}
 }
 

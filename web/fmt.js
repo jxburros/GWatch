@@ -170,3 +170,21 @@ export function isBeta(version) {
   const v = String(version || '').trim().replace(/^v/, '');
   return /^0\./.test(v);
 }
+
+/** The groups a node belongs to. A node carries `groups`, a list; `group` is
+    the deprecated alias for the first of them, and is all an older server (or
+    a hand-written fixture) sends, so it is read as the one group it names. */
+export function nodeGroups(n) {
+  if (!n) return [];
+  if (Array.isArray(n.groups) && n.groups.length) return n.groups;
+  const g = (n.group || '').trim();
+  return g ? [g] : [];
+}
+
+/** True when the node is in the named group. A filter names one group and a
+    node may be in several, so any one of them is a match. */
+export function inGroup(n, group) {
+  const want = String(group || '').trim().toLowerCase();
+  if (!want) return false;
+  return nodeGroups(n).some((g) => String(g).trim().toLowerCase() === want);
+}

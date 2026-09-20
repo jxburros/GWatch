@@ -1045,6 +1045,9 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .node-row .n-name { font-weight: 600; font-size: var(--list-font); display: flex; flex-direction: column; min-width: 0; }
 .node-row .n-name a { color: var(--text); }
 .node-row .n-host { font-family: var(--mono); font-size: 0.78125rem; color: var(--muted); font-weight: 400; }
+/* A node sits in one section but may belong to several groups. The ones the
+   section heading does not already name ride on the row, above its tags. */
+.node-row .n-groups { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
 .node-row .n-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
 .node-row .n-meta { font-size: 0.75rem; color: var(--muted); display: flex; flex-direction: column; gap: 3px; white-space: nowrap; font-family: var(--mono); }
 .node-row .n-actions { display: flex; align-items: center; gap: 6px; }

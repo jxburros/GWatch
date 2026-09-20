@@ -36,9 +36,10 @@ func (s *Set) readTools() []Tool {
 		{
 			Name: "gwatch_list_nodes",
 			Description: "List the monitored nodes with their current status and a one-line state per check. " +
-				"Optional group, tag and status filters narrow the list. Use gwatch_get_node for a node's full configuration.",
+				"Optional group, tag and status filters narrow the list; a node in several groups matches any one of them. " +
+				"Use gwatch_get_node for a node's full configuration.",
 			InputSchema: object(map[string]any{
-				"group":  str("Only nodes in this group (exact, case-insensitive)."),
+				"group":  str("Only nodes that belong to this group (exact, case-insensitive; a node may be in several)."),
 				"tag":    str("Only nodes carrying this tag (exact, case-insensitive)."),
 				"status": enum("Only nodes in this status.", "up", "degraded", "down", "unknown", "paused", "maintenance"),
 				"q":      str("Case-insensitive substring matched against the node name and host."),
@@ -106,8 +107,9 @@ func (s *Set) readTools() []Tool {
 			Handler:     s.templates,
 		},
 		{
-			Name:        "gwatch_groups",
-			Description: "The groups and tags in use, with how many nodes carry each. Useful for filtering gwatch_list_nodes.",
+			Name: "gwatch_groups",
+			Description: "The groups and tags in use, with how many nodes carry each. A node in several groups is counted " +
+				"in each of them, so the group counts can add up to more than the number of nodes. Useful for filtering gwatch_list_nodes.",
 			InputSchema: object(map[string]any{}),
 			Handler:     s.groups,
 		},
@@ -169,7 +171,7 @@ type nodeSummary struct {
 	ID     int64          `json:"id"`
 	Name   string         `json:"name"`
 	Host   string         `json:"host"`
-	Group  string         `json:"group"`
+	Groups []string       `json:"groups,omitempty"`
 	Tags   []string       `json:"tags,omitempty"`
 	Status string         `json:"status"`
 	Checks []checkSummary `json:"checks"`
@@ -203,7 +205,8 @@ func (s *Set) listNodes(ctx context.Context, args json.RawMessage) (Result, erro
 	// about what it is actually asking the server for.
 	out := make([]nodeSummary, 0, len(nodes))
 	for _, n := range nodes {
-		if in.Group != "" && !strings.EqualFold(n.Group, in.Group) {
+		// A node in several groups matches a filter naming any one of them.
+		if in.Group != "" && !n.InGroup(in.Group) {
 			continue
 		}
 		if in.Status != "" && !strings.EqualFold(n.Status, in.Status) {
@@ -218,7 +221,7 @@ func (s *Set) listNodes(ctx context.Context, args json.RawMessage) (Result, erro
 				continue
 			}
 		}
-		ns := nodeSummary{ID: n.ID, Name: n.Name, Host: n.Host, Group: n.Group, Tags: n.Tags, Status: n.Status}
+		ns := nodeSummary{ID: n.ID, Name: n.Name, Host: n.Host, Groups: n.GroupList(), Tags: n.Tags, Status: n.Status}
 		for _, c := range n.Checks {
 			cs := checkSummary{ID: c.ID, Name: c.Name, Type: c.Type}
 			if st, ok := n.StateByCheck[strconv.FormatInt(c.ID, 10)]; ok {

@@ -431,8 +431,11 @@ func windowCovers(w model.MaintenanceWindow, n model.Node) bool {
 	if w.NodeID != nil {
 		return *w.NodeID == n.ID
 	}
+	// A window still names one group, and covers every node that has that
+	// group among its own — being in a group is being in a group, whether or
+	// not the node is in others as well.
 	if strings.TrimSpace(w.Group) != "" {
-		return strings.EqualFold(strings.TrimSpace(w.Group), strings.TrimSpace(n.Group))
+		return n.InGroup(w.Group)
 	}
 	return true
 }
@@ -471,8 +474,8 @@ func (e *Engine) newMail(kind string, c model.Check, n model.Node, r model.Resul
 	if st.ConsecutiveFailures > 0 {
 		details["Consecutive failures"] = fmt.Sprintf("%d", st.ConsecutiveFailures)
 	}
-	if n.Group != "" {
-		details["Group"] = n.Group
+	if groups := n.GroupList(); len(groups) > 0 {
+		details["Group"] = strings.Join(groups, ", ")
 	}
 	msg := r.Message
 	if r.Error != "" && msg == "" {

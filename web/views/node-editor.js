@@ -2,7 +2,7 @@
 
 import { api } from '../api.js';
 import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, openModal, emptyState, skeleton, CHECK_TYPES, checkTypeLabel, uid, busy } from '../components.js';
-import { interval as fmtInterval } from '../fmt.js';
+import { interval as fmtInterval, nodeGroups } from '../fmt.js';
 import { resultInspector } from './inspector.js';
 
 const INTERVALS = [30, 60, 120, 300, 600, 900, 1800, 3600];
@@ -83,7 +83,7 @@ export async function mount(root, ctx) {
     if (tplId) { try { const list = await api.get('/api/templates'); tpl = (list || []).find((t) => t.id === tplId) || null; } catch { tpl = null; } }
     state.draft = tpl
       ? { ...tpl.node, id: undefined, template: tpl.id, tags: [...(tpl.node.tags || [])], enabled: true, importance: tpl.node.importance || 'normal', checks: (tpl.checks || []).map((c) => ({ ...c, _key: uid('c'), id: undefined, config: { ...(c.config || {}) }, alerts: c.alerts ? { ...c.alerts } : null })) }
-      : { name: '', host: '', group: '', tags: [], notes: '', importance: 'normal', enabled: true, dependsOnNodeId: null, template: '', checks: [] };
+      : { name: '', host: '', groups: [], tags: [], notes: '', importance: 'normal', enabled: true, dependsOnNodeId: null, template: '', checks: [] };
     if (tpl && (!state.draft.name || state.draft.name === tpl.name)) state.draft.name = '';
   } else {
     let node;
@@ -104,8 +104,9 @@ export async function mount(root, ctx) {
   /* ---------- Node fields ---------- */
   const nameInput = textInput({ value: d.name, placeholder: 'e.g. Living room router', oninput: () => { d.name = nameInput.value; } });
   const hostInput = textInput({ value: d.host, placeholder: 'e.g. 192.168.1.1, nas.local or https://example.com', oninput: () => { d.host = hostInput.value; } });
-  const groupInput = textInput({ value: d.group || '', placeholder: 'e.g. Home Network', list: 'group-list', oninput: () => { d.group = groupInput.value; } });
-  const groupList = h('datalist', { id: 'group-list' }, state.groups.groups.map((g) => h('option', { value: g.name })));
+  // A node can be in several groups, so the group field is the same chip
+  // editor as tags, suggesting the groups already in use.
+  const groupsInput = chipInput({ values: nodeGroups(d), placeholder: 'Add a group and press Enter', suggestions: state.groups.groups.map((g) => g.name), onChange: (v) => { d.groups = v; } });
   const tagsInput = chipInput({ values: d.tags || [], placeholder: 'Add a tag and press Enter', suggestions: state.groups.tags.map((t) => t.name), onChange: (v) => { d.tags = v; } });
   const importanceSel = selectInput({ options: [{ value: 'low', label: 'Low' }, { value: 'normal', label: 'Normal' }, { value: 'high', label: 'High' }, { value: 'critical', label: 'Critical' }], value: d.importance || 'normal', onchange: () => { d.importance = importanceSel.value; } });
   const notesInput = textarea({ value: d.notes || '', placeholder: 'Anything useful: where it lives, how to reboot it, who owns it…', oninput: () => { d.notes = notesInput.value; } });
@@ -118,7 +119,7 @@ export async function mount(root, ctx) {
     h('h2', { style: { marginBottom: '18px' } }, 'Node'),
     h('div', { class: 'form-grid' },
       nameField, hostField,
-      field({ label: 'Group', input: h('div', null, groupInput, groupList), help: 'Used for dashboard filters, maintenance windows and the wallboard.' }),
+      field({ label: 'Groups', input: groupsInput, help: 'A node can be in more than one. Groups drive dashboard filters, maintenance windows and the wallboard.' }),
       field({ label: 'Tags', input: tagsInput }),
       field({ label: 'Importance', input: importanceSel, help: 'Critical and high nodes are listed first on the wallboard.' }),
       field({ label: 'Depends on', input: dependsSel, help: 'Alerts for this node are suppressed while the parent is down, and its failures are shown as "affected by" the parent.' }),
@@ -546,7 +547,10 @@ export async function mount(root, ctx) {
     if (n) { toast(`Please fix ${n} problem${n === 1 ? '' : 's'} before saving.`, { kind: 'error' }); root.querySelector('.has-error input, .error')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
     if (!d.checks.length) { const ok = await confirmDialog({ title: 'Save without checks?', message: 'This node will not be monitored until you add a check.', confirmLabel: 'Save anyway' }); if (!ok) return; }
     state.saving = true;
-    const payload = { ...d, name: d.name.trim(), host: d.host.trim(), group: (d.group || '').trim(), checks: d.checks.map((c, i) => ({ ...cleanCheck(c), sortOrder: i })) };
+    const groups = nodeGroups(d).map((g) => g.trim()).filter(Boolean);
+    // group goes out as well as groups: it is the deprecated alias, and the
+    // server derives it from the list anyway.
+    const payload = { ...d, name: d.name.trim(), host: d.host.trim(), groups, group: groups[0] || '', checks: d.checks.map((c, i) => ({ ...cleanCheck(c), sortOrder: i })) };
     try {
       const saved = isNew ? await api.post('/api/nodes', payload) : await api.put(`/api/nodes/${d.id}`, payload);
       toast(isNew ? `${saved.name} added` : 'Changes saved', { kind: 'success' });

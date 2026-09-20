@@ -2,6 +2,8 @@ package model
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -277,5 +279,85 @@ func TestAlertOverrideNilMeansInherit(t *testing.T) {
 	b, _ = json.Marshal(o)
 	if string(b) != `{"enabled":true}` {
 		t.Errorf("override = %s", b)
+	}
+}
+
+// A node may belong to several groups, and the old single-group field is kept
+// for one release as an alias for the first of them. These are the rules the
+// store, the API and the MCP companion all lean on.
+func TestNodeGroupsNormalisation(t *testing.T) {
+	t.Run("trims, drops blanks and folds duplicates onto the first spelling", func(t *testing.T) {
+		got := NormalizeGroups([]string{" Home Network ", "", "  ", "home network", "Servers"})
+		if len(got) != 2 || got[0] != "Home Network" || got[1] != "Servers" {
+			t.Fatalf("normalised = %q", got)
+		}
+	})
+
+	t.Run("never returns nil, so the wire format is a list", func(t *testing.T) {
+		if got := NormalizeGroups(nil); got == nil || len(got) != 0 {
+			t.Fatalf("normalised nil = %#v, want an empty list", got)
+		}
+	})
+
+	t.Run("caps the list", func(t *testing.T) {
+		many := make([]string, 0, MaxNodeGroups+5)
+		for i := 0; i < MaxNodeGroups+5; i++ {
+			many = append(many, fmt.Sprintf("g%d", i))
+		}
+		if got := NormalizeGroups(many); len(got) != MaxNodeGroups {
+			t.Fatalf("len = %d, want the cap of %d", len(got), MaxNodeGroups)
+		}
+	})
+
+	t.Run("group alias is the first group", func(t *testing.T) {
+		n := Node{Groups: []string{"Servers", "Storage"}, Group: "Stale"}
+		n.SyncGroups()
+		if n.Group != "Servers" {
+			t.Fatalf("group = %q, want the first of the list", n.Group)
+		}
+	})
+
+	t.Run("a body carrying only the old field is read as one group", func(t *testing.T) {
+		n := Node{Group: " Office "}
+		n.SyncGroups()
+		if len(n.Groups) != 1 || n.Groups[0] != "Office" || n.Group != "Office" {
+			t.Fatalf("legacy group not adopted: %+v", n)
+		}
+	})
+
+	t.Run("no groups at all clears both fields", func(t *testing.T) {
+		n := Node{Groups: []string{"  "}, Group: "   "}
+		n.SyncGroups()
+		if len(n.Groups) != 0 || n.Group != "" {
+			t.Fatalf("blank groups should leave nothing: %+v", n)
+		}
+	})
+
+	t.Run("InGroup matches any group, ignoring case", func(t *testing.T) {
+		n := Node{Groups: []string{"Home Network", "Critical"}}
+		if !n.InGroup("critical") || !n.InGroup(" Home Network ") {
+			t.Fatal("InGroup should match any of the node's groups")
+		}
+		if n.InGroup("Servers") || n.InGroup("") {
+			t.Fatal("InGroup should not match a group the node is not in")
+		}
+		// A node built by hand with only the old field is still in that group.
+		if legacy := (Node{Group: "Office"}); !legacy.InGroup("office") {
+			t.Fatal("InGroup should fall back to the group alias")
+		}
+	})
+}
+
+// The wire format promises a list of groups rather than null, because the
+// browser and the MCP companion both iterate it without checking.
+func TestNodeGroupsMarshalAsAList(t *testing.T) {
+	var n Node
+	n.SyncGroups()
+	b, err := json.Marshal(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"groups":[]`) {
+		t.Fatalf("groups should marshal as an empty list: %s", b)
 	}
 }

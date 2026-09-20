@@ -13,20 +13,26 @@ import (
 	"github.com/jxburros/GWatch/internal/secrets"
 )
 
-const nodeCols = `id, name, host, group_name, tags, notes, importance, enabled, depends_on_node_id, template, created_at, updated_at`
+// group_name holds the node's first group. It stays in the row next to the
+// groups list because older binaries and the existing indexes still read it.
+const nodeCols = `id, name, host, group_name, "groups", tags, notes, importance, enabled, depends_on_node_id, template, created_at, updated_at`
 
 func scanNode(sc interface{ Scan(...any) error }) (model.Node, error) {
 	var n model.Node
-	var tags, created, updated string
+	var groups, tags, created, updated string
 	var enabled int
 	var dep sql.NullInt64
-	if err := sc.Scan(&n.ID, &n.Name, &n.Host, &n.Group, &tags, &n.Notes, &n.Importance, &enabled, &dep, &n.Template, &created, &updated); err != nil {
+	if err := sc.Scan(&n.ID, &n.Name, &n.Host, &n.Group, &groups, &tags, &n.Notes, &n.Importance, &enabled, &dep, &n.Template, &created, &updated); err != nil {
 		return n, err
 	}
 	n.Enabled = enabled == 1
 	n.DependsOnNode = int64Ptr(dep)
 	n.CreatedAt = mustTime(created)
 	n.UpdatedAt = mustTime(updated)
+	_ = json.Unmarshal([]byte(groups), &n.Groups)
+	// A row written before the groups column existed still says what it meant
+	// through group_name, and SyncGroups reads it that way.
+	n.SyncGroups()
 	_ = json.Unmarshal([]byte(tags), &n.Tags)
 	if n.Tags == nil {
 		n.Tags = []string{}
@@ -92,6 +98,7 @@ func (s *Store) GetNode(ctx context.Context, id int64) (model.Node, error) {
 func (s *Store) CreateNode(ctx context.Context, n model.Node) (model.Node, error) {
 	now := time.Now()
 	n.CreatedAt, n.UpdatedAt = now, now
+	n.SyncGroups()
 	if n.Tags == nil {
 		n.Tags = []string{}
 	}
@@ -99,9 +106,9 @@ func (s *Store) CreateNode(ctx context.Context, n model.Node) (model.Node, error
 		n.Importance = model.ImportanceNormal
 	}
 	err := s.WriteTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `INSERT INTO nodes(name, host, group_name, tags, notes, importance, enabled, depends_on_node_id, template, created_at, updated_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			n.Name, n.Host, n.Group, jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), n.Template, fmtTime(now), fmtTime(now))
+		res, err := tx.ExecContext(ctx, `INSERT INTO nodes(name, host, group_name, "groups", tags, notes, importance, enabled, depends_on_node_id, template, created_at, updated_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+			n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), n.Template, fmtTime(now), fmtTime(now))
 		if err != nil {
 			return err
 		}
@@ -129,6 +136,7 @@ func (s *Store) CreateNode(ctx context.Context, n model.Node) (model.Node, error
 func (s *Store) UpdateNode(ctx context.Context, n model.Node) (model.Node, []int64, error) {
 	now := time.Now()
 	n.UpdatedAt = now
+	n.SyncGroups()
 	if n.Tags == nil {
 		n.Tags = []string{}
 	}
@@ -140,8 +148,8 @@ func (s *Store) UpdateNode(ctx context.Context, n model.Node) (model.Node, []int
 	}
 	var deleted []int64
 	err := s.WriteTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `UPDATE nodes SET name=?, host=?, group_name=?, tags=?, notes=?, importance=?, enabled=?, depends_on_node_id=?, template=?, updated_at=? WHERE id=?`,
-			n.Name, n.Host, n.Group, jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), n.Template, fmtTime(now), n.ID)
+		res, err := tx.ExecContext(ctx, `UPDATE nodes SET name=?, host=?, group_name=?, "groups"=?, tags=?, notes=?, importance=?, enabled=?, depends_on_node_id=?, template=?, updated_at=? WHERE id=?`,
+			n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), n.Template, fmtTime(now), n.ID)
 		if err != nil {
 			return err
 		}
@@ -216,7 +224,9 @@ func (s *Store) DeleteNode(ctx context.Context, id int64) error {
 	return nil
 }
 
-// GroupCounts returns groups and tags with node counts.
+// GroupCounts returns groups and tags with node counts. A node that belongs to
+// several groups is counted once in each of them, so the group counts can add
+// up to more than the number of nodes.
 func (s *Store) GroupCounts(ctx context.Context) (groups map[string]int, tags map[string]int, err error) {
 	nodes, err := s.ListNodes(ctx)
 	if err != nil {
@@ -225,8 +235,10 @@ func (s *Store) GroupCounts(ctx context.Context) (groups map[string]int, tags ma
 	groups = map[string]int{}
 	tags = map[string]int{}
 	for _, n := range nodes {
-		if g := strings.TrimSpace(n.Group); g != "" {
-			groups[g]++
+		for _, g := range n.GroupList() {
+			if g = strings.TrimSpace(g); g != "" {
+				groups[g]++
+			}
 		}
 		for _, t := range n.Tags {
 			if t = strings.TrimSpace(t); t != "" {

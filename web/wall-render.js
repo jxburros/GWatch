@@ -14,7 +14,7 @@
 
 import { h, icon, clear, statusOrb, statusMeta, statusSpine, statusWord, statusPill, emptyState } from './components.js';
 import { LineChart, toSeries, seriesColor } from './charts.js';
-import { relTime, ms as fmtMs, plural, dateShort, timeShort } from './fmt.js';
+import { relTime, ms as fmtMs, plural, dateShort, timeShort, inGroup } from './fmt.js';
 
 const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const DAYS_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -264,7 +264,7 @@ function groups(body, doc) {
 
 function nodes(body, doc, cfg) {
   let list = (doc.nodes || []).map((nv) => ({ ...nv.node, status: nv.status }));
-  if (cfg.group) list = list.filter((n) => n.group === cfg.group);
+  if (cfg.group) list = list.filter((n) => inGroup(n, cfg.group));
   if (cfg.tag) list = list.filter((n) => (n.tags || []).includes(cfg.tag));
   if (Array.isArray(cfg.nodeIds) && cfg.nodeIds.length) {
     const want = new Set(cfg.nodeIds.map(Number));

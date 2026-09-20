@@ -214,6 +214,19 @@ func TestReadTools(t *testing.T) {
 		if len(nodes) != 1 {
 			t.Fatalf("group filter should leave 1 node, got %d", len(nodes))
 		}
+		// The router is in two groups; naming its second one finds it, which
+		// is the whole point of matching any group rather than the first.
+		text, _ = call(t, cs, "gwatch_list_nodes", map[string]any{"group": "critical"})
+		nodes, _ = jsonPart(t, text)["nodes"].([]any)
+		if len(nodes) != 1 {
+			t.Fatalf("a filter on a node's second group should leave 1 node, got %d", len(nodes))
+		}
+		if first, _ := nodes[0].(map[string]any); first["name"] != "Router" {
+			t.Fatalf("second-group filter found the wrong node: %v", first)
+		}
+		if first, _ := nodes[0].(map[string]any); len(first["groups"].([]any)) != 2 {
+			t.Fatalf("the node summary should carry every group: %v", first)
+		}
 		text, _ = call(t, cs, "gwatch_list_nodes", map[string]any{"tag": "INFRA"})
 		nodes, _ = jsonPart(t, text)["nodes"].([]any)
 		if len(nodes) != 1 {
@@ -366,7 +379,7 @@ func TestWriteToolsWithReadWriteKey(t *testing.T) {
 	cs, _ := session(t, writeKey, true)
 
 	text, isErr := call(t, cs, "gwatch_create_node", map[string]any{
-		"name": "NAS", "host": "192.168.1.50", "group": "Home Network",
+		"name": "NAS", "host": "192.168.1.50", "groups": []any{"Home Network", "Storage"},
 		"tags": []any{"storage"}, "importance": "high",
 		"checks": []any{map[string]any{
 			"type": "tcp", "name": "SMB", "intervalSeconds": 120,
@@ -379,8 +392,23 @@ func TestWriteToolsWithReadWriteKey(t *testing.T) {
 	if !strings.HasPrefix(text, "Created node 3 \"NAS\"") {
 		t.Errorf("unexpected summary: %q", firstLine(text))
 	}
+	created := jsonPart(t, text)
+	if groups, _ := created["groups"].([]any); len(groups) != 2 || groups[0] != "Home Network" {
+		t.Errorf("created node should carry both groups: %v", created["groups"])
+	}
+	if created["group"] != "Home Network" {
+		t.Errorf("the deprecated group field should be the first group: %v", created["group"])
+	}
 
+	// A caller written against the old single-group tool still works: group
+	// alone becomes the node's whole group list.
 	if text, isErr := call(t, cs, "gwatch_update_node", map[string]any{"id": 3, "group": "Storage"}); isErr {
+		t.Fatalf("update_node with the legacy group failed: %s", text)
+	} else if groups, _ := jsonPart(t, text)["groups"].([]any); len(groups) != 1 || groups[0] != "Storage" {
+		t.Errorf("a legacy group update should replace the list: %v", groups)
+	}
+
+	if text, isErr := call(t, cs, "gwatch_update_node", map[string]any{"id": 3, "groups": []any{"Storage", "Home Network"}}); isErr {
 		t.Fatalf("update_node failed: %s", text)
 	}
 	if text, isErr := call(t, cs, "gwatch_set_node_enabled", map[string]any{"id": 3, "enabled": false}); isErr {

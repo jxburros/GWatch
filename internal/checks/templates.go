@@ -28,7 +28,7 @@ func Templates() []model.NodeTemplate {
 		}
 	}
 	node := func(name, group, template string) model.Node {
-		return model.Node{
+		n := model.Node{
 			Name:       name,
 			Group:      group,
 			Tags:       []string{},
@@ -36,6 +36,10 @@ func Templates() []model.NodeTemplate {
 			Enabled:    true,
 			Template:   template,
 		}
+		// A template starts a node off in one group, but it is sent to the
+		// browser as a node, so it carries the group list every node does.
+		n.SyncGroups()
+		return n
 	}
 	return []model.NodeTemplate{
 		{

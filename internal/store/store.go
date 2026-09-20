@@ -186,6 +186,7 @@ CREATE TABLE IF NOT EXISTS nodes (
   name TEXT NOT NULL,
   host TEXT NOT NULL DEFAULT '',
   group_name TEXT NOT NULL DEFAULT '',
+  "groups" TEXT NOT NULL DEFAULT '[]',
   tags TEXT NOT NULL DEFAULT '[]',
   notes TEXT NOT NULL DEFAULT '',
   importance TEXT NOT NULL DEFAULT 'normal',
@@ -374,6 +375,9 @@ CREATE TABLE IF NOT EXISTS api_keys (
 var addedColumns = []struct{ table, column, ddl string }{
 	{"endpoints", "allow_no_token", "ALTER TABLE endpoints ADD COLUMN allow_no_token INTEGER NOT NULL DEFAULT 0"},
 	{"events", "actor", "ALTER TABLE events ADD COLUMN actor TEXT NOT NULL DEFAULT ''"},
+	// "groups" is quoted everywhere it is used: it is a keyword in SQLite's
+	// window-frame syntax, and a bare one reads badly even where it parses.
+	{"nodes", "groups", `ALTER TABLE nodes ADD COLUMN "groups" TEXT NOT NULL DEFAULT '[]'`},
 }
 
 // currentSchemaVersion is the schema_version this build expects. Every
@@ -387,7 +391,7 @@ var addedColumns = []struct{ table, column, ddl string }{
 // instead); migrate() takes care of backing up the file first, running the
 // step in its own transaction, and recording the new version once it
 // commits.
-const currentSchemaVersion = 2
+const currentSchemaVersion = 3
 
 // migration is one numbered step that brings the database from version-1 to
 // version. Steps run in order, oldest first, each in its own transaction.
@@ -406,6 +410,11 @@ var migrations = []migration{
 		name:    "backfill missing check_state rows",
 		run:     migrateBackfillCheckState,
 	},
+	{
+		version: 3,
+		name:    "backfill node groups from group_name",
+		run:     migrateBackfillNodeGroups,
+	},
 }
 
 // migrateBackfillCheckState gives every check a check_state row. Every
@@ -420,6 +429,20 @@ func migrateBackfillCheckState(ctx context.Context, tx *sql.Tx) error {
 		INSERT INTO check_state(check_id, status)
 		SELECT id, 'unknown' FROM checks
 		WHERE id NOT IN (SELECT check_id FROM check_state)`)
+	return err
+}
+
+// migrateBackfillNodeGroups fills the groups column for rows written before a
+// node could belong to more than one group. addedColumns gives those rows an
+// empty list; the group they were actually in is still in group_name, so each
+// one becomes a one-group node. Rows that already have a list are left alone,
+// which is what makes the step safe to run twice.
+func migrateBackfillNodeGroups(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx, `
+		UPDATE nodes
+		SET "groups" = json_array(group_name)
+		WHERE trim(coalesce(group_name, '')) != ''
+		  AND ("groups" IS NULL OR trim("groups") = '' OR "groups" = '[]')`)
 	return err
 }
 
