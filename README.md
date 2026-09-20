@@ -49,7 +49,7 @@ a port and whether to allow other devices on your network, then installs and sta
 `GWatch` service. Full walkthrough (including the PowerShell-only path, upgrading and
 uninstalling): [`docs/INSTALL.md`](docs/INSTALL.md).
 
-**Linux/macOS** — run it straight from source (Go 1.24+):
+**Linux/macOS** — run it straight from source (Go 1.26+):
 
 ```bash
 go run . run --data-dir ./data

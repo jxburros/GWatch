@@ -43,9 +43,15 @@ jobs:
       - name: Keep LF line endings
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
+      # The newest 1.26 patch rather than go.mod's `go 1.26.0`: a
+      # go-version-file install would pin the .0 release, and every stdlib
+      # fix since would then show up as a govulncheck failure until someone
+      # bumped the directive. Tracking the patch level here keeps the scan
+      # honest and the builds on a supported toolchain.
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache: true
       - uses: actions/setup-node@v4
         with:
@@ -201,7 +207,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache: true
 
       - name: gofmt, go vet, go build, go test
@@ -233,13 +240,12 @@ jobs:
           go build ./...
           go test -count=1 ./...
 
-      # govulncheck's latest release tracks the latest Go toolchain rather
-      # than the one GWatch targets, so it is pinned to the newest release
-      # that still builds under go.mod's `go 1.24` with GOTOOLCHAIN=local
-      # (v1.2.0 and up require Go 1.25). Bump the pin once go.mod's Go version
-      # moves past what a newer govulncheck needs.
+      # govulncheck is pinned so a release of it cannot change what the job
+      # does on its own; bump the pin when a newer one is wanted, and check
+      # its go.mod still builds under the Go version above with
+      # GOTOOLCHAIN=local.
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
       - name: govulncheck
         run: govulncheck ./...
@@ -257,7 +263,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache: true
       - name: go vet, go test
         run: |
@@ -287,7 +294,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache: true
       # The VERSION file is what local builds and the installer read, and the
       # tag is what the release is named after. If they disagree, a release
@@ -424,7 +432,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache: true
       - name: Tag matches mcp/VERSION
         run: |

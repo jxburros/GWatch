@@ -62,6 +62,8 @@ The 2026-09-19 sprint: everything labelled `sprint-plan` in the tracker.
   `npm test` and in CI.
 - **CI runs on Linux and macOS as well as Windows** (#17), with the race
   detector on the concurrency-heavy packages and `govulncheck` on both modules.
+  Building GWatch now needs Go 1.26: the scan found standard-library fixes that
+  never reached the 1.24 line, so the module moved to a supported toolchain.
 
 ### Changed
 
@@ -83,6 +85,11 @@ The 2026-09-19 sprint: everything labelled `sprint-plan` in the tracker.
 
 ### Fixed
 
+- **macOS reported zero total memory.** The collector read `hw.memsize`
+  through a call that trims a trailing NUL byte, which every memory size
+  below 2^56 ends in, so the eight-byte value came back seven bytes long and
+  was refused. The first macOS CI run (#17) caught it; the value is now read
+  raw.
 - **The page no longer flashes when live data arrives** (#28). The nodes
   list, the dashboard widgets and the node history are updated in place
   instead of being rebuilt, and chart canvases paint their own themed

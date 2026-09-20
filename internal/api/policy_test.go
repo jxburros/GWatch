@@ -157,7 +157,10 @@ func resolveThroughMux(t *testing.T, mux *http.ServeMux, method, path string) (p
 		got = p
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, r)
-		redirected = rec.Code == http.StatusMovedPermanently || rec.Code == http.StatusPermanentRedirect
+		// Any redirect means this request is not served by the pattern named:
+		// the mux answered 301 for a cleaned path up to Go 1.25 and 307 from
+		// Go 1.26, and the difference is not one this test cares about.
+		redirected = rec.Code >= 300 && rec.Code <= 399
 	})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(method, path, nil))
 	return got, !redirected
 }

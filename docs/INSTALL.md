@@ -171,7 +171,7 @@ either path is fully supported. Use the scripts directly if you want to script a
 unattended install across several machines, prefer not to run a downloaded `.exe`, or
 want to build `gwatch.exe` from source yourself.
 
-1. Build (or download) `gwatch.exe`. With Go 1.24+ installed:
+1. Build (or download) `gwatch.exe`. With Go 1.26+ installed:
    ```powershell
    powershell -ExecutionPolicy Bypass -File scripts\build.ps1
    ```

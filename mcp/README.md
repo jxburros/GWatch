@@ -46,7 +46,7 @@ read your SMTP password.
 `gwatch-<os>-<arch>` binaries, with a `.sha256` and an ed25519 `.sig` beside each. Grab the one for
 your platform, rename it to `gwatch-mcp` (`.exe` on Windows) and put it somewhere on your `PATH`.
 
-**Or build it with Go** (1.24 or newer):
+**Or build it with Go** (1.26 or newer):
 
 ```sh
 go install github.com/jxburros/GWatch/mcp/cmd/gwatch-mcp@latest
@@ -226,11 +226,11 @@ layer and knows nothing about MCP, and `internal/mcpserver` is the only package 
 protocol. Adding a tool means adding it to `internal/tools`; the transport does not change.
 
 **Why `github.com/modelcontextprotocol/go-sdk` is pinned at v1.0.0**: `mcp/go.mod` declares
-`go 1.24.0`, to build against the same Go version the root module targets — CI runs with
-`GOTOOLCHAIN=local`, so a `go.mod` requiring a newer Go fails the build outright rather than
-quietly downloading a toolchain. The SDK stays buildable under Go 1.24 through its v1.4.0
-release; v1.5.0 and everything since raise the SDK's own `go` directive to 1.25. So the pin can
-move up to v1.4.0 freely, but going past it means raising the root module's Go version first
-(and re-verifying everything else in the repository still builds under it) — a repository-wide
-decision, not an `mcp/`-local one, which is why it is not done casually. See also the comment at
-the top of `internal/mcpserver/server.go`.
+`go 1.24.0`, the oldest Go this module is known to build with; CI runs with `GOTOOLCHAIN=local`
+on the root module's toolchain (Go 1.26), so a `go.mod` requiring a newer Go than that fails the
+build outright rather than quietly downloading a toolchain. The SDK stays buildable under Go 1.24
+through its v1.4.0 release; v1.5.0 and everything since raise the SDK's own `go` directive to
+1.25, which the root module now clears. So the pin can move up whenever someone wants the newer
+SDK — it is kept at v1.0.0 only because nothing here needs more yet, and a bump deserves its own
+change with the e2e tests re-run. See also the comment at the top of
+`internal/mcpserver/server.go`.
