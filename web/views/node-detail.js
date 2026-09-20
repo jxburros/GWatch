@@ -1,6 +1,6 @@
 // Node detail: header, per-check cards with result inspector, charts, events.
 
-import { api, getHistoryMulti, qs } from '../api.js';
+import { api, getHistoryMulti, getHistoryMetric, qs } from '../api.js';
 import { h, icon, clear, replace, statusPill, statusGlyph, importanceBadge, tagList, banner, toast, confirmDialog, showMenu, menuButton, emptyState, skeleton, eventRow, rangeChips, checkTypeLabel } from '../components.js';
 import { LineChart, toSeries, uptimeBar, uptimeLegend, SERIES_COLORS } from '../charts.js';
 import { relTime, ms as fmtMs, pct, dateTime, interval, plural, timeShort } from '../fmt.js';
@@ -281,6 +281,14 @@ export async function mount(root, ctx) {
       body.append(chartSection('Packet loss', lossHost, () => lossChart.exportPNG(`${slug(n.name)}-loss-${state.range}.png`), pings.map((p) => p.checkId)));
     }
 
+    // SNMP readings. Each OID is its own metric with its own unit, so each
+    // one gets its own chart rather than sharing an axis with a rate in
+    // bits per second and a percentage.
+    for (const c of checks.filter((x) => x.type === 'snmp')) {
+      await renderSNMPCharts(c, body);
+      if (state.destroyed) return;
+    }
+
     // Uptime bars
     const up = h('div', null, h('div', { class: 'section-title' }, `Availability — ${state.range}`));
     for (const hs of list) {
@@ -290,6 +298,34 @@ export async function mount(root, ctx) {
     }
     up.append(uptimeLegend());
     body.append(up);
+  }
+
+  // An SNMP check's OIDs are charted like any other metric: the server serves
+  // them from /api/history with metric=<name>, and only from raw results —
+  // the rollup tables have no column for a metric a check invented, so these
+  // charts reach back only as far as raw history is kept.
+  async function renderSNMPCharts(c, body) {
+    const oids = (c.config?.snmpOids || []).filter((o) => o.name);
+    if (!oids.length) return;
+    const n = state.node;
+    const section = h('div', { class: 'stack-sm' }, h('div', { class: 'section-title' }, `${c.name} — SNMP readings`));
+    body.append(section);
+    let drew = false;
+    for (const o of oids) {
+      let series;
+      try { series = await getHistoryMetric(c.id, state.range, o.name); } catch { continue; }
+      if (state.destroyed) return;
+      if (!(series.points || []).some((p) => p.value != null)) continue;
+      const host = h('div', null);
+      const chart = new LineChart(host, { unit: o.unit || '', height: 180, ariaLabel: `${o.name} history`, title: `${n.name} — ${o.name} (${state.range})` });
+      state.charts.push(chart);
+      chart.setData({ series: [{ ...toSeries(series, 'avg', SERIES_COLORS[state.charts.length % SERIES_COLORS.length]), name: o.name }], from: series.from, to: series.to, bucketSeconds: 0 });
+      section.append(h('div', null, h('div', { class: 'row-between', style: { marginBottom: '4px' } },
+        h('div', { class: 'small muted' }, o.name, o.unit ? ` (${o.unit})` : ''),
+        h('a', { class: 'btn btn-sm', href: `/api/export/history.csv${qs({ checkId: c.id, range: state.range, metric: o.name })}`, download: `${slug(o.name)}-${state.range}.csv` }, icon('download'), 'CSV')), host));
+      drew = true;
+    }
+    if (!drew) section.append(h('p', { class: 'note' }, 'No readings recorded in this period yet. A counter also needs two runs before it has a rate to chart.'));
   }
 
   function chartSection(title, host, onExportPng, ids) {

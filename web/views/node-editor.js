@@ -1,7 +1,7 @@
 // Node editor: create / edit a node and its checks, with inline check testing.
 
 import { api } from '../api.js';
-import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, openModal, emptyState, skeleton, CHECK_TYPES, checkTypeLabel, uid, busy } from '../components.js';
+import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, promptDialog, openModal, emptyState, skeleton, CHECK_TYPES, checkTypeLabel, uid, busy } from '../components.js';
 import { interval as fmtInterval } from '../fmt.js';
 import { resultInspector } from './inspector.js';
 
@@ -21,6 +21,10 @@ function defaultCheck(type, settings) {
     case 'json': base.config = { method: 'GET', jsonPath: '', jsonExpected: '' }; break;
     case 'custom': base.config = { command: '', workDir: '', env: {} }; base.name = 'Custom script'; break;
     case 'system': base.config = { ...SYSTEM_DEFAULTS, hostSource: 'local' }; base.name = 'Hardware health'; break;
+    // A new SNMP check starts where every device is the same: v2c on 161 with
+    // the community every one of them ships with, reading the one OID every
+    // one of them answers. It is a working check before anything is typed.
+    case 'snmp': base.config = { snmpVersion: '2c', snmpPort: 161, snmpCommunity: 'public', snmpOids: [oidRow(SNMP_PRESETS[0].items[0])] }; base.name = 'SNMP'; break;
   }
   return base;
 }
@@ -39,6 +43,8 @@ function cleanCheck(c) {
   }
   for (const k of ['pingCount', 'certWarnDays', 'port']) if (cfg[k] != null) cfg[k] = Number(cfg[k]);
   for (const k of ['latencyWarnMs', 'packetLossWarnPct']) if (cfg[k] != null) cfg[k] = Number(cfg[k]);
+  if (cfg.snmpPort != null) cfg.snmpPort = Number(cfg.snmpPort);
+  if (cfg.snmpOids) cfg.snmpOids = cfg.snmpOids.map(cleanOidRow).filter((o) => o.oid || o.name);
   out.config = cfg;
   if (out.alerts) {
     const a = {};
@@ -58,6 +64,103 @@ const SYSTEM_DEFAULTS = {
   cpuWarnPct: 90, memWarnPct: 90, memCritPct: 97, swapWarnPct: 50,
   diskWarnPct: 85, diskCritPct: 95, loadWarnPerCore: 2,
 };
+
+/*
+ * Well-known OIDs from the standard MIBs, offered as presets so that setting
+ * up a router does not start with a MIB browser. Everything here is from
+ * SNMPv2-MIB, IF-MIB or HOST-RESOURCES-MIB, which every device that speaks
+ * SNMP at all implements; vendor MIBs are deliberately absent, because a
+ * preset that only works on one make would be worse than no preset.
+ *
+ * "{N}" in an OID is an interface or processor index, which the editor asks
+ * for when the preset is chosen: SNMP numbers the ports and there is no way
+ * to know from here which number is the one the reader means. Walking the
+ * device (docs/SNMP.md) is how that number is found.
+ */
+const SNMP_PRESETS = [
+  { group: 'System', items: [
+    { label: 'Uptime — sysUpTime', oid: '1.3.6.1.2.1.1.3.0', name: 'Uptime', kind: 'gauge', scale: 0.01, unit: 's' },
+    { label: 'Description — sysDescr', oid: '1.3.6.1.2.1.1.1.0', name: 'Description', kind: 'gauge' },
+    { label: 'Device name — sysName', oid: '1.3.6.1.2.1.1.5.0', name: 'Device name', kind: 'gauge' },
+  ] },
+  { group: 'Interface (asks for the port number)', items: [
+    { label: 'Link up/down — ifOperStatus', oid: '1.3.6.1.2.1.2.2.1.8.{N}', name: 'Port {N} link', kind: 'gauge', critBelow: 1, critAbove: 1 },
+    { label: 'Traffic in — ifInOctets (bit/s)', oid: '1.3.6.1.2.1.2.2.1.10.{N}', name: 'Port {N} in', kind: 'counter', scale: 8, unit: 'bit/s' },
+    { label: 'Traffic out — ifOutOctets (bit/s)', oid: '1.3.6.1.2.1.2.2.1.16.{N}', name: 'Port {N} out', kind: 'counter', scale: 8, unit: 'bit/s' },
+    { label: 'Traffic in, 64-bit — ifHCInOctets (bit/s)', oid: '1.3.6.1.2.1.31.1.1.1.6.{N}', name: 'Port {N} in', kind: 'counter', scale: 8, unit: 'bit/s' },
+    { label: 'Traffic out, 64-bit — ifHCOutOctets (bit/s)', oid: '1.3.6.1.2.1.31.1.1.1.10.{N}', name: 'Port {N} out', kind: 'counter', scale: 8, unit: 'bit/s' },
+    { label: 'Errors in — ifInErrors', oid: '1.3.6.1.2.1.2.2.1.14.{N}', name: 'Port {N} errors in', kind: 'counter', unit: '/s', warnAbove: 0 },
+    { label: 'Errors out — ifOutErrors', oid: '1.3.6.1.2.1.2.2.1.20.{N}', name: 'Port {N} errors out', kind: 'counter', unit: '/s', warnAbove: 0 },
+  ] },
+  { group: 'Processor (asks for the processor number)', items: [
+    { label: 'Processor load — hrProcessorLoad', oid: '1.3.6.1.2.1.25.3.3.1.2.{N}', name: 'Processor {N}', kind: 'gauge', unit: '%', warnAbove: 85, critAbove: 95 },
+  ] },
+];
+
+const SNMP_AUTH_PROTOCOLS = ['', 'MD5', 'SHA', 'SHA224', 'SHA256', 'SHA384', 'SHA512'];
+const SNMP_PRIV_PROTOCOLS = ['', 'DES', 'AES', 'AES192', 'AES256', 'AES192C', 'AES256C'];
+
+/** A blank OID row, or one filled in from a preset with its index applied. */
+function oidRow(preset, index) {
+  const row = { oid: '', name: '', kind: 'gauge', scale: 1, unit: '' };
+  if (!preset) return row;
+  const n = String(index ?? 1);
+  row.oid = preset.oid.replace('{N}', n);
+  row.name = preset.name.replace('{N}', n);
+  row.kind = preset.kind || 'gauge';
+  row.scale = preset.scale ?? 1;
+  row.unit = preset.unit || '';
+  for (const k of SNMP_THRESHOLD_KEYS) if (preset[k] != null) row[k] = preset[k];
+  return row;
+}
+
+const SNMP_THRESHOLD_KEYS = ['warnAbove', 'critAbove', 'warnBelow', 'critBelow'];
+
+// snmpErrors mirrors internal/checks.validateSNMPCheck so that the editor can
+// say what is wrong beside the field rather than after a round trip. The
+// server refuses the same things again: this is a courtesy, not the rule.
+function snmpErrors(cfg) {
+  const e = {};
+  const port = Number(cfg.snmpPort);
+  if (cfg.snmpPort != null && cfg.snmpPort !== '' && (!port || port < 1 || port > 65535)) e.snmpPort = 'Port must be 1–65535.';
+  if ((cfg.snmpVersion || '2c') === '3') {
+    if (!(cfg.snmpUser || '').trim()) e.snmpUser = 'SNMP v3 needs a user name.';
+    if (cfg.snmpAuthProto && !cfg.snmpAuthPass) e.snmpAuthPass = 'Enter the authentication password.';
+    if (cfg.snmpPrivProto && !cfg.snmpAuthProto) e.snmpPrivProto = 'Encryption needs authentication as well.';
+    if (cfg.snmpPrivProto && !cfg.snmpPrivPass) e.snmpPrivPass = 'Enter the encryption password.';
+  }
+  const rows = cfg.snmpOids || [];
+  if (!rows.length) { e.snmpOids = 'Add at least one reading.'; return e; }
+  if (rows.length > 64) { e.snmpOids = 'An SNMP check can read at most 64 OIDs. Split the rest into a second check.'; return e; }
+  const names = new Set();
+  for (const o of rows) {
+    const oid = (o.oid || '').trim().replace(/^\./, '');
+    if (!/^\d+(\.\d+)+$/.test(oid)) { e.snmpOids = `"${o.oid || '(blank)'}" is not a numeric OID — it should look like 1.3.6.1.2.1.1.3.0.`; return e; }
+    const name = (o.name || '').trim().toLowerCase();
+    if (!name) { e.snmpOids = `The reading ${o.oid} needs a name.`; return e; }
+    if (names.has(name)) { e.snmpOids = `Two readings are both called "${o.name}" — names identify the metric in charts, so they must differ.`; return e; }
+    names.add(name);
+    const num = (k) => (o[k] === '' || o[k] == null || isNaN(Number(o[k])) ? null : Number(o[k]));
+    const [wa, ca, wb, cb] = ['warnAbove', 'critAbove', 'warnBelow', 'critBelow'].map(num);
+    if (wa != null && ca != null && wa >= ca) { e.snmpOids = `${o.name}: the critical "above" threshold must be above the warning one.`; return e; }
+    if (wb != null && cb != null && wb <= cb) { e.snmpOids = `${o.name}: the critical "below" threshold must be below the warning one.`; return e; }
+  }
+  return e;
+}
+
+// An unset threshold has to be absent rather than zero: zero is a threshold a
+// reader might genuinely mean (an error counter that should never move).
+function cleanOidRow(o) {
+  const row = { oid: (o.oid || '').trim(), name: (o.name || '').trim(), kind: o.kind === 'counter' ? 'counter' : 'gauge' };
+  const scale = Number(o.scale);
+  row.scale = isFinite(scale) && scale > 0 ? scale : 1;
+  if ((o.unit || '').trim()) row.unit = o.unit.trim();
+  for (const k of SNMP_THRESHOLD_KEYS) {
+    if (o[k] === '' || o[k] == null || isNaN(Number(o[k]))) continue;
+    row[k] = Number(o[k]);
+  }
+  return row;
+}
 
 // Warning/critical pairs, for the rule that a critical threshold cannot sit
 // below the warning it is supposed to escalate.
@@ -337,8 +440,146 @@ export async function mount(root, ctx) {
         );
       }
       case 'system': return systemFields(c, err);
+      case 'snmp': return snmpFields(c, err);
       default: return h('p', { class: 'note' }, 'No settings for this type.');
     }
+  }
+
+  /* ---------- SNMP ---------- */
+
+  function snmpFields(c, err) {
+    const cfg = c.config;
+    if (!Array.isArray(cfg.snmpOids)) cfg.snmpOids = [];
+
+    const version = selectInput({
+      options: [{ value: '2c', label: 'Version 2c — a community string' }, { value: '3', label: 'Version 3 — a user with authentication' }],
+      value: cfg.snmpVersion || '2c',
+      onchange: () => { cfg.snmpVersion = version.value; renderCreds(); },
+    });
+    const port = numberInput({ value: cfg.snmpPort || 161, min: 1, max: 65535, oninput: () => { cfg.snmpPort = Number(port.value) || 161; } });
+
+    // A stored credential never comes back from the server: what arrives is
+    // the same mask the settings screen uses. The box therefore starts empty
+    // and the mask stays in the draft, so leaving the box alone keeps what is
+    // stored and typing in it replaces that.
+    const secretInput = (key) => {
+      const stored = !!cfg[key];
+      const input = textInput({
+        type: 'password', value: '', autocomplete: 'off',
+        placeholder: stored ? 'Leave blank to keep the stored value' : '',
+        oninput: () => { cfg[key] = input.value; },
+      });
+      return { input, help: stored ? 'A value is stored — leave this blank to keep it.' : 'Nothing stored yet.' };
+    };
+
+    const community = secretInput('snmpCommunity');
+    const communityRow = h('div', { class: 'form-grid' },
+      field({ label: 'Community string', input: community.input, error: err.snmpCommunity, help: `${community.help} Most devices ship with "public", which is read-only.` }));
+
+    const user = textInput({ value: cfg.snmpUser || '', placeholder: 'e.g. monitor', oninput: () => { cfg.snmpUser = user.value; } });
+    const authProto = selectInput({
+      options: SNMP_AUTH_PROTOCOLS.map((p) => ({ value: p, label: p || 'None (noAuthNoPriv)' })),
+      value: cfg.snmpAuthProto || '', onchange: () => { cfg.snmpAuthProto = authProto.value; },
+    });
+    const privProto = selectInput({
+      options: SNMP_PRIV_PROTOCOLS.map((p) => ({ value: p, label: p || 'None (no encryption)' })),
+      value: cfg.snmpPrivProto || '', onchange: () => { cfg.snmpPrivProto = privProto.value; },
+    });
+    const authPass = secretInput('snmpAuthPass');
+    const privPass = secretInput('snmpPrivPass');
+    const v3Row = h('div', { class: 'form-grid' },
+      field({ label: 'User', input: user, error: err.snmpUser }),
+      field({ label: 'Authentication', input: authProto, help: 'SHA256 or better where the device offers it.' }),
+      field({ label: 'Authentication password', input: authPass.input, error: err.snmpAuthPass, help: authPass.help }),
+      field({ label: 'Encryption', input: privProto, help: 'Encryption needs authentication as well.' }),
+      field({ label: 'Encryption password', input: privPass.input, error: err.snmpPrivPass, help: privPass.help }));
+
+    const credsWrap = h('div');
+    function renderCreds() {
+      clear(credsWrap);
+      credsWrap.append((cfg.snmpVersion || '2c') === '3' ? v3Row : communityRow);
+    }
+    renderCreds();
+
+    /* ---- the readings table ---- */
+    const rowsWrap = h('div', { class: 'table-wrap' });
+    const small = (props) => numberInput({ ...props, style: { minWidth: '72px' } });
+
+    function renderRows() {
+      clear(rowsWrap);
+      if (!cfg.snmpOids.length) {
+        rowsWrap.append(h('p', { class: 'note' }, 'No readings yet. Add one from Presets, or add a blank row and paste an OID into it.'));
+        return;
+      }
+      const table = h('table', { class: 'table' }, h('thead', null, h('tr', null,
+        h('th', null, 'OID'), h('th', null, 'Name'), h('th', null, 'Kind'), h('th', { class: 'num' }, 'Scale'),
+        h('th', null, 'Unit'), h('th', { class: 'num' }, 'Warn >'), h('th', { class: 'num' }, 'Crit >'),
+        h('th', { class: 'num' }, 'Warn <'), h('th', { class: 'num' }, 'Crit <'), h('th', null, ''))));
+      const tb = h('tbody');
+      cfg.snmpOids.forEach((o, i) => {
+        const oid = textInput({ value: o.oid || '', class: 'mono', placeholder: '1.3.6.1.2.1.1.3.0', 'aria-label': 'OID', oninput: () => { o.oid = oid.value; } });
+        const name = textInput({ value: o.name || '', placeholder: 'Uptime', 'aria-label': 'Reading name', oninput: () => { o.name = name.value; } });
+        const kind = selectInput({ options: [{ value: 'gauge', label: 'Gauge' }, { value: 'counter', label: 'Counter' }], value: o.kind || 'gauge', onchange: () => { o.kind = kind.value; } });
+        const scale = small({ value: o.scale ?? 1, step: 'any', 'aria-label': 'Scale', oninput: () => { o.scale = scale.value; } });
+        const unit = textInput({ value: o.unit || '', placeholder: '—', 'aria-label': 'Unit', style: { minWidth: '64px' }, oninput: () => { o.unit = unit.value; } });
+        const th = SNMP_THRESHOLD_KEYS.map((k) => {
+          const input = small({ value: o[k] ?? '', step: 'any', placeholder: 'off', 'aria-label': `${k} threshold`, oninput: () => { o[k] = input.value; } });
+          return h('td', { class: 'num' }, input);
+        });
+        tb.append(h('tr', null,
+          h('td', null, oid), h('td', null, name), h('td', null, kind), h('td', { class: 'num' }, scale), h('td', null, unit), ...th,
+          h('td', null, h('button', { class: 'btn btn-sm icon-btn btn-danger', type: 'button', 'aria-label': `Remove ${o.name || 'reading'}`, title: 'Remove', onclick: () => { cfg.snmpOids.splice(i, 1); renderRows(); } }, icon('x')))));
+      });
+      table.append(tb);
+      rowsWrap.append(table);
+    }
+    renderRows();
+
+    const presets = selectInput({
+      options: [{ value: '', label: 'Presets…' }],
+      onchange: async () => {
+        const [gi, ii] = presets.value.split(':');
+        presets.value = '';
+        const preset = SNMP_PRESETS[Number(gi)]?.items[Number(ii)];
+        if (!preset) return;
+        let index = 1;
+        if (preset.oid.includes('{N}')) {
+          const answer = await promptDialog({
+            title: 'Which one?',
+            label: preset.oid.startsWith('1.3.6.1.2.1.25') ? 'Processor number' : 'Interface index',
+            value: '1',
+            confirmLabel: 'Add reading',
+            message: 'SNMP numbers ports and processors itself, so the number here is the device’s, not the label on its case. The SNMP guide shows how to walk a device to find out which is which.',
+          });
+          if (answer == null || answer === '') return;
+          index = Number(answer) || 1;
+        }
+        cfg.snmpOids.push(oidRow(preset, index));
+        renderRows();
+      },
+    });
+    for (const [gi, group] of SNMP_PRESETS.entries()) {
+      const og = h('optgroup', { label: group.group });
+      group.items.forEach((item, ii) => og.append(h('option', { value: `${gi}:${ii}` }, item.label)));
+      presets.append(og);
+    }
+
+    return h('div', { class: 'stack' },
+      h('div', { class: 'form-grid' },
+        targetField(c, err, 'Device override', d.host ? `Uses node host (${d.host})` : '192.168.1.1', 'The router, switch or access point to read. Leave blank to use the node host.'),
+        field({ label: 'SNMP version', input: version }),
+        field({ label: 'Port', input: port, error: err.snmpPort, help: 'UDP 161 unless the device was changed.' })),
+      credsWrap,
+      h('div', { class: 'row-between', style: { marginTop: '4px' } },
+        h('div', { class: 'section-title', style: { marginBottom: 0 } }, 'Readings'),
+        h('div', { class: 'btn-group' },
+          presets,
+          h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { cfg.snmpOids.push(oidRow()); renderRows(); } }, icon('plus'), 'Add a reading'))),
+      h('p', { class: 'note' }, 'A ', h('b', null, 'gauge'), ' is a value that already means something — a percentage, a temperature, a link state. A ', h('b', null, 'counter'), ' only ever climbs, so GWatch charts how fast it climbs: an interface’s octet counter with a scale of 8 becomes bits per second. The first run after a restart has nothing to compare against, so a counter has no reading (and no verdict) until the second one.'),
+      h('p', { class: 'note' }, 'Thresholds are strict: crossing a ', h('b', null, 'Warn'), ' value marks the check degraded, crossing a ', h('b', null, 'Crit'), ' value marks it down. Setting both ', h('b', null, 'Crit >'), ' and ', h('b', null, 'Crit <'), ' to the same number means "must be exactly this", which is how a link-state reading is expressed. A reading that is text rather than a number is shown as it arrived and never thresholded.'),
+      err.snmpOids ? h('div', { class: 'error small', style: { color: 'var(--down)' } }, err.snmpOids) : null,
+      rowsWrap,
+    );
   }
 
   /* ---------- Hardware health ---------- */
@@ -531,6 +772,7 @@ export async function mount(root, ctx) {
           if (warn > 0 && crit > 0 && crit < warn) e[critKey] = `The ${label} critical threshold must be at or above its warning threshold.`;
         }
       }
+      if (c.type === 'snmp') Object.assign(e, snmpErrors(c.config));
       if (['http', 'keyword', 'json'].includes(c.type) && c.config.target && !/^(https?:\/\/)?[^\s/]+/.test(c.config.target.trim())) e.target = 'Enter a valid URL.';
       if (Object.keys(e).length) { errors.checks[c._key] = e; count += Object.keys(e).length; }
     }

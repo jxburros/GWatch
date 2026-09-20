@@ -90,6 +90,10 @@ func OpenWithKeyFile(path, keyFile string) (*Store, error) {
 		s.Close()
 		return nil, err
 	}
+	if err := s.migrateCheckSecrets(context.Background()); err != nil {
+		s.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -251,7 +255,8 @@ CREATE TABLE IF NOT EXISTS results (
   loss_pct REAL,
   attempts INTEGER NOT NULL DEFAULT 1,
   details TEXT NOT NULL DEFAULT '{}',
-  warnings TEXT NOT NULL DEFAULT '[]'
+  warnings TEXT NOT NULL DEFAULT '[]',
+  metrics TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_results_check_ts ON results(check_id, ts);
 CREATE INDEX IF NOT EXISTS idx_results_ts ON results(ts);
@@ -374,6 +379,10 @@ CREATE TABLE IF NOT EXISTS api_keys (
 var addedColumns = []struct{ table, column, ddl string }{
 	{"endpoints", "allow_no_token", "ALTER TABLE endpoints ADD COLUMN allow_no_token INTEGER NOT NULL DEFAULT 0"},
 	{"events", "actor", "ALTER TABLE events ADD COLUMN actor TEXT NOT NULL DEFAULT ''"},
+	// The named metrics a check measured beyond its latency, as a JSON object
+	// of name -> number. An SNMP check writes one entry per OID here; every
+	// other check leaves it empty.
+	{"results", "metrics", "ALTER TABLE results ADD COLUMN metrics TEXT NOT NULL DEFAULT ''"},
 }
 
 // currentSchemaVersion is the schema_version this build expects. Every

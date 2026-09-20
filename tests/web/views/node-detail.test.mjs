@@ -22,3 +22,27 @@ test('node detail view renders the node\'s header and its checks', async (t) => 
 
   await settle();
 });
+
+test('node detail shows an snmp check\'s readings once the result is inspected', async (t) => {
+  const node = window.__gwatchMock.nodes.find((n) => n.checks.some((c) => c.type === 'snmp'));
+  const check = node.checks.find((c) => c.type === 'snmp');
+  const { root } = await mountView(nodeDetailView, { params: { id: String(node.id) } }, t);
+
+  const card = [...root.querySelectorAll('.check-card')].find((c) => c.getAttribute('aria-label') === check.name);
+  assert.ok(card, 'the snmp check has a card');
+  const inspect = [...card.querySelectorAll('button')].find((b) => b.textContent.includes('Inspect last result'));
+  inspect.click();
+  await settle();
+
+  const table = [...root.querySelectorAll('.inspector table.table')].find((tb) => tb.textContent.includes('Verdict'));
+  assert.ok(table, 'the inspector shows a readings table');
+  const text = table.textContent;
+  for (const o of check.config.snmpOids) {
+    assert.ok(text.includes(o.name), `${o.name} is listed`);
+    assert.ok(text.includes(o.oid), `${o.oid} is listed`);
+  }
+  // The text reading is shown as it arrived and carries no verdict.
+  assert.ok(text.includes('Reported as text'), 'a non-numeric reading says so');
+
+  await settle();
+});

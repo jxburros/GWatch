@@ -785,7 +785,7 @@ func TestValidate(t *testing.T) {
 		host    string
 		wantErr string
 	}{
-		{"unsupported type", model.Check{Type: "snmp"}, "h", "unsupported check type"},
+		{"unsupported type", model.Check{Type: "telnet"}, "h", "unsupported check type"},
 		{"missing target", model.Check{Type: model.CheckPing}, "", "target"},
 		{"node host fallback ok", model.Check{Type: model.CheckPing}, "192.168.1.1", ""},
 		{"interval too small", model.Check{Type: model.CheckPing, IntervalSeconds: 5}, "h", "interval"},

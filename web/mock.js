@@ -80,9 +80,32 @@
     mkCheck(backupSrv.id, 'ping', 'Ping', { config: { pingCount: 4 }, base: 1.1, noise: 0.5 }),
     mkCheck(backupSrv.id, 'tcp', 'SMB (445)', { config: { port: 445 }, base: 2.4, noise: 0.3 }),
   ];
+  // A managed switch read over SNMP: the readings, not a round trip, are what
+  // the check is for, so it carries the per-OID rows the inspector renders.
+  const swtch = mkNode({ name: 'Office switch', host: '192.168.1.3', group: 'Home Network', tags: ['network', 'snmp'], importance: 'high', notes: 'Eight-port managed switch under the desk. Read over SNMP v2c with a read-only community.' });
+  swtch.checks = [
+    mkCheck(swtch.id, 'ping', 'Ping', { config: { pingCount: 4 }, base: 0.8, noise: 0.3, interval: 60 }),
+    mkCheck(swtch.id, 'snmp', 'SNMP readings', {
+      interval: 120,
+      config: {
+        snmpVersion: '2c', snmpPort: 161, snmpCommunity: '********',
+        snmpOids: [
+          { oid: '1.3.6.1.2.1.1.3.0', name: 'Uptime', kind: 'gauge', scale: 0.01, unit: 's' },
+          { oid: '1.3.6.1.2.1.1.1.0', name: 'Description', kind: 'gauge', scale: 1 },
+          { oid: '1.3.6.1.2.1.2.2.1.8.1', name: 'Uplink link', kind: 'gauge', scale: 1, critBelow: 1, critAbove: 1 },
+          { oid: '1.3.6.1.2.1.31.1.1.1.6.1', name: 'Uplink in', kind: 'counter', scale: 8, unit: 'bit/s' },
+          { oid: '1.3.6.1.2.1.31.1.1.1.10.1', name: 'Uplink out', kind: 'counter', scale: 8, unit: 'bit/s' },
+          { oid: '1.3.6.1.2.1.2.2.1.14.3', name: 'Port 3 errors in', kind: 'counter', scale: 1, unit: '/s', warnAbove: 0, critAbove: 5 },
+        ],
+      },
+      base: 9, noise: 0.3, status: 'degraded',
+      warn: 'Port 3 errors in (1.3.6.1.2.1.2.2.1.14.3) is 0.4 /s, above the warning threshold of 0 /s',
+      message: '6 readings read in 9 ms · Uptime 412350 s, Description MikroTik CRS310, Uplink link 1 and 3 more',
+    }),
+  ];
   const newHost = mkNode({ name: 'Garage camera', host: '192.168.1.71', group: 'Home Network', tags: ['camera'], importance: 'low' });
   newHost.checks = [mkCheck(newHost.id, 'ping', 'Ping', { config: { pingCount: 4 }, base: 5, noise: 0.5, status: 'unknown', message: '' })];
-  nodes.push(gateway, plex, nas, ha, site, weather, printer, pihole, backupSrv, newHost);
+  nodes.push(gateway, plex, nas, ha, site, weather, printer, pihole, backupSrv, swtch, newHost);
 
   /* ---------- Maintenance ---------- */
   const maintenance = [
@@ -113,6 +136,25 @@
   function certInfo(days, host) {
     const subject = host.replace(/^https?:\/\//, '').replace(/[:/].*$/, '');
     return { subject: `CN=${subject}`, issuer: "CN=R11, O=Let's Encrypt, C=US", notBefore: ago((90 - days) * DAY), notAfter: ahead(days * DAY), daysRemaining: days, dnsNames: [subject, subject.replace(/^www\./, '')], serial: '04:AB:19:F2:7C:33:9E:1D', valid: true };
+  }
+
+  // snmpReading invents one plausible reading for an OID row: a gauge gets a
+  // value, a counter gets a rate, and an OID whose name says it is text gets
+  // text and no number at all — which is what the inspector has to cope with.
+  function snmpReading(o, t, r) {
+    const v = { oid: o.oid, name: o.name, unit: o.unit || '' };
+    const wave = (period, amp) => 1 + amp * Math.sin((t / period) * Math.PI * 2);
+    if (o.oid === '1.3.6.1.2.1.1.1.0') { v.raw = 'MikroTik CRS310, RouterOS 7.14'; return v; }
+    if (o.kind === 'counter') {
+      const base = o.name.includes('errors') ? 0.4 : (o.name.includes('out') ? 3.1e6 : 8.4e6);
+      v.rate = +(base * wave(6 * HOUR, 0.35) * (0.9 + r() * 0.2)).toFixed(2);
+      v.raw = String(Math.round(1.4e11 + t / 100));
+      return v;
+    }
+    if (o.oid === '1.3.6.1.2.1.1.3.0') { v.value = +((NOW - 41 * DAY - t % MIN) / 1000).toFixed(0); v.raw = String(Math.round(v.value * 100)); return v; }
+    v.value = 1;
+    v.raw = '1';
+    return v;
   }
 
   function makeResult(check, node, t, r, { failed, latency, statusOverride } = {}) {
@@ -158,6 +200,18 @@
       case 'dns': {
         if (!failed) { const vals = check.config.expectedIps?.length ? check.config.expectedIps : ['93.184.215.14', '2606:2800:21f:cb07:6820:80da:af6b:8b2c']; res.details = { resolvedValues: vals, expectedMatch: check.config.expectedIps?.length ? true : null, resolver: check.config.dnsServer || 'system' }; res.message = res.message || `Resolved to ${vals[0]} in ${latency.toFixed(1)} ms`; }
         else { res.error = p.message; res.details = { resolver: check.config.dnsServer || 'system', resolvedValues: [] }; }
+        break;
+      }
+      case 'snmp': {
+        if (failed) { res.error = p.message || 'no response'; break; }
+        res.details = { snmp: (check.config.snmpOids || []).map((o) => snmpReading(o, t, r)) };
+        res.metrics = {};
+        for (const v of res.details.snmp) {
+          const measured = v.value != null ? v.value : v.rate;
+          if (measured != null) res.metrics[v.name] = measured;
+        }
+        res.message = res.message || `${res.details.snmp.length} readings read in ${latency.toFixed(0)} ms`;
+        if (p.warn) res.warnings = [p.warn];
         break;
       }
     }
@@ -385,6 +439,24 @@
   })();
 
   /* ---------- History ---------- */
+  // metricHistory serves one of an SNMP check's OIDs, the way the server does:
+  // raw points only, with the metric's value repeated in avgMs so the chart
+  // helpers can plot it without knowing it is not a latency.
+  function metricHistory(checkId, range, metric) {
+    const base = history(checkId, range);
+    const { c } = findCheck(checkId);
+    const o = (c.config?.snmpOids || []).find((x) => x.name === metric);
+    if (!o) throw Object.assign(new Error(`check ${checkId} does not measure "${metric}"`), { status: 400 });
+    const r = rng(c.id * 977 + metric.length);
+    const points = base.points.map((p) => {
+      if (p.avgMs == null) return { ...p, avgMs: null, minMs: null, maxMs: null, value: null };
+      const reading = snmpReading(o, +new Date(p.ts), r);
+      const v = reading.value != null ? reading.value : reading.rate;
+      return { ...p, value: v ?? null, avgMs: v ?? null, minMs: v ?? null, maxMs: v ?? null, jitterMs: null, lossPct: null };
+    });
+    return { ...base, source: 'raw', bucketSeconds: 0, metric, metricUnit: o.unit || '', points };
+  }
+
   function history(checkId, range) {
     const found = findCheck(checkId);
     if (!found) throw Object.assign(new Error('check not found'), { status: 404 });
@@ -593,7 +665,7 @@
   on('POST', /^\/api\/checks\/(\d+)\/silence$/, (m, body) => { const f = findCheck(m[1]); if (!f) throw err(404, 'check not found'); const mins = Number(body.minutes) || 0; if (mins > 0) { silences[f.c.id] = Date.now() + mins * MIN; addEvent('silenced', { nodeId: f.n.id, nodeName: f.n.name, checkId: f.c.id, checkName: f.c.name, title: `Alerts silenced for ${mins} minutes` }); } else { delete silences[f.c.id]; addEvent('unsilenced', { nodeId: f.n.id, nodeName: f.n.name, checkId: f.c.id, checkName: f.c.name, title: 'Silence removed' }); } return stateFor(f.n, f.c); });
   on('GET', /^\/api\/checks\/(\d+)\/results$/, (m, body, u) => { const f = findCheck(m[1]); if (!f) throw err(404, 'check not found'); const limit = Number(u.searchParams.get('limit')) || 50; return (resultLog[f.c.id] || []).slice(0, limit); });
   on('GET', /^\/api\/checks\/(\d+)\/state$/, (m) => { const f = findCheck(m[1]); if (!f) throw err(404, 'check not found'); return stateFor(f.n, f.c); });
-  on('GET', /^\/api\/history$/, (m, body, u) => { const ids = u.searchParams.getAll('checkId'); const range = u.searchParams.get('range') || '24h'; if (ids.length === 1) return history(ids[0], range); return ids.map((id) => history(id, range)); });
+  on('GET', /^\/api\/history$/, (m, body, u) => { const ids = u.searchParams.getAll('checkId'); const range = u.searchParams.get('range') || '24h'; const metric = u.searchParams.get('metric'); if (ids.length === 1) return metric ? metricHistory(ids[0], range, metric) : history(ids[0], range); return ids.map((id) => history(id, range)); });
   on('GET', /^\/api\/history\/multi$/, (m, body, u) => { const ids = u.searchParams.getAll('checkId'); const range = u.searchParams.get('range') || '24h'; return ids.map((id) => history(id, range)); });
   on('GET', /^\/api\/events$/, (m, body, u) => {
     const q = (u.searchParams.get('q') || '').toLowerCase();

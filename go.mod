@@ -1,8 +1,11 @@
 module github.com/jxburros/GWatch
 
-go 1.24
+go 1.24.0
+
+toolchain go1.24.7
 
 require (
+	github.com/gosnmp/gosnmp v1.45.0
 	github.com/kardianos/service v1.2.2
 	github.com/prometheus-community/pro-bing v0.7.0
 	golang.org/x/crypto v0.40.0

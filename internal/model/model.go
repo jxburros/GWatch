@@ -25,10 +25,11 @@ const (
 	CheckJSON    CheckType = "json"    // HTTP/S JSON response has expected value at a path
 	CheckCustom  CheckType = "custom"  // user-supplied command/script, output parsed for status/metrics
 	CheckSystem  CheckType = "system"  // hardware health of a machine: processor, memory, disk space, throughput
+	CheckSNMP    CheckType = "snmp"    // SNMP readings from a network device: interfaces, processor, uptime
 )
 
 // AllCheckTypes lists the supported check types in display order.
-var AllCheckTypes = []CheckType{CheckPing, CheckHTTP, CheckCert, CheckTCP, CheckDNS, CheckKeyword, CheckJSON, CheckCustom, CheckSystem}
+var AllCheckTypes = []CheckType{CheckPing, CheckHTTP, CheckCert, CheckTCP, CheckDNS, CheckKeyword, CheckJSON, CheckCustom, CheckSystem, CheckSNMP}
 
 // Valid reports whether the type is one the engine can run.
 func (t CheckType) Valid() bool {
@@ -61,6 +62,8 @@ func (t CheckType) Label() string {
 		return "Custom script"
 	case CheckSystem:
 		return "Hardware health"
+	case CheckSNMP:
+		return "SNMP"
 	}
 	return string(t)
 }
@@ -229,6 +232,66 @@ type CheckConfig struct {
 	// StaleAfterSeconds is how old a reading may be before the check reports
 	// the machine as down. 0 means three times the check interval.
 	StaleAfterSeconds int `json:"staleAfterSeconds,omitempty"`
+
+	// SNMP: readings taken straight off a router, switch or access point.
+	// The community string and the v3 passwords are credentials, so the store
+	// seals them before they reach disk and the API never echoes them back —
+	// an editor that sends the field back blank keeps what is stored.
+	SNMPVersion   string    `json:"snmpVersion,omitempty"`   // "2c" (default) or "3"
+	SNMPPort      int       `json:"snmpPort,omitempty"`      // default 161
+	SNMPCommunity string    `json:"snmpCommunity,omitempty"` // v2c community string
+	SNMPUser      string    `json:"snmpUser,omitempty"`      // v3 security name
+	SNMPAuthProto string    `json:"snmpAuthProto,omitempty"` // "" (noAuth) | MD5 | SHA | SHA224 | SHA256 | SHA384 | SHA512
+	SNMPAuthPass  string    `json:"snmpAuthPass,omitempty"`
+	SNMPPrivProto string    `json:"snmpPrivProto,omitempty"` // "" (noPriv) | DES | AES | AES192 | AES256 | AES192C | AES256C
+	SNMPPrivPass  string    `json:"snmpPrivPass,omitempty"`
+	SNMPOIDs      []SNMPOID `json:"snmpOids,omitempty"`
+}
+
+// SNMPOID is one reading an SNMP check takes, with the thresholds that decide
+// the check's verdict. A "counter" is an ever-increasing total (bytes seen on
+// an interface, errors counted), so it is evaluated as the per-second rate of
+// change between consecutive runs rather than as the number itself; a "gauge"
+// is a value that already means something on its own (a temperature, a
+// percentage, an operational status).
+type SNMPOID struct {
+	OID  string `json:"oid"`            // dotted numeric OID, e.g. 1.3.6.1.2.1.1.3.0
+	Name string `json:"name"`           // the metric name, unique within the check
+	Kind string `json:"kind,omitempty"` // "gauge" (default) or "counter"
+	// Scale multiplies the reading (or the rate) before it is compared and
+	// charted. 0 and 1 both mean "as read"; 8 turns a bytes-per-second rate
+	// into bits per second.
+	Scale     float64  `json:"scale,omitempty"`
+	Unit      string   `json:"unit,omitempty"` // shown beside the value, e.g. "bit/s", "%", "s"
+	WarnAbove *float64 `json:"warnAbove,omitempty"`
+	CritAbove *float64 `json:"critAbove,omitempty"`
+	WarnBelow *float64 `json:"warnBelow,omitempty"`
+	CritBelow *float64 `json:"critBelow,omitempty"`
+}
+
+// Scaled applies Scale to a reading. A missing or zero scale means "as read"
+// rather than "multiply by nothing".
+func (o SNMPOID) Scaled(v float64) float64 {
+	if o.Scale == 0 || o.Scale == 1 {
+		return v
+	}
+	return v * o.Scale
+}
+
+// SNMPValue is one OID as the last run read it.
+type SNMPValue struct {
+	OID  string `json:"oid"`
+	Name string `json:"name"`
+	Raw  string `json:"raw,omitempty"` // the value as the device reported it
+	// Value is the numeric reading after Scale, for a gauge. It is nil when
+	// the device answered with something that is not a number (sysDescr, a MAC
+	// address), which is reported as Raw and never thresholded.
+	Value *float64 `json:"value,omitempty"`
+	// Rate is the per-second rate of change after Scale, for a counter. It is
+	// nil on the first run after a restart, when there is no previous sample
+	// to compare against.
+	Rate *float64 `json:"rate,omitempty"`
+	Unit string   `json:"unit,omitempty"`
 }
 
 // SystemDefaults are the thresholds a new hardware check starts with. They are
@@ -281,6 +344,12 @@ type Result struct {
 	Details   ResultDetails `json:"details"`
 	Attempts  int           `json:"attempts"`
 	Warnings  []string      `json:"warnings,omitempty"` // degraded reasons
+	// Metrics carries the extra numbers a check measured beyond the latency
+	// every check reports, keyed by a name the check's configuration chose —
+	// for an SNMP check, one entry per OID holding its value or rate after
+	// Scale. They are stored with the result and charted by asking
+	// /api/history for metric=<name>.
+	Metrics map[string]float64 `json:"metrics,omitempty"`
 }
 
 // ResultDetails carries the type-specific diagnostics shown in the
@@ -327,6 +396,9 @@ type ResultDetails struct {
 	// System: the hardware reading the check evaluated, and how old it was.
 	Host       *HostMetrics `json:"host,omitempty"`
 	HostAgeSec *float64     `json:"hostAgeSeconds,omitempty"`
+
+	// SNMP: every OID the run asked for, in the order the check lists them.
+	SNMP []SNMPValue `json:"snmp,omitempty"`
 }
 
 // CertInfo describes the leaf certificate presented by a TLS server.
@@ -875,6 +947,11 @@ type HistoryPoint struct {
 	Availability float64   `json:"availability"`
 	Count        int       `json:"count"`
 	Failures     int       `json:"failures"`
+	// Value is the named metric this point carries when the series was asked
+	// for one (see HistorySeries.Metric). AvgMS, MinMS and MaxMS carry the
+	// same number, so a chart drawn from the latency fields plots a named
+	// metric without knowing it is not a latency.
+	Value *float64 `json:"value,omitempty"`
 }
 
 // HistorySeries is the response of the history endpoint.
@@ -890,6 +967,12 @@ type HistorySeries struct {
 	To         time.Time      `json:"to"`
 	Points     []HistoryPoint `json:"points"`
 	Summary    HistorySummary `json:"summary"`
+	// Metric names the per-check metric this series carries instead of
+	// latency, empty for the usual latency series. Such a series is always
+	// read from raw results: the rollup tables have columns for latency,
+	// jitter and loss and nowhere to put a metric a check invented.
+	Metric     string `json:"metric,omitempty"`
+	MetricUnit string `json:"metricUnit,omitempty"`
 }
 
 // HistorySummary aggregates a series for stat tiles.

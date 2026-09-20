@@ -673,7 +673,7 @@ func (s *Server) handleExportHistory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "checkId is required")
 		return
 	}
-	series, err := s.historyFor(r.Context(), *id, r.URL.Query().Get("range"))
+	series, err := s.historyFor(r.Context(), *id, r.URL.Query().Get("range"), r.URL.Query().Get("metric"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -738,6 +738,15 @@ func (s *Server) handleExportConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg.Settings.Alerts.SMTP.Password = ""
 	cfg.Settings.Backups.Password = ""
+	// A configuration export is meant to be readable and shareable, so the
+	// checks' credentials come out empty for the same reason the passwords do.
+	for i := range cfg.Nodes {
+		for j := range cfg.Nodes[i].Checks {
+			for _, field := range checkSecretFields(&cfg.Nodes[i].Checks[j].Config) {
+				*field = ""
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="gwatch-config.json"`)
 	enc := json.NewEncoder(w)

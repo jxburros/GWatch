@@ -507,7 +507,25 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, ov)
+	writeJSON(w, http.StatusOK, maskOverview(ov))
+}
+
+// maskOverview hides the checks' credentials in the overview, which every
+// viewer and every read-only API key may read.
+func maskOverview(ov engine.Overview) engine.Overview {
+	nodes := make([]engine.NodeView, len(ov.Nodes))
+	copy(nodes, ov.Nodes)
+	for i := range nodes {
+		nodes[i].Node = maskNodeChecks(nodes[i].Node)
+		views := make([]engine.CheckView, len(nodes[i].Checks))
+		copy(views, nodes[i].Checks)
+		for j := range views {
+			views[j].Check = maskCheck(views[j].Check)
+		}
+		nodes[i].Checks = views
+	}
+	ov.Nodes = nodes
+	return ov
 }
 
 type wallboardDoc struct {
@@ -522,7 +540,7 @@ func (s *Server) handleWallboard(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	doc := wallboardDoc{Overview: ov, Health: s.Engine.Health(r.Context()), Trends: []model.HistorySeries{}}
+	doc := wallboardDoc{Overview: maskOverview(ov), Health: s.Engine.Health(r.Context()), Trends: []model.HistorySeries{}}
 	rng, _ := store.ParseRange("24h")
 	for _, c := range autoChecks(ov, 6) {
 		series, err := s.Store.History(r.Context(), c.check, c.node.Name, rng, time.Now())
@@ -591,7 +609,66 @@ type nodeDoc struct {
 	InMaintenance bool                       `json:"inMaintenance"`
 }
 
+// checkSecretFields points at the credentials inside a check configuration.
+// They are masked on the way out and restored on the way in, the same way the
+// settings screen handles the SMTP password, so that reading a node — which
+// any viewer and any read-only API key may do — never hands out a community
+// string, an SNMP v3 password or a metrics token.
+func checkSecretFields(cfg *model.CheckConfig) []*string {
+	return []*string{&cfg.MetricsToken, &cfg.SNMPCommunity, &cfg.SNMPAuthPass, &cfg.SNMPPrivPass}
+}
+
+// maskNodeChecks returns the node with its checks' credentials replaced by the
+// mask. The checks are copied first: the caller's slice comes from the store
+// or the engine and must keep the values the runners need.
+func maskNodeChecks(n model.Node) model.Node {
+	if len(n.Checks) == 0 {
+		return n
+	}
+	checks := make([]model.Check, len(n.Checks))
+	copy(checks, n.Checks)
+	for i := range checks {
+		checks[i] = maskCheck(checks[i])
+	}
+	n.Checks = checks
+	return n
+}
+
+func maskCheck(c model.Check) model.Check {
+	for _, field := range checkSecretFields(&c.Config) {
+		if *field != "" {
+			*field = passwordMask
+		}
+	}
+	return c
+}
+
+// restoreCheckSecrets puts back the credentials of an incoming node's checks
+// when the editor sent them masked or blank, which is what "leave blank to
+// keep the stored value" means on the wire. A check the caller has not saved
+// before has nothing to restore from.
+func restoreCheckSecrets(n *model.Node, existing model.Node) {
+	stored := map[int64]model.CheckConfig{}
+	for _, c := range existing.Checks {
+		stored[c.ID] = c.Config
+	}
+	for i := range n.Checks {
+		prev, ok := stored[n.Checks[i].ID]
+		if !ok {
+			continue
+		}
+		before := checkSecretFields(&prev)
+		now := checkSecretFields(&n.Checks[i].Config)
+		for j := range now {
+			if *now[j] == "" || *now[j] == passwordMask {
+				*now[j] = *before[j]
+			}
+		}
+	}
+}
+
 func (s *Server) decorateNode(n model.Node, states map[int64]model.CheckState, last map[int64]model.Result) nodeDoc {
+	n = maskNodeChecks(n)
 	doc := nodeDoc{Node: n, StateByCheck: map[int64]model.CheckState{}}
 	for _, c := range n.Checks {
 		if st, ok := states[c.ID]; ok {
@@ -715,6 +792,29 @@ func (s *Server) normalizeNode(n *model.Node) error {
 				c.Config.LoadWarnPerCore = d.LoadWarnPerCore
 			}
 		}
+		if c.Type == model.CheckSNMP {
+			// Version and port are what every device answers on unless it was
+			// deliberately changed, so a check saved without them is filled in
+			// rather than refused.
+			if strings.TrimSpace(c.Config.SNMPVersion) == "" {
+				c.Config.SNMPVersion = "2c"
+			}
+			if c.Config.SNMPPort == 0 {
+				c.Config.SNMPPort = 161
+			}
+			for i := range c.Config.SNMPOIDs {
+				o := &c.Config.SNMPOIDs[i]
+				o.OID = strings.TrimSpace(o.OID)
+				o.Name = strings.TrimSpace(o.Name)
+				o.Kind = strings.ToLower(strings.TrimSpace(o.Kind))
+				if o.Kind == "" {
+					o.Kind = "gauge"
+				}
+				if o.Scale == 0 {
+					o.Scale = 1
+				}
+			}
+		}
 		if c.FailureThreshold < 0 {
 			c.FailureThreshold = 0
 		}
@@ -732,6 +832,15 @@ func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n.ID = 0
+	for i := range n.Checks {
+		// A new node's checks are new too, so a masked credential here came
+		// from a duplicated node rather than from something stored.
+		for _, field := range checkSecretFields(&n.Checks[i].Config) {
+			if *field == passwordMask {
+				*field = ""
+			}
+		}
+	}
 	if err := s.normalizeNode(&n); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -791,6 +900,7 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n.ID = id
+	restoreCheckSecrets(&n, existing)
 	if err := s.normalizeNode(&n); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -805,6 +915,11 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.fail(w, err)
 		return
+	}
+	for _, id := range deleted {
+		// Drop the in-memory state of a check that no longer exists, so a
+		// later check handed the same id cannot inherit its counter reading.
+		checks.ForgetCheck(id)
 	}
 	detail := describeNodeChange(existing, updated, len(deleted))
 	s.configChanged(r.Context(), &updated, fmt.Sprintf("Updated node %s", updated.Name), detail)
@@ -882,6 +997,9 @@ func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 	if err := s.Store.DeleteNode(r.Context(), id); err != nil {
 		s.fail(w, err)
 		return
+	}
+	for _, c := range n.Checks {
+		checks.ForgetCheck(c.ID)
 	}
 	s.configChanged(r.Context(), nil, fmt.Sprintf("Deleted node %s", n.Name), fmt.Sprintf("Removed %d check(s) and their history.", len(n.Checks)))
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -1037,6 +1155,21 @@ func (s *Server) handleTestCheck(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("unsupported check type %q", body.Check.Type))
 		return
 	}
+	// The editor never holds the credentials of a saved check, so testing one
+	// straight after opening it sends them masked or blank. Fill them back in
+	// from the stored check, or the test would fail for a reason that has
+	// nothing to do with the device.
+	if body.Check.ID != 0 {
+		if stored, err := s.Store.GetCheck(r.Context(), body.Check.ID); err == nil {
+			before := checkSecretFields(&stored.Config)
+			now := checkSecretFields(&body.Check.Config)
+			for i := range now {
+				if *now[i] == "" || *now[i] == passwordMask {
+					*now[i] = *before[i]
+				}
+			}
+		}
+	}
 	if err := checks.Validate(body.Check, body.NodeHost); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1140,7 +1273,9 @@ func (s *Server) handleCheckState(w http.ResponseWriter, r *http.Request) {
 
 // ---- history ----
 
-func (s *Server) historyFor(ctx context.Context, checkID int64, rangeName string) (model.HistorySeries, error) {
+// historyFor builds one check's series. A metric name asks for one of the
+// check's own measurements (an SNMP check's OIDs) instead of its latency.
+func (s *Server) historyFor(ctx context.Context, checkID int64, rangeName, metric string) (model.HistorySeries, error) {
 	rng, err := store.ParseRange(rangeName)
 	if err != nil {
 		return model.HistorySeries{}, err
@@ -1153,7 +1288,25 @@ func (s *Server) historyFor(ctx context.Context, checkID int64, rangeName string
 	if err != nil {
 		return model.HistorySeries{}, err
 	}
+	if metric = strings.TrimSpace(metric); metric != "" {
+		if !checkHasMetric(c, metric) {
+			return model.HistorySeries{}, fmt.Errorf("check %d does not measure %q", checkID, metric)
+		}
+		return s.Store.HistoryMetric(ctx, c, n.Name, rng, time.Now(), metric)
+	}
 	return s.Store.History(ctx, c, n.Name, rng, time.Now())
+}
+
+// checkHasMetric reports whether a check is configured to measure a named
+// metric. Asking is what keeps /api/history from turning into a way to probe
+// for arbitrary names in stored results.
+func checkHasMetric(c model.Check, metric string) bool {
+	for _, o := range c.Config.SNMPOIDs {
+		if o.Name == metric {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
@@ -1171,7 +1324,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid checkId")
 		return
 	}
-	series, err := s.historyFor(r.Context(), id, r.URL.Query().Get("range"))
+	series, err := s.historyFor(r.Context(), id, r.URL.Query().Get("range"), r.URL.Query().Get("metric"))
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			s.fail(w, err)
@@ -1201,7 +1354,7 @@ func (s *Server) handleHistoryMulti(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		series, err := s.historyFor(r.Context(), id, r.URL.Query().Get("range"))
+		series, err := s.historyFor(r.Context(), id, r.URL.Query().Get("range"), r.URL.Query().Get("metric"))
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				continue

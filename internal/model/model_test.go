@@ -15,12 +15,12 @@ func TestCheckTypeValid(t *testing.T) {
 			t.Errorf("%s has no human label", k)
 		}
 	}
-	for _, bad := range []CheckType{"", "smtp", "PING", "snmp"} {
+	for _, bad := range []CheckType{"", "smtp", "PING", "telnet"} {
 		if bad.Valid() {
 			t.Errorf("%q should not be valid", bad)
 		}
 	}
-	if got := CheckType("snmp").Label(); got != "snmp" {
+	if got := CheckType("telnet").Label(); got != "telnet" {
 		t.Errorf("unknown label = %q, want passthrough", got)
 	}
 }
