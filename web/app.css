@@ -33,11 +33,17 @@
   --line: #262a31;
   --line-strong: #333941;
   --text: #f2f4f6;
-  --muted: #9aa3ac;
-  --dim: #6c757f;
+  /* #37 contrast pass: --muted already cleared 4.5:1 everywhere it sits, but a
+     small lift makes it read as intentionally muted rather than merely dim.
+     --dim and --num-zero did not clear their bars against --elev (the
+     lightest of the three surfaces they sit on) and are raised to do so:
+     --dim carries tiny uppercase labels, which are small text and need
+     4.5:1; --num-zero is a large tabular numeral, which only needs 3:1. */
+  --muted: #9ea7af;
+  --dim: #858e97;
   --band: #22262d;
   --rail-active-bg: #1c1f25;
-  --num-zero: #5b636c;
+  --num-zero: #67717b;
   --grid: rgba(255, 255, 255, 0.02);
   --scrim: rgba(3, 4, 6, 0.72);
   --shadow: 0 10px 34px rgba(0, 0, 0, 0.5);
@@ -57,6 +63,12 @@
   --down: #ff5c5c;
   --warn: #ffc542;
   --unknown: #8b949e;
+  /* The two trigger-action badges (git / custom script) were hard-coded to
+     one colour each and never adapted per theme; on the light theme's pale
+     tint of the same hue that read at under 2:1. Tokenised so each theme can
+     pick its own shade of the same colour. */
+  --a-git: #ff8a65;
+  --a-script: #3ec8b8;
   --maint: #6ea0ff;
   --paused: #5b6472;
   --up-soft: rgba(53, 224, 127, 0.12);
@@ -88,6 +100,29 @@
   --nav-h: 2.625rem;
   --row-h: 11.375rem;
   --gutter: clamp(0.875rem, 1.4vw, 1.75rem);
+
+  /* #32 density tokens. Compact is the default: these are the tight values,
+     so a phone scrolling a hundred nodes does not spend most of its screen
+     on padding. `:root[data-density="comfortable"]` below restates every one
+     of them at roughly today's pre-#32 numbers — turning density on never
+     changes anything for someone who leaves it alone. */
+  --row-pad-y: 0.375rem;
+  --row-gap: 0.625rem;
+  --list-font: 0.8125rem;
+  --chip-pad: 0 6px;
+  --group-gap: 0.875rem;
+  --check-pad-y: 0.75rem;
+  --check-pad-x: 0.875rem;
+}
+
+:root[data-density="comfortable"] {
+  --row-pad-y: 0.6875rem;
+  --row-gap: 1rem;
+  --list-font: 0.875rem;
+  --chip-pad: 1px 7px;
+  --group-gap: 1.375rem;
+  --check-pad-y: 1rem;
+  --check-pad-x: 1.125rem;
 }
 
 :root[data-theme="light"] {
@@ -105,10 +140,15 @@
   --line-strong: #bcc2ca;
   --text: #10151d;
   --muted: #55606f;
-  --dim: #8a929c;
+  /* #37 contrast pass: on white/near-white, --dim (small uppercase labels,
+     4.5:1) and --num-zero (a large tabular numeral, 3:1) both fell short —
+     --dim badly (2.8:1 on --bg) — so both are darkened. They are no longer
+     the same value: --num-zero can stay lighter because it only has to clear
+     the lower bar. */
+  --dim: #666f79;
   --band: #eceef1;
   --rail-active-bg: #eceef1;
-  --num-zero: #8a929c;
+  --num-zero: #838b96;
   --grid: rgba(0, 0, 0, 0.035);
   --scrim: rgba(20, 24, 30, 0.45);
   --shadow: 0 10px 30px rgba(20, 30, 50, 0.18);
@@ -116,24 +156,31 @@
   --panel-edge: rgba(255, 255, 255, 0.9);
   --panel-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0) 52%);
   --wash: radial-gradient(1100px 620px at 12% -12%, rgba(var(--accent-rgb), 0.09), transparent 62%);
-  --up: #12923f;
-  --down: #d92626;
-  --warn: #b26a00;
-  --unknown: #6b7480;
+  /* --up, --down, --warn and --unknown were all under 4.5:1 against at least
+     one of bg/card/elev (down and warn worst on --bg, up and unknown worst
+     everywhere) — the light theme had more failing pairs than the dark one,
+     since a saturated colour on a near-white field loses contrast fast. Each
+     is darkened along its own hue just enough to clear 4.5:1 on all three. */
+  --up: #107f37;
+  --down: #d42525;
+  --warn: #9f5f00;
+  --unknown: #666f7a;
+  --a-git: #c73000;
+  --a-script: #237b71;
   --maint: #2360d6;
   --paused: #8a93a1;
-  --up-soft: rgba(18, 146, 63, 0.12);
-  --down-soft: rgba(217, 38, 38, 0.10);
-  --warn-soft: rgba(178, 106, 0, 0.12);
+  --up-soft: rgba(16, 127, 55, 0.12);
+  --down-soft: rgba(212, 37, 37, 0.10);
+  --warn-soft: rgba(159, 95, 0, 0.12);
   --maint-soft: rgba(35, 96, 214, 0.12);
-  --unknown-soft: rgba(107, 116, 128, 0.14);
+  --unknown-soft: rgba(102, 111, 122, 0.14);
   --paused-soft: rgba(138, 147, 161, 0.18);
   --paused-text: #5f6976;
 
-  --up-rgb: 18, 146, 63;
-  --down-rgb: 217, 38, 38;
-  --warn-rgb: 178, 106, 0;
-  --unknown-rgb: 107, 116, 128;
+  --up-rgb: 16, 127, 55;
+  --down-rgb: 212, 37, 37;
+  --warn-rgb: 159, 95, 0;
+  --unknown-rgb: 102, 111, 122;
   --maint-rgb: 35, 96, 214;
   --paused-rgb: 138, 147, 161;
 }
@@ -671,17 +718,25 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .theme-option .preview i { display: block; }
 .theme-option b { font-size: 0.8125rem; }
 .theme-option span { font-size: 0.75rem; color: var(--muted); }
+/* #32: the density picker is two .theme-option cards, not three, so it gets
+   its own column count. The preview swaps in a little stack of bars instead
+   of the theme swatch — closer together for compact, further apart for
+   breathing room — so the option reads before you click it. */
+.theme-options.density-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.density-preview { display: flex; flex-direction: column; justify-content: center; height: 2.75rem; padding: 0 0.625rem; border: 1px solid var(--line); background: var(--card); gap: 3px; }
+.density-preview i { display: block; height: 4px; background: var(--line-strong); }
+.density-preview.is-comfortable { gap: 7px; }
 
 /* ---------- Tables / lists ---------- */
 .table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 .table th { text-align: left; font-size: 0.65625rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--dim); font-weight: 400; font-family: var(--mono); padding: 6px 0.625rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
-.table td { padding: 0.5rem 0.625rem; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.table td { padding: var(--row-pad-y) 0.625rem; border-bottom: 1px solid var(--line); vertical-align: middle; }
 .table tr:last-child td { border-bottom: 0; }
 .table td.mono, .table th.mono { font-family: var(--mono); font-size: 0.78125rem; font-variant-numeric: tabular-nums; }
 .table td.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .table-wrap { overflow: auto; }
 .list { display: flex; flex-direction: column; }
-.list-item { display: flex; align-items: center; gap: 0.75rem; padding: 0.5625rem 0; border-bottom: 1px solid var(--line); }
+.list-item { display: flex; align-items: center; gap: 0.75rem; padding: var(--row-pad-y) 0; font-size: var(--list-font); border-bottom: 1px solid var(--line); }
 .list-item:last-child { border-bottom: 0; }
 .list-item .grow { flex: 1; min-width: 0; }
 
@@ -898,7 +953,7 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .status-row .name a { color: var(--text); }
 .status-row .name .sub { font-size: 0.78125rem; color: var(--muted); font-weight: 400; font-family: var(--mono); }
 .check-chips { display: flex; gap: 4px; flex-wrap: wrap; }
-.check-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; background: var(--elev); border: 1px solid var(--line); font-family: var(--mono); font-size: 0.71875rem; font-weight: 400; letter-spacing: 0.02em; color: var(--muted); white-space: nowrap; }
+.check-chip { display: inline-flex; align-items: center; gap: 4px; padding: var(--chip-pad); background: var(--elev); border: 1px solid var(--line); font-family: var(--mono); font-size: 0.71875rem; font-weight: 400; letter-spacing: 0.02em; color: var(--muted); white-space: nowrap; }
 .check-chip .icon { font-size: 0.6875rem; stroke-width: 3; }
 .check-chip .lat { font-family: var(--mono); color: var(--dim); font-weight: 500; }
 .event-rows { display: flex; flex-direction: column; }
@@ -973,7 +1028,7 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .filter-count { font-family: var(--mono); font-size: 0.6875rem; color: var(--dim); letter-spacing: 0.14em; text-transform: uppercase; white-space: nowrap; margin-left: auto; }
 .filters { display: flex; flex-direction: column; gap: 7px; margin: 0; }
 .filter-bar .toolbar + .filters:not(:empty) { margin-top: 0.875rem; padding-top: 0.875rem; border-top: 1px solid var(--line); }
-.node-group { margin-bottom: 1.375rem; }
+.node-group { margin-bottom: var(--group-gap); }
 .node-group:last-child { margin-bottom: 0; }
 .node-group-head { display: flex; align-items: center; gap: 0.625rem; margin-bottom: 0.5rem; padding: 0 2px; }
 .node-group-head h2 { font-size: 0.6875rem; font-weight: 400; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.14em; color: var(--muted); }
@@ -982,13 +1037,16 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
    groups a block of readouts. */
 .node-group-head::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--line), transparent); }
 .node-rows { display: flex; flex-direction: column; border: 1px solid var(--line); box-shadow: inset 0 1px 0 var(--panel-edge); }
-.node-row { display: grid; grid-template-columns: 0.1875rem 6.5rem minmax(11.25rem, 1.1fr) minmax(13.75rem, 2.2fr) 9.375rem auto; align-items: center; gap: 1rem; padding: 0.6875rem 1rem; background: var(--card); border-bottom: 1px solid var(--line); position: relative; transition: background var(--dur) var(--ease); }
+/* #32: padding, the inter-column gap and the name's font size all follow the
+   density tokens, so switching density is a single attribute flip rather
+   than a per-row recompute. */
+.node-row { display: grid; grid-template-columns: 0.1875rem 6.5rem minmax(11.25rem, 1.1fr) minmax(13.75rem, 2.2fr) 9.375rem auto; align-items: center; gap: var(--row-gap); padding: var(--row-pad-y) 1rem; background: var(--card); border-bottom: 1px solid var(--line); position: relative; transition: background var(--dur) var(--ease); }
 .node-row .spine { align-self: center; }
 .node-row:last-child { border-bottom: 0; }
 .node-row:hover { background: var(--elev); }
 .node-row.disabled { opacity: 0.7; }
 .node-row .n-meta { justify-self: end; text-align: right; align-items: flex-end; }
-.node-row .n-name { font-weight: 600; font-size: 0.875rem; display: flex; flex-direction: column; min-width: 0; }
+.node-row .n-name { font-weight: 600; font-size: var(--list-font); display: flex; flex-direction: column; min-width: 0; }
 .node-row .n-name a { color: var(--text); }
 .node-row .n-host { font-family: var(--mono); font-size: 0.78125rem; color: var(--muted); font-weight: 400; }
 .node-row .n-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
@@ -1011,13 +1069,17 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .detail-head h1 { font-size: 1.375rem; font-weight: 700; letter-spacing: -0.025em; display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
 .detail-head .d-meta { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; color: var(--muted); font-size: 0.8125rem; }
 .detail-head .d-meta .host { font-family: var(--mono); color: var(--text); }
-.check-card { padding: 1rem 1.125rem; }
+/* #32: a check-card is the "check row" on the node detail page — one per
+   check, stacked with .stack-joined. Its padding follows the density tokens,
+   and the band bleeds out to the card's edge by exactly that padding, so it
+   still reaches the edge at either density. */
+.check-card { padding: var(--check-pad-y) var(--check-pad-x); }
 .check-card + .check-card { border-top: 0; }
 /* The check's own band: what kind of check it is, how often it runs, and what
    it points at — the facts that never change while you are reading the card. */
 .check-card > .check-band:first-child {
   display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap;
-  margin: -1rem -1.125rem 1rem; padding: 0.5rem 1rem;
+  margin: calc(-1 * var(--check-pad-y)) calc(-1 * var(--check-pad-x)) var(--check-pad-y); padding: 0.5rem var(--check-pad-x);
   background: var(--band); border-bottom: 1px solid var(--line);
   font-family: var(--mono); font-size: 0.6875rem; font-weight: 400; color: var(--muted);
   text-transform: uppercase; letter-spacing: 0.16em;
@@ -1052,8 +1114,8 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .trigger-row .t-sub { font-size: 0.75rem; color: var(--muted); margin-top: 2px; font-family: var(--mono); }
 .trigger-row .t-out { font-size: 0.75rem; color: var(--dim); margin-top: 3px; white-space: pre-wrap; word-break: break-word; max-height: 3.2em; overflow: hidden; }
 .action-badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 0.5rem; background: var(--accent-soft); color: var(--accent-hover); font-size: 0.65625rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.14em; font-family: var(--mono); }
-.action-badge.a-git { background: rgba(240, 80, 50, 0.14); color: #ff8a65; }
-.action-badge.a-script { background: rgba(62, 200, 184, 0.14); color: #3ec8b8; }
+.action-badge.a-git { background: rgba(240, 80, 50, 0.14); color: var(--a-git); }
+.action-badge.a-script { background: rgba(62, 200, 184, 0.14); color: var(--a-script); }
 .action-badge.a-run_node { background: var(--up-soft); color: var(--up); }
 .cond-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .cond-chips label { display: inline-flex; align-items: center; gap: 5px; padding: 3px 0.5rem; border: 1px solid var(--line-strong); background: var(--elev); font-size: 0.75rem; cursor: pointer; font-family: var(--mono); }
@@ -1088,7 +1150,7 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .timeline-day h2 { display: flex; align-items: center; gap: 0.625rem; font-size: 0.6875rem; font-weight: 400; text-transform: uppercase; letter-spacing: 0.14em; color: var(--dim); margin-bottom: 0.5rem; padding-left: 2px; font-family: var(--mono); }
 .timeline-day h2::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--line), transparent); }
 .timeline { display: flex; flex-direction: column; border: 1px solid var(--line); box-shadow: inset 0 1px 0 var(--panel-edge); }
-.timeline .event-row { padding: 0.6875rem 1rem; background: var(--card); border-bottom: 1px solid var(--line); transition: background var(--dur) var(--ease); }
+.timeline .event-row { padding: var(--row-pad-y) 1rem; background: var(--card); border-bottom: 1px solid var(--line); transition: background var(--dur) var(--ease); }
 .timeline .event-row:hover { background: var(--elev); }
 .timeline .event-row:last-child { border-bottom: 0; }
 .timeline .ev-icon { width: 1.75rem; height: 1.75rem; font-size: 0.875rem; }
@@ -1175,7 +1237,7 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .settings-panel .card .lead { color: var(--muted); font-size: 0.8125rem; margin-bottom: 1.125rem; }
 .retention-summary { padding: 0.625rem 0.75rem; background: var(--elev); border: 1px solid var(--line); font-size: 0.84375rem; line-height: 1.6; }
 .retention-summary b { color: var(--accent-hover); }
-.maint-row { display: grid; grid-template-columns: 1fr auto; gap: 0.75rem; align-items: center; padding: 0.625rem 0; border-bottom: 1px solid var(--line); }
+.maint-row { display: grid; grid-template-columns: 1fr auto; gap: 0.75rem; align-items: center; padding: var(--row-pad-y) 0; border-bottom: 1px solid var(--line); }
 .maint-row:last-child { border-bottom: 0; }
 .maint-row .m-title { font-weight: 600; display: flex; align-items: center; gap: 0.5rem; }
 .maint-row .m-sub { font-size: 0.78125rem; color: var(--muted); margin-top: 2px; }
@@ -1184,7 +1246,7 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .weekdays label:has(input:checked) { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
 .weekdays label:has(input:focus-visible) { box-shadow: var(--focus); }
 .weekdays input { position: absolute; opacity: 0; width: 0; height: 0; }
-.backup-row { display: grid; grid-template-columns: 1fr auto; gap: 0.75rem; align-items: center; padding: 0.5625rem 0; border-bottom: 1px solid var(--line); }
+.backup-row { display: grid; grid-template-columns: 1fr auto; gap: 0.75rem; align-items: center; padding: var(--row-pad-y) 0; border-bottom: 1px solid var(--line); }
 .backup-row:last-child { border-bottom: 0; }
 .backup-row .b-name { font-family: var(--mono); font-size: 0.78125rem; font-weight: 500; }
 .backup-row .b-sub { font-size: 0.78125rem; color: var(--muted); margin-top: 2px; }
@@ -1214,7 +1276,7 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .pill-warn { color: var(--warn); border-color: var(--warn); background: var(--warn-soft); }
 
 .update-notes { max-height: 15rem; overflow: auto; white-space: pre-wrap; font-size: 0.78125rem; color: var(--muted); padding: 0.625rem 0.75rem; border: 1px solid var(--line); background: var(--elev); }
-.endpoint-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.75rem; align-items: center; padding: 0.625rem 0; border-bottom: 1px solid var(--line); }
+.endpoint-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.75rem; align-items: center; padding: var(--row-pad-y) 0; border-bottom: 1px solid var(--line); }
 .endpoint-row:last-child { border-bottom: 0; }
 .endpoint-row .e-url { font-family: var(--mono); font-size: 0.78125rem; color: var(--accent-hover); word-break: break-all; }
 
@@ -1244,7 +1306,7 @@ body.bare-mode .main { margin-left: 0; }
 .signin-card .form-actions .btn { width: 100%; justify-content: center; }
 
 /* ---------- Users & API keys ---------- */
-.access-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.75rem; align-items: center; padding: 0.6875rem 0; border-bottom: 1px solid var(--line); }
+.access-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.75rem; align-items: center; padding: var(--row-pad-y) 0; border-bottom: 1px solid var(--line); }
 .access-row:last-child { border-bottom: 0; }
 .access-row .a-meta { color: var(--muted); font-size: 0.75rem; display: flex; flex-wrap: wrap; gap: 4px 0.75rem; margin-top: 3px; }
 .access-row .a-name { display: flex; align-items: center; gap: 0.5rem; }
@@ -1404,7 +1466,7 @@ body.wallboard-mode .view { padding: 0; }
 
 /* ---------- Wallboard editor ---------- */
 .wb-panels { display: flex; flex-direction: column; }
-.wb-panel-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 1rem; padding: 0.625rem 0; border-bottom: 1px solid var(--line); }
+.wb-panel-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 1rem; padding: var(--row-pad-y) 0; border-bottom: 1px solid var(--line); }
 .wb-panel-row:last-child { border-bottom: 0; }
 .wb-panel-main { min-width: 0; }
 .wb-panel-name { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
@@ -1551,7 +1613,7 @@ kbd { font-family: var(--mono); font-size: 0.71875rem; padding: 2px 6px; border:
   .widget[data-h="1"] .health-item .hv { font-size: 0.84375rem; line-height: 1.45; }
   .widget[data-h="1"] .health-item .hl { font-size: 0.65625rem; letter-spacing: 0.14em; }
   .summary-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .template-grid, .type-picker, .widget-picker, .theme-options { grid-template-columns: 1fr; }
+  .template-grid, .type-picker, .widget-picker, .theme-options, .theme-options.density-options { grid-template-columns: 1fr; }
   .uptime-row { grid-template-columns: 1fr; gap: 4px; }
   .audit-toolbar { grid-template-columns: 1fr; }
   /* A phone is not a wall, but a board opened on one should still be

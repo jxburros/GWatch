@@ -168,6 +168,19 @@ export function applyTheme(theme) {
 }
 export function currentTheme() { return document.documentElement.getAttribute('data-theme') || 'dark'; }
 
+/* ---------- Density (#32) ---------- */
+// A per-browser preference, like the pinned sidebar: there is no server
+// setting for it, so it does not go through /api/settings and does not need
+// an admin to change it. boot.js sets the same attribute pre-paint from the
+// same localStorage key, so switching it here just keeps the two in step.
+export function applyDensity(density) {
+  const d = density === 'comfortable' ? 'comfortable' : 'compact';
+  document.documentElement.setAttribute('data-density', d);
+  try { localStorage.setItem('gw.density', d); } catch { /* ignore */ }
+  notifyTheme();
+}
+export function currentDensity() { return document.documentElement.getAttribute('data-density') === 'comfortable' ? 'comfortable' : 'compact'; }
+
 export function hexToRgb(hex) {
   const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || '');
   return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : null;

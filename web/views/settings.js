@@ -3,7 +3,7 @@
 // monitor health. Logs moved to the Audit tab.
 
 import { api, qs } from '../api.js';
-import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, openModal, emptyState, skeleton, banner, eventRow, busy, applyTheme, applyAccent, ACCENT_PRESETS, hexToRgb } from '../components.js';
+import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, openModal, emptyState, skeleton, banner, eventRow, busy, applyTheme, applyAccent, ACCENT_PRESETS, hexToRgb, applyDensity, currentDensity } from '../components.js';
 import { relTime, dateTime, bytes, num, duration, retentionSpan, toLocalInput, fromLocalInput, weekdayShort, timeShort, plural, isBeta } from '../fmt.js';
 import { openEndpointEditor, endpointRow, triggerRow, openTriggerEditor } from './automation.js';
 import { tipsEnabled, setTipsEnabled, resetTips, seenCount, resetOnboarding, TIPS } from '../tips.js';
@@ -125,6 +125,24 @@ export async function mount(root, ctx) {
       }
     };
     renderThemes();
+    // #32: density is a per-browser preference, like the pinned sidebar — it
+    // never touches state.settings and there is nothing here for a viewer to
+    // be locked out of, so it renders the same way for both roles.
+    const densities = [
+      { value: 'compact', label: 'Compact (default)', desc: 'Tighter rows, so a long node list scrolls easily.' },
+      { value: 'comfortable', label: 'Breathing room', desc: 'The roomier spacing GWatch used to ship with.' },
+    ];
+    const densityWrap = h('div', { class: 'theme-options density-options', role: 'radiogroup', 'aria-label': 'List density' });
+    const renderDensities = () => {
+      clear(densityWrap);
+      const current = currentDensity();
+      for (const d of densities) {
+        densityWrap.append(h('button', { type: 'button', role: 'radio', class: `theme-option ${current === d.value ? 'active' : ''}`, 'aria-checked': current === d.value ? 'true' : 'false', onclick: () => { applyDensity(d.value); renderDensities(); } },
+          h('div', { class: `density-preview ${d.value === 'comfortable' ? 'is-comfortable' : ''}` }, h('i'), h('i'), h('i')),
+          h('b', null, d.label), h('span', null, d.desc)));
+      }
+    };
+    renderDensities();
     const swatches = h('div', { class: 'swatches', role: 'radiogroup', 'aria-label': 'Accent colour' });
     const custom = h('input', { type: 'color', value: g.accentColor || '#43c9c0', 'aria-label': 'Custom accent colour', oninput: () => { g.accentColor = custom.value; applyAccent(custom.value); renderSwatches(); } });
     const hex = textInput({ value: g.accentColor || '#43c9c0', class: 'mono', style: { maxWidth: '110px' }, 'aria-label': 'Accent hex', oninput: () => { if (hexToRgb(hex.value)) { g.accentColor = hex.value.toLowerCase(); custom.value = g.accentColor; applyAccent(g.accentColor); renderSwatches(); } } });
@@ -140,6 +158,9 @@ export async function mount(root, ctx) {
           ? 'Changes apply immediately; press Save to keep them for every browser that opens this GWatch.'
           : 'Changes apply immediately and are remembered by this browser. Only an administrator can change the theme for everyone.'),
         themeWrap),
+      h('section', { class: 'card' }, h('h2', null, 'Density'),
+        h('p', { class: 'lead' }, 'How tightly node rows, checks and lists are packed. Remembered by this browser only — there is no shared setting for it.'),
+        densityWrap),
       h('section', { class: 'card' }, h('h2', null, 'Accent colour'), h('p', { class: 'lead' }, 'Used for buttons, highlights, the active navigation item and the first chart line.'), swatches,
         h('div', { class: 'row', style: { marginTop: '14px', gap: '8px' } }, h('button', { class: 'btn btn-primary', type: 'button' }, 'Primary button'), h('button', { class: 'btn', type: 'button' }, 'Button'), h('span', { class: 'chip active' }, 'Active chip'), h('a', { href: '#/settings/appearance' }, 'A link')),
         isAdmin ? h('hr', { class: 'divider' }) : null, isAdmin ? saveBar() : null),
