@@ -86,6 +86,7 @@ func (s *Server) Handler() http.Handler {
 
 	s.route(mux, "GET /api/nodes", s.handleListNodes)
 	s.route(mux, "POST /api/nodes", s.handleCreateNode)
+	s.route(mux, "PATCH /api/nodes/bulk", s.handleBulkUpdateNodes)
 	s.route(mux, "GET /api/nodes/{id}", s.handleGetNode)
 	s.route(mux, "PUT /api/nodes/{id}", s.handleUpdateNode)
 	s.route(mux, "DELETE /api/nodes/{id}", s.handleDeleteNode)
@@ -740,6 +741,23 @@ func (s *Server) handleGetNode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.decorateNode(n, s.Engine.States(), last))
 }
 
+// normalizeTags cleans a tag list: blanks go, surrounding space goes, and two
+// tags that differ only in case are one tag under the spelling first given.
+// The bulk-edit path applies the same rule, so a tag added to thirty nodes at
+// once reads the same as one typed into the editor.
+func normalizeTags(tags []string) []string {
+	out := make([]string, 0, len(tags))
+	seen := map[string]bool{}
+	for _, t := range tags {
+		t = strings.TrimSpace(t)
+		if t != "" && !seen[strings.ToLower(t)] {
+			seen[strings.ToLower(t)] = true
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // normalizeNode validates and fills defaults on a node and its checks.
 func (s *Server) normalizeNode(n *model.Node) error {
 	settings := s.Engine.Settings()
@@ -759,16 +777,7 @@ func (s *Server) normalizeNode(n *model.Node) error {
 	default:
 		return fmt.Errorf("invalid importance %q", n.Importance)
 	}
-	tags := make([]string, 0, len(n.Tags))
-	seen := map[string]bool{}
-	for _, t := range n.Tags {
-		t = strings.TrimSpace(t)
-		if t != "" && !seen[strings.ToLower(t)] {
-			seen[strings.ToLower(t)] = true
-			tags = append(tags, t)
-		}
-	}
-	n.Tags = tags
+	n.Tags = normalizeTags(n.Tags)
 	if n.DependsOnNode != nil && (*n.DependsOnNode <= 0 || *n.DependsOnNode == n.ID) {
 		n.DependsOnNode = nil
 	}

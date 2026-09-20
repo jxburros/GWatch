@@ -27,6 +27,11 @@ The 2026-09-19 sprint: everything labelled `sprint-plan` in the tracker.
   see every device that answers with its name, round trip and open ports, then
   bulk-add the ones you pick as nodes with a template suggested for each.
   Administrator only, pure Go, no `nmap`.
+- **Bulk edit** (#27). Nodes › Bulk edit, and `PATCH /api/nodes/bulk` behind
+  it, applies one change — interval, timeout, retries, failure threshold,
+  enabled, alert overrides, latency, packet-loss and certificate thresholds,
+  ping method, groups, tags, importance, dependency — across as many nodes and
+  checks as you tick, in one transaction with one entry in the timeline.
 - **Nodes can belong to more than one group** (#35). Nodes carry a `groups`
   list; filters, maintenance windows, dashboard and wallboard group panels
   match any of a node's groups. The single `group` field stays for one release

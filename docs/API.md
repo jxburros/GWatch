@@ -196,6 +196,7 @@ companion that lets an AI assistant use this API with a key, is documented in
 - `POST /api/nodes/{id}/duplicate` → new Node (name suffixed " (copy)", disabled).
 - `POST /api/nodes/{id}/run` → runs all enabled checks of the node now → `[Result]`.
 - `POST /api/nodes/{id}/silence` body `{ "minutes": 60 }` (0 = unsilence) → silences every check of the node → Node.
+- `PATCH /api/nodes/bulk` — one change across many nodes and checks. See **Bulk edit** below.
 - `GET /api/templates` → `[NodeTemplate]` (website, home-server, router — shown as "Network device", ping, api, tcp-service, this-computer, agent-machine, dns).
 - `GET /api/groups` → `{ "groups": [{"name":"...","count":3}], "tags": [{"name":"...","count":2}] }`. A node in several groups is counted once in each of them, so the counts can add up to more than the number of nodes.
 
@@ -391,6 +392,76 @@ answered **409**; the registry is in memory, so a restart forgets the last run.
 Progress is also pushed over `/api/stream` (see Server-sent events), and each run leaves
 one entry of type `discovery` in the timeline — "Discovery scanned 254 addresses in
 192.168.1.0/24: 17 responded" — as does each add.
+
+### Bulk edit
+
+`PATCH /api/nodes/bulk` applies one change to many nodes and checks in a single
+transaction, with one engine reload and one entry in the event timeline. It is
+admin-only; a read-write API key may call it, a read-only key gets 403.
+
+```json
+{
+  "nodeIds":  [1, 2, 3],
+  "checkIds": [17],
+  "node":  { "addTags": ["critical"] },
+  "check": { "intervalSeconds": 120 },
+  "checkFilter": { "types": ["ping", "tcp"] }
+}
+```
+
+**Semantics.** The `node` patch applies to every node in `nodeIds`. The `check`
+patch applies to every check in `checkIds` **plus** every check of every node in
+`nodeIds`. `checkFilter.types` narrows that whole set, listed check ids
+included, so what a caller selects and what it changes are the same set. Both
+patches are partial: only the fields actually present in the JSON are changed,
+so `"enabled": false` and an absent `enabled` are different requests. An
+unknown field anywhere in the body is a 400 naming it — a misspelled key means
+the change would silently not happen.
+
+**Node fields.** `groups` (replaces the whole list), `addGroups`,
+`removeGroups`, `tags` (replaces), `addTags`, `removeTags`, `importance`,
+`enabled`, `dependsOnNodeId` (a node id, or `null` to clear it). Group and tag
+names are trimmed, folded case-insensitively onto the spelling already in use
+and capped at 16 groups, exactly as `PUT /api/nodes/{id}` does; removals match
+ignoring case. A dependency that would form a loop, or point a node at itself,
+is refused.
+
+**Check fields.** `intervalSeconds`, `timeoutSeconds`, `retries`,
+`failureThreshold`, `enabled`, `alerts` and `config`.
+
+`alerts` is the whole per-check `AlertOverride`: an object **replaces** it (so a
+field the object leaves out goes back to following the global setting), and an
+explicit `null` clears it.
+
+`config` is a whitelist of keys whose meaning does not depend on the check type:
+`latencyWarnMs`, `packetLossWarnPct`, `pingMethod`, `certWarnDays`. Any other
+key is a 400 naming it and listing the ones that would have worked.
+
+**Check type changes are not supported.** A check's type decides what its
+configuration means, so changing it in bulk would leave every check it touched
+pointing at settings that mean nothing for the new type. Change a type one
+check at a time, in the editor.
+
+**Validation** is the same as the single-node path: the interval minimum from
+Settings › General, and `checks.Validate` on the merged check. Nothing is
+written unless everything validates, and the store writes it all in one
+transaction — a row that has gone missing since the request was built fails the
+whole batch.
+
+**Errors.** 400 when nothing is selected, when nothing would change, when the
+type filter leaves no checks, for an unknown field or config key, for a value
+the single-node path would also refuse, and for a node or check id that no
+longer exists.
+
+**Response.**
+
+```json
+{ "nodes": 5, "checks": 14, "changes": ["interval → 120 s", "tags +critical"] }
+```
+
+`nodes` and `checks` are how many rows were written; `changes` is the same list
+of phrases the audit entry is built from ("Bulk edit: interval → 120 s on 14
+checks; tags +critical on 5 nodes").
 
 ## History (charts)
 

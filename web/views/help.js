@@ -46,6 +46,7 @@ const TOPICS = [
       ),
       h('p', null, 'Nodes carry groups, tags, notes and an importance, can be duplicated or disabled, and templates prefill defaults for a website, home server, network device, API, TCP service, DNS name or ping-only device. Every check can be run on demand from the node\'s page, which shows the complete result rather than just a verdict.'),
       h('p', null, h('b', null, 'Discover'), ' on the ', h('a', { href: '#/nodes' }, 'Nodes'), ' page pings a range of addresses — ', h('code', null, '192.168.1.0/24'), ', ', h('code', null, '192.168.1.10-50'), ' — looks up the name of everything that answers, and offers the lot in a list with a suggested template each, so a whole house can be added in one go instead of one address at a time.'),
+      h('p', null, h('a', { href: '#/nodes/bulk' }, 'Bulk edit'), ', from the Nodes page, changes one setting — interval, timeout, failure threshold, groups, tags, importance, enabled, alert overrides — across as many nodes and checks as you tick, in one go. A check\'s type is the one thing it will not change, because the type decides what the rest of its configuration means.'),
       h('p', { class: 'note' }, 'History is kept at full resolution for 30 days and then rolled up into 5-minute, hourly and daily summaries, so the database does not grow without bound. ', h('a', { href: '#/settings/retention' }, 'Settings › Retention'), ' spells out exactly what is kept and what is deleted.'),
     ],
   },

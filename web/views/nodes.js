@@ -14,6 +14,7 @@ export async function mount(root, ctx) {
   // a hardware section of its own.
   ctx.setTitle('Nodes', {
     actions: [
+      h('a', { class: 'btn admin-only', href: '#/nodes/bulk' }, icon('sliders'), 'Bulk edit'),
       h('button', { class: 'btn admin-only', type: 'button', onclick: () => pairMachine(load) }, icon('cpu'), 'Pair a machine'),
       // Sweeping the network is the other way of getting here: rather than
       // typing an address, be shown the ones that answer.

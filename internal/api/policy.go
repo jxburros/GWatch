@@ -124,6 +124,9 @@ var policies = []routePolicy{
 	// ---- monitoring writes: a readwrite key may do these ----
 	{"POST", "/api/nodes", levelAdmin, keyWrite},
 	{"PUT", "/api/nodes/{id}", levelAdmin, keyWrite},
+	// One patch across many nodes and checks. It changes nothing a PUT could
+	// not, so it sits at the same standing as the single-node write.
+	{"PATCH", "/api/nodes/bulk", levelAdmin, keyWrite},
 	{"DELETE", "/api/nodes/{id}", levelAdmin, keyWrite},
 	{"POST", "/api/nodes/{id}/enable", levelAdmin, keyWrite},
 	{"POST", "/api/nodes/{id}/duplicate", levelAdmin, keyWrite},
