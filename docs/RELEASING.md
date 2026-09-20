@@ -152,6 +152,54 @@ The wizard artwork under `scripts/installer/assets/` is committed, not generated
 release time, so a release needs no image tooling on the runner. If the mark ever
 changes, `web/logo.svg` and those assets have to be updated together.
 
+## Releasing the MCP companion
+
+`gwatch-mcp` ([`mcp/README.md`](../mcp/README.md)) is a separate Go module
+(`mcp/go.mod`) with its own version, in [`mcp/VERSION`](../mcp/VERSION). It
+does not share the core `VERSION` file or the core `v<VERSION>` tag scheme —
+it uses **nested-module tags**, `mcp/v<VERSION>`, which is the scheme Go's
+module resolution expects for a module that lives in a subdirectory of the
+repository: it is what makes
+
+```sh
+go install github.com/jxburros/GWatch/mcp/cmd/gwatch-mcp@latest
+```
+
+resolve to the right code. A plain `v<VERSION>` tag on the root module is
+invisible to `go install` for a path under `mcp/`.
+
+To cut an MCP release:
+
+```sh
+# 1. Bump the version and commit
+echo 0.2.0 > mcp/VERSION
+git commit -am "Release gwatch-mcp 0.2.0"
+git push
+
+# 2. Tag it, on the same commit
+git tag mcp/v0.2.0
+git push origin mcp/v0.2.0
+```
+
+Pushing an `mcp/v*` tag runs the `mcp-tag` job in
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml): it fails if the
+tag does not match `mcp/VERSION`, and builds the module, but it does **not**
+publish a separate GitHub release. `gwatch-mcp` binaries ship inside the
+*core* release instead — the `release` job's "Cross-compile the MCP
+companion" step builds `gwatch-mcp-<os>-<arch>[.exe]` from whatever
+`mcp/VERSION` says at the time a core `v*` tag is pushed, signs and
+checksums it alongside everything else, and attaches it to that release. In
+practice this means: bump `mcp/VERSION` and push an `mcp/v*` tag whenever
+`mcp/` changes and you want `go install ...@latest` to see it, and expect the
+built binary to actually reach users on the *next* core release rather than
+immediately — the two release trains are independent, and the mcp tag exists
+for `go install`, not for GitHub's release page.
+
+Bump `mcp/VERSION` (and push a matching tag) for any change under `mcp/`
+that a `go install` user should see reflected in `gwatch-mcp version` and in
+module resolution — not just user-visible tool changes, but also fixes to
+the HTTP client, the MCP transport layer or the SDK pin.
+
 ## Forks and private builds
 
 A fork that publishes its own releases does not have to edit

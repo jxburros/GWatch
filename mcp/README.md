@@ -55,6 +55,14 @@ go install github.com/jxburros/GWatch/mcp/cmd/gwatch-mcp@latest
 The main package lives at `mcp/cmd/gwatch-mcp` rather than at the module root so that `go install`
 produces a binary called `gwatch-mcp`; installing the module root would name the binary `mcp`.
 
+`gwatch-mcp` is released with its own **nested-module tags**, `mcp/v<version>` (not the root
+module's `v<version>`), which is what makes `@latest` above resolve at all — Go's module
+resolution needs a tag prefixed with the module's own subdirectory to find a version of code that
+lives under `mcp/` rather than at the repository root. Its binaries still ship inside the *core*
+GitHub release, cross-compiled from whatever `mcp/VERSION` says at the time; see
+[`docs/RELEASING.md`](../docs/RELEASING.md#releasing-the-mcp-companion) for the full release
+process.
+
 **Or from a checkout:**
 
 ```sh
@@ -216,3 +224,13 @@ GWATCH_E2E_URL=http://127.0.0.1:7230 GWATCH_E2E_KEY=gw_… go test ./internal/e2
 The layering is worth keeping: `internal/gwatch` is the HTTP client, `internal/tools` is the tool
 layer and knows nothing about MCP, and `internal/mcpserver` is the only package that touches the
 protocol. Adding a tool means adding it to `internal/tools`; the transport does not change.
+
+**Why `github.com/modelcontextprotocol/go-sdk` is pinned at v1.0.0**: `mcp/go.mod` declares
+`go 1.24.0`, to build against the same Go version the root module targets — CI runs with
+`GOTOOLCHAIN=local`, so a `go.mod` requiring a newer Go fails the build outright rather than
+quietly downloading a toolchain. The SDK stays buildable under Go 1.24 through its v1.4.0
+release; v1.5.0 and everything since raise the SDK's own `go` directive to 1.25. So the pin can
+move up to v1.4.0 freely, but going past it means raising the root module's Go version first
+(and re-verifying everything else in the repository still builds under it) — a repository-wide
+decision, not an `mcp/`-local one, which is why it is not done casually. See also the comment at
+the top of `internal/mcpserver/server.go`.
