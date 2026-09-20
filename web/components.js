@@ -127,6 +127,9 @@ const ICONS = {
   webhook: '<path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17c.01-.7.2-1.4.57-2"/><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06"/><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8"/>',
   palette: '<circle cx="13.5" cy="6.5" r="1.2" fill="currentColor"/><circle cx="17.5" cy="10.5" r="1.2" fill="currentColor"/><circle cx="8.5" cy="7.5" r="1.2" fill="currentColor"/><circle cx="6.5" cy="12.5" r="1.2" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.5-.7 1.5-1.5 0-.4-.2-.8-.4-1-.3-.3-.4-.6-.4-1 0-.8.7-1.5 1.5-1.5H16c3.3 0 6-2.7 6-6 0-5-4.5-9-10-9z"/>',
   wifi: '<path d="M5 12.6a11 11 0 0 1 14 0M8.5 16a6 6 0 0 1 7 0M2 8.8a15.5 15.5 0 0 1 20 0M12 20h.01"/>',
+  // A sweep hand over two rings, for discovery: the magnifying glass already
+  // means "search this list", and this means "look out there".
+  radar: '<path d="M19.1 4.9a10 10 0 1 1-8.2-2.8"/><path d="M15.5 8.5a5 5 0 1 0 .8 5.8"/><path d="M12 12 20 4"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/>',
   rocket: '<path d="M4.5 16.5c-1.5 1.3-2 5-2 5s3.7-.5 5-2c.7-.8.7-2 0-2.8-.8-.7-2-.7-2.8 0z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.9 12.9 0 0 1 22 2c0 2.7-.9 7.5-6 11a22 22 0 0 1-4 2z"/><path d="M9 12H4s.5-3 2-4 4 0 4 0M12 15v5s3-.5 4-2 0-4 0-4"/>',
   layout: '<rect x="3" y="3" width="18" height="18" rx="1"/><path d="M3 9h18M9 21V9"/>',
   sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
@@ -605,6 +608,7 @@ export const EVENT_META = {
   endpoint_called: { label: 'Endpoint', icon: 'webhook', cls: 'ev-info' },
   update: { label: 'Update', icon: 'rocket', cls: 'ev-info' },
   auth: { label: 'Sign-in & accounts', icon: 'user', cls: 'ev-info' },
+  discovery: { label: 'Discovery', icon: 'radar', cls: 'ev-info' },
 };
 export function eventMeta(type) { return EVENT_META[type] || { label: type, icon: 'info', cls: 'ev-neutral' }; }
 

@@ -224,6 +224,73 @@ companion that lets an AI assistant use this API with a key, is documented in
 - `GET /api/checks/{id}/results?limit=50` → `[Result]` newest first.
 - `GET /api/checks/{id}/state` → CheckState.
 
+## Discovery (find devices on the network)
+
+A discovery run pings a range of addresses, asks whatever answered for its name and
+tries a short list of TCP ports on it, and suggests a node template per responder. Every
+route here is **administrator-only and refused for API keys**, reads included: starting
+one is a decision about the network, and a run's results are a map of it.
+
+One run at a time per install. A second `POST /api/discovery` while one is going is
+answered **409**; the registry is in memory, so a restart forgets the last run.
+
+- `POST /api/discovery` body `{ "ranges": ["192.168.1.0/24", "192.168.1.10-50", "10.0.0.5"], "ports": [22,80,443] }`
+  → **202** with the `DiscoveryJob` as it stands. Leaving `ports` out uses the default
+  set — 22, 80, 443, 445, 3389, 8080, 8443, 9100, 32400 and 1883 (161/SNMP is not probed:
+  it is UDP, where silence and a dropped packet are the same answer) — and sending it
+  empty (`"ports": []`) probes nothing at all, describing each responder by its name and
+  round trip alone. At most 24 ports. Ranges are IPv4 CIDR
+  blocks, dashed ranges written out in full or abbreviated to a last octet, or single
+  addresses; several may share a line, separated by commas or semicolons, and `#` starts
+  a comment. Network and broadcast addresses are skipped. **400** for IPv6, for anything
+  unparseable, and for more than 4096 addresses in one run — each with a message to show
+  the person who typed it.
+- `GET /api/discovery` → the most recent run, so a modal that was closed mid-sweep can
+  reattach. **404** when nothing has been run yet.
+- `GET /api/discovery/{id}` → that run. **404** once it has been superseded.
+- `POST /api/discovery/{id}/cancel` → the run, now `"cancelled"`. Whatever had already
+  answered is kept. Cancelling a finished run is not an error.
+- `POST /api/discovery/{id}/add` body
+  `{ "items": [{"ip": "192.168.1.20", "name": "NAS", "template": "home-server"}], "group": "Home", "groups": ["Home"] }`
+  → **201** `{ "created": [Node...], "skipped": [{"ip": "...", "reason": "..."}] }`.
+  `name` defaults to the responder's reverse-DNS name and then to its address; `template`
+  defaults to the suggested one and then to `ping`. Nodes are built from
+  `GET /api/templates` exactly as the node editor builds them, with `host` set to the
+  address. An address already used as some node's `host` is skipped rather than
+  duplicated, as is one the run never saw. `group` and `groups` are the same thing; the
+  first entry of `groups` is used when `group` is absent.
+
+`DiscoveryJob`:
+
+```json
+{
+  "id": "6f1c…",
+  "ranges": ["192.168.1.0/24"],
+  "ports": [22, 80, 443],
+  "state": "running | done | cancelled | failed",
+  "total": 254,
+  "scanned": 118,
+  "responders": 9,
+  "results": [
+    {
+      "ip": "192.168.1.20",
+      "hostname": "nas.lan",
+      "rttMs": 1.4,
+      "openPorts": [22, 80],
+      "template": "home-server",
+      "note": "SSH and a web interface — looks like a server or NAS."
+    }
+  ],
+  "error": "",
+  "startedAt": "...",
+  "finishedAt": "..."
+}
+```
+
+Progress is also pushed over `/api/stream` (see Server-sent events), and each run leaves
+one entry of type `discovery` in the timeline — "Discovery scanned 254 addresses in
+192.168.1.0/24: 17 responded" — as does each add.
+
 ## History (charts)
 
 - `GET /api/history?checkId=ID&range=1h|24h|7d|30d|1y` → `HistorySeries`.
@@ -575,4 +642,5 @@ See [`RESTORE.md`](RESTORE.md) for the end-to-end restore-to-a-new-machine proce
 
 ## Server-sent events
 
-- `GET /api/stream` (text/event-stream) emits `event: update` with `data: {"kind":"result"|"state"|"event"|"config"|"health"|"maintenance"|"trigger"|"endpoint","checkId":..,"nodeId":..}` whenever something changes. The UI uses it to refresh without polling; falling back to polling every 15s is fine.
+- `GET /api/stream` (text/event-stream) emits `event: update` with `data: {"kind":"result"|"state"|"event"|"config"|"health"|"maintenance"|"trigger"|"endpoint"|"discovery","checkId":..,"nodeId":..}` whenever something changes. The UI uses it to refresh without polling; falling back to polling every 15s is fine.
+- A `"discovery"` update carries the sweep's counters instead of a check or node, a few times a second while one is running and once more when it stops: `{"kind":"discovery","discovery":{"id":"6f1c…","state":"running","scanned":118,"total":254,"responders":9}}`. The results themselves are read from `GET /api/discovery/{id}`.

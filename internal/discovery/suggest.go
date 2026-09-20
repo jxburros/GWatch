@@ -145,10 +145,19 @@ func (s portSet) onlyAmong(ports ...int) bool {
 }
 
 // normalizePorts validates a caller's port list, dropping duplicates and
-// keeping the order tidy. An empty list means the default set.
+// keeping the order tidy.
+//
+// No list at all (nil) means the default set. A list that is present but empty
+// means exactly that: probe nothing, and describe each responder by its name
+// and its round trip alone. The distinction is worth keeping — it is the
+// difference between "you decide" and "don't", and a sweep that touches no
+// ports is both faster and less intrusive.
 func normalizePorts(ports []int) ([]int, error) {
-	if len(ports) == 0 {
+	if ports == nil {
 		return append([]int(nil), DefaultPorts...), nil
+	}
+	if len(ports) == 0 {
+		return []int{}, nil
 	}
 	seen := map[int]bool{}
 	out := make([]int, 0, len(ports))

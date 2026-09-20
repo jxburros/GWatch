@@ -255,19 +255,31 @@ func (r *Registry) Running() bool {
 }
 
 // clone copies the slices a caller could otherwise hold a live reference to.
+//
+// Every copy is made with make rather than appended onto a nil slice, because
+// appending nothing to nil leaves nil — and a nil slice is `null` in JSON,
+// where the documented shape of all three of these is a list. A browser
+// reading openPorts should find an empty list on a device that answered a ping
+// and nothing else, not an absence.
 func (j Job) clone() Job {
 	out := j
-	out.Ranges = append([]string(nil), j.Ranges...)
-	out.Ports = append([]int(nil), j.Ports...)
+	out.Ranges = copyOf(j.Ranges)
+	out.Ports = copyOf(j.Ports)
 	out.Results = make([]Responder, len(j.Results))
 	for i, r := range j.Results {
-		r.OpenPorts = append([]int(nil), r.OpenPorts...)
+		r.OpenPorts = copyOf(r.OpenPorts)
 		out.Results[i] = r
 	}
 	if j.FinishedAt != nil {
 		t := *j.FinishedAt
 		out.FinishedAt = &t
 	}
+	return out
+}
+
+func copyOf[T any](in []T) []T {
+	out := make([]T, len(in))
+	copy(out, in)
 	return out
 }
 

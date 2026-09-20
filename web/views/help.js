@@ -30,7 +30,7 @@ const TOPICS = [
     id: 'nodes',
     title: 'Nodes and check types',
     icon: 'server',
-    q: 'ping tcp http https dns certificate keyword json custom script hardware template group tag dependency importance interval timeout',
+    q: 'ping tcp http https dns certificate keyword json custom script hardware template group tag dependency importance interval timeout discover discovery scan subnet range cidr find devices',
     body: () => [
       h('p', null, 'A ', h('b', null, 'node'), ' is one thing you care about — a device, a server, a site — and it holds one or more ', h('b', null, 'checks'), '. Grouping them means a machine goes down once rather than three times, and one dependency ("Plex depends on Gateway") keeps a router outage from looking like a dozen separate failures.'),
       h('ul', { class: 'help-list' },
@@ -44,6 +44,7 @@ const TOPICS = [
         h('li', null, h('b', null, 'Hardware health'), ' — processor, memory, disk and throughput for this computer or a machine running the agent.'),
       ),
       h('p', null, 'Nodes carry groups, tags, notes and an importance, can be duplicated or disabled, and templates prefill defaults for a website, home server, network device, API, TCP service, DNS name or ping-only device. Every check can be run on demand from the node\'s page, which shows the complete result rather than just a verdict.'),
+      h('p', null, h('b', null, 'Discover'), ' on the ', h('a', { href: '#/nodes' }, 'Nodes'), ' page pings a range of addresses — ', h('code', null, '192.168.1.0/24'), ', ', h('code', null, '192.168.1.10-50'), ' — looks up the name of everything that answers, and offers the lot in a list with a suggested template each, so a whole house can be added in one go instead of one address at a time.'),
       h('p', { class: 'note' }, 'History is kept at full resolution for 30 days and then rolled up into 5-minute, hourly and daily summaries, so the database does not grow without bound. ', h('a', { href: '#/settings/retention' }, 'Settings › Retention'), ' spells out exactly what is kept and what is deleted.'),
     ],
   },

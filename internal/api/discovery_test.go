@@ -104,6 +104,9 @@ func TestDiscoveryRunAndAddNodes(t *testing.T) {
 	if started.ID == "" || started.Total != 254 || len(started.Ports) == 0 {
 		t.Fatalf("started: %+v", started)
 	}
+	if len(started.Ports) != len(discovery.DefaultPorts) {
+		t.Fatalf("no ports field should mean the default set, got %v", started.Ports)
+	}
 	if started.Ranges[0] != "192.168.1.0/24" {
 		t.Fatalf("the run should remember what it was asked for: %+v", started.Ranges)
 	}
@@ -232,11 +235,16 @@ func TestDiscoveryRefusesASecondRunAndCanBeCancelled(t *testing.T) {
 	if cancelled.State != "cancelled" {
 		t.Fatalf("state after cancelling: %q", cancelled.State)
 	}
-	// And once it is stopped, another run may start and finish normally.
+	// And once it is stopped, another run may start and finish normally. This
+	// one clears the ports field, which means "probe nothing" rather than
+	// "use the defaults".
 	srv.discovery().Sweep = fakeSweep()
 	var second jobDoc
-	if code, body, _ := as(t, ts, creds{}, "POST", "/api/discovery", map[string]any{"ranges": []string{"10.0.1.0/30"}}, &second); code != 202 {
+	if code, body, _ := as(t, ts, creds{}, "POST", "/api/discovery", map[string]any{"ranges": []string{"10.0.1.0/30"}, "ports": []int{}}, &second); code != 202 {
 		t.Fatalf("a run after a cancelled one: %d %s", code, body)
+	}
+	if len(second.Ports) != 0 {
+		t.Errorf("an empty ports list should probe nothing, got %v", second.Ports)
 	}
 	waitForJob(t, srv, second.ID, "done")
 	// The cancelled run has been superseded: the registry keeps one.

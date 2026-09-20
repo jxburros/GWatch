@@ -181,6 +181,17 @@ func TestSweepFindsAndDescribesResponders(t *testing.T) {
 	if got := reg.Running(); got {
 		t.Error("the registry still thinks a run is in flight")
 	}
+
+	// A device with nothing open still reports a list, not an absence: the web
+	// interface is handed `"openPorts": []`, never `null`.
+	bare, err := ParseRanges([]string{"192.168.1.50"})
+	if err != nil || len(bare) != 1 {
+		t.Fatal(err)
+	}
+	only := sweep(context.Background(), bare, nil, 1, nil)
+	if len(only) != 1 || only[0].OpenPorts == nil {
+		t.Fatalf("a responder with no ports probed should carry an empty list, got %+v", only)
+	}
 }
 
 // One lost packet on a busy wireless network is ordinary, so a silent first

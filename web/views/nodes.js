@@ -15,6 +15,9 @@ export async function mount(root, ctx) {
   ctx.setTitle('Nodes', {
     actions: [
       h('button', { class: 'btn admin-only', type: 'button', onclick: () => pairMachine(load) }, icon('cpu'), 'Pair a machine'),
+      // Sweeping the network is the other way of getting here: rather than
+      // typing an address, be shown the ones that answer.
+      h('button', { class: 'btn admin-only', type: 'button', onclick: () => discover(ctx, load) }, icon('radar'), 'Discover'),
       h('button', { class: 'btn btn-primary admin-only', type: 'button', onclick: () => openTemplatePicker(state, ctx) }, icon('plus'), 'Add node'),
     ],
   });
@@ -286,5 +289,24 @@ export async function openTemplatePicker(state, ctx) {
   grid.append(h('a', { class: 'template-card', href: '#/nodes/new', onclick: () => m.close() },
     h('span', { class: 't-icon' }, icon('file')),
     h('span', null, h('b', null, 'Blank'), h('span', null, 'Start from an empty node and add the checks you want.'))));
+  // The last card is the other way round: rather than describing a device and
+  // then finding its address, find the addresses first and pick from them.
+  // Nothing is handed back to reload here: the node list is still mounted
+  // behind the modal, and the timeline entry a discovery add writes reaches it
+  // over the update stream within the second.
+  grid.append(h('button', { class: 'template-card', type: 'button', onclick: () => { m.close(); discover(ctx); } },
+    h('span', { class: 't-icon' }, icon('radar')),
+    h('span', null, h('b', null, 'Discover devices'), h('span', null, 'Ping a range of addresses and add whatever answers, several at a time.'))));
   replace(body, h('p', null, 'Pick a starting point. Every setting can be changed afterwards.'), grid);
+}
+
+/** Open the discovery modal. It is loaded when it is asked for rather than
+ *  with the node list: most visits to this page never open it. */
+async function discover(ctx, reload) {
+  try {
+    const mod = await import('./discovery.js');
+    await mod.openDiscovery(ctx, reload);
+  } catch (e) {
+    toast(e.message, { kind: 'error' });
+  }
 }

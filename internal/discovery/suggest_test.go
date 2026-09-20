@@ -71,7 +71,11 @@ func TestSuggestedTemplatesExist(t *testing.T) {
 
 func TestNormalizePorts(t *testing.T) {
 	if got, err := normalizePorts(nil); err != nil || len(got) != len(DefaultPorts) {
-		t.Fatalf("an empty list should mean the defaults: %v %v", got, err)
+		t.Fatalf("no list at all should mean the defaults: %v %v", got, err)
+	}
+	// A list that is there but empty is a decision, not an omission.
+	if got, err := normalizePorts([]int{}); err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("an empty list should mean no ports at all: %v %v", got, err)
 	}
 	got, err := normalizePorts([]int{443, 22, 443, 80})
 	if err != nil {

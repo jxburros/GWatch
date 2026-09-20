@@ -19,9 +19,24 @@ import (
 // the result is not something an integration should be able to set off.
 
 // discoveryRequest is the body of POST /api/discovery.
+//
+// Ports is a pointer so that "no ports field" and "an empty ports field" stay
+// different requests: the first takes the default set, the second probes
+// nothing at all. The interface offers both — the field opens with the
+// defaults in it and can be cleared.
 type discoveryRequest struct {
 	Ranges []string `json:"ranges"`
-	Ports  []int    `json:"ports"`
+	Ports  *[]int   `json:"ports"`
+}
+
+func (r discoveryRequest) ports() []int {
+	if r.Ports == nil {
+		return nil
+	}
+	if *r.Ports == nil {
+		return []int{}
+	}
+	return *r.Ports
 }
 
 func (s *Server) handleStartDiscovery(w http.ResponseWriter, r *http.Request) {
@@ -35,7 +50,7 @@ func (s *Server) handleStartDiscovery(w http.ResponseWriter, r *http.Request) {
 	// name the administrator who set it off.
 	actor := auth.FromContext(r.Context()).Label()
 	job, err := s.discovery().Start(
-		discovery.Request{Ranges: req.Ranges, Ports: req.Ports},
+		discovery.Request{Ranges: req.Ranges, Ports: req.ports()},
 		func(job discovery.Job) { s.pushDiscovery(actor, job) },
 	)
 	switch {
