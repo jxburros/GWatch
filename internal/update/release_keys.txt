@@ -24,3 +24,5 @@
 # time, without editing the file:
 #
 #   go build -ldflags "-X github.com/jxburros/GWatch/internal/update.releaseKeys=ed25519:AAAA..." .
+
+ed25519:OzN/mY/5zRszwN7DxuhrC718w+3TjL36FuZHbYV/qkk=
