@@ -100,6 +100,20 @@ off this machine are limited to 300 per minute per client IP. Both answer `429` 
 back, so an endpoint called on a schedule is never throttled by its own traffic; an
 unknown slug still answers `404`, but it is charged for, so slugs cannot be enumerated.
 
+**Response headers.** Every response, the static UI included, carries:
+
+| Header | Value |
+| --- | --- |
+| `Content-Security-Policy` | `default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; base-uri 'none'; object-src 'none'; form-action 'self'; frame-ancestors 'none'` |
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` |
+| `Referrer-Policy` | `same-origin` |
+
+GWatch serves its own bundle and talks to nothing but itself, so every source is `'self'`.
+The wallboard page (`/wall`, `/wall.html`) is the one exception: it is read-only and gated
+on its board's share token, and putting one in a dashboard elsewhere is a real use, so it
+is sent `frame-ancestors *` and no `X-Frame-Options`. Everything else refuses to be framed.
+
 **Public routes**, reachable without any credential: `GET /api/health` (liveness only —
 `{"serviceRunning","schedulerRunning","now"}` — until the caller identifies itself),
 `GET /api/version`, `GET /api/me`, `GET /api/auth/setup`, `POST /api/auth/login`,

@@ -209,7 +209,7 @@ func (s *Server) Handler() http.Handler {
 	if s.Web != nil {
 		mux.Handle("/", s.staticHandler())
 	}
-	return versionAlias(noCache(s.accessControl(mux)))
+	return securityHeaders(versionAlias(noCache(s.accessControl(mux))))
 }
 
 func isLoopbackRemote(addr string) bool {
@@ -219,6 +219,68 @@ func isLoopbackRemote(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// contentSecurityPolicy is the policy every response carries. GWatch serves
+// its own bundle and talks to nothing but itself, so each source list is
+// 'self' and the few exceptions are named one at a time:
+//
+//   - img-src also allows data: for the one inline SVG in app.css (the select
+//     arrow) and blob: for a chart exported as a PNG.
+//   - style-src-attr allows the style="--i:N" attributes the sidebar uses to
+//     stagger its transitions. The markup carries them, and a style attribute
+//     needs 'unsafe-inline' whatever its content. Splitting it out this way
+//     keeps an injected <style> element refused, which is the case that
+//     matters. A browser that does not know style-src-attr falls back to
+//     style-src and loses the stagger; nothing else depends on it.
+//   - script-src needs no hash or nonce: what used to be inline in index.html
+//     now lives in boot.js and entry.js.
+//
+// frame-ancestors is filled in per request by securityHeaders.
+const contentSecurityPolicy = "default-src 'self'; " +
+	"script-src 'self'; " +
+	"style-src 'self'; " +
+	"style-src-attr 'unsafe-inline'; " +
+	"img-src 'self' data: blob:; " +
+	"font-src 'self'; " +
+	"connect-src 'self'; " +
+	"base-uri 'none'; " +
+	"object-src 'none'; " +
+	"form-action 'self'; " +
+	"frame-ancestors "
+
+// securityHeaders puts the response headers a browser needs in order to hold
+// GWatch to its own origin on every response, static assets included.
+//
+// The wallboard is the one page allowed into someone else's frame. It is
+// read-only, it is reached with a board's own share token rather than with
+// whatever credential the viewer happens to hold, and putting one in a Home
+// Assistant dashboard is a thing people actually do. Framing it therefore
+// costs nothing that clickjacking could take. Every other page — the
+// application, where a click does change something — refuses to be framed at
+// all, and says so twice: X-Frame-Options for browsers that predate
+// frame-ancestors, and frame-ancestors for the rest.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		if isWallboardPage(r.URL.Path) {
+			h.Set("Content-Security-Policy", contentSecurityPolicy+"*")
+		} else {
+			h.Set("Content-Security-Policy", contentSecurityPolicy+"'none'")
+			h.Set("X-Frame-Options", "DENY")
+		}
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "same-origin")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// isWallboardPage reports whether a path addresses the projected wallboard.
+// It recognises the same spellings staticHandler does, and is applied to the
+// path as it arrived, before that rewrite.
+func isWallboardPage(p string) bool {
+	p = path.Clean(p)
+	return p == "/wall" || p == "/wall.html"
 }
 
 func noCache(next http.Handler) http.Handler {
