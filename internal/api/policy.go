@@ -150,6 +150,15 @@ var policies = []routePolicy{
 
 	// ---- administration: never through an API key ----
 	{"GET", "/api/network", levelAdmin, keyDeny},
+	// Discovery pings a few thousand addresses and then creates monitors from
+	// what answered. Both halves are an administrator's decision, and reading
+	// a sweep's results is a map of the network, so even the GETs are held to
+	// the same standing as the sweep itself.
+	{"GET", "/api/discovery", levelAdmin, keyDeny},
+	{"POST", "/api/discovery", levelAdmin, keyDeny},
+	{"GET", "/api/discovery/{id}", levelAdmin, keyDeny},
+	{"POST", "/api/discovery/{id}/cancel", levelAdmin, keyDeny},
+	{"POST", "/api/discovery/{id}/add", levelAdmin, keyDeny},
 	{"GET", "/api/settings", levelAdmin, keyDeny},
 	{"PUT", "/api/settings", levelAdmin, keyDeny},
 	{"POST", "/api/settings/test-email", levelAdmin, keyDeny},

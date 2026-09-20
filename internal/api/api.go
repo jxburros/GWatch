@@ -15,11 +15,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jxburros/GWatch/internal/auth"
 	"github.com/jxburros/GWatch/internal/backup"
 	"github.com/jxburros/GWatch/internal/checks"
+	"github.com/jxburros/GWatch/internal/discovery"
 	"github.com/jxburros/GWatch/internal/engine"
 	"github.com/jxburros/GWatch/internal/logging"
 	"github.com/jxburros/GWatch/internal/model"
@@ -45,6 +47,13 @@ type Server struct {
 	failLimiter *auth.Limiter
 	apiLimiter  *auth.Limiter
 
+	// discoveryJobs holds the subnet sweep in flight and the last one that
+	// finished. It lives here rather than in the store because a sweep is a
+	// question about the network as it is right now: an answer that survived a
+	// restart would be an answer about a network that has moved on.
+	discoveryJobs *discovery.Registry
+	discoveryOnce sync.Once
+
 	// routes records every pattern Handler() registered, so the authorization
 	// tests can prove the router and the policy table describe the same surface.
 	routes []routeSpec
@@ -65,6 +74,7 @@ func (s *Server) Handler() http.Handler {
 	if s.apiLimiter == nil {
 		s.apiLimiter = auth.NewLimiter(remoteRequestLimit, remoteRequestWindow)
 	}
+	s.discovery()
 
 	s.route(mux, "GET /api/health", s.handleHealth)
 	s.route(mux, "GET /api/status", s.handleStatus)
@@ -85,6 +95,12 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /api/nodes/{id}/silence", s.handleSilenceNode)
 	s.route(mux, "GET /api/templates", s.handleTemplates)
 	s.route(mux, "GET /api/groups", s.handleGroups)
+
+	s.route(mux, "GET /api/discovery", s.handleLatestDiscovery)
+	s.route(mux, "POST /api/discovery", s.handleStartDiscovery)
+	s.route(mux, "GET /api/discovery/{id}", s.handleGetDiscovery)
+	s.route(mux, "POST /api/discovery/{id}/cancel", s.handleCancelDiscovery)
+	s.route(mux, "POST /api/discovery/{id}/add", s.handleAddFromDiscovery)
 
 	s.route(mux, "POST /api/checks/test", s.handleTestCheck)
 	s.route(mux, "POST /api/checks/{id}/run", s.handleRunCheck)
