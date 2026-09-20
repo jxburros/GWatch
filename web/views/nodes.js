@@ -3,7 +3,7 @@
 import { api } from '../api.js';
 import { h, icon, clear, replace, statusSpine, statusWord, checkChip, importanceBadge, tagList, toggle, menuButton, toast, confirmDialog, openModal, emptyState, skeleton } from '../components.js';
 import { relTime } from '../fmt.js';
-import { pairMachine } from './hardware.js';
+import { pairMachine } from './machines.js';
 
 const STATUS_ORDER = ['down', 'degraded', 'unknown', 'maintenance', 'up', 'paused'];
 

@@ -161,6 +161,24 @@ filling" and "the disk is full" do not arrive as the same alert twice. Alerts,
 cooldowns, silencing and maintenance windows all work exactly as they do for
 any other check.
 
+### One check, many metrics
+
+A machine is a node, and its hardware is one check on that node — not one
+check per metric. That is deliberate: a machine either is or is not the thing
+being watched, so it gets one row in **Nodes**, one status, and one place to
+set "report down after no reading for". Splitting it into a processor check, a
+memory check, a disk check and so on would multiply that bookkeeping without
+buying anything, since every reading already arrives as a single snapshot of
+the whole machine.
+
+What is not shared is the threshold: every metric — processor, memory, swap,
+disk, load — has its own warning/critical pair on that one check, edited as
+its own group in the check editor, and its own coloured line on the machine's
+history charts (grouped as *Processor and memory*, *Network throughput* and
+*Disk throughput*). One check does not mean one number; it means one place to
+configure all of them and one place to see whether the machine, as a whole, is
+fine.
+
 **A machine that stops reporting is down.** That is the whole point of an agent
 that pushes: silence is the signal. By default a check reports down after three
 missed intervals (at least a minute); change it under "Report down after no

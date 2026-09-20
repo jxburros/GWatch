@@ -406,37 +406,48 @@ export async function mount(root, ctx) {
         field({ label: 'Read hardware from', input: source }),
         field({ label: 'Report down after no reading for', input: stale, help: 'A machine that stops reporting is the signal an agent exists to give.' })),
       sourceWrap,
-      h('div', { class: 'section-title', style: { marginTop: '4px' } }, 'Thresholds'),
-      h('p', { class: 'note' }, 'Crossing a warning threshold makes this check degraded; crossing the critical one makes it down. Leave a threshold at 0 to ignore that reading entirely.'),
-      h('div', { class: 'form-grid-3' },
-        pctField(cfg, 'cpuWarnPct', 'Processor warning'),
-        pctField(cfg, 'cpuCritPct', 'Processor critical', err.cpuCritPct),
-        pctField(cfg, 'swapWarnPct', 'Swap warning'),
-        pctField(cfg, 'memWarnPct', 'Memory warning'),
-        pctField(cfg, 'memCritPct', 'Memory critical', err.memCritPct),
-        h('div'),
-        pctField(cfg, 'diskWarnPct', 'Disk warning'),
-        pctField(cfg, 'diskCritPct', 'Disk critical', err.diskCritPct),
-        field({ label: 'Watch only these mount points', input: mounts, help: 'Leave empty to watch every filesystem.' })),
+      h('div', { class: 'section-title', style: { marginTop: '4px' } }, 'Warning and critical thresholds'),
+      h('p', { class: 'note' }, 'One check, one history line per metric, each with its own pair of thresholds below: crossing ', h('b', null, 'warning'), ' marks the check ', h('b', null, 'degraded'), '; crossing ', h('b', null, 'critical'), ' marks it ', h('b', null, 'down'), '. Filled in below at the defaults GWatch ships with — leave a threshold at 0 to turn it off.'),
+      h('div', { class: 'stack-sm' },
+        thresholdGroup('Processor', cfg, err, 'cpuWarnPct', 'cpuCritPct'),
+        thresholdGroup('Memory', cfg, err, 'memWarnPct', 'memCritPct'),
+        thresholdGroup('Swap', cfg, err, 'swapWarnPct', null,
+          'Swap has a warning only — heavy swapping can degrade this check, but never marks it down by itself.'),
+        thresholdGroup('Disk', cfg, err, 'diskWarnPct', 'diskCritPct', null,
+          field({ label: 'Watch only these mount points', input: mounts, help: 'Leave empty to watch every filesystem.' }))),
       h('details', { class: 'collapsible' },
-        h('summary', null, icon('chevronRight'), 'Load average'),
+        h('summary', null, icon('chevronRight'), 'Load average (used when processor use cannot be read)'),
         h('div', { class: 'stack-sm', style: { paddingTop: '8px' } },
-          h('p', { class: 'note' }, 'Load per core is processor demand divided by the number of cores, so it means the same thing on a 2-core box and a 64-core one. On macOS, where processor utilisation is not readable without a native extension, this is what the check watches instead.'),
-          h('div', { class: 'form-grid-3' },
-            loadField(cfg, 'loadWarnPerCore', 'Load warning (per core)'),
-            loadField(cfg, 'loadCritPerCore', 'Load critical (per core)', err.loadCritPerCore)))),
+          h('p', { class: 'note' }, 'Load per core is processor demand divided by the number of cores, so it means the same thing on a 2-core box and a 64-core one. On macOS, where processor utilisation is not readable without a native extension, this is what the check watches instead of processor use above.'),
+          thresholdGroup('Load per core', cfg, err, 'loadWarnPerCore', 'loadCritPerCore', null, null, { unit: '', step: 0.1 }))),
     );
     return wrap;
   }
 
-  function pctField(cfg, key, label, error) {
-    const input = numberInput({ value: cfg[key] ?? '', min: 0, max: 100, step: 1, oninput: () => { cfg[key] = Number(input.value) || 0; } });
-    return field({ label, input: h('div', { class: 'input-with-unit' }, input, h('span', { class: 'unit' }, '%')), error });
+  // thresholdGroup is one metric's warning/critical pair, boxed and labelled
+  // so the two numbers that escalate together read as a unit rather than as
+  // two rows in an unrelated grid, with the shipped default visible in each
+  // field even when it is 0 (off). `critKey` is null for a metric that only
+  // ever warns (see Swap, above); `extra` adds a further field to the box,
+  // used for Disk's mount-point filter.
+  function thresholdGroup(label, cfg, err, warnKey, critKey, note, extra, { unit = '%', step = 1 } = {}) {
+    const fields = [pctField(cfg, warnKey, 'Warning', null, { unit, step })];
+    if (critKey) fields.push(pctField(cfg, critKey, 'Critical', err[critKey], { unit, step }));
+    return h('div', { style: { border: '1px solid var(--line)', padding: '10px 12px 12px' } },
+      h('div', { class: 'section-title', style: { marginBottom: '8px' } }, label),
+      h('div', { class: 'form-grid' }, ...fields),
+      note ? h('p', { class: 'note', style: { marginTop: '6px' } }, note) : null,
+      extra ? h('div', { style: { marginTop: '10px' } }, extra) : null);
   }
 
-  function loadField(cfg, key, label, error) {
-    const input = numberInput({ value: cfg[key] ?? '', min: 0, step: 0.1, oninput: () => { cfg[key] = Number(input.value) || 0; } });
-    return field({ label, input, error });
+  function pctField(cfg, key, label, error, { unit = '%', step = 1 } = {}) {
+    const def = SYSTEM_DEFAULTS[key];
+    const input = numberInput({
+      value: cfg[key] ?? '', min: 0, max: unit === '%' ? 100 : undefined, step,
+      placeholder: def != null ? `Default (${def}${unit})` : 'Off',
+      oninput: () => { cfg[key] = Number(input.value) || 0; },
+    });
+    return field({ label, input: unit ? h('div', { class: 'input-with-unit' }, input, h('span', { class: 'unit' }, unit)) : input, error });
   }
 
   // The machine list comes from the server, so a check cannot be pointed at a
