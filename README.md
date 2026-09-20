@@ -88,8 +88,11 @@ brief that defines the scope lives in [`local-network-monitoring-product-brief.m
 - **Remote access**: opt in to serving the interface on the whole LAN.
 - **Accounts and API keys**: user accounts with two roles — administrator and viewer —
   and API keys scoped read-only or read-write.
-- **Updates**: check GitHub releases from Settings › Updates and install the new
-  executable in place (the previous one is kept as `.old`); the service restarts itself.
+- **Updates**: GWatch watches the project's GitHub releases — on a schedule and when
+  you open the interface, or only when you press the button, as you prefer — and says so
+  beside Settings when a new version is waiting. Install the newest, or pick an earlier
+  release, or opt into pre-releases at your own risk. The new executable replaces the
+  running one in place (the previous one is kept as `.old`); the service restarts itself.
   An update is only installed if its ed25519 signature verifies against a release key
   pinned into the running binary — an unsigned, differently signed or altered download
   is refused, never installed with a warning. A build with no key pinned (the default

@@ -11,6 +11,24 @@ disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ## Unreleased
 
+### Added
+
+- **Updates are yours to drive.** Settings › Updates now lists every release
+  the project has published, and installs the one you pick: the newest, or an
+  earlier one you would rather have. Pre-releases are shown when you ask for
+  them, marked as what they are and installed at your own risk. Whatever you
+  choose is downloaded, checked against the pinned signing key and installed
+  the same way.
+- **GWatch looks for updates by itself.** A check runs shortly after the
+  service starts and then once a day (1-720 hours, your choice), and again
+  when you open the interface. When something is waiting, an indicator appears
+  beside Settings and takes you to Updates; if you would rather be asked
+  outright, GWatch offers the update in a dialog as you arrive, which you can
+  take, put off, or skip for that version. All of it switches off in one
+  place, and off means off: no periodic check, no check on open, no prompt. A
+  check asks GitHub for the list of releases and tells it nothing about you or
+  what you monitor.
+
 ### Fixed
 
 - **A chart no longer hides the result that was just recorded.** Result

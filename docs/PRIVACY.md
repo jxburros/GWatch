@@ -108,14 +108,21 @@ Only what you configure, and only to destinations you chose.
 2. **Alert email**, if you configure it — sent through your own SMTP server,
    with your credentials, to the addresses you nominate. GWatch has no mail
    relay of its own, so if you do not configure SMTP, no email is ever sent.
-3. **Update checks**, when you ask for one. Pressing **Check for updates** in
-   Settings › Updates makes a request to `api.github.com` for the GWatch
-   repository's releases, and installing an update downloads the asset from
-   GitHub. Nothing about your installation is sent with that request beyond
-   what any HTTPS request necessarily reveals — your IP address and the fact
-   that something asked about GWatch releases. GitHub's handling of that request
-   is covered by GitHub's own privacy policy. GWatch does not check for updates
-   on a schedule; nothing happens until you click.
+3. **Update checks.** A check makes a request to `api.github.com` for the
+   GWatch repository's releases, and installing an update downloads the asset
+   from GitHub. Nothing about your installation is sent with that request
+   beyond what any HTTPS request necessarily reveals — your IP address and the
+   fact that something asked about GWatch releases. GitHub's handling of that
+   request is covered by GitHub's own privacy policy.
+
+   GWatch checks on its own as well as when you press **Check now**: shortly
+   after the service starts, once every 24 hours after that (or whatever
+   interval you set), and when you open the web interface. This is the only
+   thing GWatch does that reaches outside your network without you asking, and
+   it is switchable: turn off **Check for updates automatically** in
+   Settings › Updates and GWatch contacts nobody until you press the button.
+   Nothing is installed without you choosing to install it, whether or not
+   automatic checks are on.
 4. **Automation you set up.** Triggers and custom endpoints send exactly what
    you told them to send, to the webhook URL, Slack or Teams workspace, ntfy
    server or Pushover account you configured, or run the command you wrote on

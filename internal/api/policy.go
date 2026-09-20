@@ -170,6 +170,7 @@ var policies = []routePolicy{
 	{"PUT", "/api/endpoints/{id}", levelAdmin, keyDeny},
 	{"DELETE", "/api/endpoints/{id}", levelAdmin, keyDeny},
 	{"POST", "/api/endpoints/{id}/run", levelAdmin, keyDeny},
+	{"GET", "/api/update/releases", levelAdmin, keyDeny},
 	{"POST", "/api/update/check", levelAdmin, keyDeny},
 	{"POST", "/api/update/apply", levelAdmin, keyDeny},
 	{"GET", "/api/users", levelAdmin, keyDeny},

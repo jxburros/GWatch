@@ -1197,6 +1197,22 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .url-list a, .url-list span { display: flex; align-items: center; gap: 0.5rem; padding: 6px 0.625rem; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 0.8125rem; }
 .url-list a:last-child, .url-list span:last-child { border-bottom: 0; }
 .update-box { display: flex; flex-direction: column; gap: 0.625rem; }
+/* The update badge in the header. It is only in the DOM when a newer release
+   is waiting, so it may carry the accent without competing with anything. */
+.update-badge { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+.update-badge:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.update-badge .nav-icon { color: var(--accent); }
+.update-badge .topbar-btn-label { font-family: var(--mono); letter-spacing: 0.04em; }
+
+/* One release in the list of versions on offer. */
+.release-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap;
+  padding: 0.625rem 0.75rem; border: 1px solid var(--line); background: var(--elev);
+}
+.release-main { min-width: 0; }
+.release-title { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 2px; }
+.pill-warn { color: var(--warn); border-color: var(--warn); background: var(--warn-soft); }
+
 .update-notes { max-height: 15rem; overflow: auto; white-space: pre-wrap; font-size: 0.78125rem; color: var(--muted); padding: 0.625rem 0.75rem; border: 1px solid var(--line); background: var(--elev); }
 .endpoint-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.75rem; align-items: center; padding: 0.625rem 0; border-bottom: 1px solid var(--line); }
 .endpoint-row:last-child { border-bottom: 0; }

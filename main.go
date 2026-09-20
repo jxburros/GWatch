@@ -312,8 +312,16 @@ func runApp(ctx context.Context, cfg config, mode string, requestRestart func())
 		return err
 	}
 	lm := &listenManager{base: cfg.listen, log: log}
+	updater := &api.Updater{
+		Client: &update.Client{}, Version: version, Restart: requestRestart, Log: log,
+		Prefs: func() model.UpdateSettings { return eng.Settings().Updates },
+		Repo:  func() string { return eng.Settings().General.UpdateRepo },
+	}
+	// Checks for new releases run in the background, and stop with the
+	// service. Whether they run at all is a setting (Settings › Updates).
+	go updater.Run(ctx)
 	srv := &api.Server{Engine: eng, Store: st, Log: log, Web: webFS, BackupDir: filepath.Join(cfg.dataDir, "backups"), Version: version,
-		Updater: &api.Updater{Client: &update.Client{}, Version: version, Restart: requestRestart, Log: log},
+		Updater: updater,
 		Network: func() model.NetworkInfo { return lm.info(eng.Settings().General) },
 	}
 	httpServer := &http.Server{

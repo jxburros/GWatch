@@ -80,17 +80,26 @@ func TestCheckDownloadSwap(t *testing.T) {
 	pinKeys(t, pub)
 	mux := http.NewServeMux()
 	var srvURL string
-	mux.HandleFunc("/repos/acme/gwatch/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+	// Newest first is what GitHub serves; a draft, a pre-release and an older
+	// release are in the list so the picking rules are exercised.
+	mux.HandleFunc("/repos/acme/gwatch/releases", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Accept") != "application/vnd.github+json" {
 			t.Errorf("missing accept header")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"tag_name":"v2.5.0","html_url":"https://example.com/rel","body":"notes","published_at":"2026-09-01T10:00:00Z","assets":[
-			{"name":"gwatch-linux-amd64.sha256","size":70,"browser_download_url":"` + srvURL + `/dl/gwatch-linux-amd64.sha256"},
-			{"name":"gwatch-linux-amd64","size":` + strconv.Itoa(len(payload)) + `,"browser_download_url":"` + srvURL + `/dl/gwatch-linux-amd64"},
-			{"name":"gwatch-windows-amd64.exe","size":5,"browser_download_url":"` + srvURL + `/dl/win"}]}`))
+		w.Write([]byte(`[
+			{"tag_name":"v9.9.9","draft":true,"html_url":"https://example.com/draft","assets":[
+				{"name":"gwatch-linux-amd64","size":5,"browser_download_url":"` + srvURL + `/dl/gwatch-linux-amd64"}]},
+			{"tag_name":"v3.0.0-rc1","prerelease":true,"html_url":"https://example.com/rc","body":"rc notes","published_at":"2026-09-10T10:00:00Z","assets":[
+				{"name":"gwatch-linux-amd64","size":` + strconv.Itoa(len(payload)) + `,"browser_download_url":"` + srvURL + `/dl/gwatch-linux-amd64"}]},
+			{"tag_name":"v2.5.0","html_url":"https://example.com/rel","body":"notes","published_at":"2026-09-01T10:00:00Z","assets":[
+				{"name":"gwatch-linux-amd64.sha256","size":70,"browser_download_url":"` + srvURL + `/dl/gwatch-linux-amd64.sha256"},
+				{"name":"gwatch-linux-amd64","size":` + strconv.Itoa(len(payload)) + `,"browser_download_url":"` + srvURL + `/dl/gwatch-linux-amd64"},
+				{"name":"gwatch-windows-amd64.exe","size":5,"browser_download_url":"` + srvURL + `/dl/win"}]},
+			{"tag_name":"v2.4.0","html_url":"https://example.com/old","body":"old notes","published_at":"2026-08-01T10:00:00Z","assets":[
+				{"name":"gwatch-linux-amd64","size":` + strconv.Itoa(len(payload)) + `,"browser_download_url":"` + srvURL + `/dl/gwatch-linux-amd64"}]}]`))
 	})
-	mux.HandleFunc("/repos/acme/empty/releases/latest", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(404) })
+	mux.HandleFunc("/repos/acme/empty/releases", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(404) })
 	mux.HandleFunc("/dl/gwatch-linux-amd64", func(w http.ResponseWriter, r *http.Request) { w.Write(payload) })
 	mux.HandleFunc("/dl/gwatch-linux-amd64.sha256", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(hex.EncodeToString(sum[:]) + "  gwatch-linux-amd64\n"))
@@ -103,32 +112,67 @@ func TestCheckDownloadSwap(t *testing.T) {
 	srvURL = srv.URL
 
 	c := &Client{APIBase: srv.URL, HTTP: srv.Client(), GOOS: "linux", GOARCH: "amd64"}
-	info, err := c.Check(context.Background(), "acme/gwatch", "2.4.1")
+	info, err := c.Check(context.Background(), "acme/gwatch", "2.4.1", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !info.UpdateAvailable || info.LatestVersion != "2.5.0" || info.AssetName != "gwatch-linux-amd64" || info.ReleaseURL != "https://example.com/rel" || info.PublishedAt == nil {
 		t.Fatalf("info: %+v", info)
 	}
-	if info2, _ := c.Check(context.Background(), "acme/gwatch", "2.5.0"); info2.UpdateAvailable {
+	if info.Prerelease {
+		t.Fatal("a stable check should not land on the release candidate")
+	}
+	// The same check, with pre-releases accepted, offers the newer rc instead.
+	pre, err := c.Check(context.Background(), "acme/gwatch", "2.4.1", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pre.UpdateAvailable || pre.LatestVersion != "3.0.0-rc1" || !pre.Prerelease {
+		t.Fatalf("prerelease check: %+v", pre)
+	}
+	if info2, _ := c.Check(context.Background(), "acme/gwatch", "2.5.0", false); info2.UpdateAvailable {
 		t.Fatal("same version should not be an update")
 	}
-	if info3, _ := c.Check(context.Background(), "acme/gwatch", "dev"); !info3.UpdateAvailable || !info3.CurrentIsDev {
+	// A draft is not public, so it is never on offer.
+	if d, _ := c.Check(context.Background(), "acme/gwatch", "2.5.0", true); d.LatestVersion == "9.9.9" {
+		t.Fatal("a draft release should never be offered")
+	}
+	if info3, _ := c.Check(context.Background(), "acme/gwatch", "dev", false); !info3.UpdateAvailable || !info3.CurrentIsDev {
 		t.Fatal("dev builds should always see the release")
 	}
-	if _, err := c.Check(context.Background(), "acme/empty", "1.0"); err == nil || !strings.Contains(err.Error(), "no releases") {
+	if _, err := c.Check(context.Background(), "acme/empty", "1.0", false); err == nil || !strings.Contains(err.Error(), "no releases") {
 		t.Fatalf("expected no-releases error, got %v", err)
 	}
-	if _, err := c.Check(context.Background(), "bad repo", "1.0"); err == nil {
+	if _, err := c.Check(context.Background(), "bad repo", "1.0", false); err == nil {
 		t.Fatal("expected invalid repo error")
 	}
 	win := &Client{APIBase: srv.URL, HTTP: srv.Client(), GOOS: "windows", GOARCH: "amd64"}
-	if wi, _ := win.Check(context.Background(), "acme/gwatch", "1.0"); wi.AssetName != "gwatch-windows-amd64.exe" {
+	if wi, _ := win.Check(context.Background(), "acme/gwatch", "1.0", false); wi.AssetName != "gwatch-windows-amd64.exe" {
 		t.Fatalf("windows asset: %+v", wi)
 	}
+	// A platform the release carries no executable for still hears about the
+	// release; it is installing that is refused.
 	arm := &Client{APIBase: srv.URL, HTTP: srv.Client(), GOOS: "linux", GOARCH: "arm64"}
-	if ai, _ := arm.Check(context.Background(), "acme/gwatch", "1.0"); ai.AssetURL != "" {
+	if ai, _ := arm.Check(context.Background(), "acme/gwatch", "1.0", false); ai.AssetURL != "" {
 		t.Fatalf("arm64 should have no asset: %+v", ai)
+	}
+
+	// The catalogue itself: newest first, draft gone, each annotated.
+	rels, err := c.Releases(context.Background(), "acme/gwatch", "2.5.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rels) != 3 || rels[0].Version != "3.0.0-rc1" || !rels[0].Prerelease || rels[1].Version != "2.5.0" || rels[2].Version != "2.4.0" {
+		t.Fatalf("catalogue: %+v", rels)
+	}
+	if !rels[0].Newer || !rels[1].Running || rels[2].Newer || !rels[2].Installable {
+		t.Fatalf("catalogue flags: %+v", rels)
+	}
+	if got := Find(rels, "v2.4.0"); got == nil || got.Version != "2.4.0" {
+		t.Fatalf("Find should accept a tag: %+v", got)
+	}
+	if got := Find(rels, "1.0.0"); got != nil {
+		t.Fatal("Find should not invent a release")
 	}
 
 	dir := t.TempDir()
@@ -266,14 +310,14 @@ func TestDownloadRequiresSignature(t *testing.T) {
 // still see that a release exists, and says why it cannot install it.
 func TestCheckWithoutKeyStillReports(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/repos/acme/gwatch/releases/latest", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"tag_name":"v9.0.0","html_url":"https://example.com/rel","assets":[]}`))
+	mux.HandleFunc("/repos/acme/gwatch/releases", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[{"tag_name":"v9.0.0","html_url":"https://example.com/rel","assets":[]}]`))
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	pinKeys(t)
 	c := &Client{APIBase: srv.URL, HTTP: srv.Client(), GOOS: "linux", GOARCH: "amd64"}
-	info, err := c.Check(context.Background(), "acme/gwatch", "1.0.0")
+	info, err := c.Check(context.Background(), "acme/gwatch", "1.0.0", false)
 	if err != nil {
 		t.Fatal(err)
 	}

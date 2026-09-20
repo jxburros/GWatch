@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jxburros/GWatch/internal/model"
+	"github.com/jxburros/GWatch/internal/update"
 )
 
 func TestTriggersEndpointsAndHooks(t *testing.T) {
@@ -347,9 +348,10 @@ func TestChartsStatusEventsAndAccessPassword(t *testing.T) {
 func TestUpdateEndpoints(t *testing.T) {
 	ts, srv := newTestServer(t)
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
+		if strings.HasSuffix(r.URL.Path, "/releases") {
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"tag_name":"v9.9.9","html_url":"https://example.com","assets":[]}`)
+			fmt.Fprintf(w, `[{"tag_name":"v9.9.9","html_url":"https://example.com","assets":[]},
+				{"tag_name":"v10.0.0-beta1","prerelease":true,"html_url":"https://example.com/beta","assets":[]}]`)
 			return
 		}
 		w.WriteHeader(404)
@@ -383,5 +385,107 @@ func TestUpdateEndpoints(t *testing.T) {
 	if len(events) < 2 {
 		t.Fatalf("update events: %+v", events)
 	}
+
+	// The catalogue lists both releases, the pre-release flagged as such, and
+	// the stable check does not land on it.
+	var cat struct {
+		Releases []model.Release `json:"releases"`
+	}
+	if code := call(t, ts, "GET", "/api/update/releases", nil, &cat); code != 200 || len(cat.Releases) != 2 {
+		t.Fatalf("releases: %d %+v", code, cat.Releases)
+	}
+	if cat.Releases[0].Version != "10.0.0-beta1" || !cat.Releases[0].Prerelease || cat.Releases[1].Version != "9.9.9" {
+		t.Fatalf("catalogue: %+v", cat.Releases)
+	}
+	if info.Prerelease || info.LatestVersion != "9.9.9" {
+		t.Fatalf("a stable check should not offer the pre-release: %+v", info)
+	}
+
+	// Naming a version that was never published is refused, and named
+	// against the release list rather than turned into a download URL.
+	resp, _ = http.Post(ts.URL+"/api/update/apply", "application/json", strings.NewReader(`{"version":"4.2.0"}`))
+	data, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 502 || !strings.Contains(string(data), "no release 4.2.0") {
+		t.Fatalf("unknown version: %d %s", resp.StatusCode, data)
+	}
 	_ = context.Background()
+}
+
+// TestUpdaterBackgroundChecks covers the parts of the updater that no HTTP
+// request drives: whether a periodic check is due, and what the status says
+// about when the next one is.
+func TestUpdaterBackgroundChecks(t *testing.T) {
+	var hits int
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/releases") {
+			hits++
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `[{"tag_name":"v9.9.9","html_url":"https://example.com","assets":[]}]`)
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	defer gh.Close()
+
+	prefs := model.UpdateSettings{CheckAutomatically: false, CheckIntervalHours: 24}
+	u := &Updater{
+		Client:  &update.Client{APIBase: gh.URL, HTTP: gh.Client()},
+		Version: "1.0.0",
+		Prefs:   func() model.UpdateSettings { return prefs },
+		Repo:    func() string { return "acme/gwatch" },
+	}
+
+	// Automatic checks off: nothing is contacted, and the status says so.
+	u.checkIfDue(context.Background())
+	if hits != 0 {
+		t.Fatalf("a check ran with automatic checks off (%d requests)", hits)
+	}
+	if st := u.Status(); st.AutoCheck || st.NextCheckAt != nil || st.LastCheckAt != nil {
+		t.Fatalf("status with checks off: %+v", st)
+	}
+
+	// Switched on: the first tick checks, and the next one is scheduled an
+	// interval later.
+	prefs.CheckAutomatically = true
+	u.checkIfDue(context.Background())
+	if hits != 1 {
+		t.Fatalf("expected one check, got %d", hits)
+	}
+	st := u.Status()
+	if !st.AutoCheck || st.LastCheckAt == nil || st.NextCheckAt == nil {
+		t.Fatalf("status after check: %+v", st)
+	}
+	if got := st.NextCheckAt.Sub(*st.LastCheckAt); got != 24*time.Hour {
+		t.Fatalf("next check should be an interval later, got %s", got)
+	}
+	if st.Last == nil || st.Last.LatestVersion != "9.9.9" || !st.Last.UpdateAvailable {
+		t.Fatalf("last check: %+v", st.Last)
+	}
+
+	// Not due yet: the interval has not elapsed, so GitHub is left alone.
+	u.checkIfDue(context.Background())
+	if hits != 1 {
+		t.Fatalf("a check ran before it was due (%d requests)", hits)
+	}
+
+	// Due again once the interval has passed.
+	u.mu.Lock()
+	u.lastCheck = time.Now().Add(-25 * time.Hour)
+	u.mu.Unlock()
+	u.checkIfDue(context.Background())
+	if hits != 2 {
+		t.Fatalf("expected a second check once due, got %d", hits)
+	}
+
+	// PromptOnOpen only reaches the interface when checking is on at all:
+	// GWatch cannot offer an update it never looks for.
+	prefs.PromptOnOpen = true
+	if st := u.Status(); !st.PromptOnOpen {
+		t.Fatal("prompt should be on when checks are on")
+	}
+	prefs.CheckAutomatically = false
+	if st := u.Status(); st.PromptOnOpen {
+		t.Fatal("prompt should be off when automatic checks are off")
+	}
 }
