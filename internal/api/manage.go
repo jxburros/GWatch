@@ -300,6 +300,16 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "warning thresholds must be positive (packet loss up to 100%)")
 		return
 	}
+	// An empty ping method is how every settings document written before this
+	// setting existed looks, so it means the default rather than an error.
+	g.PingMethod = strings.TrimSpace(g.PingMethod)
+	if g.PingMethod == "" {
+		g.PingMethod = def.General.PingMethod
+	}
+	if !model.ValidPingMethod(g.PingMethod) {
+		writeError(w, http.StatusBadRequest, `ping method must be "auto", "builtin" or "system"`)
+		return
+	}
 	switch g.Theme {
 	case "dark", "light", "system":
 	default:
@@ -444,6 +454,11 @@ func describeSettingsChange(before, after model.Settings) string {
 	}
 	if before.General.Theme != after.General.Theme || before.General.AccentColor != after.General.AccentColor {
 		parts = append(parts, "appearance changed")
+	}
+	// How a ping is sent decides whether GWatch runs an external program, so
+	// it gets a line rather than disappearing into "general settings changed".
+	if before.General.PingMethod != after.General.PingMethod {
+		parts = append(parts, "ping method set to "+after.General.PingMethod)
 	}
 	if before.General != after.General {
 		parts = append(parts, "general settings changed")

@@ -27,3 +27,18 @@ test('settings view (viewer) is limited to the tabs marked viewer: true', async 
   assert.deepEqual(tabLabels, ['Appearance', 'Monitor health', 'About']);
   assert.match(root.textContent, /signed in as a viewer/);
 });
+
+// #47: the General tab carries a Ping card with the three-way method choice,
+// set from settings.general.pingMethod.
+test('settings General has a Ping card with the method choice', async (t) => {
+  const { root } = await mountView(settingsView, undefined, t);
+  const panel = root.querySelector('.settings-panel');
+  const heads = [...panel.querySelectorAll('h2')].map((el) => el.textContent);
+  assert.ok(heads.includes('Ping'), `a Ping card (got ${heads.join(', ')})`);
+
+  const select = [...panel.querySelectorAll('select')].find((el) => [...el.options].some((o) => o.value === 'builtin'));
+  assert.ok(select, 'the ping method select is on the tab');
+  assert.deepEqual([...select.options].map((o) => o.value), ['auto', 'builtin', 'system']);
+  assert.equal(select.value, 'auto'); // web/mock.js's settings.general.pingMethod
+  assert.match(panel.textContent, /falls back to the system ping command/);
+});

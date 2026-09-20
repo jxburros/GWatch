@@ -274,7 +274,17 @@ export async function mount(root, ctx) {
     switch (c.type) {
       case 'ping': {
         const count = numberInput({ value: cfg.pingCount || 4, min: 1, max: 20, oninput: () => { cfg.pingCount = Number(count.value); } });
-        return h('div', { class: 'form-grid-3' }, targetField(c, err, 'Host override'), field({ label: 'Packets per run', input: count, error: err.pingCount, help: 'Packets per run, default 4, max 20. More packets give a steadier average and a more meaningful jitter and standard deviation.' }), ...warnFields(c, { loss: true }));
+        // An empty value means "whatever Settings › General says", which is
+        // what cleanCheck drops from the config before it is saved.
+        const method = selectInput({
+          options: [{ value: '', label: 'Use global setting' }, { value: 'builtin', label: 'Built-in' }, { value: 'system', label: 'System ping' }],
+          value: cfg.pingMethod || '',
+          onchange: () => { cfg.pingMethod = method.value; },
+        });
+        return h('div', { class: 'form-grid-3' }, targetField(c, err, 'Host override'),
+          field({ label: 'Packets per run', input: count, error: err.pingCount, help: 'Packets per run, default 4, max 20. More packets give a steadier average and a more meaningful jitter and standard deviation.' }),
+          field({ label: 'Ping method', input: method, help: 'Built-in sends the echo requests itself; system ping runs the operating system\'s ping command.' }),
+          ...warnFields(c, { loss: true }));
       }
       case 'http':
         return h('div', { class: 'stack' }, httpCommon(c, err), h('div', { class: 'form-grid-3' }, ...certFields(c, { withToggle: true }), ...warnFields(c)), contentWatch(c));

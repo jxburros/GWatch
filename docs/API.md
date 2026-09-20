@@ -19,10 +19,14 @@ omitted for callers who have not identified themselves).
 
 ## Platform notes
 
-- **Ping** uses a raw socket on Windows (fine under the service account). On Linux it
-  tries an unprivileged ping socket first, then a raw socket, then falls back to
-  shelling out to the system `ping` command — whichever works, it works without any
-  setup on your part.
+- **Ping** builds its own ICMP echo requests; there is no ping library underneath it.
+  On Linux and macOS it tries an unprivileged ICMP socket first and then a raw one; on
+  Windows it goes straight to a raw socket, which the service account may open. If none
+  of those is permitted it falls back to shelling out to the system `ping` command —
+  whichever works, it works without any setup on your part. `general.pingMethod`
+  (`auto`, the default, `builtin` or `system`) chooses between that order, the built-in
+  sender alone and the system command alone, and a check may override it with
+  `config.pingMethod` (the same three values, or `""` to follow the setting).
 - **Email alerts** work with any SMTP provider: STARTTLS on port 587, implicit TLS on
   465, or no encryption at all. Use **Settings › Alerts › Send test email** before
   relying on it — that exercises the exact configuration a real alert would use.
@@ -223,6 +227,10 @@ companion that lets an AI assistant use this API with a key, is documented in
 - `POST /api/checks/{id}/silence` body `{ "minutes": 60 }` (0 = unsilence) → CheckState.
 - `GET /api/checks/{id}/results?limit=50` → `[Result]` newest first.
 - `GET /api/checks/{id}/state` → CheckState.
+
+A ping check's config is `pingCount` (packets per run, default 4, maximum 20) and
+`pingMethod` (`""` to follow `general.pingMethod`, or `auto`/`builtin`/`system` to
+override it), plus the usual `target`, `latencyWarnMs` and `packetLossWarnPct`.
 
 A `Result` is one observation: `{id, checkId, ts, success, status, message, error,
 latencyMs, minMs, maxMs, jitterMs, stddevMs, lossPct, details, attempts, warnings}`.
@@ -511,7 +519,7 @@ The `<asset>.sha256` sidecar is still checked when the release publishes one (`c
 ## Settings
 
 - `GET /api/settings` → `Settings` (SMTP password, access password and the scheduled-backup password are returned masked as `"********"` when set).
-- `PUT /api/settings` body `Settings` → saved Settings (a masked password keeps the stored one). `general.theme` is `dark|light|system`, `general.accentColor` a hex colour, `general.remoteAccess` rebinds the listener to all interfaces live, `general.accessPassword` is the legacy shared password for other devices (user accounts replace it), `general.requireLoginLocally` makes a browser on this computer sign in too — it is refused while no administrator account exists, and ignored until one does, `general.updateRepo` is the GitHub repository checked for releases. `backups` configures scheduled automatic backups (see below); it cannot be saved with `enabled: true` and no password. `updates` is `{checkAutomatically, checkIntervalHours, includePrerelease, promptOnOpen}`: `checkAutomatically` governs every check GWatch makes on its own (the periodic one and the one made when the interface is opened), `checkIntervalHours` must be 1-720, `includePrerelease` lets a pre-release be offered as an update, and `promptOnOpen` offers a waiting update in a dialog when the interface is opened. `indicators` configures the status circles in the header (see below).
+- `PUT /api/settings` body `Settings` → saved Settings (a masked password keeps the stored one). `general.theme` is `dark|light|system`, `general.accentColor` a hex colour, `general.remoteAccess` rebinds the listener to all interfaces live, `general.accessPassword` is the legacy shared password for other devices (user accounts replace it), `general.requireLoginLocally` makes a browser on this computer sign in too — it is refused while no administrator account exists, and ignored until one does, `general.updateRepo` is the GitHub repository checked for releases, `general.pingMethod` is `auto|builtin|system` and is refused if it is anything else (an empty value is read as `auto`, which is what settings saved before it existed contain). `backups` configures scheduled automatic backups (see below); it cannot be saved with `enabled: true` and no password. `updates` is `{checkAutomatically, checkIntervalHours, includePrerelease, promptOnOpen}`: `checkAutomatically` governs every check GWatch makes on its own (the periodic one and the one made when the interface is opened), `checkIntervalHours` must be 1-720, `includePrerelease` lets a pre-release be offered as an update, and `promptOnOpen` offers a waiting update in a dialog when the interface is opened. `indicators` configures the status circles in the header (see below).
 - All three passwords are stored encrypted in the database with the local `gwatch.key` file; the API request and response bodies are unchanged.
 - `POST /api/settings/test-email` body `{ "to": "optional@override" }` → `{ "ok": true, "message": "..." }` or error.
 - `GET /api/retention/status` → `RetentionStatus`. `POST /api/retention/run` → runs rollup+cleanup now → RetentionStatus.

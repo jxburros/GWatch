@@ -322,7 +322,7 @@
     { id: 'nodes-maintenance', name: 'In maintenance', enabled: true, colour: 'yellow', condition: { kind: 'nodesInStatus', status: 'maintenance', minCount: 1 } },
   ];
   let settings = {
-    general: { instanceName: 'Home monitor', defaultIntervalSeconds: 60, defaultTimeoutSeconds: 10, maxConcurrentChecks: 8, minIntervalSeconds: 10, wallboardRefreshSeconds: 15, latencyWarnMs: 0, packetLossWarnPct: 0, theme: 'dark', accentColor: '#43c9c0', remoteAccess: false, accessPassword: '', requireLoginLocally: false, updateRepo: 'jxburros/GWatch' },
+    general: { instanceName: 'Home monitor', defaultIntervalSeconds: 60, defaultTimeoutSeconds: 10, maxConcurrentChecks: 8, minIntervalSeconds: 10, wallboardRefreshSeconds: 15, latencyWarnMs: 0, packetLossWarnPct: 0, pingMethod: 'auto', theme: 'dark', accentColor: '#43c9c0', remoteAccess: false, accessPassword: '', requireLoginLocally: false, updateRepo: 'jxburros/GWatch' },
     alerts: { enabled: true, recipients: ['jeff@example.com', 'sam@example.com'], failureThreshold: 2, cooldownMinutes: 60, notifyRecovery: true, notifyWarnings: true, certWarnDays: 14, smtp: { host: 'smtp.example.com', port: 587, username: 'gwatch@example.com', password: '********', from: 'GWatch <gwatch@example.com>', security: 'starttls' } },
     retention: { rawDays: 30, fiveMinDays: 180, hourlyDays: 730, dailyDays: 0, eventDays: 730 },
     indicators: clone(DEFAULT_INDICATORS),

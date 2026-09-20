@@ -384,6 +384,7 @@ func (e *Engine) runAndProcess(ctx context.Context, checkID int64, depth int) (m
 		DefaultCertWarn:   e.settings.Alerts.CertWarnDays,
 		LatencyWarnMS:     e.settings.General.LatencyWarnMS,
 		PacketLossWarnPct: e.settings.General.PacketLossWarnPct,
+		PingMethod:        e.settings.General.PingMethod,
 		Hosts:             e.hosts,
 	}
 	if st != nil {
@@ -460,6 +461,7 @@ func (e *Engine) TestCheck(ctx context.Context, c model.Check, nodeHost string) 
 		DefaultCertWarn:   e.settings.Alerts.CertWarnDays,
 		LatencyWarnMS:     e.settings.General.LatencyWarnMS,
 		PacketLossWarnPct: e.settings.General.PacketLossWarnPct,
+		PingMethod:        e.settings.General.PingMethod,
 	}
 	e.mu.Unlock()
 	if c.TimeoutSeconds <= 0 {

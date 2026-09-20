@@ -30,6 +30,7 @@ type Options struct {
 	DefaultCertWarn   int     // global cert warn days (used when Config.CertWarnDays == 0; default 14)
 	LatencyWarnMS     float64 // global latency warning threshold (used when Config.LatencyWarnMS == 0; 0 = off)
 	PacketLossWarnPct float64 // global packet loss warning threshold (used when Config.PacketLossWarnPct == 0; 0 = off)
+	PingMethod        string  // global ping method (used when Config.PingMethod == ""; "" = auto)
 
 	// Hosts supplies hardware readings taken elsewhere — by the engine's
 	// sampler for this computer, or by an agent that pushed them in. It is nil
@@ -205,6 +206,9 @@ func Validate(check model.Check, nodeHost string) error {
 	case model.CheckPing:
 		if cfg.PingCount < 0 || cfg.PingCount > maxPingCount {
 			return fmt.Errorf("ping count must be between 1 and %d", maxPingCount)
+		}
+		if cfg.PingMethod != "" && !model.ValidPingMethod(cfg.PingMethod) {
+			return errors.New(`ping method must be "auto", "builtin" or "system" (or empty to follow the global setting)`)
 		}
 		if _, err := hostOnly(target); err != nil {
 			return err

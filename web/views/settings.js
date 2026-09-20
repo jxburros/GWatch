@@ -21,13 +21,20 @@ const TABS = [
   { id: 'about', label: 'About', viewer: true },
 ];
 
+// The ping methods GeneralSettings.PingMethod accepts. A check may override
+// the global choice with the same values, plus "" for "follow the setting".
+const PING_METHODS = [
+  { value: 'auto', label: 'Auto (recommended)' },
+  { value: 'builtin', label: 'Built-in sender' },
+  { value: 'system', label: 'System ping command' },
+];
+
 const REPO_URL = 'https://github.com/jxburros/GWatch';
 const GWATCH_COPYRIGHT = 'Copyright (c) 2026 JX Holdings. Original developers: Jeffrey Guntly and Garrett Guntly.';
 // Go module dependencies from go.mod, with licenses confirmed by reading each
 // module's LICENSE file under $(go env GOMODCACHE).
 const DEPENDENCIES = [
   { name: 'kardianos/service', use: 'runs GWatch as a background service on Windows, macOS and Linux', license: 'zlib' },
-  { name: 'prometheus-community/pro-bing', use: 'sends the ICMP pings used by ping checks', license: 'MIT' },
   { name: 'modernc.org/sqlite', use: 'the embedded database that stores history, events and settings', license: 'BSD-3-Clause' },
   { name: 'golang.org/x/crypto', use: 'password hashing for accounts and the access password', license: 'BSD-3-Clause' },
 ];
@@ -91,6 +98,7 @@ export async function mount(root, ctx) {
     const s = state.settings || await loadSettings();
     const g = s.general;
     const name = textInput({ value: g.instanceName || '', placeholder: 'GWatch', oninput: () => { g.instanceName = name.value; } });
+    const pingMethod = selectInput({ options: PING_METHODS, value: g.pingMethod || 'auto', onchange: () => { g.pingMethod = pingMethod.value; } });
     return h('form', { class: 'stack', onsubmit: (e) => { e.preventDefault(); saveSettings(); } },
       h('section', { class: 'card' }, h('h2', null, 'General'), h('p', { class: 'lead' }, 'Defaults for new checks and protection against overloading the machine.'),
         h('div', { class: 'form-grid' },
@@ -102,6 +110,19 @@ export async function mount(root, ctx) {
           numField(g, 'maxConcurrentChecks', 'Max concurrent checks', { min: 1, help: 'How many checks may run at the same time.' }),
           numField(g, 'latencyWarnMs', 'Latency warning default', { unitLabel: 'ms', help: '0 = off. Marks checks degraded when slower than this.' }),
           numField(g, 'packetLossWarnPct', 'Packet-loss warning default', { unitLabel: '%', help: '0 = off. Applies to ping checks.' }),
+        )),
+      // Ping is the one check type whose mechanics a reader may have to take a
+      // hand in: sending an echo request needs a socket the operating system
+      // may refuse to hand out. The setting sits here with the other defaults,
+      // and any individual check can override it.
+      h('section', { class: 'card' }, h('h2', null, 'Ping'),
+        h('p', { class: 'lead' }, 'How ping checks send their echo requests. Any individual check can override this.'),
+        h('div', { class: 'form-grid' },
+          field({
+            label: 'Ping method',
+            input: pingMethod,
+            help: 'Auto tries the built-in sender and falls back to the system ping command. Built-in never runs an external program. System ping uses the operating system\'s ping command, which is the way out where raw sockets are not permitted.',
+          }),
         ),
         h('hr', { class: 'divider' }), saveBar()));
   }

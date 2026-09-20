@@ -222,6 +222,25 @@ func TestSettingsDashboardsMaintenanceBackups(t *testing.T) {
 	if code := call(t, ts, "PUT", "/api/settings", bad, nil); code != 400 {
 		t.Fatalf("expected 400 for bad recipient, got %d", code)
 	}
+	// The ping method is one of three words. An empty one is what every
+	// settings document written before the setting existed looks like, so it
+	// becomes the default instead of an error.
+	badPing := saved
+	badPing.General.PingMethod = "telepathy"
+	if code := call(t, ts, "PUT", "/api/settings", badPing, nil); code != 400 {
+		t.Fatalf("expected 400 for an unknown ping method, got %d", code)
+	}
+	emptyPing := saved
+	emptyPing.General.PingMethod = ""
+	var back model.Settings
+	if code := call(t, ts, "PUT", "/api/settings", emptyPing, &back); code != 200 || back.General.PingMethod != model.PingMethodAuto {
+		t.Fatalf("empty ping method: %d %q", code, back.General.PingMethod)
+	}
+	okPing := saved
+	okPing.General.PingMethod = model.PingMethodSystem
+	if code := call(t, ts, "PUT", "/api/settings", okPing, &back); code != 200 || back.General.PingMethod != model.PingMethodSystem {
+		t.Fatalf("system ping method: %d %q", code, back.General.PingMethod)
+	}
 	if code := call(t, ts, "POST", "/api/settings/test-email", map[string]string{}, nil); code != 200 {
 		t.Fatalf("test email: %d", code)
 	}
