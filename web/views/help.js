@@ -19,9 +19,9 @@ const TOPICS = [
     id: 'getting-started',
     title: 'Getting started',
     icon: 'rocket',
-    q: 'setup first run install service port 8080 localhost begin tour onboarding',
+    q: 'setup first run install service port 7230 localhost begin tour onboarding',
     body: () => [
-      h('p', null, 'GWatch runs as a background service on this computer and serves this interface on ', h('code', null, 'http://127.0.0.1:8080'), '. It checks what you tell it to on a schedule, keeps the history in an embedded database beside itself, and sends alerts. There is no cloud account and nothing leaves the machine unless you configure somewhere for it to go.'),
+      h('p', null, 'GWatch runs as a background service on this computer and serves this interface on ', h('code', null, 'http://127.0.0.1:7230'), '. It checks what you tell it to on a schedule, keeps the history in an embedded database beside itself, and sends alerts. There is no cloud account and nothing leaves the machine unless you configure somewhere for it to go.'),
       h('p', null, 'A sensible first hour: create an administrator account under ', h('a', { href: '#/settings/users' }, 'Settings › Users & access'), ', add the router as your first node, add the two or three things you actually notice when they break, then set up email under ', h('a', { href: '#/settings/alerts' }, 'Settings › Alerts'), ' and send the test message.'),
       h('p', { class: 'note' }, 'Install, upgrade and uninstall steps for Windows live in ', doc('INSTALL.md', 'INSTALL.md'), '.'),
     ],
@@ -102,7 +102,7 @@ const TOPICS = [
     icon: 'wifi',
     q: 'lan network phone tablet vpn reverse proxy tls port forward tailscale wireguard listen 0.0.0.0 firewall',
     body: () => [
-      h('p', null, 'By default the interface answers on this computer only. ', h('a', { href: '#/settings/network' }, 'Settings › Network access'), ' opens it to the rest of your LAN and lists the addresses a phone or tablet can use; a firewall on this computer may still need to allow the port. Starting the service with ', h('code', null, '--listen 0.0.0.0:8080'), ' does the same from the command line.'),
+      h('p', null, 'By default the interface answers on this computer only. ', h('a', { href: '#/settings/network' }, 'Settings › Network access'), ' opens it to the rest of your LAN and lists the addresses a phone or tablet can use; a firewall on this computer may still need to allow the port. Starting the service with ', h('code', null, '--listen 0.0.0.0:7230'), ' does the same from the command line.'),
       h('p', null, 'GWatch never becomes an internet-facing service on its own: there is no hosted relay and no tunnel helper. To reach it from outside the house, bring your own way in — a private network (VPN) or a reverse proxy with TLS that you control — and use a viewer account or a read-only API key rather than your administrator credentials.'),
       h('p', { class: 'note' }, 'Never port-forward GWatch\'s HTTP port to the internet: plain HTTP puts your password on the wire in the clear. The full argument and the recommended setups: ', doc('REMOTE-ACCESS.md', 'REMOTE-ACCESS.md'), '.'),
     ],

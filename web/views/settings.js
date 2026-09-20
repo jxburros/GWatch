@@ -225,7 +225,7 @@ export async function mount(root, ctx) {
         h('p', { class: 'note' }, 'It still works, so nothing breaks on upgrade, and scripts using it keep going. Leave it empty once you have accounts.'),
         h('div', { class: 'form-grid' }, field({ label: 'Access password', input: h('div', { class: 'input-with-unit' }, pw, clearPw), help: 'Other devices are asked for it (any user name). This computer is not, unless you require a sign-in here as well.' })),
         h('hr', { class: 'divider' }), saveBar()),
-      h('section', { class: 'card' }, h('h2', null, 'Command-line alternative'), h('p', { class: 'note' }, 'You can also start the service with ', h('code', null, '--listen 0.0.0.0:8080'), ' (or set ', h('code', null, 'GWATCH_LISTEN'), ') to bind every interface regardless of this setting.')));
+      h('section', { class: 'card' }, h('h2', null, 'Command-line alternative'), h('p', { class: 'note' }, 'You can also start the service with ', h('code', null, '--listen 0.0.0.0:7230'), ' (or set ', h('code', null, 'GWATCH_LISTEN'), ') to bind every interface regardless of this setting.')));
   }
 
   /* ---------- Alerts ---------- */

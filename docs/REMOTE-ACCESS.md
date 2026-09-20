@@ -67,13 +67,13 @@ the raw port. With Caddy, the whole configuration is:
 
 ```caddyfile
 gwatch.example.com {
-    reverse_proxy 127.0.0.1:8080
+    reverse_proxy 127.0.0.1:7230
 }
 ```
 
 Caddy obtains and renews the certificate itself. Turn on `general.remoteAccess` only if
 the proxy is on a different machine; when the proxy runs alongside GWatch, leave it off
-and let the proxy reach `127.0.0.1:8080`, so the port is never open on the network.
+and let the proxy reach `127.0.0.1:7230`, so the port is never open on the network.
 
 Over HTTPS the session cookie is issued with `Secure` set, so it is never sent in the
 clear.
@@ -90,7 +90,7 @@ Three things to do if you go this way:
 
 ### What not to do
 
-- Do not forward port 8080 (or whatever you bound) from your router to the internet.
+- Do not forward port 7230 (or whatever you bound) from your router to the internet.
 - Do not rely on the legacy shared access password on a public hostname. It is one
   password for everyone, it grants full administrator access, and it leaves no trace of
   who used it. Accounts replace it.

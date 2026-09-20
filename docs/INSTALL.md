@@ -37,7 +37,7 @@ Then it's an ordinary "Next, Next, Finish" wizard:
 3. **Destination folder** — where the `gwatch.exe` program file goes (default:
    `C:\Program Files\GWatch`). Leave the default unless you have a reason to change it.
 4. **Network access page** — this is the one page worth reading:
-   - **Port** — which network port GWatch listens on. `8080` (the default) is fine
+   - **Port** — which network port GWatch listens on. `7230` (the default) is fine
      unless something else on your computer already uses it.
    - **"Allow other devices on my network to open GWatch"** — leave this unchecked if
      you only want to use GWatch from this computer. Check it if you want to check on
@@ -62,8 +62,8 @@ It takes under a minute and you can skip it; **Help** in the sidebar restarts it
 you like, and the same page has an opt-in setting for small contextual tips that point
 things out as you go. Tips are off until you turn them on.
 
-- The web interface opens at an address like `http://127.0.0.1:8080` (or
-  `http://<your-computer-name>:8080` if you allowed LAN access).
+- The web interface opens at an address like `http://127.0.0.1:7230` (or
+  `http://<your-computer-name>:7230` if you allowed LAN access).
 - A **GWatch Monitor** shortcut in your Start Menu (and on the desktop, if you chose
   that option) reopens the interface any time.
 - **If you allowed other devices on your network to connect**: go to
@@ -87,7 +87,7 @@ Before you start, get a pairing code:
 
 Then, on the other machine, run `gwatch-agent-setup-<version>.exe` and fill in the
 **Connect to GWatch** page: the server's address (for example
-`http://gwatch.lan:8080`), the pairing code, and optionally a name. The installer
+`http://gwatch.lan:7230`), the pairing code, and optionally a name. The installer
 exchanges the code for a credential that can do exactly one thing — submit that
 machine's readings — and registers the `GWatchAgent` service. The machine should appear
 on its own node within a minute.
@@ -96,7 +96,7 @@ Nothing is opened up on the machine running the agent: it dials out to GWatch an
 up, and GWatch is given no way back in. To install across several machines at once:
 
 ```powershell
-gwatch-agent-setup-0.1.0.exe /VERYSILENT /SERVER=http://gwatch.lan:8080 /CODE=ABCD-2345
+gwatch-agent-setup-0.1.0.exe /VERYSILENT /SERVER=http://gwatch.lan:7230 /CODE=ABCD-2345
 ```
 
 Each machine needs its own code. See [`HARDWARE.md`](HARDWARE.md) for what the agent
@@ -169,6 +169,27 @@ The installer wraps the same steps the [`scripts/install.ps1`](../scripts/instal
 and [`scripts/uninstall.ps1`](../scripts/uninstall.ps1) PowerShell scripts perform, and
 either path is fully supported. Use the scripts directly if you want to script an
 unattended install across several machines, prefer not to run a downloaded `.exe`, or
-want to build `gwatch.exe` from source yourself. See the
-[README's "Install on Windows" section](../README.md#install-on-windows) for the exact
-commands.
+want to build `gwatch.exe` from source yourself.
+
+1. Build (or download) `gwatch.exe`. With Go 1.24+ installed:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts\build.ps1
+   ```
+2. Install the service from an **Administrator** PowerShell:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -Exe .\dist\gwatch.exe
+   ```
+   This copies the program to `C:\Program Files\GWatch`, registers the `GWatch` service
+   (automatic start, restarts on failure), starts it, and adds a Start-menu shortcut that
+   opens the interface. Data lives in `C:\ProgramData\GWatch` (`gwatch.db`, `logs\`, `backups\`).
+   Add `-Listen 0.0.0.0:7230` to serve the interface to the whole network from the start
+   (it can also be switched on later in Settings › Network access).
+3. Open <http://127.0.0.1:7230> (or run `gwatch open`).
+
+**Updating**: build the new `gwatch.exe` and run `scripts\install.ps1` again. It stops the
+service, replaces the executable and starts the service. Your data is untouched.
+
+**Removing**: `scripts\uninstall.ps1` (add `-RemoveData` to also delete the database).
+
+You can also manage the service by hand: `gwatch install`, `gwatch uninstall`,
+`gwatch start|stop|restart|status`.

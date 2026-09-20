@@ -48,7 +48,7 @@ runs on and posts the reading to GWatch every minute.
 3. Run it on the machine you want to watch:
 
    ```
-   gwatch-agent install --server https://gwatch.lan:8080 --token gwa_…
+   gwatch-agent install --server https://gwatch.lan:7230 --token gwa_…
    ```
 
    On Windows, from an Administrator prompt. The agent installs itself as a

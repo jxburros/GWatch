@@ -157,7 +157,7 @@ begin
   PortEdit.Left := PortLabel.Left + 48;
   PortEdit.Top := PortLabel.Top - 4;
   PortEdit.Width := 80;
-  PortEdit.Text := ExpandConstant('{param:PORT|8080}');
+  PortEdit.Text := ExpandConstant('{param:PORT|7230}');
 
   LanCheck := TNewCheckBox.Create(NetworkPage);
   LanCheck.Parent := NetworkPage.Surface;
@@ -216,13 +216,13 @@ end;
 
 // ------------------------------------------------------------------------
 // Helpers shared between the wizard, the [Run]/[Icons] code lookups and
-// silent installs (/VERYSILENT /PORT=8080 /LAN=1). Written as line comments:
+// silent installs (/VERYSILENT /PORT=7230 /LAN=1). Written as line comments:
 // a "{code:...}" inside a brace comment would end the comment early.
 // ------------------------------------------------------------------------
 function GetPort(Param: String): String;
 begin
   if WizardSilent then
-    Result := ExpandConstant('{param:PORT|8080}')
+    Result := ExpandConstant('{param:PORT|7230}')
   else
     Result := Trim(PortEdit.Text);
 end;

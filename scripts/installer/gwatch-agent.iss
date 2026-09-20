@@ -147,7 +147,7 @@ begin
   ServerEdit.Left := 0;
   ServerEdit.Top := 16;
   ServerEdit.Width := ConnectPage.SurfaceWidth;
-  ServerEdit.Text := ExpandConstant('{param:SERVER|http://gwatch.lan:8080}');
+  ServerEdit.Text := ExpandConstant('{param:SERVER|http://gwatch.lan:7230}');
 
   AddLabel(ConnectPage, 48, 'Pairing code (GWatch > Nodes > Pair a machine)');
   CodeEdit := TNewEdit.Create(ConnectPage);
@@ -266,7 +266,7 @@ begin
     if GetServer = '' then
     begin
       MsgBox('Enter the address of your GWatch server, for example' + #13#10 +
-             'http://gwatch.lan:8080', mbError, MB_OK);
+             'http://gwatch.lan:7230', mbError, MB_OK);
       Result := False;
     end
     else if GetCode = '' then

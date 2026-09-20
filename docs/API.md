@@ -1,6 +1,6 @@
 # GWatch localhost API
 
-All endpoints are served by the local service on `http://127.0.0.1:8080` (configurable) and
+All endpoints are served by the local service on `http://127.0.0.1:7230` (configurable) and
 return JSON unless noted. Errors are `{"error": "message"}` with a 4xx/5xx status.
 Timestamps are RFC 3339 strings. Field names match `internal/model/model.go`.
 
@@ -16,6 +16,16 @@ working for at least one release, so integrations should use `/api/v1/…`.
 Every API response carries `X-GWatch-API-Version: 1`, and `GET /api/version` returns
 `{"version": "0.4.1", "platform": "windows/amd64", "apiVersion": 1}` (`platform` is
 omitted for callers who have not identified themselves).
+
+## Platform notes
+
+- **Ping** uses a raw socket on Windows (fine under the service account). On Linux it
+  tries an unprivileged ping socket first, then a raw socket, then falls back to
+  shelling out to the system `ping` command — whichever works, it works without any
+  setup on your part.
+- **Email alerts** work with any SMTP provider: STARTTLS on port 587, implicit TLS on
+  465, or no encryption at all. Use **Settings › Alerts › Send test email** before
+  relying on it — that exercises the exact configuration a real alert would use.
 
 ## Authentication and roles
 
