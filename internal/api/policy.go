@@ -244,6 +244,14 @@ func matchPattern(pattern, path string) (score int, ok bool) {
 		}
 		return 0, false
 	}
+	// A trailing slash is a segment of its own to net/http's mux: /api/nodes/
+	// does not reach "GET /api/nodes", it falls through to the /api/ catch-all
+	// and 404s. Matching it here would authorize against a route that is never
+	// going to run — harmless today, but the kind of drift this table exists
+	// to avoid. A "{rest...}" pattern is the exception: it swallows the slash.
+	if strings.HasSuffix(path, "/") && !strings.Contains(pattern, "...}") {
+		return 0, false
+	}
 	pp := strings.Split(strings.Trim(pattern, "/"), "/")
 	sp := strings.Split(strings.Trim(path, "/"), "/")
 	for i, seg := range pp {
