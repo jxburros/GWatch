@@ -831,4 +831,41 @@
 
   window.__gwatchMock = { nodes, events, dashboards, states, overview, history };
   console.info('[GWatch] mock API enabled (?mock=1)');
+
+  /* ---------- Unmistakable "this is fake" banner ---------- */
+  // The mock backend ships inside the release binary (it is genuinely useful
+  // for support), so anyone who lands on ?mock=1 — by a stray bookmark, a
+  // shared link, or poking around — needs to know at a glance that nothing
+  // on the screen is their actual network. This cannot be dismissed: there
+  // is no close button, and it is reinstalled on every load, on purpose.
+  const MOCK_BANNER_TEXT = 'Mock data — this is not your network';
+  document.title = '[MOCK] ' + document.title;
+
+  function paintMockBanner() {
+    const bar = document.createElement('div');
+    bar.id = 'gwatch-mock-banner';
+    bar.setAttribute('role', 'status');
+    bar.textContent = MOCK_BANNER_TEXT + ' (?mock=1)';
+    // Inline via the CSSOM, not a style="" attribute or a <style> block, so
+    // this survives a strict Content-Security-Policy. Colours are hard-coded
+    // rather than pulled from the app's CSS variables on purpose: the banner
+    // must stay legible and obviously "not the app" even if the stylesheet
+    // fails to load.
+    bar.style.cssText = [
+      'position:fixed', 'top:0', 'left:0', 'right:0', 'z-index:2147483647',
+      'display:flex', 'align-items:center', 'justify-content:center', 'gap:0.5em',
+      'padding:0.5em 1em', 'background:#b45309', 'color:#fff',
+      'font:600 13px/1.3 system-ui, -apple-system, "Segoe UI", sans-serif',
+      'letter-spacing:0.02em', 'text-align:center',
+      'box-shadow:0 1px 6px rgba(0,0,0,0.4)', 'pointer-events:none',
+    ].join(';');
+    document.body.prepend(bar);
+    // Push the app down by the banner's own height so it is never covered.
+    const push = () => { document.body.style.paddingTop = bar.offsetHeight + 'px'; };
+    push();
+    window.addEventListener('resize', push);
+  }
+
+  if (document.body) paintMockBanner();
+  else document.addEventListener('DOMContentLoaded', paintMockBanner);
 })();
