@@ -4,7 +4,7 @@
 VERSION ?= $(shell tr -d ' \t\r\n' < VERSION)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build windows rsrc agent agent-all test test-race cover fmt fmt-check vet tidy-check web-check ci run keygen sign verify-release mcp-build mcp-test mcp-fmt
+.PHONY: build windows rsrc agent agent-all test test-race cover fmt fmt-check vet tidy-check web-check web-test ci run keygen sign verify-release mcp-build mcp-test mcp-fmt
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/gwatch .
@@ -81,6 +81,13 @@ tidy-check:
 web-check:
 	@find web -name '*.js' -type f | sort | xargs -n1 node --check
 
+# The web test suite (tests/web/) exercises web/'s shared helpers and each
+# view's happy path against web/mock.js, with jsdom as the only dependency —
+# it lives outside web/ so //go:embed never ships it in the binary. Needs
+# `npm ci` run once first (devDependencies only; see package.json).
+web-test:
+	npm test
+
 # The MCP companion (mcp/) is a separate Go module with its own go.mod and its
 # own version, so the root `./...` above never sees it — these targets are how
 # it gets built and tested. It talks to GWatch over the JSON API with an API
@@ -96,7 +103,7 @@ mcp-test:
 mcp-fmt:
 	cd mcp && gofmt -w .
 
-ci: fmt-check vet tidy-check test-race mcp-test mcp-build
+ci: fmt-check vet tidy-check test-race mcp-test mcp-build web-test
 
 run:
 	go run . run --data-dir ./data

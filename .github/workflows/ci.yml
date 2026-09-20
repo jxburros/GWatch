@@ -117,7 +117,12 @@ jobs:
           for f in web/index.html web/app.js web/app.css web/api.js web/components.js web/logo.svg; do
             if [ ! -s "$f" ]; then echo "::error::missing or empty web asset: $f"; status=1; fi
           done
-          exit $status
+          if [ $status -ne 0 ]; then exit $status; fi
+          # The tests themselves live outside web/ (tests/web/), not because
+          # they belong to a different feature but so //go:embed web never
+          # picks them up and ships them inside gwatch.exe — see tests/web/.
+          npm ci
+          npm test
 
       # install.ps1 / uninstall.ps1 are how GWatch gets onto a Windows machine.
       - name: PowerShell scripts parse
