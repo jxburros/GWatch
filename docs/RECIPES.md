@@ -14,7 +14,7 @@ placeholders, from `internal/engine/automation.go` (`TriggerVars`) and
 
 | Placeholder | Meaning |
 |---|---|
-| `{{node.name}}`, `{{node.host}}`, `{{node.group}}`, `{{node.tags}}`, `{{node.notes}}` | the node the trigger fired on |
+| `{{node.name}}`, `{{node.host}}`, `{{node.group}}` (its first group), `{{node.groups}}` (all of them, comma-separated), `{{node.tags}}`, `{{node.notes}}` | the node the trigger fired on |
 | `{{check.name}}`, `{{check.type}}`, `{{check.target}}` | the check that fired it |
 | `{{target}}` | the check's effective target (host/URL/port) |
 | `{{status}}`, `{{prev_status}}` | new and previous status (`up`, `degraded`, `down`, `unknown`) |

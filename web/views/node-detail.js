@@ -3,7 +3,7 @@
 import { api, getHistoryMulti, qs } from '../api.js';
 import { h, icon, clear, replace, statusPill, statusGlyph, importanceBadge, tagList, banner, toast, confirmDialog, showMenu, menuButton, emptyState, skeleton, eventRow, rangeChips, checkTypeLabel } from '../components.js';
 import { LineChart, toSeries, uptimeBar, uptimeLegend, SERIES_COLORS } from '../charts.js';
-import { relTime, ms as fmtMs, pct, dateTime, interval, plural, timeShort } from '../fmt.js';
+import { relTime, ms as fmtMs, pct, dateTime, interval, plural, timeShort, nodeGroups } from '../fmt.js';
 import { resultInspector } from './inspector.js';
 import { openTriggerEditor, triggerRow } from './automation.js';
 import { hardwarePanel } from './machines.js';
@@ -79,7 +79,7 @@ export async function mount(root, ctx) {
         h('h1', null, statusPill(n.status || 'unknown', { large: true }), n.name),
         h('div', { class: 'd-meta' },
           n.host ? h('span', { class: 'host' }, n.host) : null,
-          n.group ? h('span', { class: 'tag tag-group' }, n.group) : null,
+          nodeGroups(n).map((g) => h('span', { class: 'tag tag-group' }, g)),
           ...(n.tags || []).map((t) => h('span', { class: 'tag' }, t)),
           importanceBadge(n.importance),
           n.template ? h('span', { class: 'dim small' }, `from ${n.template} template`) : null,

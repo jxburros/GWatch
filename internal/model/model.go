@@ -114,12 +114,22 @@ const (
 	ImportanceCritical Importance = "critical"
 )
 
+// MaxNodeGroups caps how many groups one node may belong to. A node that
+// appears in a dozen places is already hard to reason about; the cap exists so
+// a bad import cannot turn one node into a hundred group sections.
+const MaxNodeGroups = 16
+
 // Node is a device, service, website, endpoint, router, NAS, server,
 // application or API. A node owns zero or more checks.
 type Node struct {
-	ID            int64      `json:"id"`
-	Name          string     `json:"name"`
-	Host          string     `json:"host"` // default target for checks (hostname, IP or URL)
+	ID     int64    `json:"id"`
+	Name   string   `json:"name"`
+	Host   string   `json:"host"` // default target for checks (hostname, IP or URL)
+	Groups []string `json:"groups"`
+	// Group is the first entry of Groups, kept for one release so clients
+	// written against the single-group API keep working. It is filled in on
+	// every read; on a write it is used only when Groups is absent or empty.
+	// Deprecated: read and write Groups.
 	Group         string     `json:"group"`
 	Tags          []string   `json:"tags"`
 	Notes         string     `json:"notes"`
@@ -132,6 +142,78 @@ type Node struct {
 
 	// Checks is populated by the API when returning a full node.
 	Checks []Check `json:"checks"`
+}
+
+// NormalizeGroups cleans a list of group names: blanks are dropped, duplicates
+// that differ only in case are folded onto the first spelling seen (so "Home"
+// and "home" are one group, named the way it was first typed), and the result
+// is capped at MaxNodeGroups. It always returns a non-nil slice, because the
+// wire format promises a list rather than null.
+func NormalizeGroups(groups []string) []string {
+	out := make([]string, 0, len(groups))
+	seen := map[string]bool{}
+	for _, g := range groups {
+		g = strings.TrimSpace(g)
+		if g == "" || seen[strings.ToLower(g)] {
+			continue
+		}
+		seen[strings.ToLower(g)] = true
+		out = append(out, g)
+		if len(out) == MaxNodeGroups {
+			break
+		}
+	}
+	return out
+}
+
+// SyncGroups normalises the node's groups and keeps Group in step with them.
+// A body that carries only the old Group field is read as a one-group node, so
+// an older client (or an older database row) still says what it meant; every
+// other case is decided by Groups, and Group comes back out of it as the first
+// group. Call this wherever a node arrives from outside: the API, the store
+// and the restore path all do.
+func (n *Node) SyncGroups() {
+	n.Groups = NormalizeGroups(n.Groups)
+	if len(n.Groups) == 0 {
+		if g := strings.TrimSpace(n.Group); g != "" {
+			n.Groups = []string{g}
+		}
+	}
+	if len(n.Groups) > 0 {
+		n.Group = n.Groups[0]
+	} else {
+		n.Group = ""
+	}
+}
+
+// InGroup reports whether the node belongs to the named group, matching any of
+// its groups and ignoring case. An empty name matches nothing: "no group
+// filter" is the caller's decision to make, not a group a node can be in.
+func (n Node) InGroup(group string) bool {
+	group = strings.TrimSpace(group)
+	if group == "" {
+		return false
+	}
+	for _, g := range n.Groups {
+		if strings.EqualFold(strings.TrimSpace(g), group) {
+			return true
+		}
+	}
+	// A node that came from somewhere that only filled Group in (a hand-built
+	// literal in a test, say) is still in that group.
+	return len(n.Groups) == 0 && strings.EqualFold(strings.TrimSpace(n.Group), group)
+}
+
+// GroupList returns the groups the node belongs to, falling back to Group for
+// a node whose Groups was never filled in.
+func (n Node) GroupList() []string {
+	if len(n.Groups) > 0 {
+		return n.Groups
+	}
+	if g := strings.TrimSpace(n.Group); g != "" {
+		return []string{g}
+	}
+	return nil
 }
 
 // Check is one monitor attached to a node.

@@ -347,3 +347,63 @@ func TestSchedulerRunsDueChecks(t *testing.T) {
 		t.Fatalf("retention status: %+v", rs)
 	}
 }
+
+// A maintenance window still names one group. A node that has that group among
+// its own is covered by it, whether the group is its first or its last.
+func TestMaintenanceMatchesAnyOfANodesGroups(t *testing.T) {
+	e, st, net, _ := setup(t)
+	ctx := context.Background()
+	n, err := st.CreateNode(ctx, model.Node{Name: "NAS", Host: "nas", Groups: []string{"Storage", "Servers"}, Enabled: true,
+		Checks: []model.Check{{Type: model.CheckPing, Name: "Ping", Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := st.CreateNode(ctx, model.Node{Name: "Printer", Host: "printer", Groups: []string{"Office"}, Enabled: true,
+		Checks: []model.Check{{Type: model.CheckPing, Name: "Ping", Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SaveMaintenance(ctx, model.MaintenanceWindow{Name: "Weekly reboot", Group: "Servers", Enabled: true,
+		StartAt: time.Now().Add(-time.Minute), EndAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer e.Stop()
+
+	cid := n.Checks[0].ID
+	net.mu.Lock()
+	net.down[cid] = true
+	net.down[other.Checks[0].ID] = true
+	net.mu.Unlock()
+	// Two runs: one failure is not yet a failure, by the default threshold.
+	e.RunNow(ctx, cid)
+	e.RunNow(ctx, cid)
+	s, _ := e.State(cid)
+	if s.SuppressReason != "maintenance" {
+		t.Fatalf("a window on the node's second group should still cover it: %+v", s)
+	}
+	e.RunNow(ctx, other.Checks[0].ID)
+	e.RunNow(ctx, other.Checks[0].ID)
+	if s, _ := e.State(other.Checks[0].ID); s.SuppressReason == "maintenance" {
+		t.Fatalf("a node outside the window's group should not be covered: %+v", s)
+	}
+
+	// The overview counts the node in each of its groups, so the two group
+	// tallies add up to more than the number of nodes.
+	ov, err := e.Overview(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]int{}
+	for _, g := range ov.Groups {
+		seen[g.Name] = g.Total
+	}
+	if seen["Storage"] != 1 || seen["Servers"] != 1 || seen["Office"] != 1 {
+		t.Fatalf("each group should count the nodes in it: %v", seen)
+	}
+	if ov.Summary.Total != 2 {
+		t.Fatalf("the node tally itself should not be inflated: %d", ov.Summary.Total)
+	}
+}

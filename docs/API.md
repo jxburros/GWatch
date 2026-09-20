@@ -170,7 +170,7 @@ companion that lets an AI assistant use this API with a key, is documented in
   {
     "summary": {"up":0,"degraded":0,"down":0,"unknown":0,"paused":0,"maintenance":0,"total":0},
     "nodes": [ {"node": Node (with checks), "status": "up", "checks": [ {"check": Check, "state": CheckState, "lastResult": Result|null} ], "inMaintenance": false, "affectedBy": "Gateway"|"" } ],
-    "groups": [ {"name":"Home Network","status":"up","up":3,"degraded":0,"down":0,"unknown":0,"paused":0,"maintenance":0,"total":3} ],
+    "groups": [ {"name":"Home Network","status":"up","up":3,"degraded":0,"down":0,"unknown":0,"paused":0,"maintenance":0,"total":3} ],   // a node counts in every group it is in, so these totals can exceed summary.total; a node with no group at all is counted under "Ungrouped"
     "incidents": [ Event ... ]      // open down/degraded conditions as most recent related events (max 20)
     "certWarnings": [ {"nodeId":1,"nodeName":"Site","checkId":3,"checkName":"HTTPS","daysRemaining":9,"notAfter":"...","subject":"..."} ],
     "attention": [ {"nodeId":1,"nodeName":"...","checkId":2,"checkName":"...","status":"down","message":"...","since":"...","affectedBy":""} ],
@@ -185,6 +185,8 @@ companion that lets an AI assistant use this API with a key, is documented in
 
 ## Nodes and checks
 
+**Groups.** A node belongs to zero or more groups, carried as `"groups": ["Home Network", "Critical"]` — always a list, never `null`. `"group"` is a **deprecated** alias kept for one release: on a read it is the first entry of `groups` (`""` when there are none), and on a write it is used only when `groups` is absent or empty, in which case the node ends up in that one group. Group names are trimmed, blanks are dropped, names that differ only in case are folded onto the first spelling given, and the list is capped at 16. Everything that filters or groups by a group — maintenance windows, dashboard and wallboard panels, the node list — matches **any** of a node's groups.
+
 - `GET /api/nodes` → `[Node]` each with `checks`, plus live state: each node object also carries `"status"`, `"stateByCheck": {checkId: CheckState}`, `"inMaintenance"`.
 - `POST /api/nodes` body: `Node` (with `checks`, ids omitted) → created `Node`.
 - `GET /api/nodes/{id}` → `Node` with checks, `stateByCheck`, `lastResults: {checkId: Result}`, `"status"`.
@@ -195,7 +197,7 @@ companion that lets an AI assistant use this API with a key, is documented in
 - `POST /api/nodes/{id}/run` → runs all enabled checks of the node now → `[Result]`.
 - `POST /api/nodes/{id}/silence` body `{ "minutes": 60 }` (0 = unsilence) → silences every check of the node → Node.
 - `GET /api/templates` → `[NodeTemplate]` (website, home-server, router — shown as "Network device", ping, api, tcp-service, this-computer, agent-machine, dns).
-- `GET /api/groups` → `{ "groups": [{"name":"...","count":3}], "tags": [{"name":"...","count":2}] }`.
+- `GET /api/groups` → `{ "groups": [{"name":"...","count":3}], "tags": [{"name":"...","count":2}] }`. A node in several groups is counted once in each of them, so the counts can add up to more than the number of nodes.
 
 - `POST /api/checks/test` body: `{ "check": Check, "nodeHost": "..." }` → `Result` (not recorded; for validating unsaved config).
 - The `custom` check type (`Check.type == "custom"`) runs a user-supplied command on the
@@ -379,7 +381,7 @@ Widget types (`Widget.type`) and their `config`:
 | `chart` | the Charts-tab config: `{ "checkIds": [], "metric": "avg|min|max|jitter|loss|availability", "range": "24h", "style": "line|area|step|bars|scatter", "smooth", "points", "lineWidth", "shadeFailures", "legend", "grid", "yMin", "yMax", "threshold", "split", "uptime", "colors": {checkId: "#hex"} }` | fully configurable chart |
 | `summary` | `{}` | overall health counts (up/degraded/down/unknown) |
 | `groups` | `{ "groups": ["Home Network", ...] }` (empty = all) | group status cards |
-| `status_list` | `{ "group": "", "tag": "", "nodeIds": [] }` | node/check status list, filtered |
+| `status_list` | `{ "group": "", "tag": "", "nodeIds": [] }` | node/check status list, filtered (`group` matches any of a node's groups) |
 | `latency_chart` | `{ "checkIds": [1,2], "range": "24h", "metric": "avg" }` | line chart of latency/response time |
 | `response_chart` | same as latency_chart (HTTP checks) | response time |
 | `loss_chart` | `{ "checkIds": [], "range": "24h" }` | packet loss % |
@@ -422,7 +424,7 @@ Panel types (`WallPanel.type`) and their `config`:
 | `clock` | `{ "seconds": false }` | time and date |
 | `attention` | `{ "limit": 6 }` | what is down or degraded now, worst first |
 | `groups` | `{}` | one tile per group, worst status wins |
-| `nodes` | `{ "group": "", "tag": "", "nodeIds": [], "limit": 24 }` | a grid of nodes and their status |
+| `nodes` | `{ "group": "", "tag": "", "nodeIds": [], "limit": 24 }` | a grid of nodes and their status (`group` matches any of a node's groups) |
 | `trends` | `{ "range": "24h", "limit": 4, "checkIds": [] }` | charts; no `checkIds` means GWatch picks |
 | `certs` | `{}` | certificates expiring soon or invalid |
 | `maintenance` | `{}` | maintenance windows in force |
@@ -478,7 +480,7 @@ An `Action` is `{ "type": "http|slack|teams|ntfy|pushover|git|script|run_node", 
 
 `slack`, `teams`, `ntfy` and `pushover` all default `title` to `"GWatch {{instance}}"` and `message` to `"{{node.name}} is {{status}}: {{message}}"` when left blank; both fields are JSON-safe (or form/header-safe) no matter what characters `{{message}}` expands to, since the payload is built with `encoding/json` (or form-encoding for Pushover, headers for ntfy) instead of string concatenation.
 
-String fields may contain `{{placeholders}}`: `node.name`, `node.host`, `node.group`, `check.name`, `check.type`, `target`, `status`, `prev_status`, `message`, `error`, `success`, `latencyMs`, `lossPct`, `statusCode`, `failures`, `event`, `ts`, `instance`, `body`, `query.<name>`. Scripts also receive them as `GWATCH_*` environment variables (`node.name` → `GWATCH_NODE_NAME`).
+String fields may contain `{{placeholders}}`: `node.name`, `node.host`, `node.group` (the node's first group), `node.groups` (all of them, comma-separated), `check.name`, `check.type`, `target`, `status`, `prev_status`, `message`, `error`, `success`, `latencyMs`, `lossPct`, `statusCode`, `failures`, `event`, `ts`, `instance`, `body`, `query.<name>`. Scripts also receive them as `GWATCH_*` environment variables (`node.name` → `GWATCH_NODE_NAME`).
 
 A placeholder value can be anything an HTTP caller or a monitored device sent, so inside the **code of a script action** it is never spliced in as raw text. It is replaced by something the interpreter cannot re-parse as code:
 

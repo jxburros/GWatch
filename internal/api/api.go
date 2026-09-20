@@ -650,7 +650,9 @@ func (s *Server) normalizeNode(n *model.Node) error {
 	settings := s.Engine.Settings()
 	n.Name = strings.TrimSpace(n.Name)
 	n.Host = strings.TrimSpace(n.Host)
-	n.Group = strings.TrimSpace(n.Group)
+	// A body may carry groups, the older single group, or both; SyncGroups
+	// settles which wins and leaves the two fields agreeing with each other.
+	n.SyncGroups()
 	if n.Name == "" {
 		return fmt.Errorf("name is required")
 	}
@@ -819,8 +821,8 @@ func describeNodeChange(before, after model.Node, deletedChecks int) string {
 	if before.Host != after.Host {
 		parts = append(parts, fmt.Sprintf("host %s → %s", before.Host, after.Host))
 	}
-	if before.Group != after.Group {
-		parts = append(parts, fmt.Sprintf("group %q → %q", before.Group, after.Group))
+	if beforeGroups, afterGroups := strings.Join(before.GroupList(), ", "), strings.Join(after.GroupList(), ", "); beforeGroups != afterGroups {
+		parts = append(parts, fmt.Sprintf("groups %q → %q", beforeGroups, afterGroups))
 	}
 	if before.Enabled != after.Enabled {
 		parts = append(parts, map[bool]string{true: "enabled", false: "disabled"}[after.Enabled])

@@ -23,3 +23,28 @@ test('nodes view lists every mock node and titles the page', async (t) => {
   const count = root.querySelector('.filter-count').textContent;
   assert.equal(count, `${mockNodes.length} nodes`);
 });
+
+test('the group filter matches any of a node\'s groups, and the others are chips on the row', async (t) => {
+  // The NAS is in two groups in the mock data. Filtering on its second one
+  // must find it, and the row must say which other groups it is in.
+  const nas = window.__gwatchMock.nodes.find((n) => n.name === 'NAS');
+  assert.ok(nas.groups.length > 1, 'the mock NAS should be in more than one group');
+  const second = nas.groups[1];
+
+  const { root } = await mountView(nodesView, { query: new URLSearchParams(`group=${second}`) }, t);
+  const rows = [...root.querySelectorAll('.node-row')];
+  const names = rows.map((r) => r.querySelector('.n-name a').textContent);
+  assert.ok(names.includes(nas.name), `filtering on ${second} should find the NAS`);
+  for (const other of window.__gwatchMock.nodes) {
+    if (!(other.groups || []).includes(second)) assert.ok(!names.includes(other.name), `${other.name} is not in ${second}`);
+  }
+
+  // It is listed once, under the group that was filtered for, with its other
+  // groups shown as chips beside its name.
+  assert.equal(names.filter((n) => n === nas.name).length, 1);
+  const section = root.querySelector(`.node-group[aria-label="${second}"]`);
+  assert.ok(section, `expected a section headed ${second}`);
+  const row = rows.find((r) => r.querySelector('.n-name a').textContent === nas.name);
+  const chips = [...row.querySelectorAll('.n-groups .tag-group')].map((c) => c.textContent);
+  assert.deepEqual(chips, nas.groups.filter((g) => g !== second));
+});

@@ -61,9 +61,12 @@ type key struct {
 }
 
 type node struct {
-	ID         int64            `json:"id"`
-	Name       string           `json:"name"`
-	Host       string           `json:"host"`
+	ID     int64    `json:"id"`
+	Name   string   `json:"name"`
+	Host   string   `json:"host"`
+	Groups []string `json:"groups"`
+	// Group is the deprecated single-group alias GWatch still sends and
+	// accepts; groups decides when both are given, exactly as it does there.
 	Group      string           `json:"group"`
 	Tags       []string         `json:"tags"`
 	Notes      string           `json:"notes"`
@@ -96,21 +99,42 @@ func (s *Server) Recorded() []Request {
 }
 
 func (s *Server) seed() {
+	// The router is in two groups, so the tests have a node whose second
+	// group is the one a filter names.
 	s.nodes[1] = &node{
-		ID: 1, Name: "Router", Host: "192.168.1.1", Group: "Home Network",
+		ID: 1, Name: "Router", Host: "192.168.1.1", Groups: []string{"Home Network", "Critical"},
 		Tags: []string{"infra"}, Importance: "critical", Enabled: true,
 		Checks: []map[string]any{
 			{"id": 11, "nodeId": 1, "type": "ping", "name": "Ping", "enabled": true, "intervalSeconds": 60, "timeoutSeconds": 5, "config": map[string]any{}},
 		},
 	}
 	s.nodes[2] = &node{
-		ID: 2, Name: "Website", Host: "https://example.com", Group: "Public",
+		ID: 2, Name: "Website", Host: "https://example.com", Groups: []string{"Public"},
 		Tags: []string{"web", "external"}, Importance: "high", Enabled: true,
 		Checks: []map[string]any{
 			{"id": 21, "nodeId": 2, "type": "http", "name": "Homepage", "enabled": true, "intervalSeconds": 120, "timeoutSeconds": 10, "config": map[string]any{"target": "https://example.com"}},
 		},
 	}
+	for _, n := range s.nodes {
+		n.syncGroups()
+	}
 	s.nextID = 3
+}
+
+// syncGroups mirrors what GWatch does with the two fields: a node given only
+// the old single group is read as being in that one group, and group always
+// comes back out as the first of the list.
+func (n *node) syncGroups() {
+	if len(n.Groups) == 0 && strings.TrimSpace(n.Group) != "" {
+		n.Groups = []string{n.Group}
+	}
+	if n.Groups == nil {
+		n.Groups = []string{}
+	}
+	n.Group = ""
+	if len(n.Groups) > 0 {
+		n.Group = n.Groups[0]
+	}
 }
 
 // ---- policy --------------------------------------------------------------
@@ -221,7 +245,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request, path string, k ke
 		ok(w, s.nodeList())
 	case r.Method == http.MethodGet && path == "/groups":
 		ok(w, map[string]any{
-			"groups": []map[string]any{{"name": "Home Network", "count": 1}, {"name": "Public", "count": 1}},
+			"groups": []map[string]any{{"name": "Critical", "count": 1}, {"name": "Home Network", "count": 1}, {"name": "Public", "count": 1}},
 			"tags":   []map[string]any{{"name": "infra", "count": 1}, {"name": "web", "count": 1}},
 		})
 	case r.Method == http.MethodGet && path == "/templates":
@@ -290,7 +314,7 @@ func (s *Server) nodeDoc(n *node, withState bool) map[string]any {
 		status, msg = "down", "connection refused"
 	}
 	doc := map[string]any{
-		"id": n.ID, "name": n.Name, "host": n.Host, "group": n.Group,
+		"id": n.ID, "name": n.Name, "host": n.Host, "groups": n.Groups, "group": n.Group,
 		"tags": n.Tags, "notes": n.Notes, "importance": n.Importance,
 		"enabled": n.Enabled, "dependsOnNodeId": nil, "checks": n.Checks,
 	}
@@ -431,6 +455,7 @@ func (s *Server) createNode(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "name and host are required")
 		return
 	}
+	in.syncGroups()
 	in.ID = s.nextID
 	s.nextID++
 	for i := range in.Checks {
@@ -455,6 +480,7 @@ func (s *Server) updateNode(w http.ResponseWriter, r *http.Request, path string)
 		fail(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
+	in.syncGroups()
 	in.ID = n.ID
 	s.nodes[n.ID] = &in
 	ok(w, s.nodeDoc(&in, true))

@@ -146,7 +146,7 @@ func TriggerVars(n model.Node, c model.Check, r model.Result, st model.CheckStat
 		"node.id":      strconv.FormatInt(n.ID, 10),
 		"node.name":    n.Name,
 		"node.host":    n.Host,
-		"node.group":   n.Group,
+		"node.group":   n.Group, // the first group, as before a node could have several
 		"check.id":     strconv.FormatInt(c.ID, 10),
 		"check.name":   c.Name,
 		"check.type":   string(c.Type),
@@ -161,6 +161,7 @@ func TriggerVars(n model.Node, c model.Check, r model.Result, st model.CheckStat
 		"lossPct":      "",
 		"statusCode":   "",
 		"prev_status":  "",
+		"node.groups":  strings.Join(n.GroupList(), ","),
 		"node.tags":    strings.Join(n.Tags, ","),
 		"node.notes":   n.Notes,
 		"instance":     "",

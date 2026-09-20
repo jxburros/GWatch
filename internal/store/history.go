@@ -441,12 +441,13 @@ func (s *Store) ClearHistory(ctx context.Context) error {
 
 // CreateNodeWithID inserts a node keeping its original id (restore).
 func (s *Store) CreateNodeWithID(ctx context.Context, n model.Node) error {
+	n.SyncGroups()
 	if n.Tags == nil {
 		n.Tags = []string{}
 	}
 	return s.WriteTx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO nodes(id, name, host, group_name, tags, notes, importance, enabled, depends_on_node_id, template, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-			n.ID, n.Name, n.Host, n.Group, jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nil, n.Template, fmtTime(n.CreatedAt), fmtTime(n.UpdatedAt)); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO nodes(id, name, host, group_name, "groups", tags, notes, importance, enabled, depends_on_node_id, template, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			n.ID, n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nil, n.Template, fmtTime(n.CreatedAt), fmtTime(n.UpdatedAt)); err != nil {
 			return err
 		}
 		for _, c := range n.Checks {
