@@ -14,11 +14,24 @@ served on `http://127.0.0.1:7230` (optionally to the rest of your LAN).
 No cloud account, no AI features, never exposed to the internet by itself. The product
 brief that defines the scope lives in [`local-network-monitoring-product-brief.md`](local-network-monitoring-product-brief.md).
 
-> **GWatch is in beta (0.2.1).** It works and it looks after your data, but the
+> **GWatch is in beta (0.2.2).** It works and it looks after your data, but the
 > interface and the JSON API can still change between releases, and bugs are likelier
 > now than they will be at 1.0 — which is reserved for the first public, stable
 > release. [`CHANGELOG.md`](CHANGELOG.md) lists what is in this version and the gaps it
 > ships with. Please [report anything that looks wrong](https://github.com/jxburros/GWatch/issues).
+
+## What's new in 0.2.2
+
+Since 0.2.1: SNMP checks for routers, switches and access points; subnet discovery;
+bulk edit across nodes and checks; nodes can belong to more than one group; status
+indicators in the header; compact lists by default with a "Breathing room" mode; a
+"Ping only" template; ping's own ICMP sender with a method setting and standard
+deviation reporting; the default port moved to 7230; hardware check thresholds shown
+per metric; brighter dark-theme text with WCAG contrast everywhere; a shorter README
+with the detail moved into `docs/`; several security fixes (rate-limited endpoint
+tokens, enforced `Content-Type`, security headers on every response, enforced database
+schema versioning); and CI now runs on Linux and macOS as well as Windows. Full detail
+in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## What it does
 
