@@ -139,7 +139,15 @@
 }
 
 * { box-sizing: border-box; }
-html, body { height: 100%; }
+/* The root carries the background as well as the body. Without it the browser
+   paints its own default — white — over anything the body has not covered yet:
+   the overscroll band, the moment before the stylesheet applies, and any
+   element that is briefly transparent. `color-scheme` tells the browser which
+   default to use for the scrollbars and form widgets it draws itself, so those
+   do not arrive light on a dark page either. */
+html, body { height: 100%; background-color: var(--bg); }
+:root { color-scheme: dark; }
+:root[data-theme="light"] { color-scheme: light; }
 /* The root font size is the single dial the rest of the interface hangs off.
    It is 14px on a small laptop and 18px on a large display, interpolated in
    between, so a wallboard on a television is legible from across the room and
@@ -757,8 +765,16 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .tab.active::after, .tab[aria-selected="true"]::after { left: 0; right: 0; }
 
 /* ---------- Charts ---------- */
-.chart { position: relative; width: 100%; }
-.chart canvas { display: block; width: 100%; }
+/* Chart surfaces are stated rather than inherited. A canvas is transparent
+   until something paints it, so a chart that is being re-sized or re-drawn
+   would otherwise show the page default through the hole for a frame. The
+   canvas inherits its host's colour, and charts.js paints that same colour as
+   its first drawing operation, so the bitmap is never see-through. */
+.chart { position: relative; width: 100%; background-color: var(--card); }
+.chart-host, .chart-body { background-color: var(--card); }
+.chart canvas { display: block; width: 100%; background-color: inherit; }
+/* A wallboard panel is themeable, so its charts follow the panel, not a card. */
+.wall-chart .chart, .wall-chart .chart-host, .wall-chart .chart-body { background-color: var(--wall-panel, var(--card)); }
 .chart-tooltip { position: absolute; pointer-events: none; background: var(--elev-2); border: 1px solid var(--line-strong); padding: 6px 0.5rem; font-size: 0.75rem; box-shadow: var(--shadow); z-index: 5; min-width: 8.75rem; white-space: nowrap; }
 .chart-tooltip .tt-time { color: var(--muted); font-weight: 600; margin-bottom: 4px; font-family: var(--mono); }
 .chart-tooltip .tt-row { display: flex; align-items: center; gap: 0.5rem; justify-content: space-between; }
