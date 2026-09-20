@@ -9,7 +9,7 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
-## Unreleased
+## 0.2.2
 
 The 2026-09-19 sprint: everything labelled `sprint-plan` in the tracker.
 
