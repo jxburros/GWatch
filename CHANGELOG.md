@@ -9,6 +9,99 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## Unreleased
+
+The 2026-09-19 sprint: everything labelled `sprint-plan` in the tracker.
+
+### Added
+
+- **SNMP checks for routers, switches and access points** (#39). A check
+  reads any list of OIDs on a schedule, with warning and critical thresholds
+  per OID; counters are charted as a per-second rate (bits per second with a
+  scale of 8), presets cover the standard MIBs (sysUpTime, IF-MIB traffic,
+  errors and link state, HOST-RESOURCES load), and "Walk this device" lists
+  what a device exposes so you can tick the readings you want. SNMP
+  credentials and agent metrics tokens are now encrypted at rest and masked by
+  the API. See `docs/SNMP.md`.
+- **Discovery** (#42). From the Nodes page, sweep one or more IP ranges and
+  see every device that answers with its name, round trip and open ports, then
+  bulk-add the ones you pick as nodes with a template suggested for each.
+  Administrator only, pure Go, no `nmap`.
+- **Nodes can belong to more than one group** (#35). Nodes carry a `groups`
+  list; filters, maintenance windows, dashboard and wallboard group panels
+  match any of a node's groups. The single `group` field stays for one release
+  as a deprecated alias for the first group.
+- **Status indicators in the header** (#26). A row of orbs under the page
+  title: blue when nothing is connected, green when all is clear, and one per
+  firing rule in yellow, orange or red. The rules are yours to set under
+  Settings › Indicators and come seeded with sensible defaults.
+- **Compact lists by default, with a "Breathing room" mode** (#32). Node
+  lists, check rows and settings lists take less space; Settings › Appearance
+  restores the old spacing.
+- **A "Ping only" template** (#41), and the "Router" template is now
+  "Network device" (#40) — a switch or access point is the same thing to
+  monitoring rules.
+- **Ping reports the standard deviation of each run** (#30) alongside min,
+  max, average, jitter and loss, on the check card, in the inspector and in the
+  results CSV. The packet count is editable per check.
+- **A ping method setting** (#47). Settings › General › Ping chooses between
+  the automatic socket order, the built-in sender alone and the system `ping`
+  command, with a per-check override. GWatch now sends its own ICMP echo
+  requests; the third-party ping library is gone.
+- **Settings shows where your data lives** (#33): the data directory,
+  `gwatch.db`, `gwatch.key` and the backups folder, on the Retention and
+  Backups tabs. It is never a temp folder on any platform; `docs/INSTALL.md`
+  says where it is on each.
+- **A test suite for the web interface** (#21): the shared formatting, chart
+  and DOM helpers and every view's happy path against the mock API, run by
+  `npm test` and in CI.
+- **CI runs on Linux and macOS as well as Windows** (#17), with the race
+  detector on the concurrency-heavy packages and `govulncheck` on both modules.
+
+### Changed
+
+- **The default port is 7230** (#25), no longer 8080, so a fresh install does
+  not collide with the next development server. Existing installs are
+  unaffected: the service registers its `--listen` address explicitly.
+- **Hardware checks show each metric's thresholds prominently** (#29). A
+  machine is still one node with one hardware check; every metric in it has
+  its own warning and critical pair, now grouped and labelled in the editor
+  with the defaults visible. `docs/HARDWARE.md` explains why it is one check.
+- **The dark theme's grey text is brighter** (#37), and every text and
+  background pair in both themes now clears WCAG contrast; a test keeps it so.
+- **The README is a short overview** (#22) that links to the documents in
+  `docs/`, which now carry what it used to repeat. The mock demo interface
+  (`?mock=1`) wears an undismissable "Mock data" banner.
+- **The MCP companion is released with its own `mcp/vX.Y.Z` tags** (#11), so
+  `go install .../mcp/cmd/gwatch-mcp@latest` resolves. `docs/RELEASING.md`
+  explains when to bump `mcp/VERSION`.
+
+### Fixed
+
+- **The page no longer flashes when live data arrives** (#28). The nodes
+  list, the dashboard widgets and the node history are updated in place
+  instead of being rebuilt, and chart canvases paint their own themed
+  background.
+- **Custom endpoint tokens can no longer be guessed without limit** (#15).
+  A wrong `/hook/` token counts against the same per-IP failure budget as a
+  wrong password and answers 429 with `Retry-After` once it runs out; an
+  unknown slug is charged too. A correct token restores the budget.
+- **The cross-site write guard covers the legacy access password** (#16),
+  and every request carrying a body must declare `Content-Type:
+  application/json`; form-shaped bodies are refused with 415.
+- **Every response carries security headers** (#19): a
+  `Content-Security-Policy` of `'self'`, `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: DENY` and `Referrer-Policy: same-origin`. The projected
+  wallboard is the one page that may be embedded in another site's frame.
+- **The database's schema version is enforced** (#20). A database written by
+  a newer GWatch is refused instead of silently opened; an older one gets a
+  copy taken beside it before it is migrated, and numbered data migrations
+  now have a home.
+- **The authorization table's path matcher agrees with the router** (#22).
+  A trailing slash is its own segment, as it is to `http.ServeMux`, and a
+  test holds the two to the same answer across encoded, doubled, dotted and
+  aliased paths.
+
 ## 0.2.1
 
 ### Added
