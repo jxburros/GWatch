@@ -33,11 +33,17 @@
   --line: #262a31;
   --line-strong: #333941;
   --text: #f2f4f6;
-  --muted: #9aa3ac;
-  --dim: #6c757f;
+  /* #37 contrast pass: --muted already cleared 4.5:1 everywhere it sits, but a
+     small lift makes it read as intentionally muted rather than merely dim.
+     --dim and --num-zero did not clear their bars against --elev (the
+     lightest of the three surfaces they sit on) and are raised to do so:
+     --dim carries tiny uppercase labels, which are small text and need
+     4.5:1; --num-zero is a large tabular numeral, which only needs 3:1. */
+  --muted: #9ea7af;
+  --dim: #858e97;
   --band: #22262d;
   --rail-active-bg: #1c1f25;
-  --num-zero: #5b636c;
+  --num-zero: #67717b;
   --grid: rgba(255, 255, 255, 0.02);
   --scrim: rgba(3, 4, 6, 0.72);
   --shadow: 0 10px 34px rgba(0, 0, 0, 0.5);
@@ -57,6 +63,12 @@
   --down: #ff5c5c;
   --warn: #ffc542;
   --unknown: #8b949e;
+  /* The two trigger-action badges (git / custom script) were hard-coded to
+     one colour each and never adapted per theme; on the light theme's pale
+     tint of the same hue that read at under 2:1. Tokenised so each theme can
+     pick its own shade of the same colour. */
+  --a-git: #ff8a65;
+  --a-script: #3ec8b8;
   --maint: #6ea0ff;
   --paused: #5b6472;
   --up-soft: rgba(53, 224, 127, 0.12);
@@ -105,10 +117,15 @@
   --line-strong: #bcc2ca;
   --text: #10151d;
   --muted: #55606f;
-  --dim: #8a929c;
+  /* #37 contrast pass: on white/near-white, --dim (small uppercase labels,
+     4.5:1) and --num-zero (a large tabular numeral, 3:1) both fell short —
+     --dim badly (2.8:1 on --bg) — so both are darkened. They are no longer
+     the same value: --num-zero can stay lighter because it only has to clear
+     the lower bar. */
+  --dim: #666f79;
   --band: #eceef1;
   --rail-active-bg: #eceef1;
-  --num-zero: #8a929c;
+  --num-zero: #838b96;
   --grid: rgba(0, 0, 0, 0.035);
   --scrim: rgba(20, 24, 30, 0.45);
   --shadow: 0 10px 30px rgba(20, 30, 50, 0.18);
@@ -116,24 +133,31 @@
   --panel-edge: rgba(255, 255, 255, 0.9);
   --panel-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0) 52%);
   --wash: radial-gradient(1100px 620px at 12% -12%, rgba(var(--accent-rgb), 0.09), transparent 62%);
-  --up: #12923f;
-  --down: #d92626;
-  --warn: #b26a00;
-  --unknown: #6b7480;
+  /* --up, --down, --warn and --unknown were all under 4.5:1 against at least
+     one of bg/card/elev (down and warn worst on --bg, up and unknown worst
+     everywhere) — the light theme had more failing pairs than the dark one,
+     since a saturated colour on a near-white field loses contrast fast. Each
+     is darkened along its own hue just enough to clear 4.5:1 on all three. */
+  --up: #107f37;
+  --down: #d42525;
+  --warn: #9f5f00;
+  --unknown: #666f7a;
+  --a-git: #c73000;
+  --a-script: #237b71;
   --maint: #2360d6;
   --paused: #8a93a1;
-  --up-soft: rgba(18, 146, 63, 0.12);
-  --down-soft: rgba(217, 38, 38, 0.10);
-  --warn-soft: rgba(178, 106, 0, 0.12);
+  --up-soft: rgba(16, 127, 55, 0.12);
+  --down-soft: rgba(212, 37, 37, 0.10);
+  --warn-soft: rgba(159, 95, 0, 0.12);
   --maint-soft: rgba(35, 96, 214, 0.12);
-  --unknown-soft: rgba(107, 116, 128, 0.14);
+  --unknown-soft: rgba(102, 111, 122, 0.14);
   --paused-soft: rgba(138, 147, 161, 0.18);
   --paused-text: #5f6976;
 
-  --up-rgb: 18, 146, 63;
-  --down-rgb: 217, 38, 38;
-  --warn-rgb: 178, 106, 0;
-  --unknown-rgb: 107, 116, 128;
+  --up-rgb: 16, 127, 55;
+  --down-rgb: 212, 37, 37;
+  --warn-rgb: 159, 95, 0;
+  --unknown-rgb: 102, 111, 122;
   --maint-rgb: 35, 96, 214;
   --paused-rgb: 138, 147, 161;
 }
@@ -1052,8 +1076,8 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .trigger-row .t-sub { font-size: 0.75rem; color: var(--muted); margin-top: 2px; font-family: var(--mono); }
 .trigger-row .t-out { font-size: 0.75rem; color: var(--dim); margin-top: 3px; white-space: pre-wrap; word-break: break-word; max-height: 3.2em; overflow: hidden; }
 .action-badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 0.5rem; background: var(--accent-soft); color: var(--accent-hover); font-size: 0.65625rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.14em; font-family: var(--mono); }
-.action-badge.a-git { background: rgba(240, 80, 50, 0.14); color: #ff8a65; }
-.action-badge.a-script { background: rgba(62, 200, 184, 0.14); color: #3ec8b8; }
+.action-badge.a-git { background: rgba(240, 80, 50, 0.14); color: var(--a-git); }
+.action-badge.a-script { background: rgba(62, 200, 184, 0.14); color: var(--a-script); }
 .action-badge.a-run_node { background: var(--up-soft); color: var(--up); }
 .cond-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .cond-chips label { display: inline-flex; align-items: center; gap: 5px; padding: 3px 0.5rem; border: 1px solid var(--line-strong); background: var(--elev); font-size: 0.75rem; cursor: pointer; font-family: var(--mono); }
