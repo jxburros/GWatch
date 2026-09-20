@@ -81,10 +81,10 @@ jobs:
       # The MCP companion (ROADMAP 3.1/3.2) is its own Go module with its own
       # go.mod and its own version. It is not covered by the root ./... above —
       # a nested module is invisible to the parent's package patterns — so it
-      # gets its own gofmt/vet/test/build here. It must keep building against
-      # the Go version in the root go.mod: the pinned SDK release is chosen for
-      # that, and GOTOOLCHAIN=local means a newer requirement would fail rather
-      # than silently download a toolchain.
+      # gets its own gofmt/vet/test/build here. It must keep building with
+      # the toolchain set up above: GOTOOLCHAIN=local means an SDK release
+      # requiring a newer Go would fail here rather than silently download
+      # a toolchain.
       - name: MCP companion — gofmt, go vet, go test
         working-directory: mcp
         run: |

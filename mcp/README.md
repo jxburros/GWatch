@@ -225,12 +225,10 @@ The layering is worth keeping: `internal/gwatch` is the HTTP client, `internal/t
 layer and knows nothing about MCP, and `internal/mcpserver` is the only package that touches the
 protocol. Adding a tool means adding it to `internal/tools`; the transport does not change.
 
-**Why `github.com/modelcontextprotocol/go-sdk` is pinned at v1.0.0**: `mcp/go.mod` declares
-`go 1.24.0`, the oldest Go this module is known to build with; CI runs with `GOTOOLCHAIN=local`
-on the root module's toolchain (Go 1.26), so a `go.mod` requiring a newer Go than that fails the
-build outright rather than quietly downloading a toolchain. The SDK stays buildable under Go 1.24
-through its v1.4.0 release; v1.5.0 and everything since raise the SDK's own `go` directive to
-1.25, which the root module now clears. So the pin can move up whenever someone wants the newer
-SDK — it is kept at v1.0.0 only because nothing here needs more yet, and a bump deserves its own
-change with the e2e tests re-run. See also the comment at the top of
-`internal/mcpserver/server.go`.
+**On the `github.com/modelcontextprotocol/go-sdk` version**: `mcp/go.mod` requires whatever
+Go the SDK release it uses requires (1.25 today), and CI builds it with the root module's
+toolchain (Go 1.26) under `GOTOOLCHAIN=local`, so an SDK whose `go` directive outruns that
+fails the build outright rather than quietly downloading a toolchain. The SDK is bumped when
+CI's `govulncheck` reports a reachable fix in it, or when a tool here needs something newer; a
+bump deserves its own change with the e2e and stdio tests re-run. See also the comment at the
+top of `internal/mcpserver/server.go`.
