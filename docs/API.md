@@ -280,6 +280,29 @@ echoed as written, so an `Authorization` header on an HTTP check is stored in th
 - `GET /api/checks/{id}/results?limit=50` → `[Result]` newest first.
 - `GET /api/checks/{id}/state` → CheckState.
 
+### Walking an SNMP device
+
+- `POST /api/snmp/walk` body:
+  `{ "host", "version", "port", "community", "user", "authProto", "authPass",
+  "privProto", "privPass", "oid", "max", "checkId" }` →
+  `{ "rows": [{ "oid", "type", "value", "name", "kind" }], "truncated": bool, "max": 500 }`.
+
+  `oid` is the subtree to walk, default `1.3.6.1.2.1` (mib-2); walking from the root of
+  the whole tree would drag in vendor subtrees thousands of rows deep. `max` is capped at
+  500 and `truncated` says the ceiling was hit. The whole exchange is bounded at 15
+  seconds. `checkId` names a saved check whose stored credentials fill in the blank ones,
+  the same arrangement as `POST /api/checks/test`.
+
+  `name` is a suggestion from a small table of standard-MIB OIDs (`Port 3 in`,
+  `Uptime`…), empty for an OID GWatch does not recognise, which is most of a device's
+  tree. `kind` is `"counter"` for the Counter32/Counter64 types and `"gauge"` otherwise,
+  so a ticked row arrives in the editor set up the right way.
+
+  **Administrator only, and refused to API keys of every scope.** The call takes a
+  credential and an address of the caller's choosing, makes GWatch talk to whatever is
+  there, and reports what came back — that is a probe, and it belongs to the person in
+  front of the machine rather than to an integration.
+
 ## History (charts)
 
 - `GET /api/history?checkId=ID&range=1h|24h|7d|30d|1y` → `HistorySeries`.

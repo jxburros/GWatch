@@ -6,7 +6,7 @@ import '../../../web/mock.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as nodeEditorView from '../../../web/views/node-editor.js';
-import { mountView, settle } from '../view-harness.mjs';
+import { mountView, settle, waitFor } from '../view-harness.mjs';
 
 test('node editor (edit mode) loads the node into the form', async (t) => {
   const gateway = window.__gwatchMock.nodes.find((n) => n.name === 'Gateway');
@@ -48,6 +48,38 @@ test('node editor renders the SNMP settings of an snmp check', async (t) => {
   const labels = [...presets.querySelectorAll('option')].map((o) => o.textContent);
   assert.ok(labels.some((l) => l.includes('sysUpTime')), 'sysUpTime is among the presets');
   assert.ok(labels.some((l) => l.includes('ifOperStatus')), 'ifOperStatus is among the presets');
+});
+
+test('walking a device offers its readings and adds the ticked ones', async (t) => {
+  const node = window.__gwatchMock.nodes.find((n) => n.checks.some((c) => c.type === 'snmp'));
+  const check = node.checks.find((c) => c.type === 'snmp');
+  const { root } = await mountView(nodeEditorView, { params: { id: String(node.id) } }, t);
+  const card = [...root.querySelectorAll('.editor-check')].find((c) => c.getAttribute('aria-label') === `${check.name} check`);
+  const before = card.querySelectorAll('table.table tbody tr').length;
+
+  const walk = [...card.querySelectorAll('button')].find((b) => b.textContent.includes('Walk this device'));
+  assert.ok(walk, 'the editor offers to walk the device');
+  walk.click();
+  const modal = await waitFor(() => document.querySelector('.modal'));
+
+  const rows = modal.querySelectorAll('tbody tr');
+  assert.ok(rows.length > 5, 'the walk lists what the device reported');
+  assert.ok(modal.textContent.includes('1.3.6.1.2.1.31.1.1.1.6.1'), 'an interface counter is listed with its index');
+
+  // A row already on the check cannot be added twice.
+  const known = [...rows].find((r) => r.textContent.includes(check.config.snmpOids[0].oid));
+  assert.ok(known.querySelector('input[type="checkbox"]').disabled, 'a reading already added is not offered again');
+
+  // Tick a counter row and add it: it arrives as a counter.
+  const counter = [...rows].find((r) => r.textContent.includes('1.3.6.1.2.1.2.2.1.14.2'));
+  counter.querySelector('input[type="checkbox"]').checked = true;
+  [...modal.querySelectorAll('button')].find((b) => b.textContent === 'Add ticked readings').click();
+
+  const after = card.querySelectorAll('table.table tbody tr');
+  assert.equal(after.length, before + 1, 'the ticked reading was added');
+  const added = [...after].find((r) => r.querySelector('input').value === '1.3.6.1.2.1.2.2.1.14.2');
+  assert.ok(added, 'with the OID that was ticked');
+  assert.equal([...added.querySelectorAll('select')][0].value, 'counter', 'and the kind guessed from its type');
 });
 
 test('adding an snmp check starts it on v2c with an uptime reading', async (t) => {

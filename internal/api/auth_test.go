@@ -512,6 +512,9 @@ var denyRoutes = []struct {
 	{"POST", "/api/apikeys", map[string]string{"name": "second"}},
 	{"DELETE", "/api/apikeys/1", nil},
 	{"POST", "/api/auth/change-password", map[string]string{"current": "a", "new": "b"}},
+	// Walking a device points GWatch at an address of the caller's choosing
+	// with a credential of the caller's choosing and reports what answered.
+	{"POST", "/api/snmp/walk", map[string]any{"host": "192.168.1.3"}},
 }
 
 func TestReadOnlyAPIKey(t *testing.T) {

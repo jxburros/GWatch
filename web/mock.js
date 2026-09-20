@@ -667,6 +667,27 @@
   on('GET', /^\/api\/checks\/(\d+)\/state$/, (m) => { const f = findCheck(m[1]); if (!f) throw err(404, 'check not found'); return stateFor(f.n, f.c); });
   on('GET', /^\/api\/history$/, (m, body, u) => { const ids = u.searchParams.getAll('checkId'); const range = u.searchParams.get('range') || '24h'; const metric = u.searchParams.get('metric'); if (ids.length === 1) return metric ? metricHistory(ids[0], range, metric) : history(ids[0], range); return ids.map((id) => history(id, range)); });
   on('GET', /^\/api\/history\/multi$/, (m, body, u) => { const ids = u.searchParams.getAll('checkId'); const range = u.searchParams.get('range') || '24h'; return ids.map((id) => history(id, range)); });
+
+  // "Walk this device": a plausible mib-2 subtree for a four-port switch, so
+  // the editor's picker can be seen without a real device on the network.
+  on('POST', /^\/api\/snmp\/walk$/, (m, body) => {
+    if (!body?.host) throw err(400, 'a host is required');
+    const rows = [
+      { oid: '1.3.6.1.2.1.1.1.0', type: 'OctetString', value: 'MikroTik CRS310, RouterOS 7.14', name: 'Description', kind: 'gauge' },
+      { oid: '1.3.6.1.2.1.1.3.0', type: 'TimeTicks', value: '41235000', name: 'Uptime', kind: 'gauge' },
+      { oid: '1.3.6.1.2.1.1.5.0', type: 'OctetString', value: 'office-switch', name: 'Device name', kind: 'gauge' },
+    ];
+    const ports = ['ether1-wan', 'ether2-office', 'ether3-loft', 'sfp-uplink'];
+    ports.forEach((label, i) => {
+      const n = i + 1;
+      rows.push({ oid: `1.3.6.1.2.1.2.2.1.2.${n}`, type: 'OctetString', value: label, name: `Port ${n} name`, kind: 'gauge' });
+      rows.push({ oid: `1.3.6.1.2.1.2.2.1.8.${n}`, type: 'Integer', value: n === 3 ? '2' : '1', name: `Port ${n} link`, kind: 'gauge' });
+      rows.push({ oid: `1.3.6.1.2.1.31.1.1.1.6.${n}`, type: 'Counter64', value: String(1.4e11 + n * 7e8), name: `Port ${n} in`, kind: 'counter' });
+      rows.push({ oid: `1.3.6.1.2.1.31.1.1.1.10.${n}`, type: 'Counter64', value: String(9.2e10 + n * 3e8), name: `Port ${n} out`, kind: 'counter' });
+      rows.push({ oid: `1.3.6.1.2.1.2.2.1.14.${n}`, type: 'Counter32', value: n === 3 ? '1842' : '0', name: `Port ${n} errors in`, kind: 'counter' });
+    });
+    return { rows, truncated: false, max: 500 };
+  });
   on('GET', /^\/api\/events$/, (m, body, u) => {
     const q = (u.searchParams.get('q') || '').toLowerCase();
     const until = u.searchParams.get('until');

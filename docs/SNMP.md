@@ -102,7 +102,21 @@ Two consequences worth knowing:
 
 `N` in the interface OIDs is SNMP's own index for a port, and it very often is
 not the number printed on the case. The editor asks for it when you pick one of
-those presets. To find out which is which, walk the device:
+those presets.
+
+To find out which is which, press **Walk this device** in the check's editor.
+GWatch reads the device's `1.3.6.1.2.1` subtree and shows what came back: the
+OID, a suggested name, the SNMP type and the current value. Tick the rows you
+want and they become readings, already set as gauges or counters according to
+their type — the scale, the unit and the thresholds are then yours to set. The
+port names (`ether1-wan`, `sfp-uplink`) are in the walk too, under `ifDescr`
+and `ifAlias`, which is how you tell which index is which.
+
+The walk stops at 500 rows and 15 seconds, and it is administrator-only: it
+points GWatch at an address with a credential and reports what answered, so it
+is not something an API key can do.
+
+The same thing from a terminal, if you would rather:
 
 ```
 # On Linux or macOS, from the net-snmp package:

@@ -574,12 +574,100 @@ export async function mount(root, ctx) {
         h('div', { class: 'section-title', style: { marginBottom: 0 } }, 'Readings'),
         h('div', { class: 'btn-group' },
           presets,
+          h('button', { class: 'btn btn-sm', type: 'button', onclick: (e) => walkDevice(c, e.currentTarget, renderRows) }, icon('search'), 'Walk this device'),
           h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { cfg.snmpOids.push(oidRow()); renderRows(); } }, icon('plus'), 'Add a reading'))),
       h('p', { class: 'note' }, 'A ', h('b', null, 'gauge'), ' is a value that already means something — a percentage, a temperature, a link state. A ', h('b', null, 'counter'), ' only ever climbs, so GWatch charts how fast it climbs: an interface’s octet counter with a scale of 8 becomes bits per second. The first run after a restart has nothing to compare against, so a counter has no reading (and no verdict) until the second one.'),
       h('p', { class: 'note' }, 'Thresholds are strict: crossing a ', h('b', null, 'Warn'), ' value marks the check degraded, crossing a ', h('b', null, 'Crit'), ' value marks it down. Setting both ', h('b', null, 'Crit >'), ' and ', h('b', null, 'Crit <'), ' to the same number means "must be exactly this", which is how a link-state reading is expressed. A reading that is text rather than a number is shown as it arrived and never thresholded.'),
       err.snmpOids ? h('div', { class: 'error small', style: { color: 'var(--down)' } }, err.snmpOids) : null,
       rowsWrap,
     );
+  }
+
+  // walkDevice asks the device what it can tell us and shows the answer as a
+  // list to tick. It is the only honest way to find an interface's SNMP
+  // index, which is very often not the number printed on the case.
+  async function walkDevice(c, btn, onAdded) {
+    const cfg = c.config;
+    const host = (cfg.target || d.host || '').trim();
+    if (!host) { toast('Enter the device’s host on the node (or a target on this check) first.', { kind: 'error' }); return; }
+    const done = busy(btn, 'Walking…');
+    let answer;
+    try {
+      answer = await api.post('/api/snmp/walk', {
+        host,
+        checkId: c.id || 0,
+        version: cfg.snmpVersion || '2c',
+        port: Number(cfg.snmpPort) || 161,
+        community: cfg.snmpCommunity || '',
+        user: cfg.snmpUser || '',
+        authProto: cfg.snmpAuthProto || '',
+        authPass: cfg.snmpAuthPass || '',
+        privProto: cfg.snmpPrivProto || '',
+        privPass: cfg.snmpPrivPass || '',
+        oid: '1.3.6.1.2.1',
+      });
+    } catch (e) { toast(`Could not read ${host}: ${e.message}`, { kind: 'error' }); done(); return; }
+    done();
+
+    const rows = answer?.rows || [];
+    if (!rows.length) { toast(`${host} answered, but reported nothing under 1.3.6.1.2.1.`, { kind: 'error' }); return; }
+
+    const already = new Set(cfg.snmpOids.map((o) => (o.oid || '').replace(/^\./, '')));
+    const boxes = new Map();
+    const table = h('table', { class: 'table' }, h('thead', null, h('tr', null,
+      h('th', null, ''), h('th', null, 'OID'), h('th', null, 'Suggested name'), h('th', null, 'Type'), h('th', null, 'Value'))));
+    const tb = h('tbody');
+    for (const row of rows) {
+      const have = already.has(row.oid);
+      const box = h('input', { type: 'checkbox', disabled: have, 'aria-label': `Add ${row.name || row.oid}` });
+      boxes.set(box, row);
+      tb.append(h('tr', null,
+        h('td', null, box),
+        h('td', { class: 'mono' }, row.oid),
+        h('td', null, row.name || h('span', { class: 'dim' }, '—'), have ? h('span', { class: 'tag' }, 'already added') : null),
+        h('td', { class: 'dim' }, row.type),
+        h('td', { class: 'mono truncate', style: { maxWidth: '260px' } }, row.value)));
+    }
+    table.append(tb);
+
+    const filter = textInput({ placeholder: 'Filter by OID, name or value', 'aria-label': 'Filter readings', oninput: () => {
+      const q = filter.value.trim().toLowerCase();
+      for (const tr of tb.children) tr.hidden = q ? !tr.textContent.toLowerCase().includes(q) : false;
+    } });
+
+    const add = h('button', { class: 'btn btn-primary', type: 'button', onclick: () => {
+      let added = 0;
+      for (const [box, row] of boxes) {
+        if (!box.checked) continue;
+        const name = uniqueReadingName(cfg, row.name || row.oid);
+        cfg.snmpOids.push({ oid: row.oid, name, kind: row.kind === 'counter' ? 'counter' : 'gauge', scale: 1, unit: '' });
+        added++;
+      }
+      m.close();
+      if (added) { onAdded(); toast(`Added ${added} reading${added === 1 ? '' : 's'}. Set the scale, unit and thresholds on each.`, { kind: 'success' }); }
+    } }, 'Add ticked readings');
+
+    const m = openModal({
+      title: `What ${host} can tell us`,
+      wide: true,
+      body: h('div', { class: 'stack-sm' },
+        h('p', { class: 'note' }, `${rows.length} reading${rows.length === 1 ? '' : 's'} under 1.3.6.1.2.1`, answer.truncated ? ` (stopped at the first ${answer.max} — narrow it down on the device if you need more)` : '', '. The last number of an interface row is its SNMP index, which is what the presets ask for. Ticked rows arrive as gauges or counters according to their type; the scale, unit and thresholds are yours to set.'),
+        filter,
+        h('div', { class: 'table-wrap', style: { maxHeight: '48vh', overflow: 'auto' } }, table)),
+      footer: [h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Cancel'), add],
+    });
+  }
+
+  // Names identify a metric in charts, so a walked row cannot quietly take a
+  // name another reading already has.
+  function uniqueReadingName(cfg, base) {
+    const taken = new Set((cfg.snmpOids || []).map((o) => (o.name || '').toLowerCase()));
+    if (!taken.has(base.toLowerCase())) return base;
+    for (let i = 2; i < 100; i++) {
+      const candidate = `${base} (${i})`;
+      if (!taken.has(candidate.toLowerCase())) return candidate;
+    }
+    return `${base} ${Date.now()}`;
   }
 
   /* ---------- Hardware health ---------- */

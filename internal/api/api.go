@@ -93,6 +93,8 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "GET /api/checks/{id}/results", s.handleCheckResults)
 	s.route(mux, "GET /api/checks/{id}/state", s.handleCheckState)
 
+	s.route(mux, "POST /api/snmp/walk", s.handleSNMPWalk)
+
 	s.route(mux, "GET /api/history", s.handleHistory)
 	s.route(mux, "GET /api/history/multi", s.handleHistoryMulti)
 

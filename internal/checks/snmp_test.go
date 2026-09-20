@@ -25,13 +25,21 @@ const (
 	berInteger     byte = 0x02
 	berOctetString byte = 0x04
 	berNull        byte = 0x05
+	berObjectID    byte = 0x06
 	berSequence    byte = 0x30
 	berCounter32   byte = 0x41
 	berGauge32     byte = 0x42
 	berTimeTicks   byte = 0x43
 	berCounter64   byte = 0x46
+	berGetRequest  byte = 0xa0
+	berGetNext     byte = 0xa1
 	berGetResponse byte = 0xa2
+	berGetBulk     byte = 0xa5
 )
+
+// endOfMibView is how a device says "there is nothing after that", which is
+// what stops a walk.
+var endOfMibView = []byte{0x82, 0x00}
 
 // berLength writes a DER length: the short form below 128, the long form
 // above it.
@@ -106,6 +114,63 @@ func readTLV(b []byte) (tag byte, body, rest []byte, err error) {
 	return tag, b[cursor : cursor+n], b[cursor+n:], nil
 }
 
+// encodeOID writes an object identifier: the first two arcs share a byte, and
+// every arc after that is base-128 with the top bit set on all but the last
+// byte. The walk tests need it because a GetNext answers about an OID the
+// request did not name, so there is nothing to echo back.
+func encodeOID(dotted string) []byte {
+	parts := strings.Split(strings.TrimPrefix(strings.TrimSpace(dotted), "."), ".")
+	arcs := make([]uint64, 0, len(parts))
+	for _, p := range parts {
+		var v uint64
+		fmt.Sscanf(p, "%d", &v)
+		arcs = append(arcs, v)
+	}
+	if len(arcs) < 2 {
+		return berTLV(berObjectID, nil)
+	}
+	body := []byte{byte(arcs[0]*40 + arcs[1])}
+	for _, arc := range arcs[2:] {
+		var chunk []byte
+		for {
+			chunk = append([]byte{byte(arc & 0x7f)}, chunk...)
+			arc >>= 7
+			if arc == 0 {
+				break
+			}
+		}
+		for i := 0; i < len(chunk)-1; i++ {
+			chunk[i] |= 0x80
+		}
+		body = append(body, chunk...)
+	}
+	return berTLV(berObjectID, body)
+}
+
+// compareOIDs orders two dotted OIDs the way SNMP does: arc by arc, and a
+// prefix sorts before anything that extends it.
+func compareOIDs(a, b string) int {
+	split := func(s string) []uint64 {
+		out := []uint64{}
+		for _, p := range strings.Split(strings.TrimPrefix(strings.TrimSpace(s), "."), ".") {
+			var v uint64
+			fmt.Sscanf(p, "%d", &v)
+			out = append(out, v)
+		}
+		return out
+	}
+	x, y := split(a), split(b)
+	for i := 0; i < len(x) && i < len(y); i++ {
+		if x[i] != y[i] {
+			if x[i] < y[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	return len(x) - len(y)
+}
+
 // decodeOID turns an encoded object identifier back into dotted form, which is
 // how the fake agent looks a value up.
 func decodeOID(body []byte) string {
@@ -161,6 +226,26 @@ func (a *fakeAgent) set(oid string, value []byte) {
 	a.mu.Unlock()
 }
 
+// next returns the first OID the agent knows that sorts after `after`, with
+// its value — the whole of what a walk needs from a device.
+func (a *fakeAgent) next(after string) (string, []byte) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	best := ""
+	for oid := range a.values {
+		if compareOIDs(oid, after) <= 0 {
+			continue
+		}
+		if best == "" || compareOIDs(oid, best) < 0 {
+			best = oid
+		}
+	}
+	if best == "" {
+		return "", nil
+	}
+	return best, a.values[best]
+}
+
 func (a *fakeAgent) setSilent(silent bool) {
 	a.mu.Lock()
 	a.silent = silent
@@ -206,7 +291,7 @@ func (a *fakeAgent) respond(pkt []byte) ([]byte, error) {
 		return nil, err
 	}
 	_ = community
-	_, pdu, _, err := readTLV(rest) // the request PDU
+	pduTag, pdu, _, err := readTLV(rest) // the request PDU
 	if err != nil {
 		return nil, err
 	}
@@ -214,13 +299,25 @@ func (a *fakeAgent) respond(pkt []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, _, rest, err = readTLV(rest) // error-status
+	_, _, rest, err = readTLV(rest) // error-status, or non-repeaters on a bulk
 	if err != nil {
 		return nil, err
 	}
-	_, _, rest, err = readTLV(rest) // error-index
+	// error-index, or max-repetitions on a GetBulk: how many successors the
+	// walk wants in this answer.
+	_, repsBody, rest, err := readTLV(rest)
 	if err != nil {
 		return nil, err
+	}
+	reps := 1
+	if pduTag == berGetBulk {
+		reps = 0
+		for _, c := range repsBody {
+			reps = reps<<8 | int(c)
+		}
+		if reps < 1 {
+			reps = 1
+		}
 	}
 	_, varbinds, _, err := readTLV(rest)
 	if err != nil {
@@ -238,9 +335,25 @@ func (a *fakeAgent) respond(pkt []byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+		asked := decodeOID(oidBody)
+		if pduTag == berGetNext || pduTag == berGetBulk {
+			// A walk asks for what comes *after* an OID, which is why the
+			// answer has to carry an OID of its own rather than echo one.
+			cursor := asked
+			for i := 0; i < reps; i++ {
+				found, value := a.next(cursor)
+				if found == "" {
+					out = append(out, berTLV(berSequence, append(encodeOID(cursor), endOfMibView...))...)
+					break
+				}
+				out = append(out, berTLV(berSequence, append(encodeOID(found), value...))...)
+				cursor = found
+			}
+			continue
+		}
 		encodedOID := berTLV(tag, oidBody)
 		a.mu.Lock()
-		value, ok := a.values[decodeOID(oidBody)]
+		value, ok := a.values[asked]
 		a.mu.Unlock()
 		if !ok {
 			// 0x80 is noSuchObject: the answer a device gives for an OID it
@@ -516,6 +629,105 @@ func TestValidateSNMP(t *testing.T) {
 				t.Fatalf("err = %v, want it to mention %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestWalkListsWhatTheDeviceKnows(t *testing.T) {
+	agent := newFakeAgent(t)
+	agent.set("1.3.6.1.2.1.1.1.0", berTLV(berOctetString, []byte("MikroTik CRS310, RouterOS 7.14")))
+	agent.set("1.3.6.1.2.1.1.3.0", berUnsigned(berTimeTicks, 360000))
+	agent.set("1.3.6.1.2.1.2.2.1.2.1", berTLV(berOctetString, []byte("ether1-wan")))
+	agent.set("1.3.6.1.2.1.2.2.1.8.1", berSigned(berInteger, 1))
+	agent.set("1.3.6.1.2.1.2.2.1.10.1", berUnsigned(berCounter32, 987654))
+	// Outside the mib-2 subtree the walk asks for, so it must not appear.
+	agent.set("1.3.6.1.4.1.14988.1.1.3.10.0", berSigned(berInteger, 42))
+
+	host, port := agent.hostPort()
+	rows, truncated, err := Walk(context.Background(), WalkRequest{
+		Host:   host,
+		Config: model.CheckConfig{SNMPVersion: "2c", SNMPPort: port, SNMPCommunity: "public"},
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if truncated {
+		t.Errorf("a five-row device should not be truncated")
+	}
+	byOID := map[string]WalkRow{}
+	for _, r := range rows {
+		byOID[r.OID] = r
+	}
+	if len(rows) != 5 {
+		t.Fatalf("rows = %d (%v), want the five under 1.3.6.1.2.1", len(rows), byOID)
+	}
+	if _, ok := byOID["1.3.6.1.4.1.14988.1.1.3.10.0"]; ok {
+		t.Error("the walk left its subtree")
+	}
+
+	// The type a device answers with is what the kind is guessed from, and
+	// the well-known OIDs arrive already named the way a preset would name
+	// them — including the interface index, which is the whole point.
+	octets := byOID["1.3.6.1.2.1.2.2.1.10.1"]
+	if octets.Kind != "counter" || octets.Type != "Counter32" {
+		t.Errorf("octets row = %+v, want a Counter32 counter", octets)
+	}
+	if octets.Name != "Port 1 in" {
+		t.Errorf("octets name = %q, want the indexed name", octets.Name)
+	}
+	if got := byOID["1.3.6.1.2.1.1.1.0"]; got.Name != "Description" || got.Kind != "gauge" || !strings.Contains(got.Value, "RouterOS") {
+		t.Errorf("sysDescr row = %+v", got)
+	}
+	if got := byOID["1.3.6.1.2.1.2.2.1.8.1"]; got.Name != "Port 1 link" {
+		t.Errorf("ifOperStatus name = %q", got.Name)
+	}
+}
+
+func TestWalkStopsAtTheRowLimit(t *testing.T) {
+	agent := newFakeAgent(t)
+	for i := 1; i <= 12; i++ {
+		agent.set(fmt.Sprintf("1.3.6.1.2.1.2.2.1.10.%d", i), berUnsigned(berCounter32, uint64(i*1000)))
+	}
+	host, port := agent.hostPort()
+	rows, truncated, err := Walk(context.Background(), WalkRequest{
+		Host:   host,
+		Config: model.CheckConfig{SNMPVersion: "2c", SNMPPort: port, SNMPCommunity: "public"},
+		Max:    5,
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if len(rows) != 5 || !truncated {
+		t.Fatalf("rows = %d truncated = %v, want 5 and a warning that there is more", len(rows), truncated)
+	}
+}
+
+func TestWalkRefusesAnOIDThatIsNotOne(t *testing.T) {
+	agent := newFakeAgent(t)
+	host, port := agent.hostPort()
+	_, _, err := Walk(context.Background(), WalkRequest{
+		Host:   host,
+		Config: model.CheckConfig{SNMPVersion: "2c", SNMPPort: port},
+		Root:   "interfaces",
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid OID") {
+		t.Fatalf("err = %v, want a complaint about the subtree", err)
+	}
+}
+
+func TestNameForOID(t *testing.T) {
+	cases := map[string]string{
+		"1.3.6.1.2.1.1.3.0":         "Uptime",
+		".1.3.6.1.2.1.1.5.0":        "Device name",
+		"1.3.6.1.2.1.2.2.1.8.7":     "Port 7 link",
+		"1.3.6.1.2.1.31.1.1.1.6.12": "Port 12 in",
+		"1.3.6.1.2.1.25.3.3.1.2.2":  "Processor 2",
+		"1.3.6.1.2.1.1.3":           "", // the column, not the reading
+		"1.3.6.1.4.1.9.9.13.1.3.1":  "", // a vendor MIB: named by nobody here
+	}
+	for oid, want := range cases {
+		if got := nameForOID(oid); got != want {
+			t.Errorf("nameForOID(%q) = %q, want %q", oid, got, want)
+		}
 	}
 }
 
