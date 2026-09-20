@@ -9,7 +9,7 @@
 // actually uses for --accent-hover), and checks a declared table of
 // foreground/background pairs against the WCAG 2.x contrast ratio each pair
 // needs to clear. No dependencies — node:test and node:assert only, so it
-// runs as `node --test web/tests/contrast.test.mjs` with nothing installed.
+// runs as `node --test tests/web/contrast.test.mjs` with nothing installed.
 //
 // The table is deliberately explicit about which threshold applies to which
 // pair rather than blanket-applying 4.5:1: a few tokens (the zero-count
@@ -24,7 +24,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-const CSS_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'app.css');
+const CSS_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'app.css');
 const css = readFileSync(CSS_PATH, 'utf8');
 
 /* ---------- pull the two :root blocks out of the sheet ---------- */
