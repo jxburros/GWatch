@@ -77,15 +77,28 @@ old access password and has no accounts. `403` means the credential is valid but
 entitled, and the message says why — for example `This API key is read-only.` or
 `This action needs an administrator account (you are signed in as viewer "pat").`
 
-**Cross-site writes.** A `local` principal is an administrator without presenting
-anything, so a non-GET request from that principal carrying an `Origin` header naming a
-different host is refused with 403. A request with no `Origin` (curl, a script) is
-unaffected, and so is every other kind of principal — the session cookie is
-`SameSite=Lax` and is not sent on a cross-site write in the first place.
+**Cross-site writes.** The `local` and `password` principals are both granted by
+something the browser supplies on its own — nothing at all on loopback, and cached basic
+auth credentials for the access password — so a non-GET request from either one carrying
+an `Origin` header that names a different host is refused with 403. A request with no
+`Origin` (curl, a script) is unaffected, and so are `user` and `apikey` — the session
+cookie is `SameSite=Lax` and is not sent on a cross-site write in the first place, and a
+key is not something a cross-site page can obtain.
 
-**Rate limits.** Failed credentials (sign-in, API key, access password) are limited to
-10 per minute per client IP; API-key requests from off this machine are limited to 300
-per minute per client IP. Both answer `429` with `Retry-After` in seconds.
+**Request bodies.** A request that carries a body must declare
+`Content-Type: application/json` (parameters such as `; charset=utf-8` are fine, and a
+`…+json` suffix is accepted). `text/plain`, `application/x-www-form-urlencoded` and
+`multipart/form-data` are refused with `415` — those are the content types a browser will
+send cross-origin without a preflight, so insisting on JSON puts every write behind one.
+A malformed JSON document is still a `400`. The multipart upload at
+`POST /api/backups/restore` is the one exception, and takes a file rather than a body.
+
+**Rate limits.** Failed credentials (sign-in, API key, access password, agent token and
+custom-endpoint token) are limited to 10 per minute per client IP; API-key requests from
+off this machine are limited to 300 per minute per client IP. Both answer `429` with
+`Retry-After` in seconds. A `/hook/` call that presents the right token gives its budget
+back, so an endpoint called on a schedule is never throttled by its own traffic; an
+unknown slug still answers `404`, but it is charged for, so slugs cannot be enumerated.
 
 **Public routes**, reachable without any credential: `GET /api/health` (liveness only —
 `{"serviceRunning","schedulerRunning","now"}` — until the caller identifies itself),
@@ -397,7 +410,7 @@ See [`docs/RECIPES.md`](RECIPES.md) for copy-pasteable trigger/endpoint recipes 
 - `GET /api/endpoints` → `[Endpoint]`. `POST /api/endpoints`, `PUT /api/endpoints/{id}`, `DELETE /api/endpoints/{id}`, `POST /api/endpoints/{id}/run`.
   An endpoint: `{ name, slug, description, enabled, method: "ANY|GET|POST|PUT|DELETE", token, allowNoToken, action }`.
   A token is **required**: saving with an empty `token` is rejected with 400 unless `allowNoToken` is `true`, the explicit acknowledgement that anyone who can reach the port may run the action. A token must be at least 8 characters, and supplying one forces `allowNoToken` back to `false`.
-- `ANY /hook/{slug}` → runs the endpoint's action and answers `ActionResult` (200, or 502 when the action failed). The token is passed as `?token=`, `X-GWatch-Token` or `Authorization: Bearer`; a wrong token is 401. An endpoint with no stored token is refused with 401 unless `allowNoToken` is set. `/hook/` URLs are not covered by the LAN access password, so the token is their only protection. The request body and query parameters are available to the action as `{{body}}` and `{{query.<name>}}`.
+- `ANY /hook/{slug}` → runs the endpoint's action and answers `ActionResult` (200, or 502 when the action failed). The token is passed as `?token=`, `X-GWatch-Token` or `Authorization: Bearer`; a wrong token is 401, and 429 with `Retry-After` once the per-IP failure budget runs out. An endpoint with no stored token is refused with 401 unless `allowNoToken` is set. `/hook/` URLs are not covered by the LAN access password, so the token is their only protection. The request body and query parameters are available to the action as `{{body}}` and `{{query.<name>}}`.
 
 An `Action` is `{ "type": "http|slack|teams|ntfy|pushover|git|script|run_node", "timeoutSeconds", ... }`:
 | type | fields |

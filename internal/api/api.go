@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"mime"
 	"net"
 	"net/http"
 	"path"
@@ -286,7 +287,59 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 	}
 }
 
+// decodeError is a body that could not be read, carrying the status it should
+// be answered with. A malformed document is a 400 as it always was; a body in
+// some other format entirely is a 415, and only the error knows which of the
+// two happened. Handlers pass it to writeDecodeError rather than deciding.
+type decodeError struct {
+	status int
+	msg    string
+}
+
+func (e *decodeError) Error() string { return e.msg }
+
+// writeDecodeError answers a request whose body could not be read.
+func writeDecodeError(w http.ResponseWriter, err error) {
+	var de *decodeError
+	if errors.As(err, &de) {
+		writeError(w, de.status, de.msg)
+		return
+	}
+	writeError(w, http.StatusBadRequest, err.Error())
+}
+
+// requireJSONBody refuses a body that is not announced as JSON.
+//
+// Without this, a form post from another website — which a browser will send
+// cross-origin with no preflight, because text/plain, form-urlencoded and
+// multipart are "simple" content types — is indistinguishable from the UI's
+// own fetch() once it reaches a handler. Demanding a JSON content type puts
+// every write behind a preflight the other site cannot pass. An empty body
+// with no content type is still allowed: a handler that treats a missing body
+// as "nothing to change" is not being asked to parse anything.
+func requireJSONBody(r *http.Request) error {
+	ct := strings.TrimSpace(r.Header.Get("Content-Type"))
+	if ct == "" {
+		if r.ContentLength == 0 {
+			return nil
+		}
+		return &decodeError{http.StatusUnsupportedMediaType, "this endpoint needs a Content-Type of application/json"}
+	}
+	mediaType, _, err := mime.ParseMediaType(ct)
+	if err != nil {
+		return &decodeError{http.StatusUnsupportedMediaType, "unreadable Content-Type; this endpoint needs application/json"}
+	}
+	mediaType = strings.ToLower(mediaType)
+	if mediaType == "application/json" || strings.HasSuffix(mediaType, "+json") {
+		return nil
+	}
+	return &decodeError{http.StatusUnsupportedMediaType, fmt.Sprintf("this endpoint needs a Content-Type of application/json, not %s", mediaType)}
+}
+
 func decodeJSON(r *http.Request, v any) error {
+	if err := requireJSONBody(r); err != nil {
+		return err
+	}
 	dec := json.NewDecoder(io.LimitReader(r.Body, 4<<20))
 	if err := dec.Decode(v); err != nil {
 		return fmt.Errorf("invalid JSON body: %w", err)
@@ -298,6 +351,11 @@ func decodeJSON(r *http.Request, v any) error {
 // and for every check when the field is omitted (JSON would otherwise make
 // them false).
 func decodeNode(r *http.Request) (model.Node, error) {
+	// This one reads the body itself rather than going through decodeJSON, so
+	// it has to insist on the content type itself too.
+	if err := requireJSONBody(r); err != nil {
+		return model.Node{}, err
+	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
 	if err != nil {
 		return model.Node{}, fmt.Errorf("invalid JSON body: %w", err)
@@ -611,7 +669,7 @@ func (s *Server) normalizeNode(n *model.Node) error {
 func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 	n, err := decodeNode(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	n.ID = 0
@@ -670,7 +728,7 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 	}
 	n, err := decodeNode(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	n.ID = id
@@ -780,7 +838,7 @@ func (s *Server) handleEnableNode(w http.ResponseWriter, r *http.Request) {
 		Enabled bool `json:"enabled"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	if err := s.Store.SetNodeEnabled(r.Context(), id, body.Enabled); err != nil {
@@ -847,7 +905,7 @@ func (s *Server) handleSilenceNode(w http.ResponseWriter, r *http.Request) {
 		Minutes int `json:"minutes"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	n, err := s.Store.GetNode(r.Context(), id)
@@ -906,7 +964,7 @@ func (s *Server) handleTestCheck(w http.ResponseWriter, r *http.Request) {
 		NodeHost string      `json:"nodeHost"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	settings := s.Engine.Settings()
@@ -955,7 +1013,7 @@ func (s *Server) handleEnableCheck(w http.ResponseWriter, r *http.Request) {
 		Enabled bool `json:"enabled"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	if err := s.Store.SetCheckEnabled(r.Context(), id, body.Enabled); err != nil {
@@ -982,7 +1040,7 @@ func (s *Server) handleSilenceCheck(w http.ResponseWriter, r *http.Request) {
 		Minutes int `json:"minutes"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	st, err := s.Engine.Silence(r.Context(), id, time.Duration(body.Minutes)*time.Minute)
@@ -1114,7 +1172,7 @@ func (s *Server) handleNote(w http.ResponseWriter, r *http.Request) {
 		Text   string `json:"text"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	body.Text = strings.TrimSpace(body.Text)

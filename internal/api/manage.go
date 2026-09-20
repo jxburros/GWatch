@@ -46,7 +46,7 @@ func (s *Server) handleListMaintenance(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSaveMaintenance(w http.ResponseWriter, r *http.Request) {
 	var m model.MaintenanceWindow
 	if err := decodeJSON(r, &m); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	if r.Method == http.MethodPut {
@@ -154,7 +154,7 @@ func (s *Server) handleGetDashboard(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSaveDashboard(w http.ResponseWriter, r *http.Request) {
 	var d model.Dashboard
 	if err := decodeJSON(r, &d); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	if r.Method == http.MethodPut {
@@ -248,7 +248,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	current := s.Engine.Settings()
 	var st model.Settings
 	if err := decodeJSON(r, &st); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	if st.Alerts.SMTP.Password == passwordMask {
@@ -464,7 +464,7 @@ func (s *Server) handleTestEmail(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.ContentLength != 0 {
 		if err := decodeJSON(r, &body); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeDecodeError(w, err)
 			return
 		}
 	}
@@ -508,7 +508,7 @@ func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
 		IncludeHistory bool   `json:"includeHistory"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	if strings.TrimSpace(body.Password) == "" {
@@ -599,7 +599,7 @@ func (s *Server) handleRestoreExisting(w http.ResponseWriter, r *http.Request) {
 		IncludeHistory bool   `json:"includeHistory"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	p, ok := s.backupPath(body.FileName)
