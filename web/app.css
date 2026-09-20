@@ -286,6 +286,15 @@ html.rail-pinned .rail, body.rail-pinned .rail { box-shadow: none; }
      coming to life rather than text popping in. */
   transition-delay: calc(40ms + var(--i, 0) * 16ms), calc(40ms + var(--i, 0) * 16ms);
 }
+/* The stagger index lives here rather than in a style attribute on each link,
+   so the Content-Security-Policy can refuse inline styles outright. */
+.nav-link[data-nav="dashboard"] { --i: 1; }
+.nav-link[data-nav="nodes"] { --i: 2; }
+.nav-link[data-nav="charts"] { --i: 3; }
+.nav-link[data-nav="incidents"] { --i: 4; }
+.nav-link[data-nav="audit"] { --i: 5; }
+.nav-link[data-nav="help"] { --i: 6; }
+.nav-link[data-nav="wallboard"] { --i: 8; }
 .brand { display: flex; align-items: center; gap: 0.875rem; height: var(--topbar-h); padding: 0 0.875rem; color: var(--text); font-weight: 700; font-size: 0.9375rem; letter-spacing: 0.02em; border-bottom: 1px solid var(--line); background: var(--rail-active-bg); flex: none; position: relative; }
 .brand:hover { text-decoration: none; background: var(--elev); }
 .rail:hover .brand, .rail:has(:focus-visible) .brand, html.rail-pinned .rail .brand, body.rail-pinned .rail .brand { background: var(--rail-active-bg); }

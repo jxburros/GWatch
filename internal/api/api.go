@@ -227,12 +227,10 @@ func isLoopbackRemote(addr string) bool {
 //
 //   - img-src also allows data: for the one inline SVG in app.css (the select
 //     arrow) and blob: for a chart exported as a PNG.
-//   - style-src-attr allows the style="--i:N" attributes the sidebar uses to
-//     stagger its transitions. The markup carries them, and a style attribute
-//     needs 'unsafe-inline' whatever its content. Splitting it out this way
-//     keeps an injected <style> element refused, which is the case that
-//     matters. A browser that does not know style-src-attr falls back to
-//     style-src and loses the stagger; nothing else depends on it.
+//   - style-src is plain 'self': the markup carries no style attributes (the
+//     sidebar's stagger index moved into app.css for exactly this reason),
+//     and the interface sets styles through the CSSOM, which the policy does
+//     not govern.
 //   - script-src needs no hash or nonce: what used to be inline in index.html
 //     now lives in boot.js and entry.js.
 //
@@ -240,7 +238,6 @@ func isLoopbackRemote(addr string) bool {
 const contentSecurityPolicy = "default-src 'self'; " +
 	"script-src 'self'; " +
 	"style-src 'self'; " +
-	"style-src-attr 'unsafe-inline'; " +
 	"img-src 'self' data: blob:; " +
 	"font-src 'self'; " +
 	"connect-src 'self'; " +
