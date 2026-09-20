@@ -249,6 +249,69 @@ func (s *Store) GroupCounts(ctx context.Context) (groups map[string]int, tags ma
 	return groups, tags, nil
 }
 
+// ---- bulk editing ----
+
+// BulkResult counts what a BulkUpdate wrote.
+type BulkResult struct {
+	Nodes  int `json:"nodes"`
+	Checks int `json:"checks"`
+}
+
+// BulkUpdate rewrites a set of node rows and a set of check rows in one
+// transaction. The caller hands over whole records it has already merged and
+// validated — the store's job here is atomicity, not interpretation.
+//
+// All or nothing is the point. A bulk edit that half applied would leave the
+// person guessing which of the thirty nodes they just changed actually took
+// the new interval, and there is nothing on the screen that could tell them.
+// So a row that has gone missing since the caller read it fails the whole
+// batch, and nothing is written.
+//
+// Only a node's own columns are touched and its Checks field is ignored, so a
+// bulk edit can never add, rename or remove a check as a side effect.
+func (s *Store) BulkUpdate(ctx context.Context, nodes []model.Node, checks []model.Check) (BulkResult, error) {
+	if len(nodes) == 0 && len(checks) == 0 {
+		return BulkResult{}, nil
+	}
+	now := time.Now()
+	res := BulkResult{}
+	err := s.WriteTx(ctx, func(tx *sql.Tx) error {
+		res = BulkResult{}
+		for _, n := range nodes {
+			n.SyncGroups()
+			if n.Tags == nil {
+				n.Tags = []string{}
+			}
+			if n.Importance == "" {
+				n.Importance = model.ImportanceNormal
+			}
+			if n.DependsOnNode != nil && *n.DependsOnNode == n.ID {
+				n.DependsOnNode = nil
+			}
+			out, err := tx.ExecContext(ctx, `UPDATE nodes SET group_name=?, "groups"=?, tags=?, importance=?, enabled=?, depends_on_node_id=?, updated_at=? WHERE id=?`,
+				n.Group, jsonString(n.Groups), jsonString(n.Tags), string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), fmtTime(now), n.ID)
+			if err != nil {
+				return err
+			}
+			if affected, _ := out.RowsAffected(); affected == 0 {
+				return fmt.Errorf("node %d: %w", n.ID, ErrNotFound)
+			}
+			res.Nodes++
+		}
+		for _, c := range checks {
+			if _, err := updateCheck(ctx, tx, c); err != nil {
+				return fmt.Errorf("check %d: %w", c.ID, err)
+			}
+			res.Checks++
+		}
+		return nil
+	})
+	if err != nil {
+		return BulkResult{}, err
+	}
+	return res, nil
+}
+
 // ---- checks ----
 
 const checkCols = `id, node_id, type, name, enabled, interval_seconds, timeout_seconds, retries, failure_threshold, config, alerts, sort_order, created_at, updated_at`
@@ -299,10 +362,16 @@ func updateCheck(ctx context.Context, tx *sql.Tx, c model.Check) (model.Check, e
 	if c.Alerts != nil {
 		alerts = jsonString(c.Alerts)
 	}
-	_, err := tx.ExecContext(ctx, `UPDATE checks SET node_id=?, type=?, name=?, enabled=?, interval_seconds=?, timeout_seconds=?, retries=?, failure_threshold=?, config=?, alerts=?, sort_order=?, updated_at=? WHERE id=?`,
+	res, err := tx.ExecContext(ctx, `UPDATE checks SET node_id=?, type=?, name=?, enabled=?, interval_seconds=?, timeout_seconds=?, retries=?, failure_threshold=?, config=?, alerts=?, sort_order=?, updated_at=? WHERE id=?`,
 		c.NodeID, string(c.Type), c.Name, boolInt(c.Enabled), c.IntervalSeconds, c.TimeoutSeconds, c.Retries, c.FailureThreshold, jsonString(c.Config), alerts, c.SortOrder, fmtTime(now), c.ID)
 	if err != nil {
 		return c, err
+	}
+	// A caller that names a check which is no longer there gets told so rather
+	// than a silent no-op; UpdateNode only ever updates ids it has just read
+	// back, so this is the bulk path speaking.
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		return c, ErrNotFound
 	}
 	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO check_state(check_id, status) VALUES (?, 'unknown')`, c.ID)
 	return c, err

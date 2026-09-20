@@ -2,11 +2,12 @@
 
 import { api } from '../api.js';
 import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, openModal, emptyState, skeleton, CHECK_TYPES, checkTypeLabel, uid, busy } from '../components.js';
-import { interval as fmtInterval, nodeGroups } from '../fmt.js';
+import { nodeGroups } from '../fmt.js';
 import { resultInspector } from './inspector.js';
-
-const INTERVALS = [30, 60, 120, 300, 600, 900, 1800, 3600];
-const TRI = [{ value: '', label: 'Use global default' }, { value: 'true', label: 'Yes' }, { value: 'false', label: 'No' }];
+// The interval choices, the three states of an alert override, the importance
+// levels and the ping methods are shared with the bulk editor, so both screens
+// offer the same words and the same values. See web/views/node-fields.js.
+import { INTERVALS, intervalOptions, TRI, IMPORTANCE_OPTIONS, PING_METHOD_OPTIONS, ALERT_OVERRIDE_FIELDS } from './node-fields.js';
 
 function defaultCheck(type, settings) {
   const g = settings?.general || {};
@@ -108,7 +109,7 @@ export async function mount(root, ctx) {
   // editor as tags, suggesting the groups already in use.
   const groupsInput = chipInput({ values: nodeGroups(d), placeholder: 'Add a group and press Enter', suggestions: state.groups.groups.map((g) => g.name), onChange: (v) => { d.groups = v; } });
   const tagsInput = chipInput({ values: d.tags || [], placeholder: 'Add a tag and press Enter', suggestions: state.groups.tags.map((t) => t.name), onChange: (v) => { d.tags = v; } });
-  const importanceSel = selectInput({ options: [{ value: 'low', label: 'Low' }, { value: 'normal', label: 'Normal' }, { value: 'high', label: 'High' }, { value: 'critical', label: 'Critical' }], value: d.importance || 'normal', onchange: () => { d.importance = importanceSel.value; } });
+  const importanceSel = selectInput({ options: IMPORTANCE_OPTIONS, value: d.importance || 'normal', onchange: () => { d.importance = importanceSel.value; } });
   const notesInput = textarea({ value: d.notes || '', placeholder: 'Anything useful: where it lives, how to reboot it, who owns it…', oninput: () => { d.notes = notesInput.value; } });
   const enabledToggle = toggle({ label: 'Enabled — run its checks on schedule', checked: d.enabled !== false, onChange: (v) => { d.enabled = v; } });
   const dependsSel = selectInput({ options: [{ value: '', label: 'None' }, ...state.nodes.filter((n) => String(n.id) !== String(d.id)).map((n) => ({ value: n.id, label: `${n.name} (${n.host})` }))], value: d.dependsOnNodeId ?? '', onchange: () => { d.dependsOnNodeId = dependsSel.value ? Number(dependsSel.value) : null; } });
@@ -167,7 +168,7 @@ export async function mount(root, ctx) {
     // Schedule row
     const custom = !INTERVALS.includes(Number(c.intervalSeconds));
     const customIn = numberInput({ value: c.intervalSeconds, min: state.settings?.general?.minIntervalSeconds || 10, step: 1, 'aria-label': 'Custom interval in seconds', hidden: !custom, oninput: () => { c.intervalSeconds = Number(customIn.value); } });
-    const intervalSel = selectInput({ options: [...INTERVALS.map((s) => ({ value: s, label: `Every ${fmtInterval(s)}` })), { value: 'custom', label: 'Custom…' }], value: custom ? 'custom' : c.intervalSeconds, onchange: () => { if (intervalSel.value === 'custom') { customIn.hidden = false; customIn.focus(); } else { customIn.hidden = true; c.intervalSeconds = Number(intervalSel.value); } } });
+    const intervalSel = selectInput({ options: [...intervalOptions(), { value: 'custom', label: 'Custom…' }], value: custom ? 'custom' : c.intervalSeconds, onchange: () => { if (intervalSel.value === 'custom') { customIn.hidden = false; customIn.focus(); } else { customIn.hidden = true; c.intervalSeconds = Number(intervalSel.value); } } });
     const timeoutIn = numberInput({ value: c.timeoutSeconds, min: 1, max: 120, oninput: () => { c.timeoutSeconds = Number(timeoutIn.value); } });
     const retriesIn = numberInput({ value: c.retries ?? 0, min: 0, max: 10, oninput: () => { c.retries = Number(retriesIn.value); } });
     const thresholdIn = numberInput({ value: c.failureThreshold || '', min: 0, max: 50, placeholder: `Default (${state.settings?.alerts?.failureThreshold || 2})`, oninput: () => { c.failureThreshold = Number(thresholdIn.value) || 0; } });
@@ -278,7 +279,7 @@ export async function mount(root, ctx) {
         // An empty value means "whatever Settings › General says", which is
         // what cleanCheck drops from the config before it is saved.
         const method = selectInput({
-          options: [{ value: '', label: 'Use global setting' }, { value: 'builtin', label: 'Built-in' }, { value: 'system', label: 'System ping' }],
+          options: PING_METHOD_OPTIONS,
           value: cfg.pingMethod || '',
           onchange: () => { cfg.pingMethod = method.value; },
         });
@@ -491,12 +492,14 @@ export async function mount(root, ctx) {
     const hasOverride = a.enabled != null || a.cooldownMinutes != null || a.notifyRecovery != null || a.notifyWarnings != null || a.recipients?.length;
     return h('details', { class: 'collapsible', open: !!hasOverride, style: { marginTop: '12px' } },
       h('summary', null, icon('chevronRight'), 'Alert overrides for this check', hasOverride ? h('span', { class: 'tag' }, 'customised') : null),
+      // The fields, their labels and their order come from the shared table,
+      // so the bulk editor's alert rows and this card cannot disagree.
       h('div', { class: 'form-grid-4', style: { paddingTop: '8px' } },
-        field({ label: 'Send alerts', input: tri('enabled') }),
-        field({ label: 'Cooldown', input: h('div', { class: 'input-with-unit' }, cooldown, h('span', { class: 'unit' }, 'min')) }),
-        field({ label: 'Notify on recovery', input: tri('notifyRecovery') }),
-        field({ label: 'Notify on warnings', input: tri('notifyWarnings') }),
-        field({ label: 'Recipients', input: recipients, help: 'Replaces the global recipients for this check when set.', cls: 'span-2' }),
+        ...ALERT_OVERRIDE_FIELDS.map((f) => {
+          if (f.kind === 'tri-state') return field({ label: f.label, input: tri(f.key) });
+          if (f.kind === 'chips') return field({ label: f.label, input: recipients, help: f.help, cls: 'span-2' });
+          return field({ label: f.label, input: h('div', { class: 'input-with-unit' }, cooldown, h('span', { class: 'unit' }, f.unit)) });
+        }),
       ));
   }
 

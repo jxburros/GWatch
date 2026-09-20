@@ -603,6 +603,90 @@
     addEvent('config_changed', { nodeId: n.id, nodeName: n.name, title: 'Node updated', detail: `${n.checks.length} checks` });
     return nodeOut(n, { withResults: true });
   });
+  // Bulk edit. It mirrors internal/api/bulk.go closely enough that the screen
+  // behaves the same here as against the service: the same selection rules,
+  // the same whitelist, the same shape of answer.
+  const BULK_CONFIG_KEYS = ['certWarnDays', 'latencyWarnMs', 'packetLossWarnPct', 'pingMethod'];
+  on('PATCH', /^\/api\/nodes\/bulk$/, (m, body) => {
+    const nodeIds = body?.nodeIds || [];
+    const checkIds = body?.checkIds || [];
+    if (!nodeIds.length && !checkIds.length) throw err(400, 'choose at least one node or check to change');
+    const np = body?.node, cp = body?.check;
+    const hasNode = np && Object.keys(np).length, hasCheck = cp && Object.keys(cp).length;
+    if (!hasNode && !hasCheck) throw err(400, 'choose at least one setting to change');
+    if (hasCheck) for (const k of Object.keys(cp.config || {})) {
+      if (!BULK_CONFIG_KEYS.includes(k)) throw err(400, `unknown config key(s) "${k}"; a bulk edit may set ${BULK_CONFIG_KEYS.map((x) => `"${x}"`).join(', ')}`);
+    }
+    const types = body?.checkFilter?.types || [];
+    const wanted = new Set(types);
+    const picked = [];
+    const seen = new Set();
+    const take = (c) => { if (seen.has(c.id) || (wanted.size && !wanted.has(c.type))) return; seen.add(c.id); picked.push(c); };
+    for (const id of checkIds) { const f = findCheck(id); if (!f) throw err(404, `check ${id} no longer exists`); take(f.c); }
+    const pickedNodes = [];
+    for (const id of nodeIds) {
+      const n = findNode(id); if (!n) throw err(400, `node ${id} no longer exists`);
+      if (!pickedNodes.includes(n)) pickedNodes.push(n);
+      for (const c of n.checks) take(c);
+    }
+    if (hasNode && !pickedNodes.length) throw err(400, 'the node settings have no nodes to apply to: select some nodes as well as checks');
+    if (hasCheck && !picked.length) throw err(400, wanted.size ? 'nothing to change: the selection holds no checks of the chosen type(s)' : 'nothing to change: the selected nodes have no checks');
+    const changes = [];
+    if (hasNode) {
+      const fold = (list, drop) => list.filter((x) => !(drop || []).some((d) => String(d).toLowerCase() === String(x).toLowerCase()));
+      const dedupe = (list) => { const out = [], seenL = new Set(); for (const v of list) { const k = String(v).trim().toLowerCase(); if (!k || seenL.has(k)) continue; seenL.add(k); out.push(String(v).trim()); } return out; };
+      for (const n of pickedNodes) {
+        let groups = np.groups ? [...np.groups] : groupsOf(n);
+        groups = dedupe(fold(groups, np.removeGroups).concat(np.addGroups || [])).slice(0, 16);
+        n.groups = groups; n.group = groups[0] || '';
+        let tags = np.tags ? [...np.tags] : (n.tags || []);
+        n.tags = dedupe(fold(tags, np.removeTags).concat(np.addTags || []));
+        if (np.importance != null) n.importance = np.importance;
+        if (np.enabled != null) n.enabled = !!np.enabled;
+        if ('dependsOnNodeId' in np) n.dependsOnNodeId = np.dependsOnNodeId || null;
+        n.updatedAt = iso(Date.now());
+      }
+      if (np.groups) changes.push(np.groups.length ? `groups → ${np.groups.join(', ')}` : 'groups cleared');
+      if (np.addGroups?.length) changes.push(`groups +${np.addGroups.join(', +')}`);
+      if (np.removeGroups?.length) changes.push(`groups −${np.removeGroups.join(', −')}`);
+      if (np.tags) changes.push(np.tags.length ? `tags → ${np.tags.join(', ')}` : 'tags cleared');
+      if (np.addTags?.length) changes.push(`tags +${np.addTags.join(', +')}`);
+      if (np.removeTags?.length) changes.push(`tags −${np.removeTags.join(', −')}`);
+      if (np.importance != null) changes.push(`importance → ${np.importance}`);
+      if (np.enabled != null) changes.push(np.enabled ? 'enabled' : 'disabled');
+      if ('dependsOnNodeId' in np) changes.push(np.dependsOnNodeId ? `depends on → ${findNode(np.dependsOnNodeId)?.name || np.dependsOnNodeId}` : 'dependency cleared');
+    }
+    if (hasCheck) {
+      for (const c of picked) {
+        if (cp.intervalSeconds != null) c.intervalSeconds = cp.intervalSeconds;
+        if (cp.timeoutSeconds != null) c.timeoutSeconds = cp.timeoutSeconds;
+        if (cp.retries != null) c.retries = cp.retries;
+        if (cp.failureThreshold != null) c.failureThreshold = cp.failureThreshold;
+        if (cp.enabled != null) c.enabled = !!cp.enabled;
+        if ('alerts' in cp) c.alerts = cp.alerts ? { ...cp.alerts } : null;
+        if (cp.config) Object.assign(c.config, cp.config);
+        c.updatedAt = iso(Date.now());
+        if (cp.intervalSeconds != null && states[c.id]) states[c.id].nextRunAt = iso(Date.now() + c.intervalSeconds * 1000);
+      }
+      if (cp.intervalSeconds != null) changes.push(`interval → ${cp.intervalSeconds} s`);
+      if (cp.timeoutSeconds != null) changes.push(`timeout → ${cp.timeoutSeconds} s`);
+      if (cp.retries != null) changes.push(`retries → ${cp.retries}`);
+      if (cp.failureThreshold != null) changes.push(cp.failureThreshold === 0 ? 'failures before down → global default' : `failures before down → ${cp.failureThreshold}`);
+      if (cp.enabled != null) changes.push(cp.enabled ? 'enabled' : 'disabled');
+      if ('alerts' in cp) changes.push(cp.alerts ? 'alert overrides replaced' : 'alert overrides cleared');
+      for (const k of BULK_CONFIG_KEYS) {
+        if (!cp.config || !(k in cp.config)) continue;
+        const v = cp.config[k];
+        if (k === 'latencyWarnMs') changes.push(`latency warning → ${v} ms`);
+        else if (k === 'packetLossWarnPct') changes.push(`packet loss warning → ${v} %`);
+        else if (k === 'certWarnDays') changes.push(`certificate warning → ${v} days`);
+        else changes.push(`ping method → ${v || 'global setting'}`);
+      }
+    }
+    const counts = { nodes: hasNode ? pickedNodes.length : 0, checks: hasCheck ? picked.length : 0 };
+    addEvent('config_changed', { title: `Bulk edit: ${changes.join('; ')}`, detail: `Applied to ${counts.nodes} node(s) and ${counts.checks} check(s).` });
+    return { ...counts, changes };
+  });
   on('DELETE', /^\/api\/nodes\/(\d+)$/, (m) => { const i = nodes.findIndex((n) => n.id === Number(m[1])); if (i < 0) throw err(404, 'node not found'); const [n] = nodes.splice(i, 1); addEvent('config_changed', { title: `Node "${n.name}" deleted` }); return { ok: true }; });
   on('POST', /^\/api\/nodes\/(\d+)\/enable$/, (m, body) => { const n = findNode(m[1]); if (!n) throw err(404, 'node not found'); n.enabled = !!body.enabled; addEvent('config_changed', { nodeId: n.id, nodeName: n.name, title: `Node ${n.enabled ? 'enabled' : 'disabled'}` }); return nodeOut(n); });
   on('POST', /^\/api\/nodes\/(\d+)\/duplicate$/, (m) => { const n = findNode(m[1]); if (!n) throw err(404, 'node not found'); const copy = mkNode({ ...n, name: `${n.name} (copy)`, enabled: false }); copy.checks = n.checks.map((c, i) => mkCheck(copy.id, c.type, c.name, { interval: c.intervalSeconds, timeout: c.timeoutSeconds, config: clone(c.config), alerts: c.alerts, enabled: c.enabled, sortOrder: i, base: CHECK_PROFILES[c.id]?.base ?? 20, status: 'unknown' })); nodes.push(copy); return nodeOut(copy); });

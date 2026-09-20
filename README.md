@@ -26,6 +26,8 @@ brief that defines the scope lives in [`local-network-monitoring-product-brief.m
   script (run your own command), and Hardware health (this computer, or any machine you
   install the small agent on — processor, memory, disk, network).
 - **Nodes** group several checks, with templates, groups, tags, dependencies and importance.
+- **Bulk edit** changes one setting — interval, timeout, thresholds, groups, tags, importance,
+  enabled, alert overrides — across as many nodes and checks as you tick, in one go.
 - **Alerts by email** after N consecutive failures, on recovery, or for warnings, with
   cooldowns, silencing, maintenance windows and dependency-aware suppression.
 - **Incident timeline**, **dashboards**, a **Charts** tab and an **Audit** tab with full

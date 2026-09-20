@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -654,5 +655,73 @@ func TestResultSpreadFieldsRoundTrip(t *testing.T) {
 	}
 	if got.Details.PacketsReceived != 4 || len(got.Details.RTTs) != 4 {
 		t.Errorf("details = %+v", got.Details)
+	}
+}
+
+// A bulk edit is one transaction or it is nothing. Half of thirty nodes
+// carrying a new interval, with no way to tell which half from the screen, is
+// worse than the edit never having happened.
+func TestBulkUpdateRollsBackTheWholeBatch(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	mk := func(name string) model.Node {
+		n, err := s.CreateNode(ctx, model.Node{Name: name, Host: "10.0.0.1", Groups: []string{"Home"}, Enabled: true,
+			Checks: []model.Check{{Type: model.CheckPing, Name: name + " ping", Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5}}})
+		if err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+		return n
+	}
+	a, b := mk("Alpha"), mk("Beta")
+
+	// The happy path first, so the failure below is telling us something.
+	a.Importance = model.ImportanceHigh
+	ca := a.Checks[0]
+	ca.IntervalSeconds = 300
+	res, err := s.BulkUpdate(ctx, []model.Node{a}, []model.Check{ca})
+	if err != nil || res.Nodes != 1 || res.Checks != 1 {
+		t.Fatalf("bulk update: %v %+v", err, res)
+	}
+	if got, _ := s.GetNode(ctx, a.ID); got.Importance != model.ImportanceHigh || got.Checks[0].IntervalSeconds != 300 {
+		t.Fatalf("nothing was written: %+v", got)
+	}
+
+	// Now a batch whose last item names a check that is not there. Everything
+	// before it in the batch has to go back with it.
+	b.Importance = model.ImportanceCritical
+	good := b.Checks[0]
+	good.IntervalSeconds = 900
+	missing := good
+	missing.ID = good.ID + 9999
+	if _, err := s.BulkUpdate(ctx, []model.Node{b}, []model.Check{good, missing}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a missing check should fail the batch: %v", err)
+	}
+	after, err := s.GetNode(ctx, b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Importance == model.ImportanceCritical {
+		t.Error("the node write survived a rolled-back batch")
+	}
+	if after.Checks[0].IntervalSeconds != 60 {
+		t.Errorf("the check write survived a rolled-back batch: interval %d", after.Checks[0].IntervalSeconds)
+	}
+
+	// A node that is gone fails the batch the same way, and takes the checks
+	// named alongside it with it.
+	gone := a
+	gone.ID = a.ID + 9999
+	cb := b.Checks[0]
+	cb.IntervalSeconds = 1800
+	if _, err := s.BulkUpdate(ctx, []model.Node{gone}, []model.Check{cb}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a missing node should fail the batch: %v", err)
+	}
+	if got, _ := s.GetNode(ctx, b.ID); got.Checks[0].IntervalSeconds != 60 {
+		t.Errorf("a check was written despite a missing node in the batch: %d", got.Checks[0].IntervalSeconds)
+	}
+
+	// Nothing to do is not an error, and writes nothing.
+	if res, err := s.BulkUpdate(ctx, nil, nil); err != nil || res.Nodes != 0 || res.Checks != 0 {
+		t.Fatalf("empty batch: %v %+v", err, res)
 	}
 }

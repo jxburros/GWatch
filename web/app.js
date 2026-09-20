@@ -9,6 +9,7 @@ import { notifyRoute as tipsRoute, closeTip, onboardingDone } from './tips.js';
 const routes = [
   { pattern: /^\/dashboard(?:\/(\d+))?$/, view: () => import('./views/dashboard.js'), params: ['id'], nav: 'dashboard' },
   { pattern: /^\/nodes$/, view: () => import('./views/nodes.js'), nav: 'nodes' },
+  { pattern: /^\/nodes\/bulk$/, view: () => import('./views/bulk-edit.js'), nav: 'nodes' },
   { pattern: /^\/nodes\/new$/, view: () => import('./views/node-editor.js'), nav: 'nodes' },
   { pattern: /^\/nodes\/(\d+)\/edit$/, view: () => import('./views/node-editor.js'), params: ['id'], nav: 'nodes' },
   { pattern: /^\/nodes\/(\d+)$/, view: () => import('./views/node-detail.js'), params: ['id'], nav: 'nodes' },
