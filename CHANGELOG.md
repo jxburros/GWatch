@@ -28,6 +28,16 @@ The 2026-09-21 sprint: everything labelled `sprint-plan` in the tracker.
   condition and `{{metric}}`/`{{metrics.<key>}}` placeholders, and bulk edit
   can set a threshold across many machines. `docs/HARDWARE.md` has the new
   "One check, many metrics".
+- **Notification rules across nodes** (#31, first version). Settings › Rules
+  holds rules such as "tell me when two of my three DNS servers are down": a
+  list of status conditions on any checks or whole nodes (down, or degraded
+  meaning degraded-or-worse), joined by all, any or at-least-N, with the same
+  actions triggers use, a cooldown and an optional notice when the rule
+  clears. Rules are re-evaluated on every status change and when maintenance
+  or silencing changes, fire once per crossing, record `rule_fired` and
+  `rule_cleared` in the timeline, and keep their state across restarts.
+  Per-node alerts and dependency-aware suppression are untouched. Hold timers
+  and metric conditions are deliberately left for later.
 - **JSON checks record the value they read** (#55). Tick "Record this value"
   on a JSON check and the number at its path is stored with every run, charted
   on the node page with its unit, exported per metric as CSV, and optionally
