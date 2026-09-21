@@ -621,6 +621,11 @@
   on('GET', /^\/api\/auth\/setup$/, () => ({ usersConfigured: false, loginRequired: false, accessPasswordSet: false, apiVersion: 1 }));
   on('GET', /^\/api\/users$/, () => []);
   on('GET', /^\/api\/apikeys$/, () => []);
+  // Settings › AI & MCP. The fixture has a download of an older skill behind
+  // it, so the "updated since" note is exercised. The download itself is a
+  // real file the service hands out; the mock only answers the status.
+  on('GET', /^\/api\/mcp\/status$/, () => ({ skillVersion: '1.1.0', lastDownloadedVersion: '1.0.0', lastDownloadedAt: iso(Date.now() - 9 * DAY), lastDownloadedBy: 'local', updateAvailable: true }));
+  on('GET', /^\/api\/mcp\/skill$/, () => ({ __csv: '---\nname: gwatch\nversion: 1.1.0\n---\n# Working with GWatch\n\n(The real service sends the skill; the demo sends this stand-in.)\n' }));
   on('GET', /^\/api\/overview$/, () => overview());
   on('GET', /^\/api\/wallboard$/, () => wallboard());
   on('GET', /^\/api\/wallboards$/, () => clone(wallboards));

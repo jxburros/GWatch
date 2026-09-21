@@ -88,7 +88,7 @@ Then open <http://127.0.0.1:7230> — monitoring runs only while this process ru
 | [`docs/PRIVACY.md`](docs/PRIVACY.md) | What GWatch stores, where, and the fact that none of it goes anywhere |
 | [`docs/TERMS.md`](docs/TERMS.md) | Terms of use — acceptable use, no warranty, limitation of liability |
 | [`docs/DISCLAIMER.md`](docs/DISCLAIMER.md) | The security choices that are yours to make, and what happens if you make them badly |
-| [`mcp/README.md`](mcp/README.md) | `gwatch-mcp` — an optional MCP server so an AI assistant can read (and, if you allow it, manage) your monitoring |
+| [`mcp/README.md`](mcp/README.md) | `gwatch-mcp` — an optional MCP server so an AI assistant can read (and, if you allow it, manage) your monitoring. The in-app guide, and the downloadable agent skill, are under **Settings › AI & MCP** |
 | [`CHANGELOG.md`](CHANGELOG.md) | What shipped in each release |
 | [`ROADMAP.md`](ROADMAP.md) | What's planned and roughly when |
 

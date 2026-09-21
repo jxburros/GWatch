@@ -505,6 +505,8 @@ var denyRoutes = []struct {
 	{"POST", "/api/update/apply", nil},
 	{"GET", "/api/retention/status", nil},
 	{"POST", "/api/retention/run", nil},
+	{"GET", "/api/mcp/status", nil},
+	{"GET", "/api/mcp/skill", nil},
 	{"GET", "/api/users", nil},
 	{"POST", "/api/users", map[string]string{"username": "mole", "password": "password123"}},
 	{"DELETE", "/api/users/1", nil},

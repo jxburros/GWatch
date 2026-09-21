@@ -260,6 +260,23 @@ that a `go install` user should see reflected in `gwatch-mcp version` and in
 module resolution — not just user-visible tool changes, but also fixes to
 the HTTP client, the MCP transport layer or the SDK pin.
 
+### The agent skill
+
+[`skill/SKILL.md`](../skill/SKILL.md) is the document an assistant reads to
+learn how to use the MCP tools well. It is embedded into the core binary
+(`//go:embed skill` in `main.go`) and handed out by **Settings › AI & MCP**,
+which also remembers who last downloaded which version and mentions when the
+embedded copy has moved on since.
+
+It has its own version, in [`skill/VERSION`](../skill/VERSION) and repeated in
+the front matter of `SKILL.md`, independent of both `VERSION` and
+`mcp/VERSION`. **Bump it whenever `SKILL.md` changes in a way users should
+re-download** — new guidance, a new tool, a corrected instruction. Typo fixes
+need not bump it. No tag is involved: the version is read from the embedded
+file at run time, so a bumped `skill/VERSION` reaches users with the next core
+release and nothing else has to happen. Keep the two copies of the number in
+step.
+
 ## Forks and private builds
 
 A fork that publishes its own releases does not have to edit

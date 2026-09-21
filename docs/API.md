@@ -85,8 +85,8 @@ everything under `/api/backups`, `GET /api/export/config.json`, `GET /api/logs`,
 `GET /api/export/logs.txt`, everything under `/api/triggers` (including `GET`),
 everything under `/api/endpoints` (including `GET`), `POST /api/actions/test`,
 `GET /api/automation/meta`, `GET /api/retention/status`, `POST /api/retention/run`,
-`GET|POST /api/update/…`, everything under `/api/users` and `/api/apikeys`, and
-`POST /api/auth/change-password`.
+`GET|POST /api/update/…`, `GET /api/mcp/status`, `GET /api/mcp/skill`, everything under
+`/api/users` and `/api/apikeys`, and `POST /api/auth/change-password`.
 
 That list is deliberate and tested: a key is for reading a monitor from elsewhere, not
 for administering the machine it runs on. It is the same boundary `gwatch-mcp`, the Model
@@ -756,6 +756,15 @@ A signature is mandatory. Each asset is published with a sibling `<asset>.sig` i
 | signature is malformed or from another key | `signature verification failed` |
 
 The `<asset>.sha256` sidecar is still checked when the release publishes one (`checksum mismatch` aborts the update), but it is only a transit-corruption guard and never substitutes for the signature. See [`RELEASING.md`](RELEASING.md).
+
+## AI assistants (MCP)
+
+The MCP companion itself ([`../mcp/README.md`](../mcp/README.md)) uses the endpoints above with an
+API key. These two serve the **Settings › AI & MCP** page and are for the administrator setting an
+assistant up, not for the assistant: both are admin-only and refuse every API key.
+
+- `GET /api/mcp/status` → `{ "skillVersion": "1.0.0", "lastDownloadedVersion": "1.0.0", "lastDownloadedAt": "RFC3339 or null", "lastDownloadedBy": "pat (admin)", "updateAvailable": false }`. `skillVersion` is read from the embedded `skill/VERSION`. The `lastDownloaded*` fields describe the most recent download from this install (absent/null before the first one). `updateAvailable` is true only when a download has happened and the embedded skill's version differs from the one downloaded — never having downloaded it is not an update.
+- `GET /api/mcp/skill` → a zip of the `skill/` folder as `gwatch-skill-<version>.zip` (`application/zip`, `Content-Disposition: attachment`), unpacking to `gwatch/SKILL.md`, `gwatch/README.md` and `gwatch/VERSION`. `?format=md` returns `SKILL.md` alone as `text/markdown`. Each successful download records `{version, at, by}` under the `mcpSkillDownload` setting and adds an `update` event ("Agent skill downloaded: <version>") attributed to the caller.
 
 ## Settings
 

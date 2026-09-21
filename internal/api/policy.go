@@ -172,6 +172,10 @@ var policies = []routePolicy{
 	{"POST", "/api/settings/test-email", levelAdmin, keyDeny},
 	{"POST", "/api/retention/run", levelAdmin, keyDeny},
 	{"GET", "/api/backups", levelAdmin, keyDeny},
+	// The agent skill is set-up material for the administrator configuring an
+	// assistant, not monitoring data, so an assistant's own key cannot read it.
+	{"GET", "/api/mcp/status", levelAdmin, keyDeny},
+	{"GET", "/api/mcp/skill", levelAdmin, keyDeny},
 	{"POST", "/api/backups", levelAdmin, keyDeny},
 	{"GET", "/api/backups/{name}/download", levelAdmin, keyDeny},
 	{"DELETE", "/api/backups/{name}", levelAdmin, keyDeny},

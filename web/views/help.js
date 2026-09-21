@@ -266,6 +266,7 @@ function docsCard() {
       link(`${DOCS_URL}/RESTORE.md`, 'Restore on a new machine', 'Backup, install, restore'),
       link(`${DOCS_URL}/RECIPES.md`, 'Trigger & endpoint recipes', 'Home Assistant, Discord, ntfy, Docker, git'),
       link(`${DOCS_URL}/API.md`, 'The localhost API', 'Endpoints, roles and the event stream'),
+      link(`${REPO_URL}/blob/main/mcp/README.md`, 'AI assistants (MCP)', 'gwatch-mcp, the trust model, the agent skill; set up under Settings › AI & MCP'),
     ),
     h('h3', { class: 'section-title', style: { marginTop: '18px' } }, 'Licence and legal'),
     h('div', { class: 'help-links' },
