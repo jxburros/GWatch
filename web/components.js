@@ -225,9 +225,12 @@ export const STATUS = {
 };
 export function statusMeta(status) { return STATUS[status] || STATUS.unknown; }
 
+/** A status pill is a static label, not a live region: it is re-rendered with
+ *  its row rather than updated in place, so it carries no role="status" —
+ *  that would make a screen reader announce every pill on every redraw. */
 export function statusPill(status, { label, large = false } = {}) {
   const m = statusMeta(status);
-  return h('span', { class: `pill ${m.cls} ${large ? 'pill-lg' : ''}`, role: 'status' }, icon(m.icon), label || m.label);
+  return h('span', { class: `pill ${m.cls} ${large ? 'pill-lg' : ''}` }, icon(m.icon), label || m.label);
 }
 
 /* What each spine showed the last time it was drawn, so a row that has changed
@@ -254,11 +257,12 @@ function prefersReducedMotion() {
   return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
-/** The status word beside a spine, in the status colour. */
+/** The status word beside a spine, in the status colour. Static text, like
+ *  the pill: no live-region role. */
 export function statusWord(status, { label } = {}) {
   const m = statusMeta(status);
   const key = status in STATUS ? status : 'unknown';
-  return h('span', { class: `status-word text-${key}`, role: 'status' }, label || m.label);
+  return h('span', { class: `status-word text-${key}` }, label || m.label);
 }
 
 export function statusGlyph(status, { text = true } = {}) {
@@ -283,10 +287,13 @@ export function statusOrb(status, { size = '', label } = {}) {
 export function checkChip(check, state, { href } = {}) {
   const status = state?.status || (check.enabled === false ? 'paused' : 'unknown');
   const m = statusMeta(status);
+  // The last message rides in the tooltip for a pointer, and in hidden text
+  // for a screen reader: a title attribute alone is never read out on a span.
   const chip = h(href ? 'a' : 'span', { class: 'check-chip', href, title: `${check.name || 'Check'}: ${m.label}${state?.lastMessage ? ' — ' + state.lastMessage : ''}` },
     h('span', { class: `text-${status}`, style: { display: 'inline-flex' } }, icon(m.icon)),
     h('span', { class: 'sr-only' }, m.label + ' '),
     check.name || 'Check',
+    state?.lastMessage ? h('span', { class: 'sr-only' }, ` — ${state.lastMessage}`) : null,
   );
   if (state?.lastLatencyMs != null && status !== 'paused') chip.append(h('span', { class: 'lat' }, fmtMs(state.lastLatencyMs)));
   return chip;
@@ -317,29 +324,60 @@ export function toast(message, { kind = 'info', timeout = 4500, action } = {}) {
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-export function openModal({ title, body, footer, wide = false, onClose, closeOnBackdrop = true, ariaLabel }) {
+/** The elements in `scope` a Tab press can land on. Judged by markup (hidden,
+ *  disabled, inside a hidden ancestor) rather than by layout, so the answer is
+ *  the same in a headless test as in a browser. */
+export function focusableIn(scope) {
+  return [...scope.querySelectorAll(FOCUSABLE)].filter((x) => !x.hidden && !x.disabled && !x.closest('[hidden]') && x.getAttribute('aria-hidden') !== 'true');
+}
+
+// How many modals are open. The page behind them is made inert by the first
+// and released by the last, so a dialog opened from a dialog does not free it.
+let modalDepth = 0;
+function setAppInert(on) {
+  const app = document.getElementById('app');
+  if (!app) return;
+  if (on) { app.setAttribute('inert', ''); app.setAttribute('aria-hidden', 'true'); } else { app.removeAttribute('inert'); app.removeAttribute('aria-hidden'); }
+}
+
+/** `describedBy` is the id of the element that explains the dialog (a
+ *  confirm's message, say); it becomes the dialog's aria-describedby. */
+export function openModal({ title, body, footer, wide = false, onClose, closeOnBackdrop = true, ariaLabel, describedBy }) {
   const root = document.getElementById('modals');
   const prevFocus = document.activeElement;
-  const dialog = h('div', { class: `modal ${wide ? 'modal-wide' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-label': ariaLabel || title || 'Dialog' });
+  // Named by its own heading, so what a screen reader announces is exactly
+  // what is written at the top of the box. A caller with a different name in
+  // mind passes ariaLabel, which then wins.
+  const titleId = uid('modal-title');
+  const dialog = h('div', { class: `modal ${wide ? 'modal-wide' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': ariaLabel ? null : titleId, 'aria-label': ariaLabel || null, 'aria-describedby': describedBy || null });
   const backdrop = h('div', { class: 'modal-backdrop' }, dialog);
   const close = (result) => {
     if (!backdrop.isConnected) return;
     backdrop.remove();
     document.removeEventListener('keydown', onKey);
+    // Release the page before focus goes back to it: an inert element cannot
+    // take focus, so the order matters.
+    if (--modalDepth <= 0) { modalDepth = 0; setAppInert(false); }
     if (onClose) onClose(result);
-    if (prevFocus && prevFocus.focus) { try { prevFocus.focus(); } catch { /* ignore */ } }
+    // Back to where focus came from; if that element has since gone (a row
+    // the dialog deleted, say), to the page content rather than to nowhere.
+    const back = prevFocus && prevFocus.isConnected && prevFocus.focus ? prevFocus : document.getElementById('view');
+    if (back) { try { back.focus(); } catch { /* ignore */ } }
   };
   const onKey = (e) => {
+    // Only the topmost dialog answers the keyboard.
+    if (root.lastElementChild !== backdrop) return;
     if (e.key === 'Escape') { e.preventDefault(); close(undefined); }
     if (e.key === 'Tab') {
-      const f = [...dialog.querySelectorAll(FOCUSABLE)].filter((x) => x.offsetParent !== null);
-      if (!f.length) return;
+      const f = focusableIn(dialog);
+      if (!f.length) { e.preventDefault(); return; }
       const first = f[0]; const last = f[f.length - 1];
-      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      const inside = dialog.contains(document.activeElement);
+      if (e.shiftKey && (document.activeElement === first || !inside)) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (document.activeElement === last || !inside)) { e.preventDefault(); first.focus(); }
     }
   };
-  const head = h('div', { class: 'modal-head' }, h('h2', null, title || ''), h('button', { class: 'btn btn-ghost icon-btn', type: 'button', 'aria-label': 'Close', onclick: () => close(undefined) }, icon('x')));
+  const head = h('div', { class: 'modal-head' }, h('h2', { id: titleId }, title || ''), h('button', { class: 'btn btn-ghost icon-btn', type: 'button', 'aria-label': 'Close', onclick: () => close(undefined) }, icon('x')));
   const bodyEl = h('div', { class: 'modal-body' });
   append(bodyEl, [body]);
   dialog.append(head, bodyEl);
@@ -347,8 +385,10 @@ export function openModal({ title, body, footer, wide = false, onClose, closeOnB
   backdrop.addEventListener('mousedown', (e) => { if (closeOnBackdrop && e.target === backdrop) close(undefined); });
   document.addEventListener('keydown', onKey);
   root.appendChild(backdrop);
+  if (++modalDepth === 1) setAppInert(true);
   requestAnimationFrame(() => {
-    const first = dialog.querySelector('.modal-body ' + FOCUSABLE) || dialog.querySelector(FOCUSABLE);
+    if (!backdrop.isConnected) return;
+    const first = focusableIn(bodyEl)[0] || focusableIn(dialog)[0];
     if (first) first.focus();
   });
   return { el: dialog, body: bodyEl, close };
@@ -357,9 +397,11 @@ export function openModal({ title, body, footer, wide = false, onClose, closeOnB
 export function confirmDialog({ title = 'Are you sure?', message, confirmLabel = 'Confirm', cancelLabel = 'Cancel', danger = false, body } = {}) {
   return new Promise((resolve) => {
     let result = false;
+    const msgId = message ? uid('modal-desc') : null;
     const m = openModal({
       title,
-      body: [message ? h('p', null, message) : null, body],
+      describedBy: msgId,
+      body: [message ? h('p', { id: msgId }, message) : null, body],
       footer: [
         h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, cancelLabel),
         h('button', { class: `btn ${danger ? 'btn-danger' : 'btn-primary'}`, type: 'button', onclick: () => { result = true; m.close(); } }, confirmLabel),
@@ -392,25 +434,69 @@ export function promptDialog({ title, message, label = 'Name', value = '', place
 /* ---------- Dropdown menu ---------- */
 
 let openMenu = null;
-export function closeMenus() { if (openMenu) { openMenu.remove(); openMenu = null; document.removeEventListener('mousedown', onDocDown, true); document.removeEventListener('keydown', onDocKey, true); } }
+export function closeMenus() {
+  if (!openMenu) return;
+  const menu = openMenu; openMenu = null;
+  const anchor = menu._anchor;
+  // Focus goes back to the button that opened the menu — but only when the
+  // menu had it. A click elsewhere is already moving focus to what was
+  // clicked, and must not be pulled back.
+  const hadFocus = menu.contains(document.activeElement) || document.activeElement === document.body;
+  menu.remove();
+  document.removeEventListener('mousedown', onDocDown, true);
+  document.removeEventListener('keydown', onDocKey, true);
+  if (anchor && anchor.isConnected) {
+    if (anchor.hasAttribute('aria-haspopup')) anchor.setAttribute('aria-expanded', 'false');
+    anchor.removeAttribute('aria-controls');
+    if (hadFocus) { try { anchor.focus(); } catch { /* ignore */ } }
+  }
+}
 function onDocDown(e) { if (openMenu && !openMenu.contains(e.target)) closeMenus(); }
-function onDocKey(e) { if (e.key === 'Escape') closeMenus(); }
+// Escape closes only the menu: stopping the event here keeps a dialog the
+// menu was opened from open underneath it.
+function onDocKey(e) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMenus(); } }
+
+/** Roving tabindex inside an open menu: one item is in the tab order at a
+ *  time, arrows move between the enabled ones, Home and End jump to the ends,
+ *  and Tab leaves (which closes the menu and carries on from its button). */
+function focusMenuItem(menu, item) {
+  for (const el of menu.querySelectorAll('.menu-item')) el.tabIndex = el === item ? 0 : -1;
+  item.focus();
+}
+function onMenuKey(e) {
+  const menu = e.currentTarget;
+  const items = [...menu.querySelectorAll('.menu-item:not([disabled])')];
+  if (!items.length) return;
+  const i = items.indexOf(document.activeElement);
+  let next = null;
+  switch (e.key) {
+    case 'ArrowDown': next = items[(i + 1) % items.length]; break;
+    case 'ArrowUp': next = items[(i - 1 + items.length) % items.length]; break;
+    case 'Home': next = items[0]; break;
+    case 'End': next = items[items.length - 1]; break;
+    case 'Tab': closeMenus(); return;
+    default: return;
+  }
+  e.preventDefault();
+  focusMenuItem(menu, next);
+}
 
 /** items: [{label, icon, onClick, danger, href, download, sep, adminOnly}]
  *  An `adminOnly` item is hidden from an account without the admin role. The
  *  menu is appended to <body>, so the `body.viewer` rule still reaches it. */
 export function showMenu(anchor, items) {
   closeMenus();
-  const menu = h('div', { class: 'menu', role: 'menu' });
+  const menu = h('div', { class: 'menu', role: 'menu', id: uid('menu'), onkeydown: onMenuKey });
   for (const it of items) {
     if (!it) continue;
     if (it.sep) { menu.append(h('div', { class: `menu-sep ${it.adminOnly ? 'admin-only' : ''}`, role: 'separator' })); continue; }
     const cls = `menu-item ${it.danger ? 'danger' : ''} ${it.adminOnly ? 'admin-only' : ''}`;
     const el = it.href
-      ? h('a', { class: cls, role: 'menuitem', href: it.href, download: it.download || null, target: it.target || null, onclick: () => closeMenus() }, it.icon ? icon(it.icon) : null, it.label)
-      : h('button', { class: cls, role: 'menuitem', type: 'button', disabled: !!it.disabled, onclick: () => { closeMenus(); it.onClick && it.onClick(); } }, it.icon ? icon(it.icon) : null, it.label);
+      ? h('a', { class: cls, role: 'menuitem', tabindex: -1, href: it.href, download: it.download || null, target: it.target || null, onclick: () => closeMenus() }, it.icon ? icon(it.icon) : null, it.label)
+      : h('button', { class: cls, role: 'menuitem', tabindex: -1, type: 'button', disabled: !!it.disabled, onclick: () => { closeMenus(); it.onClick && it.onClick(); } }, it.icon ? icon(it.icon) : null, it.label);
     menu.append(el);
   }
+  menu._anchor = anchor;
   document.body.appendChild(menu);
   const r = anchor.getBoundingClientRect();
   const mw = menu.offsetWidth; const mh = menu.offsetHeight;
@@ -419,15 +505,17 @@ export function showMenu(anchor, items) {
   if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 6);
   menu.style.left = `${left}px`; menu.style.top = `${top}px`;
   openMenu = menu;
+  if (anchor.hasAttribute('aria-haspopup')) anchor.setAttribute('aria-expanded', 'true');
+  anchor.setAttribute('aria-controls', menu.id);
   document.addEventListener('mousedown', onDocDown, true);
   document.addEventListener('keydown', onDocKey, true);
-  const first = menu.querySelector('.menu-item');
-  if (first) first.focus();
+  const first = menu.querySelector('.menu-item:not([disabled])');
+  if (first) focusMenuItem(menu, first);
   return menu;
 }
 
 export function menuButton(items, { label = 'More actions', small = false, cls = '' } = {}) {
-  const btn = h('button', { class: `btn icon-btn ${small ? 'btn-sm' : ''} ${cls}`, type: 'button', 'aria-label': label, 'aria-haspopup': 'menu' }, icon('more'));
+  const btn = h('button', { class: `btn icon-btn ${small ? 'btn-sm' : ''} ${cls}`, type: 'button', 'aria-label': label, 'aria-haspopup': 'menu', 'aria-expanded': 'false' }, icon('more'));
   btn.addEventListener('click', (e) => { e.stopPropagation(); showMenu(btn, typeof items === 'function' ? items() : items); });
   return btn;
 }
@@ -438,18 +526,37 @@ let idSeq = 0;
 export function uid(prefix = 'f') { return `${prefix}-${++idSeq}`; }
 
 export function field({ label, input, help, error, id, cls = '' }) {
-  const fid = id || input?.id || uid();
-  if (input && !input.id) input.id = fid;
+  // A composite control (chipInput, say) exposes the element that actually
+  // takes typing as `.input`; the label and the descriptions point at that,
+  // not at the box around it.
+  const control = input?.input instanceof Node ? input.input : input;
+  const fid = id || control?.id || uid();
+  if (control && control.id !== fid) control.id = fid;
+  const helpId = help ? `${fid}-help` : null;
+  const errorId = `${fid}-error`;
   const el = h('div', { class: `field ${cls} ${error ? 'has-error' : ''}` },
     label ? h('label', { for: fid }, label) : null,
     input,
-    help ? h('div', { class: 'help' }, help) : null,
-    error ? h('div', { class: 'error', role: 'alert' }, error) : null,
+    help ? h('div', { class: 'help', id: helpId }, help) : null,
+    error ? h('div', { class: 'error', id: errorId, role: 'alert' }, error) : null,
   );
+  // The help text and the error are announced with the control, and an error
+  // also marks it invalid — aria-invalid only means something on a form
+  // control, so a plain wrapper does not get it.
+  const describe = () => {
+    if (!(control instanceof Element)) return;
+    const hasError = !!el.querySelector('.error');
+    const ids = [helpId, hasError ? errorId : null].filter(Boolean);
+    if (ids.length) control.setAttribute('aria-describedby', ids.join(' ')); else control.removeAttribute('aria-describedby');
+    if (!('validity' in control)) return;
+    if (hasError) control.setAttribute('aria-invalid', 'true'); else control.removeAttribute('aria-invalid');
+  };
+  describe();
   el.setError = (msg) => {
     el.querySelector('.error')?.remove();
     el.classList.toggle('has-error', !!msg);
-    if (msg) el.append(h('div', { class: 'error', role: 'alert' }, msg));
+    if (msg) el.append(h('div', { class: 'error', id: errorId, role: 'alert' }, msg));
+    describe();
   };
   return el;
 }
@@ -492,31 +599,44 @@ export function chipInput({ values = [], placeholder = 'Add…', suggestions = [
   const input = h('input', { type: 'text', placeholder, id: id || uid('chip'), list: listId, autocomplete: 'off' });
   const wrap = h('div', { class: 'chip-input', onclick: (e) => { if (e.target === wrap) input.focus(); } });
   if (listId) wrap.append(h('datalist', { id: listId }, suggestions.map((s) => h('option', { value: s }))));
+  // The chips are a list to a screen reader (display: contents keeps them
+  // flowing beside the input), and each add or remove is announced through a
+  // polite live region, since the chips themselves are redrawn silently.
+  const list = h('span', { class: 'chip-items', role: 'list' });
+  const live = h('span', { class: 'sr-only', 'aria-live': 'polite' });
+  const announce = (msg) => { live.textContent = ''; live.textContent = msg; };
+  const remove = (i) => {
+    const [v] = items.splice(i, 1);
+    render();
+    announce(`${v} removed`);
+    // The remove button just went with its chip; focus goes to the box.
+    input.focus();
+    onChange && onChange(items);
+  };
   const render = () => {
-    [...wrap.querySelectorAll('.chip-item')].forEach((c) => c.remove());
+    clear(list);
     items.forEach((v, i) => {
-      const chip = h('span', { class: 'chip-item' }, v, h('button', { type: 'button', 'aria-label': `Remove ${v}`, onclick: () => { items.splice(i, 1); render(); onChange && onChange(items); } }, icon('x')));
-      wrap.insertBefore(chip, input);
+      list.append(h('span', { class: 'chip-item', role: 'listitem' }, v, h('button', { type: 'button', 'aria-label': `Remove ${v}`, onclick: () => remove(i) }, icon('x'))));
     });
   };
   const commit = () => {
     const raw = input.value.split(/[,\n;]+/).map((s) => s.trim()).filter(Boolean);
-    let changed = false;
+    const added = [];
     for (const v of raw) {
       if (validate && !validate(v)) { input.setCustomValidity('Invalid value'); input.reportValidity(); continue; }
-      if (!items.includes(v)) { items.push(v); changed = true; }
+      if (!items.includes(v)) { items.push(v); added.push(v); }
     }
     input.value = '';
     input.setCustomValidity('');
-    if (changed) { render(); onChange && onChange(items); }
+    if (added.length) { render(); announce(`${added.join(', ')} added`); onChange && onChange(items); }
   };
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); commit(); }
-    else if (e.key === 'Backspace' && !input.value && items.length) { items.pop(); render(); onChange && onChange(items); }
+    else if (e.key === 'Backspace' && !input.value && items.length) { remove(items.length - 1); }
   });
   input.addEventListener('blur', commit);
   input.addEventListener('change', commit);
-  wrap.append(input);
+  wrap.append(list, input, live);
   render();
   Object.defineProperty(wrap, 'value', { get: () => [...items], set: (v) => { items = [...(v || [])]; render(); } });
   wrap.input = input;

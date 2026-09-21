@@ -723,6 +723,9 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 /* Chip input */
 .chip-input { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; padding: 4px 6px; min-height: 2.125rem; background: var(--elev); border: 1px solid var(--line-strong); cursor: text; }
 .chip-input:focus-within { border-color: var(--accent); box-shadow: var(--focus); }
+/* The list wrapper is only there for its role; its chips lay out as direct
+   children of the box, beside the input. */
+.chip-input .chip-items { display: contents; }
 .chip-input .chip-item { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 0.5rem; background: var(--elev-2); border: 1px solid var(--line); font-size: 0.75rem; font-weight: 600; font-family: var(--mono); }
 .chip-input .chip-item button { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0 2px; display: inline-flex; }
 .chip-input .chip-item button:hover { color: var(--text); }
