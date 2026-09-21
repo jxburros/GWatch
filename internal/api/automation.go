@@ -99,6 +99,12 @@ func (s *Server) normalizeTrigger(ctx context.Context, t *model.Trigger) error {
 	if t.LatencyOverMS < 0 {
 		t.LatencyOverMS = 0
 	}
+	// metric_over watches one named metric; without a name there is nothing
+	// to compare, so the condition is refused rather than never firing.
+	t.Metric = strings.TrimSpace(t.Metric)
+	if seen["metric_over"] && t.Metric == "" {
+		return fmt.Errorf("the metric_over condition needs the metric to watch, e.g. cpu or disk:/srv")
+	}
 	return s.normalizeAction(&t.Action)
 }
 
@@ -220,7 +226,7 @@ func (s *Server) handleAutomationMeta(w http.ResponseWriter, r *http.Request) {
 		"conditions":         model.TriggerConditions,
 		"interpreters":       actions.Interpreters(),
 		"defaultInterpreter": actions.DefaultInterpreter(),
-		"placeholders":       []string{"event", "node.id", "node.name", "node.host", "node.group", "node.tags", "check.id", "check.name", "check.type", "target", "status", "prev_status", "message", "error", "success", "latencyMs", "lossPct", "statusCode", "failures", "ts", "instance", "trigger.name", "body", "query.<name>", "method", "remote"},
+		"placeholders":       []string{"event", "node.id", "node.name", "node.host", "node.group", "node.tags", "check.id", "check.name", "check.type", "target", "status", "prev_status", "message", "error", "success", "latencyMs", "lossPct", "statusCode", "failures", "ts", "instance", "trigger.name", "metric", "metric.label", "metric.value", "metric.status", "metrics.<key>", "body", "query.<name>", "method", "remote"},
 	})
 }
 

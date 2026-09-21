@@ -209,7 +209,7 @@ func (s *Store) HistoryMetric(ctx context.Context, check model.Check, nodeName s
 		Points:    []model.HistoryPoint{},
 		Metric:    metric,
 	}
-	series.MetricUnit = check.MetricUnits()[metric]
+	series.MetricUnit = check.MetricUnit(metric)
 	results, err := s.ResultsBetween(ctx, check.ID, series.From, now)
 	if err != nil {
 		return series, err
@@ -448,8 +448,8 @@ func (s *Store) InsertEventsBatch(ctx context.Context, events []model.Event) err
 			if len(e.Meta) > 0 {
 				meta = string(e.Meta)
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO events(ts, type, node_id, check_id, node_name, check_name, title, detail, meta, actor) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-				e.Timestamp.UnixMilli(), string(e.Type), nullInt64(e.NodeID), nullInt64(e.CheckID), e.NodeName, e.CheckName, e.Title, e.Detail, meta, e.Actor); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO events(ts, type, node_id, check_id, node_name, check_name, title, detail, meta, actor, metric) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+				e.Timestamp.UnixMilli(), string(e.Type), nullInt64(e.NodeID), nullInt64(e.CheckID), e.NodeName, e.CheckName, e.Title, e.Detail, meta, e.Actor, e.Metric); err != nil {
 				return err
 			}
 		}

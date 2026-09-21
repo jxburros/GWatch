@@ -6,8 +6,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   h, icon, clear, replace, toggle, statusWord, tagList, applyTheme, currentTheme,
-  toast, openModal, confirmDialog,
+  toast, openModal, confirmDialog, eventRow,
 } from '../../web/components.js';
+
+// #60: an event about one of a check's metrics names it, so a disk filling
+// and the memory on the same check read as two incidents.
+test('eventRow names the metric a metric-scoped event is about', () => {
+  const row = eventRow({ id: 1, ts: new Date().toISOString(), type: 'warning', nodeId: 3, nodeName: 'NAS', checkName: 'Hardware', title: 'Disk /srv warning', detail: 'Disk /srv is 88%', metric: 'disk:/srv' });
+  const tag = row.querySelector('.ev-metric');
+  assert.ok(tag, 'the metric is shown');
+  assert.equal(tag.textContent, 'Disk /srv');
+  assert.equal(tag.getAttribute('title'), 'disk:/srv');
+  const plain = eventRow({ id: 2, ts: new Date().toISOString(), type: 'down', nodeId: 3, nodeName: 'NAS', title: 'Down' });
+  assert.equal(plain.querySelector('.ev-metric'), null, 'a check-level event has none');
+});
 
 test('h() sets attributes, class, style objects and dataset', () => {
   const el = h('div', { class: 'a b', id: 'x', style: { color: 'red', fontSize: '12px' }, dataset: { foo: 'bar' }, title: 'hi' });

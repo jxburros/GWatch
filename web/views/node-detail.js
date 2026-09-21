@@ -3,7 +3,7 @@
 import { api, getHistoryMulti, getHistoryMetric, qs } from '../api.js';
 import { h, icon, clear, replace, statusPill, statusGlyph, importanceBadge, tagList, banner, toast, confirmDialog, showMenu, menuButton, emptyState, skeleton, eventRow, rangeChips, checkTypeLabel } from '../components.js';
 import { LineChart, toSeries, uptimeBar, uptimeLegend, SERIES_COLORS } from '../charts.js';
-import { relTime, ms as fmtMs, pct, dateTime, interval, plural, timeShort, nodeGroups } from '../fmt.js';
+import { relTime, ms as fmtMs, pct, dateTime, interval, plural, timeShort, nodeGroups, metricFamily, metricLabel, metricUnit } from '../fmt.js';
 import { resultInspector } from './inspector.js';
 import { openTriggerEditor, triggerRow } from './automation.js';
 import { hardwarePanel } from './machines.js';
@@ -249,11 +249,28 @@ export async function mount(root, ctx) {
       if (!wanted.has(key)) { panel.destroy(); panel.el.remove(); state.hardware.delete(key); }
     }
     for (const [key, name] of wanted) {
-      if (state.hardware.has(key)) continue;
-      const panel = hardwarePanel(key, { title: name || 'Hardware' });
+      if (state.hardware.has(key)) {
+        state.hardware.get(key).redraw();
+        continue;
+      }
+      // The panel colours its meters by the check's own verdicts, read from
+      // the newest result each time it draws, so the bars agree with the
+      // check's thresholds rather than with a fixed display cut-off.
+      const panel = hardwarePanel(key, { title: name || 'Hardware', metricStatus: () => metricStatusFor(key) });
       state.hardware.set(key, panel);
       hardwareEl.append(panel.el);
     }
+  }
+
+  /** Each metric's verdict from the newest result of the hardware check that
+   *  reads this machine, keyed by metric key. */
+  function metricStatusFor(hostKey) {
+    const out = {};
+    for (const c of state.node?.checks || []) {
+      if (c.type !== 'system' || hostKeyFor(c) !== hostKey) continue;
+      for (const r of (state.node.lastResults || {})[c.id]?.details?.metricResults || []) out[r.key] = r.status;
+    }
+    return out;
   }
 
   function destroyHardware() {
@@ -365,7 +382,42 @@ export async function mount(root, ctx) {
     const cfg = c.config || {};
     if (c.type === 'snmp') return (cfg.snmpOids || []).filter((o) => o.name).map((o) => ({ name: o.name, unit: o.unit || '' }));
     if (c.type === 'json' && cfg.jsonRecord) return [{ name: (cfg.jsonMetric || '').trim() || 'value', unit: (cfg.jsonUnit || '').trim() }];
+    if (c.type === 'system') {
+      // A machine's disks, interfaces and devices are only known from what
+      // it last reported (#60), so the keys come from the latest result and
+      // the server accepts any key that result carried.
+      const last = (state.node?.lastResults || {})[c.id];
+      const rows = last?.details?.metricResults || [];
+      const keys = rows.length ? rows.map((r) => r.key) : Object.keys(last?.metrics || {});
+      return keys.map((key) => ({ name: key, unit: metricUnit(key), label: rows.find((r) => r.key === key)?.label || metricLabel(key), family: metricFamily(key).family }));
+    }
     return [];
+  }
+
+  // chartGroups says which metrics share a chart. An SNMP OID or a json value
+  // is a chart of its own — each has its own unit. A hardware check's metrics
+  // are grouped by family, one series per disk or interface, so the reader
+  // sees every filesystem on one axis rather than eight charts of one line.
+  function chartGroups(c) {
+    const metrics = checkMetrics(c);
+    if (c.type !== 'system') return metrics.map((m) => ({ id: m.name, title: m.name, unit: m.unit, metrics: [m], csv: m.name }));
+    const order = ['cpu', 'memory', 'swap', 'load', 'disk', 'inodes', 'net', 'diskio'];
+    const groups = new Map();
+    for (const m of metrics) {
+      const key = m.family === 'cpu' || m.family === 'memory' || m.family === 'swap' ? 'usage' : m.family;
+      if (!groups.has(key)) groups.set(key, { id: key, title: key === 'usage' ? 'Processor, memory and swap' : metricLabel(m.family), unit: m.unit, metrics: [], pct: m.unit === '%' });
+      groups.get(key).metrics.push(m);
+    }
+    // Disk I/O mixes rates with a busy percentage, which cannot share an axis.
+    if (groups.has('diskio')) {
+      const io = groups.get('diskio');
+      const busy = io.metrics.filter((m) => m.unit === '%');
+      io.metrics = io.metrics.filter((m) => m.unit !== '%');
+      if (busy.length) groups.set('diskbusy', { id: 'diskbusy', title: 'Disk busy', unit: '%', metrics: busy, pct: true });
+      if (!io.metrics.length) groups.delete('diskio');
+    }
+    const rank = (g) => (g.id === 'usage' ? 0 : order.indexOf(g.id) + 1);
+    return [...groups.values()].sort((a, b) => rank(a) - rank(b));
   }
 
   // A check's named metrics are charted like any other: the server serves
@@ -374,48 +426,61 @@ export async function mount(root, ctx) {
   // charts reach back only as far as raw history is kept. Each chart is kept
   // in state.metricCharts so a later pass can hand it new points in place.
   async function renderMetricCharts(c) {
-    const metrics = checkMetrics(c);
-    if (!metrics.length) return null;
+    const groups = chartGroups(c);
+    if (!groups.length) return null;
     const n = state.node;
-    const section = h('div', { class: 'stack-sm' }, h('div', { class: 'section-title' }, `${c.name} — ${c.type === 'snmp' ? 'SNMP readings' : 'recorded value'}`));
+    const heading = c.type === 'snmp' ? 'SNMP readings' : c.type === 'system' ? 'hardware metrics' : 'recorded value';
+    const section = h('div', { class: 'stack-sm', 'data-check': c.id }, h('div', { class: 'section-title' }, `${c.name} — ${heading}`));
     let drew = false;
-    for (const m of metrics) {
-      let series;
-      try { series = await getHistoryMetric(c.id, state.range, m.name); } catch { continue; }
+    for (const g of groups) {
+      const data = await groupData(c, g);
       if (state.destroyed) return null;
-      if (!(series.points || []).some((p) => p.value != null)) continue;
+      if (!data) continue;
       const host = h('div', null);
-      const chart = new LineChart(host, { unit: m.unit || '', height: 180, ariaLabel: `${m.name} history`, title: `${n.name} — ${m.name} (${state.range})` });
+      const chart = new LineChart(host, { unit: g.unit || '', height: 180, legend: g.metrics.length > 1, alwaysLegend: g.metrics.length > 1, yMin: g.pct ? 0 : undefined, yMax: g.pct ? 100 : undefined, ariaLabel: `${g.title} history`, title: `${n.name} — ${g.title} (${state.range})` });
       state.charts.push(chart);
-      state.metricCharts.set(`${c.id}:${m.name}`, chart);
-      chart.setData(metricData(series, m));
-      section.append(h('div', null, h('div', { class: 'row-between', style: { marginBottom: '4px' } },
-        h('div', { class: 'small muted' }, m.name, m.unit ? ` (${m.unit})` : ''),
-        h('a', { class: 'btn btn-sm', href: `/api/export/history.csv${qs({ checkId: c.id, range: state.range, metric: m.name })}`, download: `${slug(m.name)}-${state.range}.csv` }, icon('download'), 'CSV')), host));
+      state.metricCharts.set(`${c.id}:${g.id}`, chart);
+      chart.setData(data);
+      const csv = g.metrics.length === 1
+        ? h('a', { class: 'btn btn-sm', href: `/api/export/history.csv${qs({ checkId: c.id, range: state.range, metric: g.metrics[0].name })}`, download: `${slug(g.metrics[0].name)}-${state.range}.csv` }, icon('download'), 'CSV')
+        : (() => { const btn = h('button', { class: 'btn btn-sm', type: 'button', onclick: () => showMenu(btn, g.metrics.map((m) => ({ label: `CSV — ${m.label || m.name}`, icon: 'download', href: `/api/export/history.csv${qs({ checkId: c.id, range: state.range, metric: m.name })}`, download: `${slug(m.name)}-${state.range}.csv` }))) }, icon('download'), 'CSV'); return btn; })();
+      section.append(h('div', { 'data-group': g.id }, h('div', { class: 'row-between', style: { marginBottom: '4px' } },
+        h('div', { class: 'small muted' }, g.title, g.unit ? ` (${g.unit})` : ''),
+        csv), host));
       drew = true;
     }
     if (!drew) {
       section.append(h('p', { class: 'note' }, c.type === 'snmp'
         ? 'No readings recorded in this period yet. A counter also needs two runs before it has a rate to chart.'
-        : 'No value recorded in this period yet. Only a number is charted; text is kept in the last result.'));
+        : c.type === 'system' ? 'No hardware readings recorded in this period yet.'
+          : 'No value recorded in this period yet. Only a number is charted; text is kept in the last result.'));
     }
     return section;
   }
-  function metricData(series, m) {
-    return { series: [{ ...toSeries(series, 'avg', SERIES_COLORS[state.charts.length % SERIES_COLORS.length]), name: m.name }], from: series.from, to: series.to, bucketSeconds: 0 };
+  /** Fetches every metric of a group and builds one chart's data, or null
+   *  when none of them has a reading in the range. */
+  async function groupData(c, g) {
+    const series = [];
+    for (const m of g.metrics) {
+      let hs;
+      try { hs = await getHistoryMetric(c.id, state.range, m.name); } catch { continue; }
+      if (state.destroyed) return null;
+      if (!(hs.points || []).some((p) => p.value != null)) continue;
+      series.push({ ...toSeries(hs, 'avg', SERIES_COLORS[series.length % SERIES_COLORS.length]), name: m.label || m.name, from: hs.from, to: hs.to });
+    }
+    if (!series.length) return null;
+    return { series, from: series[0].from, to: series[0].to, bucketSeconds: 0 };
   }
   /** Hands every existing metric chart its new points. Returns false when a
    *  metric has readings but no chart yet, which means the card must be rebuilt. */
   async function refreshMetricCharts(metricChecks) {
     for (const c of metricChecks) {
-      for (const m of checkMetrics(c)) {
-        let series;
-        try { series = await getHistoryMetric(c.id, state.range, m.name); } catch { continue; }
+      for (const g of chartGroups(c)) {
+        const data = await groupData(c, g);
         if (state.destroyed) return true;
-        const chart = state.metricCharts.get(`${c.id}:${m.name}`);
-        const hasData = (series.points || []).some((p) => p.value != null);
-        if (chart) chart.setData(metricData(series, m));
-        else if (hasData) return false;
+        const chart = state.metricCharts.get(`${c.id}:${g.id}`);
+        if (chart && data) chart.setData(data);
+        else if (data) return false;
       }
     }
     return true;

@@ -389,6 +389,13 @@ var addedColumns = []struct{ table, column, ddl string }{
 	// of name -> number. An SNMP check writes one entry per OID here; every
 	// other check leaves it empty.
 	{"results", "metrics", "ALTER TABLE results ADD COLUMN metrics TEXT NOT NULL DEFAULT ''"},
+	// #60: a hardware check's metrics are tracked one by one. An event about
+	// one of them names it; the check's state remembers each one's last
+	// verdict (a JSON object of key -> status); a trigger can watch one.
+	{"events", "metric", "ALTER TABLE events ADD COLUMN metric TEXT NOT NULL DEFAULT ''"},
+	{"check_state", "metric_status", "ALTER TABLE check_state ADD COLUMN metric_status TEXT NOT NULL DEFAULT ''"},
+	{"triggers", "metric", "ALTER TABLE triggers ADD COLUMN metric TEXT NOT NULL DEFAULT ''"},
+	{"triggers", "metric_over", "ALTER TABLE triggers ADD COLUMN metric_over REAL NOT NULL DEFAULT 0"},
 }
 
 // currentSchemaVersion is the schema_version this build expects. Every

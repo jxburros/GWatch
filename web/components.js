@@ -1,7 +1,7 @@
 // Small DOM toolkit: element builder, icons, status pills, toasts, modals,
 // dropdown menus, chip input, form fields, empty states and skeletons.
 
-import { relTime, ms as fmtMs } from './fmt.js';
+import { relTime, ms as fmtMs, metricLabel } from './fmt.js';
 
 /* ---------- Element builder ---------- */
 
@@ -624,6 +624,9 @@ export function eventRow(ev, { showNode = true, now = Date.now() } = {}) {
   const title = h('div', { class: 'ev-title' });
   if (showNode && ev.nodeName) title.append(link ? h('a', { href: link, style: { color: 'inherit' } }, ev.nodeName) : ev.nodeName, ev.checkName ? ` › ${ev.checkName}` : '', ' — ');
   title.append(ev.title || m.label);
+  // An event about one of a check's metrics says which one, so a disk filling
+  // up and the memory on the same check read as the two incidents they are.
+  if (ev.metric) title.append(' ', h('span', { class: 'tag ev-metric', title: ev.metric }, metricLabel(ev.metric)));
   // Who caused it. The monitoring engine leaves this empty, so the line only
   // appears for things a person or an integration did.
   const detail = h('div', { class: 'ev-detail' });

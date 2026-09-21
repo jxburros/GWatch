@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/jxburros/GWatch/internal/checks"
@@ -102,7 +103,7 @@ func (p *bulkCheckPatch) empty() bool {
 // bulkConfigKeys are the check-configuration keys a bulk edit may set. They
 // are the ones whose meaning does not depend on the check type, so applying
 // one across a mixed selection still says something true.
-var bulkConfigKeys = []string{"certWarnDays", "latencyWarnMs", "packetLossWarnPct", "pingMethod"}
+var bulkConfigKeys = []string{"certWarnDays", "latencyWarnMs", "metricThresholds", "packetLossWarnPct", "pingMethod"}
 
 // bulkChange is one line of "what this edit did", kept with the scope it
 // applied to so the audit entry can say "on 14 checks" rather than "on 14".
@@ -458,6 +459,23 @@ func applyCheckPatch(p *bulkCheckPatch, c *model.Check) error {
 			err = json.Unmarshal(raw, &c.Config.CertWarnDays)
 		case "pingMethod":
 			err = json.Unmarshal(raw, &c.Config.PingMethod)
+		case "metricThresholds":
+			// Hardware thresholds, merged by metric key: an entry in the
+			// patch replaces the check's entry for that key and leaves the
+			// rest alone, so "raise the disk warning on every NAS" does not
+			// also reset their memory thresholds. Only a hardware check has
+			// these; on any other type the key means nothing and is skipped.
+			if c.Type != model.CheckSystem {
+				continue
+			}
+			var list []model.MetricThreshold
+			if err = json.Unmarshal(raw, &list); err == nil {
+				err = model.ValidateMetricThresholds(list)
+			}
+			if err == nil {
+				c.Config.NormalizeMetricThresholds()
+				c.Config.MetricThresholds = mergeMetricThresholds(c.Config.MetricThresholds, list)
+			}
 		default:
 			unknown = append(unknown, k)
 			continue
@@ -472,6 +490,29 @@ func applyCheckPatch(p *bulkCheckPatch, c *model.Check) error {
 			strings.Join(quoteAll(unknown), ", "), strings.Join(quoteAll(bulkConfigKeys), ", "))
 	}
 	return nil
+}
+
+// mergeMetricThresholds replaces, in the check's list, every entry whose key
+// the patch names, and appends the keys it did not have. An entry in the
+// patch with neither level clears that key's thresholds. The result is sorted
+// the way the editor lists them.
+func mergeMetricThresholds(have, patch []model.MetricThreshold) []model.MetricThreshold {
+	out := make([]model.MetricThreshold, 0, len(have)+len(patch))
+	replaced := map[string]bool{}
+	for _, p := range patch {
+		replaced[strings.TrimSpace(p.Metric)] = true
+	}
+	for _, t := range have {
+		if !replaced[t.Metric] {
+			out = append(out, t)
+		}
+	}
+	for _, p := range patch {
+		p.Metric = strings.TrimSpace(p.Metric)
+		out = append(out, p)
+	}
+	model.SortMetricThresholds(out)
+	return out
 }
 
 // ---- saying what happened ----
@@ -576,6 +617,18 @@ func describeCheckPatch(p *bulkCheckPatch) []bulkChange {
 				add("ping method → global setting")
 			} else {
 				add("ping method → " + value)
+			}
+		case "metricThresholds":
+			var list []model.MetricThreshold
+			_ = json.Unmarshal(raw, &list)
+			for _, t := range list {
+				level := func(v *float64) string {
+					if v == nil {
+						return "off"
+					}
+					return strconv.FormatFloat(*v, 'f', -1, 64)
+				}
+				add(fmt.Sprintf("%s thresholds → warning %s, critical %s", t.Metric, level(t.Warn), level(t.Crit)))
 			}
 		}
 	}

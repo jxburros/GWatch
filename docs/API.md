@@ -434,8 +434,11 @@ field the object leaves out goes back to following the global setting), and an
 explicit `null` clears it.
 
 `config` is a whitelist of keys whose meaning does not depend on the check type:
-`latencyWarnMs`, `packetLossWarnPct`, `pingMethod`, `certWarnDays`. Any other
-key is a 400 naming it and listing the ones that would have worked.
+`latencyWarnMs`, `packetLossWarnPct`, `pingMethod`, `certWarnDays`, plus
+`metricThresholds`, which is merged by metric key onto every `system` check in the
+selection and skipped on every other type (see
+[Hardware check metrics](#hardware-check-metrics)). Any other key is a 400 naming it
+and listing the ones that would have worked.
 
 **Check type changes are not supported.** A check's type decides what its
 configuration means, so changing it in bulk would leave every check it touched
@@ -496,9 +499,20 @@ types write it:
   The result's message names the recording (`json "temp" = 42.5; recorded value = 42.5
   °C`) and, when a threshold is crossed, says which one.
 
+- A **system** (hardware health) check writes one entry per reading the machine
+  reported, keyed as described under [Hardware check metrics](#hardware-check-metrics):
+  `cpu`, `memory`, `swap`, `load`, `disk:<mount>`, `inodes:<mount>`,
+  `net:<iface>.rx`, `net:<iface>.tx`, `diskio:<dev>.read`, `diskio:<dev>.write`,
+  `diskio:<dev>.busy`. Each also has its own verdict in
+  `Result.details.metricResults`.
+
 Every other check type leaves `metrics` absent.
 
 - `GET /api/history?checkId=ID&range=…&metric=<name>` → `HistorySeries` for that metric.
+  For a hardware check the four singleton keys are always accepted, and so is any
+  key the check's **newest result** carried (`disk:/srv` once the machine has
+  reported that filesystem); `metricUnit` is worked out from the key (`%`, `B/s`,
+  or empty for load).
   The series carries `metric` and `metricUnit`, each point carries `value`, and `avgMs`,
   `minMs` and `maxMs` carry the same number so that a chart drawn from a series' latency
   fields plots a named metric unchanged. `GET /api/export/history.csv` takes `metric=`
@@ -527,6 +541,81 @@ Every other check type leaves `metrics` absent.
   `netTxBytesPerSec`, `diskReadBytesPerSec`, `diskWriteBytesPerSec`), not the whole
   snapshot. Readings are averaged into at most 600 buckets; a metric no reading in a
   bucket carried stays absent rather than becoming zero.
+
+### Hardware check metrics
+
+A `system` check reads a whole machine in one run, but judges, records and reports
+each reading as a metric of its own (#60).
+
+**Keys.** `cpu`, `memory`, `swap` and `load` (load average per core) are the readings
+a machine has one of. The rest are `family:instance`: `disk:/srv` and `inodes:/srv`
+per filesystem; `net:eth0.rx` and `net:eth0.tx` per interface (bytes/s received and
+sent); `diskio:sda.read`, `diskio:sda.write` (bytes/s) and `diskio:sda.busy` (%) per
+block device. Units follow the family: `%` for everything but `load` (no unit) and
+the throughput keys (`B/s`).
+
+**Per-metric verdicts.** Every run puts one `MetricResult` per reading in
+`Result.details.metricResults`:
+
+```json
+{ "key": "disk:/srv", "label": "Disk /srv", "value": 88, "unit": "%", "status": "degraded",
+  "reason": "Disk /srv is 88%, at or above the 85% warning threshold" }
+```
+
+`status` is that metric's own verdict — `up`, `degraded` (at or past its warning
+level) or `down` (at or past its critical level). The check's `status` is the worst
+of them; `warnings` carries the reasons of the degraded ones and `error` those of the
+critical ones, as before. A reading the machine did not report (no swap, no load on
+Windows) is simply absent. `Result.metrics` holds the same values keyed the same way,
+which is what `/api/history?metric=` serves. A stale reading (see `staleAfterSeconds`)
+fails the whole check and carries no metric results.
+
+**Thresholds.** `config.metricThresholds` is a list:
+
+```json
+"metricThresholds": [
+  { "metric": "cpu",       "warn": 90 },
+  { "metric": "memory",    "warn": 90, "crit": 97 },
+  { "metric": "disk",      "warn": 85, "crit": 95 },
+  { "metric": "disk:/srv", "warn": 95 },
+  { "metric": "net:eth0.rx", "warn": 1000, "crit": 100, "below": true }
+]
+```
+
+| field | meaning |
+| --- | --- |
+| `metric` | a family — `cpu`, `memory`, `swap`, `load`, `disk`, `inodes`, `net`, `diskio` — or an instance key. An instance entry replaces its family's for that instance alone; `net:eth0` and `diskio:sda` cover both directions of that interface or device, `net:eth0.rx` one of them. `cpu`, `memory`, `swap` and `load` take no instance. |
+| `warn`, `crit` | the levels; a missing level is off. Crossing `warn` makes the metric (and so the check) degraded, crossing `crit` makes it down. On an "above" threshold a level of `0` is also off, so an older configuration that said "0 turns it off" still means that. |
+| `below` | `true` for a reading where less is worse: the levels are then crossed at or *below* the number, and `crit` must be at or below `warn`. |
+
+Validation: a percentage family's levels are 0–100, a rate's are non-negative,
+`crit` is at or above `warn` (at or below with `below`), no two entries name the same
+key, and the family must be one of the eight. A family that is listed with no levels,
+or not listed at all, is still measured and charted; it just never alerts. A check
+saved with an empty list gets `SystemDefaults` (cpu 90; memory 90/97; swap 50; disk
+and inodes 85/95; load 2).
+
+The flat fields that preceded the list — `cpuWarnPct`, `cpuCritPct`, `memWarnPct`,
+`memCritPct`, `swapWarnPct`, `diskWarnPct`, `diskCritPct`, `loadWarnPerCore`,
+`loadCritPerCore` — are **deprecated**. They are still read (with `0` meaning off, and
+inodes following the disk pair when `diskCritPct` is set) when `metricThresholds` is
+empty, and a check saved with them is converted to the list and stored without them.
+`diskMounts` and `staleAfterSeconds` are unchanged.
+
+**Incidents and state.** A metric crossing its warning or critical level writes a
+`warning` event with `metric` set to its key (title `Disk /srv warning` or
+`Disk /srv critical`, detail the reason); it coming back writes `warning_cleared`
+with the same `metric`. Each metric's timeline is independent of the others'. A
+metric the machine stops reporting has its open warning cleared. `CheckState.metricStatus`
+is `{ "<key>": "degraded"|"down" }` for every metric currently outside its thresholds
+(absent when all are within them). The check-level `down`/`recovered` events, the
+down alert and its cooldown are unchanged; `warningActive` stays `false` on a check
+judged per metric.
+
+**Bulk edit.** `config.metricThresholds` in a `PATCH /api/nodes/bulk` check patch is
+merged by key: each entry replaces the check's entry for that key and the rest of the
+list is kept. It applies only to `system` checks; other checks in the selection are
+left alone. The same validation applies.
 
 Registering a machine mints a credential, so those routes sit with the other credential
 routes — an administrator in the browser, never an API key:
@@ -619,6 +708,11 @@ Every `Event` carries an optional `actor` naming who caused it — `"local"`, `"
 rejected credential. It is absent on events the monitoring engine produces by itself
 (check results, the scheduler, alerts). Sign-ins, sign-outs, failed sign-ins and every
 account or API-key change are recorded with the `auth` event type.
+
+An event about one of a check's metrics rather than the check as a whole — a hardware
+check's `warning` / `warning_cleared` for `disk:/srv` — carries the metric's key in
+`metric` (see [Hardware check metrics](#hardware-check-metrics)). It is absent on
+every other event.
 
 ## Maintenance windows
 
@@ -717,7 +811,8 @@ See [`docs/RECIPES.md`](RECIPES.md) for copy-pasteable trigger/endpoint recipes 
 
 - `GET /api/automation/meta` → conditions, interpreters, default interpreter, placeholder names, `minTokenLength` and `tokenlessEndpoints` (`[{id, name, slug}]` — endpoints anyone who can reach the port may call).
 - `GET /api/triggers?nodeId=` → `[Trigger]`. `POST /api/triggers`, `PUT /api/triggers/{id}`, `DELETE /api/triggers/{id}`.
-  A trigger: `{ nodeId, name, description, enabled, on: ["down","recovered","degraded","warning_cleared","cert_warning","content_changed","affected_by_parent","status_change","any_failure","any_success","latency_over"], checkId: null|id, latencyOverMs, cooldownMinutes, action }` plus run statistics (`lastRunAt`, `lastStatus`, `lastOutput`, `runCount`).
+  A trigger: `{ nodeId, name, description, enabled, on: ["down","recovered","degraded","warning_cleared","cert_warning","content_changed","affected_by_parent","status_change","any_failure","any_success","latency_over","metric_over"], checkId: null|id, latencyOverMs, metric, metricOver, cooldownMinutes, action }` plus run statistics (`lastRunAt`, `lastStatus`, `lastOutput`, `runCount`).
+  `metric_over` fires on a run whose `Result.metrics[metric]` is above `metricOver` — a hardware check's `disk:/srv` or `cpu`, an SNMP check's OID name, a json check's recorded value — regardless of the check's own thresholds; saving it without `metric` is a 400. A hardware check's per-metric `warning` / `warning_cleared` events satisfy `degraded` / `warning_cleared` like any other.
 - `POST /api/triggers/{id}/run` → `ActionResult` (runs it now with the node's current state).
 - `POST /api/actions/test` body `{ "action": Action, "nodeId": null|id }` → `ActionResult` (nothing recorded).
 - `GET /api/endpoints` → `[Endpoint]`. `POST /api/endpoints`, `PUT /api/endpoints/{id}`, `DELETE /api/endpoints/{id}`, `POST /api/endpoints/{id}/run`.
@@ -739,7 +834,7 @@ An `Action` is `{ "type": "http|slack|teams|ntfy|pushover|git|script|run_node", 
 
 `slack`, `teams`, `ntfy` and `pushover` all default `title` to `"GWatch {{instance}}"` and `message` to `"{{node.name}} is {{status}}: {{message}}"` when left blank; both fields are JSON-safe (or form/header-safe) no matter what characters `{{message}}` expands to, since the payload is built with `encoding/json` (or form-encoding for Pushover, headers for ntfy) instead of string concatenation.
 
-String fields may contain `{{placeholders}}`: `node.name`, `node.host`, `node.group` (the node's first group), `node.groups` (all of them, comma-separated), `check.name`, `check.type`, `target`, `status`, `prev_status`, `message`, `error`, `success`, `latencyMs`, `lossPct`, `statusCode`, `failures`, `event`, `ts`, `instance`, `body`, `query.<name>`. Scripts also receive them as `GWATCH_*` environment variables (`node.name` → `GWATCH_NODE_NAME`).
+String fields may contain `{{placeholders}}`: `node.name`, `node.host`, `node.group` (the node's first group), `node.groups` (all of them, comma-separated), `check.name`, `check.type`, `target`, `status`, `prev_status`, `message`, `error`, `success`, `latencyMs`, `lossPct`, `statusCode`, `failures`, `event`, `ts`, `instance`, `metric`, `metric.label`, `metric.value`, `metric.status` (the metric a metric-scoped event or a `metric_over` condition fired on; empty otherwise), `metrics.<key>` (every named metric of the run — a key's characters other than letters, digits, dots and dashes become `_`, so `disk:/srv` is `{{metrics.disk__srv}}`), `body`, `query.<name>`. Scripts also receive them as `GWATCH_*` environment variables (`node.name` → `GWATCH_NODE_NAME`).
 
 A placeholder value can be anything an HTTP caller or a monitored device sent, so inside the **code of a script action** it is never spliced in as raw text. It is replaced by something the interpreter cannot re-parse as code:
 

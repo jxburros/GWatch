@@ -314,20 +314,28 @@ type CheckConfig struct {
 	MetricsURL   string     `json:"metricsUrl,omitempty"`   // HostSourceURL: the endpoint to read
 	MetricsToken string     `json:"metricsToken,omitempty"` // HostSourceURL: bearer token for that endpoint
 
-	// Hardware thresholds, all percentages except LoadWarnPerCore. A warning
-	// threshold makes the check degraded, a critical one makes it down; 0
-	// turns that threshold off. Thresholds is what the check is for, so a new
-	// system check is created with SystemDefaults rather than with none.
-	CPUWarnPct      float64  `json:"cpuWarnPct,omitempty"`
-	CPUCritPct      float64  `json:"cpuCritPct,omitempty"`
-	MemWarnPct      float64  `json:"memWarnPct,omitempty"`
-	MemCritPct      float64  `json:"memCritPct,omitempty"`
-	SwapWarnPct     float64  `json:"swapWarnPct,omitempty"`
-	DiskWarnPct     float64  `json:"diskWarnPct,omitempty"`
-	DiskCritPct     float64  `json:"diskCritPct,omitempty"`
-	DiskMounts      []string `json:"diskMounts,omitempty"` // only these mount points; empty means every one
-	LoadWarnPerCore float64  `json:"loadWarnPerCore,omitempty"`
-	LoadCritPerCore float64  `json:"loadCritPerCore,omitempty"`
+	// Hardware thresholds, one entry per metric family or per named instance
+	// (see MetricThreshold). A warning threshold makes that metric — and so
+	// the check — degraded, a critical one makes it down. Thresholds are what
+	// the check is for, so a new system check is created with SystemDefaults
+	// rather than with none. Read them through EffectiveMetricThresholds,
+	// which also understands the flat fields below.
+	MetricThresholds []MetricThreshold `json:"metricThresholds,omitempty"`
+	DiskMounts       []string          `json:"diskMounts,omitempty"` // only these mount points; empty means every one
+
+	// Deprecated: the flat per-family thresholds every hardware check had
+	// before MetricThresholds. They are still read so an old configuration
+	// keeps working, and the API converts them to the list when a check is
+	// saved; nothing writes them any more. 0 means off.
+	CPUWarnPct      float64 `json:"cpuWarnPct,omitempty"`
+	CPUCritPct      float64 `json:"cpuCritPct,omitempty"`
+	MemWarnPct      float64 `json:"memWarnPct,omitempty"`
+	MemCritPct      float64 `json:"memCritPct,omitempty"`
+	SwapWarnPct     float64 `json:"swapWarnPct,omitempty"`
+	DiskWarnPct     float64 `json:"diskWarnPct,omitempty"`
+	DiskCritPct     float64 `json:"diskCritPct,omitempty"`
+	LoadWarnPerCore float64 `json:"loadWarnPerCore,omitempty"`
+	LoadCritPerCore float64 `json:"loadCritPerCore,omitempty"`
 	// StaleAfterSeconds is how old a reading may be before the check reports
 	// the machine as down. 0 means three times the check interval.
 	StaleAfterSeconds int `json:"staleAfterSeconds,omitempty"`
@@ -377,8 +385,34 @@ func (c Check) MetricUnits() map[string]string {
 		if c.Config.JSONRecord {
 			units[c.Config.JSONMetricName()] = strings.TrimSpace(c.Config.JSONUnit)
 		}
+	case CheckSystem:
+		// The four readings every machine has are always measured. Disks,
+		// interfaces and block devices are only known once a reading has
+		// arrived, so here they are listed only where a threshold names one;
+		// the API also accepts any key the check's latest result carried.
+		for _, key := range []string{MetricCPU, MetricMemory, MetricSwap, MetricLoad} {
+			units[key] = SystemMetricUnit(key)
+		}
+		for _, t := range c.Config.EffectiveMetricThresholds() {
+			if _, instance := SplitMetricKey(t.Metric); instance != "" {
+				units[t.Metric] = SystemMetricUnit(t.Metric)
+			}
+		}
 	}
 	return units
+}
+
+// MetricUnit is the unit of one named metric, looked up by key. For a hardware
+// check the key may name a disk or interface the configuration never listed,
+// so the unit comes from the key's family rather than from the check.
+func (c Check) MetricUnit(name string) string {
+	if u, ok := c.MetricUnits()[name]; ok {
+		return u
+	}
+	if c.Type == CheckSystem {
+		return SystemMetricUnit(name)
+	}
+	return ""
 }
 
 // SNMPOID is one reading an SNMP check takes, with the thresholds that decide
@@ -432,22 +466,29 @@ type SNMPValue struct {
 // what the check does is what the edit screen shows.
 func SystemDefaults() CheckConfig {
 	return CheckConfig{
-		CPUWarnPct:      90,
-		MemWarnPct:      90,
-		MemCritPct:      97,
-		SwapWarnPct:     50,
-		DiskWarnPct:     85,
-		DiskCritPct:     95,
-		LoadWarnPerCore: 2,
+		MetricThresholds: []MetricThreshold{
+			{Metric: MetricCPU, Warn: Float(90)},
+			{Metric: MetricMemory, Warn: Float(90), Crit: Float(97)},
+			{Metric: MetricSwap, Warn: Float(50)},
+			{Metric: MetricDisk, Warn: Float(85), Crit: Float(95)},
+			{Metric: MetricInodes, Warn: Float(85), Crit: Float(95)},
+			{Metric: MetricLoad, Warn: Float(2)},
+		},
 	}
 }
+
+// Float returns a pointer to v, for filling optional thresholds inline.
+func Float(v float64) *float64 { return &v }
 
 // HasSystemThresholds reports whether any hardware threshold is set. A check
 // with none would never alert, so the API fills in SystemDefaults instead.
 func (c CheckConfig) HasSystemThresholds() bool {
-	return c.CPUWarnPct > 0 || c.CPUCritPct > 0 || c.MemWarnPct > 0 || c.MemCritPct > 0 ||
-		c.SwapWarnPct > 0 || c.DiskWarnPct > 0 || c.DiskCritPct > 0 ||
-		c.LoadWarnPerCore > 0 || c.LoadCritPerCore > 0
+	for _, t := range c.EffectiveMetricThresholds() {
+		if t.Warn != nil || t.Crit != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // AlertOverride lets a check override global alert defaults. Nil pointers
@@ -533,9 +574,11 @@ type ResultDetails struct {
 	// key=value control lines), capped at 8 KiB.
 	Output string `json:"output,omitempty"`
 
-	// System: the hardware reading the check evaluated, and how old it was.
-	Host       *HostMetrics `json:"host,omitempty"`
-	HostAgeSec *float64     `json:"hostAgeSeconds,omitempty"`
+	// System: the hardware reading the check evaluated, how old it was, and
+	// each metric's own reading and verdict.
+	Host          *HostMetrics   `json:"host,omitempty"`
+	HostAgeSec    *float64       `json:"hostAgeSeconds,omitempty"`
+	MetricResults []MetricResult `json:"metricResults,omitempty"`
 
 	// SNMP: every OID the run asked for, in the order the check lists them.
 	SNMP []SNMPValue `json:"snmp,omitempty"`
@@ -574,9 +617,14 @@ type CheckState struct {
 	AffectedByNodeName  string     `json:"affectedByNodeName,omitempty"`
 	WarningActive       bool       `json:"warningActive"`
 	CertWarningActive   bool       `json:"certWarningActive"`
-	LastContentHash     string     `json:"-"`
-	LastContentValue    string     `json:"-"`
-	Running             bool       `json:"running"`
+	// MetricStatus is the last verdict of each metric a check reports
+	// separately (a hardware check's processor, memory, each disk ...), keyed
+	// by metric key. It is what lets a disk's warning begin and clear on its
+	// own timeline while the memory warning on the same check stays open.
+	MetricStatus     map[string]Status `json:"metricStatus,omitempty"`
+	LastContentHash  string            `json:"-"`
+	LastContentValue string            `json:"-"`
+	Running          bool              `json:"running"`
 }
 
 // EventType enumerates the incident timeline entries.
@@ -626,6 +674,9 @@ type Event struct {
 	Title     string          `json:"title"`
 	Detail    string          `json:"detail"`
 	Meta      json.RawMessage `json:"meta,omitempty"`
+	// Metric is set on an event about one of a check's metrics rather than
+	// the check as a whole: "disk:/srv" filling up, "memory" back to normal.
+	Metric string `json:"metric,omitempty"`
 	// Actor names who caused the event, e.g. "local", "pat (admin)" or
 	// "api key Home Assistant (read-write)". It is empty for events the
 	// monitoring engine produces by itself (check results, the scheduler).
@@ -1318,7 +1369,7 @@ type ActionResult struct {
 // TriggerConditions lists the conditions a trigger can react to.
 var TriggerConditions = []string{
 	"down", "recovered", "degraded", "warning_cleared", "cert_warning", "content_changed",
-	"affected_by_parent", "status_change", "any_failure", "any_success", "latency_over",
+	"affected_by_parent", "status_change", "any_failure", "any_success", "latency_over", "metric_over",
 }
 
 // Trigger runs an action when something happens on a node.
@@ -1331,6 +1382,8 @@ type Trigger struct {
 	On              []string   `json:"on"`                      // conditions, see TriggerConditions
 	CheckID         *int64     `json:"checkId"`                 // optional: only this check
 	LatencyOverMS   float64    `json:"latencyOverMs,omitempty"` // for the latency_over condition
+	Metric          string     `json:"metric,omitempty"`        // metric_over: which of the check's metrics, by key
+	MetricOver      float64    `json:"metricOver,omitempty"`    // metric_over: fire when that metric is above this
 	Action          Action     `json:"action"`
 	CooldownMinutes int        `json:"cooldownMinutes"`
 	LastRunAt       *time.Time `json:"lastRunAt"`

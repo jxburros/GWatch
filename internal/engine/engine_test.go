@@ -18,12 +18,18 @@ type fakeNet struct {
 	mu   sync.Mutex
 	down map[int64]bool // check id -> failing
 	runs map[int64]int
+	// custom hands a check a result of the test's own making — a hardware
+	// reading with per-metric verdicts, say — in place of the stock one.
+	custom map[int64]func() model.Result
 }
 
 func (f *fakeNet) run(ctx context.Context, c model.Check, opts checks.Options) model.Result {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.runs[c.ID]++
+	if make, ok := f.custom[c.ID]; ok {
+		return make()
+	}
 	lat := 10.0
 	if f.down[c.ID] {
 		return model.Result{Timestamp: time.Now(), Success: false, Status: model.StatusDown, Message: "connection refused", Error: "dial tcp: connection refused", Attempts: 1}

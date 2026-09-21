@@ -127,6 +127,15 @@ export const BULK_FIELDS = [
     summary: (v) => `set the certificate warning to ${v} days`,
   },
   {
+    key: 'metricThresholds', scope: 'check', path: 'config.metricThresholds', group: 'Thresholds',
+    label: 'Hardware threshold', kind: 'metric-threshold', value: { metric: 'disk', warn: 85, crit: 95 },
+    help: 'Hardware checks only. Sets the warning and critical pair for one metric — a family such as disk, or one instance such as disk:/srv — and leaves the check’s other thresholds alone. Leave a level blank to turn it off.',
+    summary: (v) => {
+      const level = (x) => (x == null || x === '' ? 'off' : String(x));
+      return `set the ${v?.metric || 'hardware'} thresholds to warning ${level(v?.warn)}, critical ${level(v?.crit)}`;
+    },
+  },
+  {
     key: 'pingMethod', scope: 'check', path: 'config.pingMethod', group: 'Thresholds',
     label: 'Ping method', kind: 'select', options: () => PING_METHOD_OPTIONS, value: '',
     help: 'Ping checks only. Built-in sends the echo requests itself; system ping runs the operating system\'s command.',
@@ -245,6 +254,14 @@ export function bulkValue(field, raw) {
     case 'tri-state': return raw === '' || raw == null ? null : raw === 'true';
     case 'chips': return [...(raw || [])];
     case 'none': return field.value ?? null;
+    case 'metric-threshold': {
+      // The server merges by metric key, so one entry travels as a list of
+      // one. A blank level is left out rather than sent as zero: absent is
+      // what "off" means on the server.
+      const row = { metric: String(raw?.metric || '').trim() };
+      for (const k of ['warn', 'crit']) if (raw?.[k] !== '' && raw?.[k] != null && !isNaN(Number(raw[k]))) row[k] = Number(raw[k]);
+      return [row];
+    }
     case 'select':
       if (field.path === 'dependsOnNodeId') return raw ? Number(raw) : null;
       if (field.path === 'intervalSeconds') return Number(raw);

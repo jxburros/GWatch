@@ -10,7 +10,7 @@
 // the same rows that go into the body, not from a second description of them.
 
 import { api } from '../api.js';
-import { h, icon, clear, replace, field, numberInput, selectInput, chipInput, toast, confirmDialog, emptyState, skeleton, checkTypeLabel, busy, statusWord, uid } from '../components.js';
+import { h, icon, clear, replace, field, textInput, numberInput, selectInput, chipInput, toast, confirmDialog, emptyState, skeleton, checkTypeLabel, busy, statusWord, uid } from '../components.js';
 import { interval as fmtInterval, nodeGroups, inGroup } from '../fmt.js';
 import { BULK_FIELDS, bulkField, bulkValue, setPath, ON_OFF_OPTIONS, TRI } from './node-fields.js';
 
@@ -284,6 +284,19 @@ export async function mount(root, ctx) {
       case 'none':
         input = h('p', { class: 'dim small', style: { margin: '6px 0 0' } }, 'No value needed.');
         break;
+      case 'metric-threshold': {
+        // Which metric, then its warning and critical levels. The key is
+        // free text so an instance ("disk:/srv") can be named as well as a
+        // family; the datalist offers the families.
+        const v = row.value = { ...(row.value || {}) };
+        const keyIn = textInput({ value: v.metric || '', list: 'bulk-metric-keys', placeholder: 'e.g. disk or disk:/srv', 'aria-label': 'Metric', oninput: () => { v.metric = keyIn.value; renderSummary(); } });
+        const datalist = h('datalist', { id: 'bulk-metric-keys' }, ...['cpu', 'memory', 'swap', 'load', 'disk', 'inodes', 'net', 'diskio'].map((k) => h('option', { value: k })));
+        const warnIn = numberInput({ value: v.warn ?? '', min: 0, step: 'any', placeholder: 'off', 'aria-label': 'Warning level', oninput: () => { v.warn = warnIn.value === '' ? '' : Number(warnIn.value); renderSummary(); } });
+        const critIn = numberInput({ value: v.crit ?? '', min: 0, step: 'any', placeholder: 'off', 'aria-label': 'Critical level', oninput: () => { v.crit = critIn.value === '' ? '' : Number(critIn.value); renderSummary(); } });
+        input = h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } }, keyIn, datalist,
+          h('span', { class: 'dim small' }, 'warn'), warnIn, h('span', { class: 'dim small' }, 'crit'), critIn);
+        break;
+      }
       default: {
         const num = numberInput({ value: row.value, min: f.min ?? 0, max: f.max, oninput: () => { row.value = Number(num.value) || 0; renderSummary(); } });
         input = f.unit ? h('div', { class: 'input-with-unit' }, num, h('span', { class: 'unit' }, f.unit)) : num;

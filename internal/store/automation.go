@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS endpoints (
 
 // ---- triggers ----
 
-const triggerCols = `id, node_id, name, description, enabled, conditions, check_id, latency_over_ms, action, cooldown_minutes, last_run_at, last_status, last_output, run_count, created_at, updated_at`
+const triggerCols = `id, node_id, name, description, enabled, conditions, check_id, latency_over_ms, metric, metric_over, action, cooldown_minutes, last_run_at, last_status, last_output, run_count, created_at, updated_at`
 
 func scanTrigger(sc interface{ Scan(...any) error }) (model.Trigger, error) {
 	var t model.Trigger
@@ -63,7 +63,7 @@ func scanTrigger(sc interface{ Scan(...any) error }) (model.Trigger, error) {
 	var conds, action, created, updated string
 	var check sql.NullInt64
 	var lastRun sql.NullString
-	if err := sc.Scan(&t.ID, &t.NodeID, &t.Name, &t.Description, &enabled, &conds, &check, &t.LatencyOverMS, &action, &t.CooldownMinutes, &lastRun, &t.LastStatus, &t.LastOutput, &t.RunCount, &created, &updated); err != nil {
+	if err := sc.Scan(&t.ID, &t.NodeID, &t.Name, &t.Description, &enabled, &conds, &check, &t.LatencyOverMS, &t.Metric, &t.MetricOver, &action, &t.CooldownMinutes, &lastRun, &t.LastStatus, &t.LastOutput, &t.RunCount, &created, &updated); err != nil {
 		return t, err
 	}
 	t.Enabled = enabled == 1
@@ -123,16 +123,16 @@ func (s *Store) SaveTrigger(ctx context.Context, t model.Trigger) (model.Trigger
 	t.UpdatedAt = now
 	if t.ID == 0 {
 		t.CreatedAt = now
-		res, err := s.Exec(ctx, `INSERT INTO triggers(node_id, name, description, enabled, conditions, check_id, latency_over_ms, action, cooldown_minutes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			t.NodeID, t.Name, t.Description, boolInt(t.Enabled), jsonString(t.On), nullInt64(t.CheckID), t.LatencyOverMS, jsonString(t.Action), t.CooldownMinutes, fmtTime(now), fmtTime(now))
+		res, err := s.Exec(ctx, `INSERT INTO triggers(node_id, name, description, enabled, conditions, check_id, latency_over_ms, metric, metric_over, action, cooldown_minutes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			t.NodeID, t.Name, t.Description, boolInt(t.Enabled), jsonString(t.On), nullInt64(t.CheckID), t.LatencyOverMS, t.Metric, t.MetricOver, jsonString(t.Action), t.CooldownMinutes, fmtTime(now), fmtTime(now))
 		if err != nil {
 			return t, err
 		}
 		t.ID, _ = res.LastInsertId()
 		return t, nil
 	}
-	res, err := s.Exec(ctx, `UPDATE triggers SET node_id=?, name=?, description=?, enabled=?, conditions=?, check_id=?, latency_over_ms=?, action=?, cooldown_minutes=?, updated_at=? WHERE id=?`,
-		t.NodeID, t.Name, t.Description, boolInt(t.Enabled), jsonString(t.On), nullInt64(t.CheckID), t.LatencyOverMS, jsonString(t.Action), t.CooldownMinutes, fmtTime(now), t.ID)
+	res, err := s.Exec(ctx, `UPDATE triggers SET node_id=?, name=?, description=?, enabled=?, conditions=?, check_id=?, latency_over_ms=?, metric=?, metric_over=?, action=?, cooldown_minutes=?, updated_at=? WHERE id=?`,
+		t.NodeID, t.Name, t.Description, boolInt(t.Enabled), jsonString(t.On), nullInt64(t.CheckID), t.LatencyOverMS, t.Metric, t.MetricOver, jsonString(t.Action), t.CooldownMinutes, fmtTime(now), t.ID)
 	if err != nil {
 		return t, err
 	}
