@@ -17,7 +17,7 @@ became, and what still needs a human:
 |---|---|---|
 | 1.1 endpoint tokens | `internal/api/automation.go`, Settings › Automation banner | — |
 | 1.2 script placeholders | `internal/actions` (`expandScriptCode`, `buildGitArgs`, `allowUntrustedInput`) | `cmd` scripts get a sanitized literal, not a reference (cmd re-parses `%VAR%`); documented |
-| 1.3 signed updates | `internal/update/sign.go`, `cmd/gwatch-sign`, `docs/RELEASING.md` | **Generate the release key, paste the public key into `internal/update/release_keys.txt`, add the `GWATCH_SIGNING_KEY` secret.** Until then self-update reports releases but refuses to install them (fail closed) |
+| 1.3 signed updates | `internal/update/sign.go`, `cmd/gwatch-sign`, `docs/RELEASING.md` | Done. The key is pinned in `internal/update/release_keys.txt` and the `GWATCH_SIGNING_KEY` secret is set — CI refuses a release if either is missing, and v0.2.0 onwards published through it |
 | 1.4 secrets at rest | `internal/secrets`, `gwatch.key` next to `gwatch.db` | — |
 | 2.1 admin/viewer accounts | `internal/auth`, `internal/api/policy.go`, Settings › Users & access, audit `actor` | — |
 | 2.2 API keys, `/api/v1`, custom checks | `internal/api/auth.go`, `internal/checks/custom.go` | — |
@@ -27,6 +27,21 @@ became, and what still needs a human:
 | 3.1 / 3.2 MCP server | separate module `mcp/` (`gwatch-mcp`), read-only by default; Settings › AI & MCP, `skill/` | Resolved: the tag scheme is `mcp/vX.Y.Z` (`docs/RELEASING.md`), and the in-app set-up page plus the versioned agent skill (#56) cover the "how do I set it up" gap |
 | 3.3 trigger recipes | `docs/RECIPES.md` | — |
 | 4.1 Windows installer | `scripts/installer/gwatch.iss`, `docs/INSTALL.md` | Not yet compiled on a Windows machine; run the CI job once and test install/upgrade/uninstall by hand |
+
+Work that has landed since the phases above, none of which was on this roadmap when it
+was written:
+
+| Item | Where it lives | Follow-up |
+|---|---|---|
+| Docker image (#51) | `Dockerfile`, `docker-compose.yml`, `docs/DOCKER.md` | 4.2's remaining gap: a first-run flow that does not need `docker exec` |
+| PostgreSQL / MySQL backends (#34) | `internal/store` dialect layer, `internal/dbconfig`, `gwatch migrate-db`, `docs/DATABASE.md` | SQLite stays the default and is what releases are tested against first |
+| Build-time SQLite driver choice (#48) | `internal/store/driver*.go`, `-tags sqlite_ncruces` / `sqlite_cgo` | — |
+| SNMP checks (#39) | `internal/checks/snmp.go`, `docs/SNMP.md` | Came off the non-goals list — see the constraints at the bottom |
+| Per-metric hardware readings (#60) | `metricThresholds`, `internal/hostmon`, `docs/HARDWARE.md` | — |
+| Notification rules across nodes (#31) | `internal/engine/rules.go`, Settings › Rules, `docs/API.md` → Rules | Hold timers and metric conditions deliberately deferred — see Open decisions |
+| JSON checks record their value (#55) | `jsonRecord` and friends in `internal/checks/http.go`, `docs/RECIPES.md` | — |
+| Settings › AI & MCP and the agent skill (#56) | `internal/api/mcp.go`, `skill/` | — |
+| Accessibility pass (#38) | `web/`, `tests/e2e/` (Playwright + axe in CI) | — |
 
 ## Phase 1 — Now: security hardening (blocking; do before any public release)
 
@@ -228,10 +243,31 @@ promise.
 
 ## Explicit non-goals (keep scope from drifting toward Zabbix/PRTG)
 
-Do not add: SNMP, distributed/multi-site monitoring, a plugin marketplace, or full RBAC
+Do not add: distributed/multi-site monitoring, a plugin marketplace, or full RBAC
 (beyond the two-tier admin/viewer split in 2.1). Each would pull GWatch toward
 enterprise-NMS territory and away from the "basic but yours to shape" niche that's
 actually working.
+
+**SNMP was on this list and came off it** (#39, shipped in 0.2.2 — `internal/checks/snmp.go`,
+`docs/SNMP.md`). The reasoning that put it here was that SNMP is the protocol an NMS is
+built around: MIB compilation, trap receivers, auto-discovery of a device's whole
+inventory. The reasoning that took it off is that a router and a switch are the two
+devices a home network cannot do without, and SNMP is the only way to ask either one how
+it is doing — a ping says the router answers, not that its WAN interface is dropping
+frames. What keeps it from being the thin end of the wedge is the shape of what shipped,
+and that shape is the constraint to hold:
+
+- **A check, not a subsystem.** An SNMP check is a list of OIDs polled on the check's own
+  schedule, each becoming a named metric with the same thresholds an OID or a JSON
+  reading gets. It goes through the same scheduler, alerting, charting and retention as
+  every other check type. There is no separate SNMP pipeline.
+- **No MIB files, no traps.** OIDs are dotted numeric; MIB names are refused because
+  GWatch ships no MIB compiler and should not grow one. GWatch polls; it does not listen
+  for traps, which would mean an inbound listener, a trap-to-event mapping language and a
+  second alerting path.
+- **Walk to choose, not to inventory.** "Walk this device" is an editor aid for picking
+  readings by hand, capped and one device at a time. It is not auto-discovery of a
+  device's inventory, and must not become it.
 
 **Host metrics were on this list and came off it.** The reasoning that put them here was
 that agents are what turns a monitor into an NMS: a fleet to deploy, a protocol to

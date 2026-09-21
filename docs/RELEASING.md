@@ -8,13 +8,21 @@ update that does not verify is refused, not installed with a warning.
 ## Building and testing locally
 
 ```bash
-make test                         # go vet + unit and integration tests
-make ci                           # everything CI runs: gofmt, vet, go mod tidy, race tests, mcp
+make test                         # go vet + unit and integration tests (SQLite)
+make ci                           # everything CI runs: gofmt, vet, go mod tidy, race tests,
+                                  #   the mcp/ module, the jsdom web suite and the Playwright/axe suite
 make cover                        # race tests plus a per-function coverage report
+make test-postgres / test-mysql   # the store, backup, API, engine and hostmon suites against a server
+make web-check                    # node --check over every web/*.js (needs node on PATH)
+make web-test                     # the jsdom suite in tests/web/
+make web-e2e                      # Playwright + axe over every route, in tests/e2e/
+make build / build-ncruces / build-cgo   # build with each of the three SQLite drivers
 make windows                      # cross-compile dist/gwatch.exe from Linux/macOS
+make docker                       # build the container image (see DOCKER.md)
 make agent                        # build dist/gwatch-agent for this platform
 make agent-all                    # build it for Windows, Linux and macOS, amd64/arm64/arm
 make mcp-build / mcp-test / mcp-fmt   # the same, for the mcp/ module (see mcp/README.md)
+make keygen / sign / verify-release   # the release signing key and release assets (below)
 ```
 
 The test suite needs no external network: HTTP, TLS and DNS checks are exercised against
@@ -30,19 +38,19 @@ service containers.
 ## Continuous integration
 
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on every push and pull
-request as three jobs:
+request as four jobs:
 
 | Job | Runner | What it does |
 |---|---|---|
-| `ci` ("Lint, build, test (Windows)") | `windows-latest` | gofmt, vet, `go mod tidy`/`verify`, build + full test suite, the mcp/ module, web-asset `node --check`, PowerShell script parsing, and compiles both Inno Setup installers |
-| `linux` ("Test (Linux)") | `ubuntu-latest` | gofmt, vet, build, full test suite (root and mcp/), a `-race` pass over `internal/engine`, `internal/api`, `internal/store` and `internal/hostmon`, the store/backup/api suites against PostgreSQL 16 and MySQL 8 service containers ([`DATABASE.md`](DATABASE.md#for-developers)), and `govulncheck` for both modules |
+| `ci` ("Lint, build, test (Windows)") | `windows-latest` | gofmt, vet, `go mod tidy`/`verify`, build + full test suite, the mcp/ module, web-asset `node --check` plus the jsdom suite (`npm test`, `tests/web/`), PowerShell script parsing, and compiles both Inno Setup installers |
+| `linux` ("Test (Linux)") | `ubuntu-latest` | gofmt, vet, build, full test suite (root and mcp/), a `-race` pass over `internal/engine`, `internal/api`, `internal/store` and `internal/hostmon`, the store/backup/api suites against PostgreSQL 16 and MySQL 8 service containers ([`DATABASE.md`](DATABASE.md#for-developers)), `govulncheck` for both modules, and the browser accessibility suite (`npm run test:e2e` — Playwright drives Chromium through every route with an axe-core scan) |
 | `macos` ("Test (macOS)") | `macos-latest` | vet + test only — deliberately lean, but this is what actually compiles and exercises `internal/sysmetrics/collect_darwin.go` |
 | `docker` ("Container image") | `ubuntu-latest` | builds the `Dockerfile` for `linux/amd64`, checks `gwatch version` inside it, then starts the container and waits for `/api/health` to answer 200 |
 
 Windows is the only one that builds an installer or touches PowerShell, since that is the
 only platform GWatch installs itself onto as a service; Linux and macOS exist to catch a
 platform-specific regression (a build tag, a syscall, a platform-tagged file the Windows
-job never compiles) before it reaches a tag push. `release` needs the first three.
+job never compiles) before it reaches a tag push. `release` needs `ci`, `linux` and `macos`; the `docker` job is independent of it.
 
 Pushing a tag such as `v0.1.0` additionally runs the `release` job (below) and the
 `docker-publish` job (["The container image"](#the-container-image)), and pushing
@@ -54,23 +62,35 @@ Pushing a tag such as `v0.1.0` additionally runs the `release` job (below) and t
 | Path | Purpose |
 |---|---|
 | `main.go` | CLI, Windows service wrapper (kardianos/service), HTTP server bound to localhost |
+| `migrate_db.go` | `gwatch migrate-db`: copies a SQLite install into a PostgreSQL/MySQL database |
 | `internal/model` | Shared data types and JSON wire format |
-| `internal/store` | SQLite (modernc, pure Go) schema, single queued writer, rollups, history queries |
-| `internal/checks` | Check runners: ping, http, cert, tcp, dns, keyword, json; node templates |
-| `internal/engine` | Scheduler, result processing, alert rules, dependencies, maintenance, retention, health, triggers |
-| `internal/actions` | Automation actions: HTTP requests, git commands, custom scripts, run-node |
+| `internal/dbconfig` | Which database to open: flags, `GWATCH_DB_*`, `database.json`, then the SQLite default |
+| `internal/store` | Schema, migrations, single queued writer, rollups and history queries, over a dialect layer that speaks SQLite, PostgreSQL and MySQL/MariaDB |
+| `internal/checks` | Check runners: ping, http, cert, tcp, dns, keyword, json, custom, system (hardware) and snmp; node templates |
+| `internal/engine` | Scheduler, result processing, alert rules, dependencies, maintenance, retention, health, triggers, notification rules |
+| `internal/actions` | Automation actions: HTTP requests, git commands, custom scripts, run-node, and the Slack / Teams / ntfy / Pushover notifiers |
+| `internal/auth` | Roles, principals, password hashing, sessions and API-key digests |
+| `internal/secrets` | The envelope that seals individual configuration values with the machine-local `gwatch.key` |
+| `internal/discovery` | Subnet sweeps: what answers, what it is called, which ports are open |
+| `internal/hostmon` | Hardware readings: samples this machine, accepts agent pushes, answers the hardware API |
+| `internal/sysmetrics` | The platform-tagged collectors behind `hostmon` (`collect_linux.go`, `collect_darwin.go`, `collect_windows.go`) |
 | `internal/update` | GitHub release check, download, checksum, signature verification and executable swap |
-| `cmd/gwatch-sign` | Maintainer CLI: generate the release signing key, sign and verify release assets |
 | `internal/mailer` | SMTP delivery and alert email rendering |
 | `internal/backup` | Encrypted backup archives and restore |
+| `internal/logging` | The size-rotated file + in-memory service log behind `/api/logs` |
 | `internal/api` | JSON API (see [`API.md`](API.md)) and static UI serving |
+| `cmd/gwatch-agent` | The one-directional hardware agent installed on other machines ([`HARDWARE.md`](HARDWARE.md)) |
+| `cmd/gwatch-sign` | Maintainer CLI: generate the release signing key, sign and verify release assets |
+| `cmd/gwatch-rsrc/` | Builds the `.syso` resource objects that put the GWatch icon inside the Windows executables (`make rsrc`) |
 | `web/` | The browser interface (vanilla HTML/CSS/JS, no build step, embedded into the binary; open with `?mock=1` for an in-browser demo backend) |
 | `web/fonts/` | Barlow and Kode Mono, latin subsets, self-hosted so the UI still requests nothing from the internet ([SIL OFL 1.1](../web/fonts/OFL.txt)) |
+| `tests/web/` | The jsdom suite for `web/` (`make web-test`). It lives outside `web/` so `//go:embed` never ships it |
+| `tests/e2e/` | Playwright + axe over every route, in both themes (`make web-e2e`); `playwright.config.mjs` and `package.json` configure both suites |
+| `skill/` | The downloadable agent skill served by `GET /api/mcp/skill`, versioned by `skill/VERSION` |
 | `scripts/` | Windows build / install / uninstall PowerShell scripts |
-| `VERSION` | The version every build reports; a release is the tag `v<VERSION>` |
 | `scripts/installer/` | The two Inno Setup scripts, their shared branding and the wizard artwork |
-| `cmd/gwatch-rsrc/` | Builds the `.syso` resource objects that put the GWatch icon inside the Windows executables (`make rsrc`) |
-| `mcp/` | The MCP companion, a separate Go module — see [`mcp/README.md`](../mcp/README.md) |
+| `VERSION` | The version every build reports; a release is the tag `v<VERSION>` |
+| `mcp/` | The MCP companion, a separate Go module with its own `VERSION` — see [`mcp/README.md`](../mcp/README.md) |
 | `Dockerfile`, `.dockerignore`, `docker-compose.yml` | The container image (`make docker`) and a ready-to-run Compose file — see [`DOCKER.md`](DOCKER.md) |
 
 ## One-time setup

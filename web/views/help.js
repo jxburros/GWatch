@@ -263,6 +263,7 @@ function docsCard() {
     h('h2', null, 'Documentation'),
     h('p', { class: 'lead' }, 'The full manual lives with the source on GitHub and always matches the release you are running.'),
     h('div', { class: 'help-links' },
+      link(`${DOCS_URL}/USER-GUIDE.md`, 'User guide', 'Every screen and setting, in order — the long version of this page'),
       link(`${DOCS_URL}/INSTALL.md`, 'Installing on Windows', 'Setup program, upgrading, uninstalling'),
       link(`${DOCS_URL}/HARDWARE.md`, 'Hardware health', 'The agent, what is measured, thresholds'),
       link(`${DOCS_URL}/SNMP.md`, 'SNMP checks', 'Enabling SNMP, choosing OIDs, traffic in bits per second'),
