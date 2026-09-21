@@ -7,7 +7,7 @@
 GWatch is a calm monitor for a home network and its services. It runs as a Windows
 background service (or a plain console program on Linux/macOS), checks your router,
 servers, websites and APIs on a schedule, keeps long-term history in an embedded SQLite
-database, sends email alerts that do not spam, can run webhooks / git commands / scripts
+database (or on your own PostgreSQL/MySQL server — [`docs/DATABASE.md`](docs/DATABASE.md)), sends email alerts that do not spam, can run webhooks / git commands / scripts
 when something changes, and shows everything in a compact dark or light web interface
 served on `http://127.0.0.1:7230` (optionally to the rest of your LAN).
 
@@ -50,6 +50,8 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 - **Automation**: triggers and custom inbound endpoints run webhooks, Slack/Teams/ntfy/
   Pushover notifications, git commands or scripts when something changes.
 - **Wallboards** for a spare monitor or tablet, with an optional no-sign-in projected view.
+  The interface is responsive, so a narrow window or a tablet can read it, but it is built
+  for a desk: GWatch is not a phone app and is not designed to run on phone hardware.
 - **Accounts and API keys**, scoped read-only or read-write, plus opt-in **remote access**.
 - **Self-updating**, with every release cryptographically signed and verified before install.
 - **Backups**: one-click, password-encrypted, restorable on a new machine in one step.
@@ -61,6 +63,12 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 a port and whether to allow other devices on your network, then installs and starts the
 `GWatch` service. Full walkthrough (including the PowerShell-only path, upgrading and
 uninstalling): [`docs/INSTALL.md`](docs/INSTALL.md).
+
+**Docker** — `docker run -d --name gwatch -p 7230:7230 -v gwatch-data:/data --cap-add NET_RAW ghcr.io/jxburros/gwatch:latest`,
+then open `http://<the docker host>:7230` and create the first administrator account.
+Multi-arch (`linux/amd64`, `linux/arm64`), a `docker-compose.yml` in the repository root,
+and what changes inside a container (ping, discovery, hardware readings, upgrades):
+[`docs/DOCKER.md`](docs/DOCKER.md).
 
 **Linux/macOS** — run it straight from source (Go 1.26+):
 
@@ -77,6 +85,8 @@ Then open <http://127.0.0.1:7230> — monitoring runs only while this process ru
 |---|---|
 | [`docs/API.md`](docs/API.md) | The JSON API: authentication and roles, every endpoint, custom checks, platform notes |
 | [`docs/INSTALL.md`](docs/INSTALL.md) | The Windows installer walkthrough, the PowerShell scripts, upgrading, uninstalling |
+| [`docs/DATABASE.md`](docs/DATABASE.md) | Keeping the data on your own PostgreSQL or MySQL/MariaDB server instead of the SQLite file: setup, `database.json`, TLS, `gwatch migrate-db` |
+| [`docs/DOCKER.md`](docs/DOCKER.md) | Running GWatch in a container: the first account, the `/data` volume, ping and discovery inside Docker, upgrading by pulling |
 | [`docs/HARDWARE.md`](docs/HARDWARE.md) | Hardware health, the agent, its trust model, and what each platform can measure |
 | [`docs/SNMP.md`](docs/SNMP.md) | SNMP checks: enabling SNMP on a router or switch, choosing OIDs, interface traffic in bits per second |
 | [`docs/RECIPES.md`](docs/RECIPES.md) | Ready-made trigger/endpoint recipes: Home Assistant, Slack/Discord, ntfy/Pushover, Docker, git |
@@ -86,7 +96,7 @@ Then open <http://127.0.0.1:7230> — monitoring runs only while this process ru
 | [`docs/PRIVACY.md`](docs/PRIVACY.md) | What GWatch stores, where, and the fact that none of it goes anywhere |
 | [`docs/TERMS.md`](docs/TERMS.md) | Terms of use — acceptable use, no warranty, limitation of liability |
 | [`docs/DISCLAIMER.md`](docs/DISCLAIMER.md) | The security choices that are yours to make, and what happens if you make them badly |
-| [`mcp/README.md`](mcp/README.md) | `gwatch-mcp` — an optional MCP server so an AI assistant can read (and, if you allow it, manage) your monitoring |
+| [`mcp/README.md`](mcp/README.md) | `gwatch-mcp` — an optional MCP server so an AI assistant can read (and, if you allow it, manage) your monitoring. The in-app guide, and the downloadable agent skill, are under **Settings › AI & MCP** |
 | [`CHANGELOG.md`](CHANGELOG.md) | What shipped in each release |
 | [`ROADMAP.md`](ROADMAP.md) | What's planned and roughly when |
 

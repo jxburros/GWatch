@@ -80,13 +80,13 @@ administrator, whatever its scope:
   charts. A key may lay a wallboard out; it may not project one.
 
 **Denied to every key, whatever its scope** (403, not 401):
-`GET|PUT /api/settings`, `POST /api/settings/test-email`, `GET /api/network`,
-everything under `/api/backups`, `GET /api/export/config.json`, `GET /api/logs`,
+`GET|PUT /api/settings`, `POST /api/settings/test-email`, `GET|PUT /api/database`,
+`POST /api/database/test`, `GET /api/network`, everything under `/api/backups`, `GET /api/export/config.json`, `GET /api/logs`,
 `GET /api/export/logs.txt`, everything under `/api/triggers` (including `GET`),
 everything under `/api/endpoints` (including `GET`), `POST /api/actions/test`,
 `GET /api/automation/meta`, `GET /api/retention/status`, `POST /api/retention/run`,
-`GET|POST /api/update/…`, everything under `/api/users` and `/api/apikeys`, and
-`POST /api/auth/change-password`.
+`GET|POST /api/update/…`, `GET /api/mcp/status`, `GET /api/mcp/skill`, everything under
+`/api/users` and `/api/apikeys`, and `POST /api/auth/change-password`.
 
 That list is deliberate and tested: a key is for reading a monitor from elsewhere, not
 for administering the machine it runs on. It is the same boundary `gwatch-mcp`, the Model
@@ -164,7 +164,7 @@ companion that lets an AI assistant use this API with a key, is documented in
 
 ## Health & overview
 
-- `GET /api/health` → `model.Health` (service mode, scheduler, last/next check, db size, retention status, backup status, recent internal errors, alert config state). Also carries the on-disk paths: `dataDir` (the data directory), `databasePath` (`<dataDir>/gwatch.db`), `keyPath` (`<dataDir>/gwatch.key`) and `backupDir` (`<dataDir>/backups`) — see [`INSTALL.md`](INSTALL.md#where-your-data-lives).
+- `GET /api/health` → `model.Health` (service mode, scheduler, last/next check, db size, retention status, backup status, recent internal errors, alert config state). Also carries the on-disk paths: `dataDir` (the data directory), `databasePath` (`<dataDir>/gwatch.db`, or a password-free `postgres://user@host:port/db` when GWatch is on a server — [`DATABASE.md`](DATABASE.md)), `keyPath` (`<dataDir>/gwatch.key`) and `backupDir` (`<dataDir>/backups`) — see [`INSTALL.md`](INSTALL.md#where-your-data-lives) — and `databaseDriver`, the database driver in use: the SQLite driver the binary was built with (see [`INSTALL.md`](INSTALL.md#choosing-the-sqlite-driver)), or the PostgreSQL/MySQL one.
 - `GET /api/overview` → 
   ```json
   {
@@ -434,8 +434,11 @@ field the object leaves out goes back to following the global setting), and an
 explicit `null` clears it.
 
 `config` is a whitelist of keys whose meaning does not depend on the check type:
-`latencyWarnMs`, `packetLossWarnPct`, `pingMethod`, `certWarnDays`. Any other
-key is a 400 naming it and listing the ones that would have worked.
+`latencyWarnMs`, `packetLossWarnPct`, `pingMethod`, `certWarnDays`, plus
+`metricThresholds`, which is merged by metric key onto every `system` check in the
+selection and skipped on every other type (see
+[Hardware check metrics](#hardware-check-metrics)). Any other key is a 400 naming it
+and listing the ones that would have worked.
 
 **Check type changes are not supported.** A check's type decides what its
 configuration means, so changing it in bulk would leave every check it touched
@@ -473,12 +476,43 @@ checks; tags +critical on 5 nodes").
 ### Named metrics
 
 A check may measure things beyond the latency every check reports. Those go into
-`Result.metrics`, a JSON object of name → number stored alongside the result; an SNMP
-check writes one entry per OID that produced a number, keyed by the OID's `name` and
-holding the value (gauge) or rate (counter) **after** `scale`. Every other check type
-leaves it absent.
+`Result.metrics`, a JSON object of name → number stored alongside the result. Two check
+types write it:
+
+- An **SNMP** check writes one entry per OID that produced a number, keyed by the OID's
+  `name` and holding the value (gauge) or rate (counter) **after** `scale`.
+- A **json** check with `jsonRecord: true` writes one entry, keyed by `jsonMetric`
+  (default `"value"`), holding the number the `jsonPath` pointed at. A JSON number and
+  a string holding one (`"42.5"`) both count; anything else — text, a boolean, an
+  object — is not a metric and is kept only as text in `Result.details.jsonValue`,
+  which is how a string is recorded. The recording sits beside `jsonExpected`, which
+  keeps its meaning: with both set the check is down on a mismatch *and* the value is
+  still stored. Its config fields:
+
+  | field | meaning |
+  | --- | --- |
+  | `jsonRecord` | `true` to keep the value on every run (requires `jsonPath`) |
+  | `jsonMetric` | the metric's name in results, charts and `metric=`; at most 64 characters, default `value` |
+  | `jsonUnit` | shown beside the value, e.g. `°C`, `%`, `ms`; optional |
+  | `jsonWarnAbove`, `jsonCritAbove`, `jsonWarnBelow`, `jsonCritBelow` | optional thresholds, compared **strictly** like an OID's: crossing a `warn` marks the check degraded, crossing a `crit` marks it down. Validation requires `jsonWarnAbove < jsonCritAbove` and `jsonWarnBelow > jsonCritBelow`. Text is never thresholded. |
+
+  The result's message names the recording (`json "temp" = 42.5; recorded value = 42.5
+  °C`) and, when a threshold is crossed, says which one.
+
+- A **system** (hardware health) check writes one entry per reading the machine
+  reported, keyed as described under [Hardware check metrics](#hardware-check-metrics):
+  `cpu`, `memory`, `swap`, `load`, `disk:<mount>`, `inodes:<mount>`,
+  `net:<iface>.rx`, `net:<iface>.tx`, `diskio:<dev>.read`, `diskio:<dev>.write`,
+  `diskio:<dev>.busy`. Each also has its own verdict in
+  `Result.details.metricResults`.
+
+Every other check type leaves `metrics` absent.
 
 - `GET /api/history?checkId=ID&range=…&metric=<name>` → `HistorySeries` for that metric.
+  For a hardware check the four singleton keys are always accepted, and so is any
+  key the check's **newest result** carried (`disk:/srv` once the machine has
+  reported that filesystem); `metricUnit` is worked out from the key (`%`, `B/s`,
+  or empty for load).
   The series carries `metric` and `metricUnit`, each point carries `value`, and `avgMs`,
   `minMs` and `maxMs` carry the same number so that a chart drawn from a series' latency
   fields plots a named metric unchanged. `GET /api/export/history.csv` takes `metric=`
@@ -489,8 +523,8 @@ leaves it absent.
   check invented, so `metric=` reaches back only as far as raw history is retained — 30
   days by default, whatever Settings › Retention says otherwise. Ranges beyond that
   return the part of the window raw results still cover. Availability, latency and the
-  uptime bars for an SNMP check are rolled up normally; only the per-OID readings are
-  limited this way.
+  uptime bars for an SNMP or json check are rolled up normally; only the named readings
+  are limited this way.
 
 ## Hardware health
 
@@ -507,6 +541,81 @@ leaves it absent.
   `netTxBytesPerSec`, `diskReadBytesPerSec`, `diskWriteBytesPerSec`), not the whole
   snapshot. Readings are averaged into at most 600 buckets; a metric no reading in a
   bucket carried stays absent rather than becoming zero.
+
+### Hardware check metrics
+
+A `system` check reads a whole machine in one run, but judges, records and reports
+each reading as a metric of its own (#60).
+
+**Keys.** `cpu`, `memory`, `swap` and `load` (load average per core) are the readings
+a machine has one of. The rest are `family:instance`: `disk:/srv` and `inodes:/srv`
+per filesystem; `net:eth0.rx` and `net:eth0.tx` per interface (bytes/s received and
+sent); `diskio:sda.read`, `diskio:sda.write` (bytes/s) and `diskio:sda.busy` (%) per
+block device. Units follow the family: `%` for everything but `load` (no unit) and
+the throughput keys (`B/s`).
+
+**Per-metric verdicts.** Every run puts one `MetricResult` per reading in
+`Result.details.metricResults`:
+
+```json
+{ "key": "disk:/srv", "label": "Disk /srv", "value": 88, "unit": "%", "status": "degraded",
+  "reason": "Disk /srv is 88%, at or above the 85% warning threshold" }
+```
+
+`status` is that metric's own verdict — `up`, `degraded` (at or past its warning
+level) or `down` (at or past its critical level). The check's `status` is the worst
+of them; `warnings` carries the reasons of the degraded ones and `error` those of the
+critical ones, as before. A reading the machine did not report (no swap, no load on
+Windows) is simply absent. `Result.metrics` holds the same values keyed the same way,
+which is what `/api/history?metric=` serves. A stale reading (see `staleAfterSeconds`)
+fails the whole check and carries no metric results.
+
+**Thresholds.** `config.metricThresholds` is a list:
+
+```json
+"metricThresholds": [
+  { "metric": "cpu",       "warn": 90 },
+  { "metric": "memory",    "warn": 90, "crit": 97 },
+  { "metric": "disk",      "warn": 85, "crit": 95 },
+  { "metric": "disk:/srv", "warn": 95 },
+  { "metric": "net:eth0.rx", "warn": 1000, "crit": 100, "below": true }
+]
+```
+
+| field | meaning |
+| --- | --- |
+| `metric` | a family — `cpu`, `memory`, `swap`, `load`, `disk`, `inodes`, `net`, `diskio` — or an instance key. An instance entry replaces its family's for that instance alone; `net:eth0` and `diskio:sda` cover both directions of that interface or device, `net:eth0.rx` one of them. `cpu`, `memory`, `swap` and `load` take no instance. |
+| `warn`, `crit` | the levels; a missing level is off. Crossing `warn` makes the metric (and so the check) degraded, crossing `crit` makes it down. On an "above" threshold a level of `0` is also off, so an older configuration that said "0 turns it off" still means that. |
+| `below` | `true` for a reading where less is worse: the levels are then crossed at or *below* the number, and `crit` must be at or below `warn`. |
+
+Validation: a percentage family's levels are 0–100, a rate's are non-negative,
+`crit` is at or above `warn` (at or below with `below`), no two entries name the same
+key, and the family must be one of the eight. A family that is listed with no levels,
+or not listed at all, is still measured and charted; it just never alerts. A check
+saved with an empty list gets `SystemDefaults` (cpu 90; memory 90/97; swap 50; disk
+and inodes 85/95; load 2).
+
+The flat fields that preceded the list — `cpuWarnPct`, `cpuCritPct`, `memWarnPct`,
+`memCritPct`, `swapWarnPct`, `diskWarnPct`, `diskCritPct`, `loadWarnPerCore`,
+`loadCritPerCore` — are **deprecated**. They are still read (with `0` meaning off, and
+inodes following the disk pair when `diskCritPct` is set) when `metricThresholds` is
+empty, and a check saved with them is converted to the list and stored without them.
+`diskMounts` and `staleAfterSeconds` are unchanged.
+
+**Incidents and state.** A metric crossing its warning or critical level writes a
+`warning` event with `metric` set to its key (title `Disk /srv warning` or
+`Disk /srv critical`, detail the reason); it coming back writes `warning_cleared`
+with the same `metric`. Each metric's timeline is independent of the others'. A
+metric the machine stops reporting has its open warning cleared. `CheckState.metricStatus`
+is `{ "<key>": "degraded"|"down" }` for every metric currently outside its thresholds
+(absent when all are within them). The check-level `down`/`recovered` events, the
+down alert and its cooldown are unchanged; `warningActive` stays `false` on a check
+judged per metric.
+
+**Bulk edit.** `config.metricThresholds` in a `PATCH /api/nodes/bulk` check patch is
+merged by key: each entry replaces the check's entry for that key and the rest of the
+list is kept. It applies only to `system` checks; other checks in the selection are
+left alone. The same validation applies.
 
 Registering a machine mints a credential, so those routes sit with the other credential
 routes — an administrator in the browser, never an API key:
@@ -591,7 +700,7 @@ arrival time. See [`HARDWARE.md`](HARDWARE.md).
 
 ## Events / incidents
 
-- `GET /api/events?limit=100&before=ID&nodeId=&checkId=&type=&q=&since=&until=` → `[Event]` newest first. A `type` filter also includes its counterpart (down+recovered, warning+warning_cleared, cert_warning+cert_warning_cleared, silenced+unsilenced, maintenance_began+maintenance_ended, alert_sent+alert_failed) unless `exact=1`. `q` is a case-insensitive search over title, detail, node and check name; `since`/`until` accept RFC 3339, `2006-01-02T15:04` or `2006-01-02`.
+- `GET /api/events?limit=100&before=ID&nodeId=&checkId=&type=&q=&since=&until=` → `[Event]` newest first. A `type` filter also includes its counterpart (down+recovered, warning+warning_cleared, cert_warning+cert_warning_cleared, silenced+unsilenced, maintenance_began+maintenance_ended, alert_sent+alert_failed, rule_fired+rule_cleared) unless `exact=1`. `q` is a case-insensitive search over title, detail, node and check name; `since`/`until` accept RFC 3339, `2006-01-02T15:04` or `2006-01-02`.
 - `POST /api/events/note` body `{ "nodeId": null|id, "text": "rebooted router" }` → Event (timeline annotation).
 
 Every `Event` carries an optional `actor` naming who caused it — `"local"`, `"password"`,
@@ -599,6 +708,11 @@ Every `Event` carries an optional `actor` naming who caused it — `"local"`, `"
 rejected credential. It is absent on events the monitoring engine produces by itself
 (check results, the scheduler, alerts). Sign-ins, sign-outs, failed sign-ins and every
 account or API-key change are recorded with the `auth` event type.
+
+An event about one of a check's metrics rather than the check as a whole — a hardware
+check's `warning` / `warning_cleared` for `disk:/srv` — carries the metric's key in
+`metric` (see [Hardware check metrics](#hardware-check-metrics)). It is absent on
+every other event.
 
 ## Maintenance windows
 
@@ -697,7 +811,8 @@ See [`docs/RECIPES.md`](RECIPES.md) for copy-pasteable trigger/endpoint recipes 
 
 - `GET /api/automation/meta` → conditions, interpreters, default interpreter, placeholder names, `minTokenLength` and `tokenlessEndpoints` (`[{id, name, slug}]` — endpoints anyone who can reach the port may call).
 - `GET /api/triggers?nodeId=` → `[Trigger]`. `POST /api/triggers`, `PUT /api/triggers/{id}`, `DELETE /api/triggers/{id}`.
-  A trigger: `{ nodeId, name, description, enabled, on: ["down","recovered","degraded","warning_cleared","cert_warning","content_changed","affected_by_parent","status_change","any_failure","any_success","latency_over"], checkId: null|id, latencyOverMs, cooldownMinutes, action }` plus run statistics (`lastRunAt`, `lastStatus`, `lastOutput`, `runCount`).
+  A trigger: `{ nodeId, name, description, enabled, on: ["down","recovered","degraded","warning_cleared","cert_warning","content_changed","affected_by_parent","status_change","any_failure","any_success","latency_over","metric_over"], checkId: null|id, latencyOverMs, metric, metricOver, cooldownMinutes, action }` plus run statistics (`lastRunAt`, `lastStatus`, `lastOutput`, `runCount`).
+  `metric_over` fires on a run whose `Result.metrics[metric]` is above `metricOver` — a hardware check's `disk:/srv` or `cpu`, an SNMP check's OID name, a json check's recorded value — regardless of the check's own thresholds; saving it without `metric` is a 400. A hardware check's per-metric `warning` / `warning_cleared` events satisfy `degraded` / `warning_cleared` like any other.
 - `POST /api/triggers/{id}/run` → `ActionResult` (runs it now with the node's current state).
 - `POST /api/actions/test` body `{ "action": Action, "nodeId": null|id }` → `ActionResult` (nothing recorded).
 - `GET /api/endpoints` → `[Endpoint]`. `POST /api/endpoints`, `PUT /api/endpoints/{id}`, `DELETE /api/endpoints/{id}`, `POST /api/endpoints/{id}/run`.
@@ -719,7 +834,7 @@ An `Action` is `{ "type": "http|slack|teams|ntfy|pushover|git|script|run_node", 
 
 `slack`, `teams`, `ntfy` and `pushover` all default `title` to `"GWatch {{instance}}"` and `message` to `"{{node.name}} is {{status}}: {{message}}"` when left blank; both fields are JSON-safe (or form/header-safe) no matter what characters `{{message}}` expands to, since the payload is built with `encoding/json` (or form-encoding for Pushover, headers for ntfy) instead of string concatenation.
 
-String fields may contain `{{placeholders}}`: `node.name`, `node.host`, `node.group` (the node's first group), `node.groups` (all of them, comma-separated), `check.name`, `check.type`, `target`, `status`, `prev_status`, `message`, `error`, `success`, `latencyMs`, `lossPct`, `statusCode`, `failures`, `event`, `ts`, `instance`, `body`, `query.<name>`. Scripts also receive them as `GWATCH_*` environment variables (`node.name` → `GWATCH_NODE_NAME`).
+String fields may contain `{{placeholders}}`: `node.name`, `node.host`, `node.group` (the node's first group), `node.groups` (all of them, comma-separated), `check.name`, `check.type`, `target`, `status`, `prev_status`, `message`, `error`, `success`, `latencyMs`, `lossPct`, `statusCode`, `failures`, `event`, `ts`, `instance`, `metric`, `metric.label`, `metric.value`, `metric.status` (the metric a metric-scoped event or a `metric_over` condition fired on; empty otherwise), `metrics.<key>` (every named metric of the run — a key's characters other than letters, digits, dots and dashes become `_`, so `disk:/srv` is `{{metrics.disk__srv}}`), `body`, `query.<name>`. Scripts also receive them as `GWATCH_*` environment variables (`node.name` → `GWATCH_NODE_NAME`).
 
 A placeholder value can be anything an HTTP caller or a monitored device sent, so inside the **code of a script action** it is never spliced in as raw text. It is replaced by something the interpreter cannot re-parse as code:
 
@@ -735,6 +850,53 @@ Unknown names become an empty literal. Elsewhere — URL, body, headers, git arg
 
 With `interpreter: "custom"` the language is whatever `command` runs, so GWatch has no quoting rule to apply: a `code` containing any `{{placeholder}}` is rejected with 400 unless `allowUntrustedInput` is `true`, which opts into raw expansion. Reading the `GWATCH_*` environment variables instead works in every interpreter and needs no acknowledgement.
 `ActionResult` is `{ ok, output, error, statusCode, startedAt, durationMs }`.
+
+## Rules
+
+A **rule** is a notification that looks at several checks at once, where a trigger looks at one node: "two of my three DNS servers are down", "the gateway and the switch are both unreachable". Rules sit beside the per-node alerts, triggers and dependency-aware suppression and change none of them (Settings › Rules; recipe 9 in [`docs/RECIPES.md`](RECIPES.md)).
+
+- `GET /api/rules` → `[Rule]`, each with its `state`. `GET /api/rules/{id}` → one. Viewers may read them in the browser; no API key may (they carry webhook URLs and tokens, like triggers).
+- `POST /api/rules`, `PUT /api/rules/{id}`, `DELETE /api/rules/{id}` — administrators. Each is recorded in the audit timeline as `config_changed` ("Rule saved: …", "Rule deleted: …").
+- `POST /api/rules/{id}/test` → `[ActionResult]`, one per action: runs the actions once with sample values (`event` = `test`), recording nothing.
+
+A rule:
+
+```json
+{ "id": 3, "name": "Two of three DNS servers down", "enabled": true,
+  "join": "at_least", "atLeast": 2,
+  "conditions": [
+    { "kind": "status", "checkId": 12, "status": "down" },
+    { "kind": "status", "checkId": 27, "status": "down" },
+    { "kind": "status", "nodeId": 4, "status": "degraded" } ],
+  "actions": [ { "type": "pushover", "token": "…", "userKey": "…" } ],
+  "cooldownMinutes": 30, "notifyCleared": true,
+  "state": { "ruleId": 3, "met": false, "since": "2026-09-20T07:12:00Z", "lastFiredAt": "2026-09-19T22:40:11Z" },
+  "createdAt": "…", "updatedAt": "…" }
+```
+
+| field | meaning |
+|---|---|
+| `join` | `all` (every condition), `any` (at least one) or `at_least` (at least `atLeast` of them; `1 ≤ atLeast ≤ len(conditions)`) |
+| `conditions[].kind` | always `status` today; the field exists so another kind can be added later without reshaping stored rules |
+| `conditions[].checkId` / `nodeId` | exactly one of the two. A check condition holds while that check is at the status; a node condition holds while **any** of the node's enabled checks is |
+| `conditions[].status` | `down`, or `degraded` — which means **degraded or worse**, so a check that went from degraded to down still satisfies it |
+| `actions` | one or more `Action`s (the table above), all run when the rule fires |
+| `cooldownMinutes` | shortest time between two runs of the actions (0 = none) |
+| `notifyCleared` | also run the actions, with `event` = `rule_cleared`, when the conditions come apart |
+| `state` | read-only: `met`, `since` (when `met` last changed), `lastFiredAt` (when the actions last ran) |
+
+Validation (400 with the reason): a name, at least one condition and one action, a known join, a count in range for `at_least`, every condition naming an existing node or check (and only one of the two), each action valid the way a trigger's is.
+
+**Semantics.**
+- The engine re-evaluates the rules that mention a check whenever that check's status changes, when a check is silenced or unsilenced, when a maintenance window opens or closes, and on every configuration reload. A rule saved while its conditions already hold fires right away; one that no longer holds after an edit clears. On start-up the stored state is trusted, so a restart neither fires a rule again nor forgets that it is waiting to clear.
+- A rule fires **once** on the way from not-met to met: it runs its actions, records a `rule_fired` event (no node or check; the title is the rule's name and the detail says which conditions held and what ran) and stays met until the conditions come apart, when it records `rule_cleared` and, with `notifyCleared`, runs the actions again. Both events carry the same `Detail` sentence, e.g. `2 of 3 conditions met — Pi-hole › DNS is down, Router › DNS is down.`
+- **Cooldown:** a firing inside `cooldownMinutes` of the last run still changes the state and records `rule_fired`, with the actions held back (the detail says so); the clearing that follows such a firing is quiet too, even with `notifyCleared`.
+- **Maintenance and silence:** a check under an active maintenance window or silenced does not count towards any rule while that lasts, and counts again afterwards. A disabled check or node never counts. A disabled rule is put back to not-met without firing anything.
+- Rules are exported and restored with the backup configuration (`rules` in `config.json`; an older archive without it restores as before). A restored rule starts not-met.
+
+**Placeholders** for a rule's actions, beside the ones every action gets: `rule.id`, `rule.name`, `rule.join`, `rule.needed`, `rule.total`, `rule.met` (how many conditions hold), `rule.conditions` (`Pi-hole › DNS is down, Router › DNS is down`), `rule.summary` (`Rule 'Two of three DNS servers down' fired: 2 of 3 conditions met — …`), `message` (the sentence after the colon), `status` (`met` or `cleared`), `event` (`rule_fired`, `rule_cleared` or `test`), `ts`, `instance`. `node.name` carries the rule's name and `check.name`, `node.host`, `target` are empty, so the default Slack, Teams, ntfy and Pushover text ("{{node.name}} is {{status}}: {{message}}") reads as a sentence without a rule-specific template.
+
+**Deliberately not included yet:** hold timers ("only when the conditions have held for N minutes") and metric conditions ("disk above 90 %"). The model is shaped for them — `kind` on a condition — but neither is built.
 
 ## Updates
 
@@ -757,6 +919,15 @@ A signature is mandatory. Each asset is published with a sibling `<asset>.sig` i
 
 The `<asset>.sha256` sidecar is still checked when the release publishes one (`checksum mismatch` aborts the update), but it is only a transit-corruption guard and never substitutes for the signature. See [`RELEASING.md`](RELEASING.md).
 
+## AI assistants (MCP)
+
+The MCP companion itself ([`../mcp/README.md`](../mcp/README.md)) uses the endpoints above with an
+API key. These two serve the **Settings › AI & MCP** page and are for the administrator setting an
+assistant up, not for the assistant: both are admin-only and refuse every API key.
+
+- `GET /api/mcp/status` → `{ "skillVersion": "1.0.0", "lastDownloadedVersion": "1.0.0", "lastDownloadedAt": "RFC3339 or null", "lastDownloadedBy": "pat (admin)", "updateAvailable": false }`. `skillVersion` is read from the embedded `skill/VERSION`. The `lastDownloaded*` fields describe the most recent download from this install (absent/null before the first one). `updateAvailable` is true only when a download has happened and the embedded skill's version differs from the one downloaded — never having downloaded it is not an update.
+- `GET /api/mcp/skill` → a zip of the `skill/` folder as `gwatch-skill-<version>.zip` (`application/zip`, `Content-Disposition: attachment`), unpacking to `gwatch/SKILL.md`, `gwatch/README.md` and `gwatch/VERSION`. `?format=md` returns `SKILL.md` alone as `text/markdown`. Each successful download records `{version, at, by}` under the `mcpSkillDownload` setting and adds an `update` event ("Agent skill downloaded: <version>") attributed to the caller.
+
 ## Settings
 
 - `GET /api/settings` → `Settings` (SMTP password, access password and the scheduled-backup password are returned masked as `"********"` when set).
@@ -764,6 +935,19 @@ The `<asset>.sha256` sidecar is still checked when the release publishes one (`c
 - All three passwords are stored encrypted in the database with the local `gwatch.key` file; the API request and response bodies are unchanged.
 - `POST /api/settings/test-email` body `{ "to": "optional@override" }` → `{ "ok": true, "message": "..." }` or error.
 - `GET /api/retention/status` → `RetentionStatus`. `POST /api/retention/run` → runs rollup+cleanup now → RetentionStatus.
+
+### Database
+
+Which database GWatch keeps its data in ([`DATABASE.md`](DATABASE.md)). This is not part of
+`Settings`: it has to be known before the database is open, so it lives in `database.json`
+in the data directory and a change takes effect at the next start. The running process is
+never switched over by these routes.
+
+- `GET /api/database` → `{ "active": { "driver": "sqlite|postgres|mysql", "label", "description", "schemaVersion", "sizeBytes" }, "saved": DBConfig, "source": "default|file", "file": "<dataDir>/database.json", "restartRequired": bool }`. `active` is the database this process is using; `saved` is what the next start will use, with `password` (and `dsn`) masked as `"********"` when set; `restartRequired` is true when the two differ.
+- `POST /api/database/test` body `DBConfig` → `{ "ok": true, "driver", "serverVersion", "database", "message" }`, or `400` for an incomplete config and `502` when the connection fails. Opens a connection with the given details and runs `SELECT version()`; writes nothing. A masked password means "the saved one".
+- `PUT /api/database` body `DBConfig` → the same document as `GET`, after validating, testing the connection (a server that cannot be reached is not saved) and writing `database.json`. `driver: "sqlite"` removes the file instead. Recorded as a `config_changed` event.
+
+`DBConfig` is `{ "driver", "host", "port", "user", "password", "database", "schema", "sslMode", "dsn" }` — the fields of `database.json`.
 
 ### Indicators
 

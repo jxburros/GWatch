@@ -5,9 +5,21 @@ import './dom.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  h, icon, clear, replace, toggle, statusWord, tagList, applyTheme, currentTheme,
-  toast, openModal, confirmDialog,
+  h, icon, clear, replace, toggle, statusWord, statusPill, tagList, applyTheme, currentTheme,
+  toast, openModal, confirmDialog, eventRow, showMenu, menuButton, closeMenus, field, textInput, chipInput, checkChip,
 } from '../../web/components.js';
+
+// #60: an event about one of a check's metrics names it, so a disk filling
+// and the memory on the same check read as two incidents.
+test('eventRow names the metric a metric-scoped event is about', () => {
+  const row = eventRow({ id: 1, ts: new Date().toISOString(), type: 'warning', nodeId: 3, nodeName: 'NAS', checkName: 'Hardware', title: 'Disk /srv warning', detail: 'Disk /srv is 88%', metric: 'disk:/srv' });
+  const tag = row.querySelector('.ev-metric');
+  assert.ok(tag, 'the metric is shown');
+  assert.equal(tag.textContent, 'Disk /srv');
+  assert.equal(tag.getAttribute('title'), 'disk:/srv');
+  const plain = eventRow({ id: 2, ts: new Date().toISOString(), type: 'down', nodeId: 3, nodeName: 'NAS', title: 'Down' });
+  assert.equal(plain.querySelector('.ev-metric'), null, 'a check-level event has none');
+});
 
 test('h() sets attributes, class, style objects and dataset', () => {
   const el = h('div', { class: 'a b', id: 'x', style: { color: 'red', fontSize: '12px' }, dataset: { foo: 'bar' }, title: 'hi' });
@@ -136,4 +148,152 @@ test('confirmDialog resolves true/false depending on which button is pressed', a
   const dialog2 = document.getElementById('modals').lastElementChild;
   dialog2.querySelector('.modal-head button').click(); // the header's own close (×) button
   assert.equal(await cancelPromise, false);
+});
+
+/* ---------- Accessibility contract (#38) ---------- */
+
+const key = (el, k, init = {}) => el.dispatchEvent(new window.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ...init }));
+
+test('openModal is named by its heading, makes the page inert and hands focus back on close', () => {
+  const opener = h('button', null, 'Open');
+  document.body.append(opener);
+  opener.focus();
+  const m = openModal({ title: 'Rename', body: h('input', { id: 'rn' }) });
+  assert.equal(m.el.getAttribute('aria-labelledby'), m.el.querySelector('h2').id);
+  assert.equal(m.el.hasAttribute('aria-label'), false);
+  const app = document.getElementById('app');
+  assert.equal(app.hasAttribute('inert'), true, 'the page behind a modal is inert');
+  assert.equal(app.getAttribute('aria-hidden'), 'true');
+  m.close();
+  assert.equal(app.hasAttribute('inert'), false, 'closing the last modal releases the page');
+  assert.equal(app.hasAttribute('aria-hidden'), false);
+  assert.equal(document.activeElement, opener, 'focus returns to the element that opened the modal');
+  opener.remove();
+});
+
+test('a modal opened from a modal keeps the page inert until both are closed', () => {
+  const app = document.getElementById('app');
+  const a = openModal({ title: 'First' });
+  const b = openModal({ title: 'Second' });
+  b.close();
+  assert.equal(app.hasAttribute('inert'), true);
+  a.close();
+  assert.equal(app.hasAttribute('inert'), false);
+});
+
+test('Tab inside a modal cycles between its first and last focusable elements without needing layout', () => {
+  const first = h('input', { id: 'first' });
+  const last = h('button', { type: 'button' }, 'OK');
+  const m = openModal({ title: 'Trap', body: [first, h('button', { type: 'button', hidden: true }, 'hidden')], footer: last });
+  // jsdom has no layout, so offsetParent is always null there: the trap must
+  // judge focusability from markup, which is what makes this testable.
+  const closeBtn = m.el.querySelector('.modal-head button');
+  last.focus();
+  key(document, 'Tab');
+  assert.equal(document.activeElement, closeBtn, 'Tab from the last element wraps to the first (the header\'s close button)');
+  key(document, 'Tab', { shiftKey: true });
+  assert.equal(document.activeElement, last, 'Shift+Tab from the first wraps to the last');
+  first.focus();
+  key(document, 'Tab');
+  assert.equal(document.activeElement, first, 'a Tab in the middle is left to the browser');
+  m.close();
+});
+
+test('confirmDialog describes the dialog by its message', async () => {
+  const p = confirmDialog({ title: 'Delete?', message: 'This cannot be undone.' });
+  const dialog = document.getElementById('modals').lastElementChild.querySelector('[role="dialog"]');
+  const desc = dialog.getAttribute('aria-describedby');
+  assert.ok(desc);
+  assert.equal(document.getElementById(desc).textContent, 'This cannot be undone.');
+  dialog.querySelector('.modal-foot .btn').click();
+  assert.equal(await p, false);
+});
+
+test('showMenu: arrow keys rove between items, Escape closes and returns focus to the trigger', () => {
+  const calls = [];
+  const btn = menuButton([
+    { label: 'One', onClick: () => calls.push('one') },
+    { label: 'Two', onClick: () => calls.push('two'), disabled: true },
+    { sep: true },
+    { label: 'Three', onClick: () => calls.push('three') },
+  ], { label: 'Options' });
+  document.body.append(btn);
+  assert.equal(btn.getAttribute('aria-expanded'), 'false');
+  btn.click();
+  const menu = document.body.querySelector('.menu');
+  assert.ok(menu, 'the menu is on the page');
+  assert.equal(btn.getAttribute('aria-expanded'), 'true');
+  assert.equal(btn.getAttribute('aria-controls'), menu.id);
+  const items = [...menu.querySelectorAll('.menu-item')];
+  assert.equal(document.activeElement, items[0], 'the first item takes focus');
+  assert.equal(items[0].tabIndex, 0);
+  assert.equal(items[2].tabIndex, -1);
+  key(menu, 'ArrowDown');
+  assert.equal(document.activeElement, items[2], 'ArrowDown skips the disabled item');
+  assert.equal(items[2].tabIndex, 0);
+  assert.equal(items[0].tabIndex, -1);
+  key(menu, 'ArrowDown');
+  assert.equal(document.activeElement, items[0], 'ArrowDown wraps');
+  key(menu, 'End');
+  assert.equal(document.activeElement, items[2]);
+  key(menu, 'Home');
+  assert.equal(document.activeElement, items[0]);
+  key(menu, 'ArrowUp');
+  assert.equal(document.activeElement, items[2], 'ArrowUp wraps the other way');
+  key(document, 'Escape');
+  assert.equal(document.body.querySelector('.menu'), null, 'Escape closes the menu');
+  assert.equal(btn.getAttribute('aria-expanded'), 'false');
+  assert.equal(document.activeElement, btn, 'focus goes back to the button');
+  btn.remove();
+  closeMenus();
+});
+
+test('field() points the control at its help and error text and marks it invalid', () => {
+  const input = textInput({});
+  const f = field({ label: 'Name', input, help: 'What to call it.' });
+  const helpId = f.querySelector('.help').id;
+  assert.ok(helpId);
+  assert.equal(input.getAttribute('aria-describedby'), helpId);
+  assert.equal(input.hasAttribute('aria-invalid'), false);
+  f.setError('Required');
+  const errId = f.querySelector('.error').id;
+  assert.ok(errId);
+  assert.equal(input.getAttribute('aria-describedby'), `${helpId} ${errId}`);
+  assert.equal(input.getAttribute('aria-invalid'), 'true');
+  f.setError('');
+  assert.equal(input.getAttribute('aria-describedby'), helpId);
+  assert.equal(input.hasAttribute('aria-invalid'), false);
+  const withError = field({ label: 'Port', input: textInput({}), error: 'Out of range' });
+  assert.equal(withError.querySelector('input').getAttribute('aria-invalid'), 'true');
+  // A composite control: the label points at the element that takes typing.
+  const chips = chipInput({ values: ['a'] });
+  const cf = field({ label: 'Tags', input: chips });
+  assert.equal(cf.querySelector('label').getAttribute('for'), chips.input.id);
+});
+
+test('chipInput renders its chips as a list and announces adds and removes', () => {
+  const chips = chipInput({ values: ['alpha', 'beta'] });
+  document.body.append(chips);
+  const list = chips.querySelector('[role="list"]');
+  assert.ok(list);
+  assert.deepEqual([...list.querySelectorAll('[role="listitem"]')].map((c) => c.firstChild.textContent), ['alpha', 'beta']);
+  const live = chips.querySelector('[aria-live="polite"]');
+  assert.ok(live);
+  chips.input.value = 'gamma';
+  key(chips.input, 'Enter');
+  assert.deepEqual(chips.value, ['alpha', 'beta', 'gamma']);
+  assert.equal(live.textContent, 'gamma added');
+  list.querySelector('[aria-label="Remove alpha"]').click();
+  assert.deepEqual(chips.value, ['beta', 'gamma']);
+  assert.equal(live.textContent, 'alpha removed');
+  assert.equal(document.activeElement, chips.input, 'focus moves to the box when a chip\'s button goes');
+  chips.remove();
+});
+
+test('status pills are static labels, not live regions; a check chip reads out its last message', () => {
+  assert.equal(statusPill('up').hasAttribute('role'), false);
+  assert.equal(statusWord('down').hasAttribute('role'), false);
+  const chip = checkChip({ name: 'HTTPS' }, { status: 'down', lastMessage: 'connection refused' });
+  const hidden = [...chip.querySelectorAll('.sr-only')].map((e) => e.textContent.trim());
+  assert.ok(hidden.some((t) => t.includes('connection refused')), 'the last message is in hidden text, not only in title');
 });

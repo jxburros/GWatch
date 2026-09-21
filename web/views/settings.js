@@ -1,11 +1,12 @@
 // Settings: general, appearance, network access, alerts, automation
-// (endpoints + all triggers), retention, maintenance, backups, updates,
-// monitor health. Logs moved to the Audit tab.
+// (endpoints + all triggers), rules, hardware, AI & MCP, retention, maintenance,
+// backups, database, updates, monitor health. Logs moved to the Audit tab.
 
 import { api, qs } from '../api.js';
 import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, openModal, emptyState, skeleton, banner, eventRow, busy, applyTheme, applyAccent, ACCENT_PRESETS, hexToRgb, applyDensity, currentDensity } from '../components.js';
 import { relTime, dateTime, bytes, num, duration, retentionSpan, toLocalInput, fromLocalInput, weekdayShort, timeShort, plural, isBeta } from '../fmt.js';
 import { openEndpointEditor, endpointRow, triggerRow, openTriggerEditor } from './automation.js';
+import { rulesPanel } from './rules.js';
 import { tipsEnabled, setTipsEnabled, resetTips, seenCount, resetOnboarding, TIPS } from '../tips.js';
 
 // `viewer: true` marks the sections an account without the admin role may
@@ -15,9 +16,9 @@ const TABS = [
   { id: 'general', label: 'General' }, { id: 'appearance', label: 'Appearance', viewer: true },
   { id: 'indicators', label: 'Indicators' }, { id: 'users', label: 'Users & access' },
   { id: 'network', label: 'Network access' }, { id: 'alerts', label: 'Alerts' },
-  { id: 'automation', label: 'Automation' }, { id: 'hardware', label: 'Hardware' },
-  { id: 'retention', label: 'Retention' }, { id: 'maintenance', label: 'Maintenance' },
-  { id: 'backups', label: 'Backups' }, { id: 'updates', label: 'Updates' }, { id: 'health', label: 'Monitor health', viewer: true },
+  { id: 'automation', label: 'Automation' }, { id: 'rules', label: 'Rules' }, { id: 'hardware', label: 'Hardware' },
+  { id: 'mcp', label: 'AI & MCP' }, { id: 'retention', label: 'Retention' }, { id: 'maintenance', label: 'Maintenance' },
+  { id: 'backups', label: 'Backups' }, { id: 'database', label: 'Database' }, { id: 'updates', label: 'Updates' }, { id: 'health', label: 'Monitor health', viewer: true },
   { id: 'about', label: 'About', viewer: true },
 ];
 
@@ -36,6 +37,8 @@ const GWATCH_COPYRIGHT = 'Copyright (c) 2026 JX Holdings. Original developers: J
 const DEPENDENCIES = [
   { name: 'kardianos/service', use: 'runs GWatch as a background service on Windows, macOS and Linux', license: 'zlib' },
   { name: 'modernc.org/sqlite', use: 'the embedded database that stores history, events and settings', license: 'BSD-3-Clause' },
+  { name: 'jackc/pgx', use: 'talks to a PostgreSQL server when Settings › Database points at one', license: 'MIT' },
+  { name: 'go-sql-driver/mysql', use: 'talks to a MySQL or MariaDB server when Settings › Database points at one', license: 'MPL-2.0' },
   { name: 'golang.org/x/crypto', use: 'password hashing for accounts and the access password', license: 'BSD-3-Clause' },
 ];
 
@@ -74,7 +77,7 @@ export async function mount(root, ctx) {
     replace(panel, skeleton({ lines: 5 }));
     state.panelRefresh = null;
     try {
-      const fn = { general: tabGeneral, appearance: tabAppearance, indicators: tabIndicators, users: tabUsers, network: tabNetwork, alerts: tabAlerts, automation: tabAutomation, hardware: tabHardware, retention: tabRetention, maintenance: tabMaintenance, backups: tabBackups, updates: tabUpdates, health: tabHealth, about: tabAbout }[state.tab];
+      const fn = { general: tabGeneral, appearance: tabAppearance, indicators: tabIndicators, users: tabUsers, network: tabNetwork, alerts: tabAlerts, automation: tabAutomation, rules: tabRules, hardware: tabHardware, mcp: tabMcp, retention: tabRetention, maintenance: tabMaintenance, backups: tabBackups, database: tabDatabase, updates: tabUpdates, health: tabHealth, about: tabAbout }[state.tab];
       const el = await fn();
       if (state.destroyed) return;
       replace(panel, isAdmin ? el : h('div', { class: 'stack' }, readOnlyNotice(), el));
@@ -513,6 +516,13 @@ export async function mount(root, ctx) {
     return wrap;
   }
 
+  /* ---------- Rules ---------- */
+  // Notification rules across nodes and checks (#31); the tab itself lives
+  // in views/rules.js beside its editor and rows.
+  async function tabRules() {
+    return rulesPanel({ isDestroyed: () => state.destroyed, onRefresh: (fn) => { state.panelRefresh = fn; } });
+  }
+
   /* ---------- Retention ---------- */
   /* ---------- Hardware ---------- */
   async function tabHardware() {
@@ -640,6 +650,100 @@ export async function mount(root, ctx) {
       h('p', { class: 'note' }, 'Full details, including how to build the agent for another platform, are in ', h('code', null, 'docs/HARDWARE.md'), '.'));
   }
 
+  /* ---------- AI & MCP ---------- */
+  // The MCP companion (gwatch-mcp) is a separate program that talks to this
+  // GWatch with an API key. Nothing here changes a setting; the tab is the
+  // set-up guide, the trust model in plain words, and the agent skill.
+  async function tabMcp() {
+    const status = await api.get('/api/mcp/status').catch(() => null);
+    return h('div', { class: 'stack' }, mcpIntroCard(), mcpSetupCard(), mcpScopeCard(), mcpSkillCard(status));
+  }
+
+  // A code block with a copy button, for the pieces of setup that are meant
+  // to be pasted somewhere else rather than typed.
+  function copyBlock(text, what) {
+    const copy = h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => {
+      try { await navigator.clipboard.writeText(text); toast(`${what} copied`, { kind: 'success' }); }
+      catch { toast('Could not copy — select the text and copy it by hand.', { kind: 'error' }); }
+    } }, icon('copy'), 'Copy');
+    return h('div', { class: 'mcp-code' }, h('code', { class: 'agent-setup' }, text), copy);
+  }
+
+  function mcpIntroCard() {
+    const item = (t, d) => h('div', null, h('b', null, t), h('div', { class: 'muted', style: { fontSize: '13px' } }, d));
+    return h('section', { class: 'card' }, h('h2', null, 'AI assistants and MCP'),
+      h('p', { class: 'lead' }, 'gwatch-mcp is a small companion program that lets an AI assistant — Claude Desktop, Claude Code or any other MCP client — ask this GWatch what is up, what is down and since when. It is optional, separate from GWatch itself, and off until you set it up.'),
+      h('div', { class: 'stack-sm', style: { marginTop: '8px' } },
+        item('It runs where the assistant runs', 'Usually your own computer. It talks to GWatch over the same API a browser uses, with an API key you create here. GWatch never connects out to the assistant.'),
+        item('Read-only unless you say otherwise', 'A read-only key lets the assistant answer questions. Changing what is monitored takes a read & write key and a flag on gwatch-mcp — two separate decisions, both yours.'),
+        item('Some things are never on offer', 'No key of any scope can reach settings, backups, accounts, other keys, automation or updates, so neither can an assistant.')),
+      h('p', { class: 'note' }, 'The full manual, including the trust model in detail, is ',
+        h('a', { href: `${REPO_URL}/blob/main/mcp/README.md`, target: '_blank', rel: 'noopener' }, 'mcp/README.md on GitHub', icon('external')), '.'));
+  }
+
+  function mcpSetupCard() {
+    const origin = `${location.protocol}//${location.host}`;
+    const desktopConfig = JSON.stringify({ mcpServers: { gwatch: { command: 'gwatch-mcp', env: { GWATCH_URL: origin, GWATCH_API_KEY: 'gw_paste_your_read_only_key_here' } } } }, null, 2);
+    const claudeCode = `claude mcp add gwatch gwatch-mcp -e GWATCH_URL=${origin} -e GWATCH_API_KEY=gw_paste_your_read_only_key_here`;
+    const check = `gwatch-mcp check --url ${origin} --api-key gw_…`;
+    const step = (title, ...body) => h('li', null, h('b', null, title), ...body);
+    // Minting a key from here reuses the Users & access dialog; the list on
+    // that tab is what refreshes, so there is nothing to reload on this one.
+    const newKey = h('button', { class: 'btn btn-sm', type: 'button', onclick: () => createKey(async () => {}) }, icon('key'), 'Create a read-only key');
+    return h('section', { class: 'card' }, h('h2', null, 'Set it up'),
+      h('ol', { class: 'mcp-steps' },
+        step('Create a read-only API key. ',
+          h('p', null, 'Under ', h('a', { href: '#/settings/users' }, 'Users & access'), ' › API keys, or with the button below. Name it after the assistant ("Claude Desktop"), keep the scope read-only, and copy the key when it is shown — it is shown once.'),
+          h('div', null, newKey)),
+        step('Install gwatch-mcp on the computer the assistant runs on. ',
+          h('p', null, 'Every GWatch release includes a gwatch-mcp binary for each platform; put it somewhere on your PATH. Or, with Go installed:'),
+          copyBlock('go install github.com/jxburros/GWatch/mcp/cmd/gwatch-mcp@latest', 'Install command')),
+        step('Tell the assistant about it. ',
+          h('p', null, 'Claude Desktop reads ', h('code', null, 'claude_desktop_config.json'), ' (macOS: ', h('code', null, '~/Library/Application Support/Claude/'), ', Windows: ', h('code', null, '%APPDATA%\\Claude\\'), '). Add this, with your key in place of the placeholder:'),
+          copyBlock(desktopConfig, 'Claude Desktop config'),
+          h('p', null, 'Claude Code takes one command instead:'),
+          copyBlock(claudeCode, 'Claude Code command'),
+          h('p', { class: 'note' }, 'Any other MCP client: run gwatch-mcp as a stdio server with the same two environment variables. Keep the key in the environment rather than on the command line, so it stays out of the process list. If the assistant is not on this network, use the address it reaches GWatch by; docs/REMOTE-ACCESS.md covers doing that safely.')),
+        step('Check it. ',
+          h('p', null, 'From that same computer, this reports the connection, the key’s scope and which tools the assistant will see:'),
+          copyBlock(check, 'Check command'))),
+      h('p', { class: 'note' }, 'The address above is the one this browser is using to reach GWatch. The assistant needs one that works from where it runs.'));
+  }
+
+  function mcpScopeCard() {
+    const item = (t, d) => h('div', null, h('b', null, t), h('div', { class: 'muted', style: { fontSize: '13px' } }, d));
+    return h('section', { class: 'card' }, h('h2', null, 'What the assistant can and cannot do'),
+      h('div', { class: 'stack-sm', style: { marginTop: '8px' } },
+        item('With a read-only key', 'The overview, nodes and their checks, recent results, history over a range, the event timeline, groups and tags, the node templates, and whether the monitor itself is healthy. Nine tools; nothing that changes anything.'),
+        item('With a read & write key and --allow-write', 'Also create, change, enable, disable, run and silence nodes, add notes to the timeline, test a check without saving it, and delete a node — which additionally has to be confirmed in the tool call. Both gates have to be open: GWatch refuses a write from a read-only key whatever gwatch-mcp was started with.'),
+        item('Never, whatever the key', 'Settings, backups and restores, updates, user accounts, API keys, automation triggers and endpoints, the configuration export and the service log. There are no tools for these, and a key could not use them if there were.')),
+      h('p', { class: 'note' }, 'Every change an assistant makes is recorded in the event timeline under the key’s name, the same as any other API key.'));
+  }
+
+  // The skill is a short document that teaches an assistant how to use the
+  // tools well. It has its own version; the card says when it was last
+  // downloaded and, only when the skill has moved on since, mentions it in an
+  // inline note. Nothing outside this card announces it.
+  function mcpSkillCard(status) {
+    const version = status?.skillVersion;
+    const dl = h('a', { class: 'btn btn-primary', href: '/api/mcp/skill', download: version ? `gwatch-skill-${version}.zip` : 'gwatch-skill.zip', onclick: () => {
+      // The download itself is what the server records; this only keeps the
+      // "last downloaded" line honest without a reload.
+      setTimeout(() => { state.panelRefresh?.(); }, 800);
+    } }, icon('download'), version ? `Download skill ${version}` : 'Download skill');
+    const md = h('a', { class: 'btn btn-sm', href: '/api/mcp/skill?format=md', download: 'SKILL.md' }, 'SKILL.md only');
+    const last = status?.lastDownloadedAt
+      ? h('p', { class: 'muted', style: { fontSize: '13px' } }, `Last downloaded ${relTime(status.lastDownloadedAt)} (version ${status.lastDownloadedVersion})${status.lastDownloadedBy ? ` by ${status.lastDownloadedBy}` : ''}.`)
+      : h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Not downloaded yet.');
+    return h('section', { class: 'card' },
+      h('div', { class: 'card-head' }, h('h2', null, 'Agent skill'), version ? h('span', { class: 'chip' }, `Version ${version}`) : null),
+      h('p', { class: 'lead' }, 'A short guide that teaches the assistant how to use GWatch well: start with the overview, how to drill into a problem, what the statuses mean, and how to be careful with the write tools. The tools describe themselves; the skill teaches judgement.'),
+      status?.updateAvailable ? banner('info', `The skill has been updated since it was last downloaded (${status.lastDownloadedVersion} → ${status.skillVersion}). Download it again when convenient and replace the copy the assistant uses.`) : null,
+      status ? h('div', { class: 'btn-group' }, dl, md) : h('p', { class: 'note' }, 'This build does not include the skill.'),
+      last,
+      h('p', { class: 'note' }, 'Where to put it: for Claude Code, unzip it into ', h('code', null, '~/.claude/skills/'), ' (or a project’s ', h('code', null, '.claude/skills/'), ') so the file lands at ', h('code', null, 'skills/gwatch/SKILL.md'), '. For Claude Desktop and assistants without a skills folder, paste the body of SKILL.md into the assistant’s instructions.'));
+  }
+
   async function tabRetention() {
     const s = state.settings || await loadSettings();
     const r = s.retention;
@@ -688,6 +792,7 @@ export async function mount(root, ctx) {
     const row = (k, v) => { if (v) dl.append(h('dt', null, k), h('dd', { class: 'mono' }, v)); };
     row('Data directory', hl.dataDir);
     row('Database', hl.databasePath);
+    row('Database driver', hl.databaseDriver);
     row('Key file', hl.keyPath);
     row('Backups folder', hl.backupDir);
     return h('div', { style: { marginTop: '10px' } }, dl,
@@ -807,7 +912,7 @@ export async function mount(root, ctx) {
           h('div', { class: 'btn-group' },
             h('a', { class: 'btn btn-sm', href: `/api/backups/${encodeURIComponent(b.fileName)}/download`, download: b.fileName }, icon('download'), 'Download'),
             h('button', { class: 'btn btn-sm', type: 'button', onclick: () => restoreExisting(b) }, icon('upload'), 'Restore'),
-            h('button', { class: 'btn btn-sm btn-danger', type: 'button', onclick: async () => { if (await confirmDialog({ title: `Delete ${b.fileName}?`, confirmLabel: 'Delete', danger: true })) { try { await api.del(`/api/backups/${encodeURIComponent(b.fileName)}`); toast('Backup deleted', { kind: 'success' }); load(); } catch (e) { toast(e.message, { kind: 'error' }); } } } }, icon('trash')))));
+            h('button', { class: 'btn btn-sm btn-danger', type: 'button', 'aria-label': `Delete ${b.fileName}`, title: 'Delete', onclick: async () => { if (await confirmDialog({ title: `Delete ${b.fileName}?`, confirmLabel: 'Delete', danger: true })) { try { await api.del(`/api/backups/${encodeURIComponent(b.fileName)}`); toast('Backup deleted', { kind: 'success' }); load(); } catch (e) { toast(e.message, { kind: 'error' }); } } } }, icon('trash')))));
       }
     };
     const pw = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'Choose a password' });
@@ -1000,6 +1105,102 @@ export async function mount(root, ctx) {
           numField(u, 'checkIntervalHours', 'Check every', { unitLabel: 'hours', min: 1, help: 'Between 1 and 720 hours (30 days). The default is once a day.' }),
           field({ label: 'GitHub repository', input: repo, help: 'Release assets are expected to be named gwatch-<os>-<arch>[.exe], which is what the release job publishes.' })),
         h('hr', { class: 'divider' }), saveBar()));
+  }
+
+
+  /* ---------- Database ---------- */
+  // Which database GWatch keeps its data in. Unlike every other tab this does
+  // not edit the settings document: the connection has to be known before the
+  // database is open, so it lives in database.json in the data directory and
+  // only takes effect at the next start. See docs/DATABASE.md.
+  const DB_DRIVERS = [
+    { value: 'sqlite', label: 'SQLite file in the data directory (default)' },
+    { value: 'postgres', label: 'PostgreSQL server' },
+    { value: 'mysql', label: 'MySQL or MariaDB server' },
+  ];
+  const DB_TLS = [
+    { value: 'prefer', label: 'Prefer (encrypt when the server offers it)' },
+    { value: 'require', label: 'Require (encrypt, do not verify the certificate)' },
+    { value: 'verify-ca', label: 'Verify CA' },
+    { value: 'verify-full', label: 'Verify CA and host name' },
+    { value: 'disable', label: 'Disable' },
+  ];
+  async function tabDatabase() {
+    const status = await api.get('/api/database');
+    const cfg = { ...status.saved };
+    if (!cfg.driver) cfg.driver = 'sqlite';
+    if (!cfg.sslMode) cfg.sslMode = 'prefer';
+    const wrap = h('div', { class: 'stack' });
+    const active = status.active || {};
+    const activeCard = h('section', { class: 'card' }, h('h2', null, 'Database in use'),
+      h('p', { class: 'lead' }, 'Where this copy of GWatch is reading and writing right now.'),
+      h('div', { class: 'health-cards', style: { marginTop: '10px' } },
+        hcard({ sqlite: 'SQLite', postgres: 'PostgreSQL', mysql: 'MySQL / MariaDB' }[active.driver] || active.driver || '—', 'Backend', active.label || ''),
+        hcard(h('span', { class: 'mono', style: { fontSize: '13px' } }, active.description || '—'), 'Location'),
+        hcard(String(active.schemaVersion ?? '—'), 'Schema version'),
+        hcard(bytes(active.sizeBytes || 0), 'Size')));
+
+    const pending = h('div', { role: 'status' });
+    const renderPending = (st) => {
+      clear(pending);
+      if (st.restartRequired) pending.append(banner('warn', h('span', null, h('b', null, 'GWatch will use this database after the service is restarted. '), `Saved: ${describe(st.saved)}. Until then it keeps using ${st.active?.description || 'the current database'}.`)));
+    };
+    const describe = (c) => c.driver === 'sqlite' || !c.driver ? 'the SQLite file in the data directory' : `${c.driver === 'postgres' ? 'PostgreSQL' : 'MySQL/MariaDB'} at ${c.host || '(connection string)'}${c.port ? ':' + c.port : ''}/${c.database || ''}${c.schema ? ` (schema ${c.schema})` : ''}`;
+    renderPending(status);
+
+    const driver = selectInput({ options: DB_DRIVERS, value: cfg.driver, onchange: () => { cfg.driver = driver.value; if (cfg.driver === 'postgres' && (!cfg.port || cfg.port === 3306)) { cfg.port = 5432; port.value = '5432'; } if (cfg.driver === 'mysql' && (!cfg.port || cfg.port === 5432)) { cfg.port = 3306; port.value = '3306'; } syncServerFields(); } });
+    const host = textInput({ value: cfg.host || '', placeholder: 'db.example.lan', autocomplete: 'off', oninput: () => { cfg.host = host.value.trim(); } });
+    const port = numberInput({ value: cfg.port || (cfg.driver === 'mysql' ? 3306 : 5432), min: 1, max: 65535, oninput: () => { cfg.port = Number(port.value) || 0; } });
+    const user = textInput({ value: cfg.user || '', placeholder: 'gwatch', autocomplete: 'off', oninput: () => { cfg.user = user.value.trim(); } });
+    const password = h('input', { type: 'password', value: cfg.password || '', autocomplete: 'new-password', placeholder: cfg.password ? '' : 'Database password', oninput: () => { cfg.password = password.value; } });
+    const database = textInput({ value: cfg.database || '', placeholder: 'gwatch', autocomplete: 'off', oninput: () => { cfg.database = database.value.trim(); } });
+    const schema = textInput({ value: cfg.schema || '', placeholder: 'public', autocomplete: 'off', oninput: () => { cfg.schema = schema.value.trim(); } });
+    const tls = selectInput({ options: DB_TLS, value: cfg.sslMode, onchange: () => { cfg.sslMode = tls.value; } });
+    const schemaField = field({ label: 'Schema (PostgreSQL)', input: schema, help: 'Leave empty for the user\u2019s default search path, normally "public".' });
+    const serverGrid = h('div', { class: 'form-grid' },
+      field({ label: 'Host', input: host }), field({ label: 'Port', input: port }),
+      field({ label: 'User', input: user }), field({ label: 'Password', input: password, help: 'Stored encrypted with this computer\u2019s gwatch.key, like the SMTP password.' }),
+      field({ label: 'Database', input: database }), schemaField,
+      h('div', { class: 'span-2' }, field({ label: 'TLS', input: tls, help: 'For MySQL, "require" encrypts without verifying and the two verify options both check the server certificate.' })));
+    const sqliteNote = h('p', { class: 'note' }, 'The embedded SQLite file needs no configuration and is right for almost every install. Choose a server only if you already run one and want GWatch\u2019s history kept there.');
+    const syncServerFields = () => { const server = cfg.driver !== 'sqlite'; serverGrid.hidden = !server; sqliteNote.hidden = server; schemaField.hidden = cfg.driver !== 'postgres'; };
+    syncServerFields();
+
+    const result = h('div', { role: 'status' });
+    const payload = () => ({ driver: cfg.driver, host: cfg.host || '', port: Number(cfg.port) || 0, user: cfg.user || '', password: cfg.password || '', database: cfg.database || '', schema: cfg.driver === 'postgres' ? (cfg.schema || '') : '', sslMode: cfg.sslMode || 'prefer' });
+    const testBtn = h('button', { class: 'btn', type: 'button', onclick: async () => {
+      const done = busy(testBtn, 'Connecting\u2026');
+      try { const r = await api.post('/api/database/test', payload()); replace(result, banner('up', r.message || `Connected (${r.serverVersion}).`)); }
+      catch (e) { replace(result, banner('down', e.message)); }
+      done();
+    } }, icon('database'), 'Test connection');
+    const saveBtn = h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
+      if (cfg.driver !== 'sqlite') {
+        const ok = await confirmDialog({ title: 'Switch database?', message: `GWatch will start using ${describe(payload())} the next time it is started. Existing data stays in the current database and is not copied; run "gwatch migrate-db" first if it should come along (docs/DATABASE.md).`, confirmLabel: 'Save' });
+        if (!ok) return;
+      }
+      const done = busy(saveBtn, 'Saving\u2026');
+      try {
+        const st = await api.put('/api/database', payload());
+        cfg.password = st.saved?.password || '';
+        password.value = cfg.password;
+        renderPending(st);
+        replace(result, banner(st.restartRequired ? 'warn' : 'up', st.restartRequired ? 'Saved. GWatch will use this database after the service is restarted.' : 'Saved. This is the database already in use.'));
+        toast('Database settings saved', { kind: 'success' });
+      } catch (e) { replace(result, banner('down', e.message)); }
+      done();
+    } }, icon('save'), 'Save');
+    const formCard = h('section', { class: 'card' }, h('h2', null, 'Database for the next start'),
+      h('p', { class: 'lead' }, 'Point GWatch at your own PostgreSQL or MySQL/MariaDB server, or go back to the SQLite file. Saving writes database.json in the data directory; nothing changes until GWatch is restarted.'),
+      pending,
+      h('div', { class: 'form-grid', style: { marginBottom: '12px' } }, h('div', { class: 'span-2' }, field({ label: 'Database', input: driver }))),
+      sqliteNote, serverGrid,
+      h('div', { class: 'form-actions', style: { marginTop: '12px' } }, testBtn, saveBtn), result);
+    const howCard = h('section', { class: 'card' }, h('h2', null, 'Moving existing data'),
+      h('p', null, 'Saving here changes where GWatch looks, not what is there. To take the nodes, history and accounts in the SQLite file along, stop the service and run ', h('code', null, 'gwatch migrate-db'), ' once: it copies everything into the database saved here and leaves the SQLite file in place as a fallback. Backups and restores work the same on every backend.'),
+      h('p', { class: 'note' }, 'Settings › Database and ', h('code', null, 'docs/DATABASE.md'), ' describe creating the database and a least-privilege user on the server, the ', h('code', null, '--db-*'), ' flags and ', h('code', null, 'GWATCH_DB_*'), ' variables that override this file, and what a server backend does not do (the pre-upgrade file copy).'));
+    wrap.append(activeCard, formCard, howCard);
+    return wrap;
   }
 
   /* ---------- Health ---------- */

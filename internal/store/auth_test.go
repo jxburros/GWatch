@@ -2,9 +2,7 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -210,11 +208,8 @@ func TestAPIKeys(t *testing.T) {
 // TestMigrateAddsColumns builds a database with the pre-2.x column set and
 // checks that opening it adds the columns migrate() is responsible for.
 func TestMigrateAddsColumns(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "old.db")
-	db, err := sql.Open("sqlite", "file:"+path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := testConfig(t)
+	db, d := rawDB(t, cfg)
 	old := `
 CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, type TEXT NOT NULL,
   node_id INTEGER, check_id INTEGER, node_name TEXT NOT NULL DEFAULT '', check_name TEXT NOT NULL DEFAULT '',
@@ -223,19 +218,18 @@ CREATE TABLE endpoints (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL
   description TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, method TEXT NOT NULL DEFAULT 'POST',
   token TEXT NOT NULL DEFAULT '', action TEXT NOT NULL DEFAULT '{}', last_called_at TEXT, last_status TEXT NOT NULL DEFAULT '',
   last_output TEXT NOT NULL DEFAULT '', call_count INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-INSERT INTO events(ts, type, title) VALUES (1, 'note', 'older event');
 `
-	if _, err := db.Exec(old); err != nil {
+	rawSchema(t, db, d, old)
+	if _, err := db.Exec("INSERT INTO events(ts, type, title) VALUES (1, 'note', 'older event')"); err != nil {
 		t.Fatal(err)
 	}
-	db.Close()
 
-	s, err := Open(path)
+	ctx := context.Background()
+	s, err := OpenDSN(ctx, cfg)
 	if err != nil {
 		t.Fatalf("open older database: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
 	for _, want := range []struct{ table, column string }{{"events", "actor"}, {"endpoints", "allow_no_token"}} {
 		cols, err := s.tableColumns(ctx, want.table)
 		if err != nil {
@@ -260,7 +254,7 @@ INSERT INTO events(ts, type, title) VALUES (1, 'note', 'older event');
 	}
 	// Opening again is a no-op (the columns are already there).
 	s.Close()
-	s2, err := Open(path)
+	s2, err := OpenDSN(ctx, cfg)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

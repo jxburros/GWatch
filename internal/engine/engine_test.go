@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -12,18 +11,25 @@ import (
 	"github.com/jxburros/GWatch/internal/mailer"
 	"github.com/jxburros/GWatch/internal/model"
 	"github.com/jxburros/GWatch/internal/store"
+	"github.com/jxburros/GWatch/internal/store/storetest"
 )
 
 type fakeNet struct {
 	mu   sync.Mutex
 	down map[int64]bool // check id -> failing
 	runs map[int64]int
+	// custom hands a check a result of the test's own making — a hardware
+	// reading with per-metric verdicts, say — in place of the stock one.
+	custom map[int64]func() model.Result
 }
 
 func (f *fakeNet) run(ctx context.Context, c model.Check, opts checks.Options) model.Result {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.runs[c.ID]++
+	if make, ok := f.custom[c.ID]; ok {
+		return make()
+	}
 	lat := 10.0
 	if f.down[c.ID] {
 		return model.Result{Timestamp: time.Now(), Success: false, Status: model.StatusDown, Message: "connection refused", Error: "dial tcp: connection refused", Attempts: 1}
@@ -61,11 +67,7 @@ func (m *mailbox) subjects() []string {
 
 func setup(t *testing.T) (*Engine, *store.Store, *fakeNet, *mailbox) {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t)
 	log, _ := logging.New("", nil)
 	settings := model.DefaultSettings()
 	settings.Alerts.Enabled = true

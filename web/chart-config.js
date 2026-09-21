@@ -162,7 +162,7 @@ export function renderConfiguredChart(host, cfg, { title = 'Chart', fetch: fetch
       for (const hs of list) {
         const avail = hs.summary?.availability;
         const cls = avail == null ? '' : avail >= 99.9 ? 'text-up' : avail >= 95 ? 'text-degraded' : 'text-down';
-        up.append(h('div', { class: 'uptime-row' }, h('div', { class: 'uptime-name truncate' }, hs.nodeName || '', h('div', { class: 'sub' }, hs.checkName)), uptimeBar(hs.points, { bucketSeconds: hs.bucketSeconds, from: hs.from, to: hs.to }), h('div', { class: `uptime-pct ${cls}` }, pct(avail, 2))));
+        up.append(h('div', { class: 'uptime-row' }, h('div', { class: 'uptime-name truncate' }, hs.nodeName || '', h('div', { class: 'sub' }, hs.checkName)), uptimeBar(hs.points, { bucketSeconds: hs.bucketSeconds, from: hs.from, to: hs.to, label: `${hs.nodeName || ''} › ${hs.checkName}` }), h('div', { class: `uptime-pct ${cls}` }, pct(avail, 2))));
       }
       up.append(uptimeLegend());
       body.append(up);

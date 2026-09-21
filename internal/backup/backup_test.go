@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/jxburros/GWatch/internal/model"
-	"github.com/jxburros/GWatch/internal/store"
+	"github.com/jxburros/GWatch/internal/store/storetest"
 )
 
 func TestEncryptRoundTrip(t *testing.T) {
@@ -55,10 +55,7 @@ func TestEncryptRoundTrip(t *testing.T) {
 func TestBackupRestore(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "a.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t)
 	gw, err := st.CreateNode(ctx, model.Node{Name: "Gateway", Host: "192.168.1.1", Group: "Home Network", Enabled: true, Checks: []model.Check{{Type: model.CheckPing, Name: "Ping", Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5}}})
 	if err != nil {
 		t.Fatal(err)
@@ -108,11 +105,7 @@ func TestBackupRestore(t *testing.T) {
 	st.Close()
 
 	// restore into a fresh database
-	st2, err := store.Open(filepath.Join(dir, "b.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st2.Close()
+	st2 := storetest.Open(t)
 	sum, err := Restore(ctx, st2, filepath.Join(bdir, info.FileName), "pw", true)
 	if err != nil {
 		t.Fatalf("restore: %v", err)
@@ -146,8 +139,7 @@ func TestBackupRestore(t *testing.T) {
 		t.Fatalf("dashboards: %+v", ds)
 	}
 	// config-only restore keeps ids too
-	st3, _ := store.Open(filepath.Join(dir, "c.db"))
-	defer st3.Close()
+	st3 := storetest.Open(t)
 	sum3, err := Restore(ctx, st3, filepath.Join(bdir, info.FileName), "pw", false)
 	if err != nil || sum3.Results != 0 || sum3.Nodes != 2 {
 		t.Fatalf("config-only restore: %v %+v", err, sum3)
@@ -157,11 +149,7 @@ func TestBackupRestore(t *testing.T) {
 func TestPrune(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "p.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
+	st := storetest.Open(t)
 	bdir := filepath.Join(dir, "backups")
 
 	// Nothing to prune yet.

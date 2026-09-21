@@ -2,7 +2,7 @@
 // failure shading, hover tooltip and PNG export; plus sparkline and uptime bar.
 
 import { ms as fmtMs, pct as fmtPct, timeShort, dateTime } from './fmt.js';
-import { h, cssColors, onThemeChange } from './components.js';
+import { h, uid, cssColors, onThemeChange } from './components.js';
 
 export const SERIES_COLORS = ['#43c9c0', '#e879a6', '#ffc542', '#6ea0ff', '#ff9f6e', '#b18cff', '#3ec8b8', '#35e07f'];
 /** Series palette with the current accent first. */
@@ -125,21 +125,41 @@ export class LineChart {
     if (this.opts.style == null) this.opts.style = this.opts.area ? 'area' : 'line';
     this._themeOff = onThemeChange(() => { this._surface = null; this.scheduleDraw(); });
     this.el = h('div', { class: 'chart', style: this.opts.height ? { height: `${this.opts.height}px` } : null });
-    this.canvas = h('canvas', { role: 'img', 'aria-label': opts.ariaLabel || 'Chart' });
+    // The canvas is a picture to assistive technology (role=img), so the same
+    // figures are also written out: a one-line summary the canvas is
+    // described by, and a full table under "View as table". The canvas is in
+    // the tab order so the tooltip can be walked with the arrow keys.
+    const id = uid('chart');
+    this.canvas = h('canvas', { role: 'img', 'aria-label': opts.ariaLabel || 'Chart', tabindex: 0, 'aria-describedby': `${id}-summary` });
     this.tooltip = h('div', { class: 'chart-tooltip', hidden: true });
     this.emptyEl = h('div', { class: 'chart-empty', hidden: true }, 'No data for this range yet');
-    this.el.append(this.canvas, this.tooltip, this.emptyEl);
+    this.summaryEl = h('p', { class: 'sr-only', id: `${id}-summary` });
+    // What the keyboard-driven tooltip shows, read out as it changes.
+    this.liveEl = h('div', { class: 'sr-only', 'aria-live': 'polite' });
+    this.el.append(this.canvas, this.tooltip, this.emptyEl, this.summaryEl, this.liveEl);
     if (this.opts.legend) { this.legend = h('div', { class: 'chart-legend' }); }
     container.append(this.el);
     if (this.legend) container.append(this.legend);
+    if (this.opts.table !== false) {
+      // The table itself is only built once the details is opened (and kept
+      // current while it is), since a dashboard redraws its charts often.
+      this.tableBody = h('div', { class: 'chart-table-body' });
+      this.tableEl = h('details', { class: 'chart-data' }, h('summary', null, 'View as table'), this.tableBody);
+      this.tableEl.addEventListener('toggle', () => { if (this.tableEl.open) this._renderTable(); });
+      container.append(this.tableEl);
+    }
     this.ctx = this.canvas.getContext('2d');
     this.data = { series: [], from: 0, to: 0, bucketSeconds: 0 };
     this.hover = null;
+    this._times = [];
+    this._kbIndex = -1;
     this._onMove = (e) => this._handleMove(e);
-    this._onLeave = () => { this.hover = null; this.tooltip.hidden = true; this.draw(); };
+    this._onLeave = () => { this.hover = null; this._kbIndex = -1; this.tooltip.hidden = true; this.draw(); };
+    this._onKey = (e) => this._handleKey(e);
     this.canvas.addEventListener('mousemove', this._onMove);
     this.canvas.addEventListener('mouseleave', this._onLeave);
-    this.canvas.addEventListener('touchstart', (e) => { if (e.touches[0]) this._handleMove(e.touches[0]); }, { passive: true });
+    this.canvas.addEventListener('keydown', this._onKey);
+    this.canvas.addEventListener('blur', this._onLeave);
     this._raf = 0;
     // Resolved lazily from the canvas's own computed background, so a chart on
     // a wallboard panel paints that panel's colour rather than a card's.
@@ -179,8 +199,58 @@ export class LineChart {
       series: series.map((s, i) => ({ ...s, color: s.color || SERIES_COLORS[i % SERIES_COLORS.length], points: (s.points || []).slice().sort((a, b) => a.t - b.t) })),
       from: f, to: t, bucketSeconds,
     };
+    // Every distinct time any series has a point at, in order: the stops the
+    // arrow keys move between.
+    this._times = [...new Set(this.data.series.flatMap((s) => s.points.map((p) => p.t)))].sort((a, b) => a - b);
+    this._kbIndex = -1;
     this._renderLegend();
+    this._renderSummary();
+    if (this.tableEl?.open) this._renderTable();
     this.draw();
+  }
+
+  /** One sentence per series — range, sample count, low, high and latest —
+   *  so a screen reader gets the shape of the chart without the table. */
+  _renderSummary() {
+    if (!this.summaryEl) return;
+    const { series, from, to } = this.data;
+    const unit = this.opts.unit;
+    const parts = [];
+    for (const s of series) {
+      const vals = s.points.filter((p) => p.v != null && isFinite(p.v));
+      if (!vals.length) { parts.push(`${s.name}: no data.`); continue; }
+      const lo = vals.reduce((a, p) => (p.v < a.v ? p : a));
+      const hi = vals.reduce((a, p) => (p.v > a.v ? p : a));
+      const last = vals[vals.length - 1];
+      parts.push(`${s.name}: ${vals.length} samples, lowest ${fmtValue(lo.v, unit)} at ${dateTime(lo.t, { seconds: false })}, highest ${fmtValue(hi.v, unit)} at ${dateTime(hi.t, { seconds: false })}, latest ${fmtValue(last.v, unit)}.`);
+    }
+    const span = from && to ? `From ${dateTime(from, { seconds: false })} to ${dateTime(to, { seconds: false })}. ` : '';
+    this.summaryEl.textContent = parts.length ? `${span}${parts.join(' ')} Press the left and right arrow keys to step through the points.` : 'No data for this range yet.';
+  }
+
+  /** The data as a table: one row per time, one column per series, plus
+   *  availability where a point carries it. */
+  _renderTable() {
+    if (!this.tableBody) return;
+    const { series } = this.data;
+    const unit = this.opts.unit;
+    const hasAvail = series.some((s) => s.points.some((p) => p.avail != null));
+    const byTime = new Map();
+    series.forEach((s, i) => { for (const p of s.points) { if (!byTime.has(p.t)) byTime.set(p.t, new Array(series.length).fill(null)); byTime.get(p.t)[i] = p; } });
+    const times = [...byTime.keys()].sort((a, b) => a - b);
+    const table = h('table', { class: 'table' },
+      h('caption', { class: 'sr-only' }, this.opts.ariaLabel || this.opts.title || 'Chart data'),
+      h('thead', null, h('tr', null, h('th', { scope: 'col' }, 'Time'), ...series.map((s) => h('th', { scope: 'col', class: 'num' }, s.name)), hasAvail ? h('th', { scope: 'col', class: 'num' }, 'Availability') : null)),
+      h('tbody', null, times.map((t) => {
+        const row = byTime.get(t);
+        const avail = row.map((p) => p?.avail).filter((a) => a != null);
+        return h('tr', null,
+          h('th', { scope: 'row', class: 'mono nowrap' }, dateTime(t, { seconds: false })),
+          ...row.map((p) => h('td', { class: 'num' }, p && p.v != null ? fmtValue(p.v, unit) : (p?.avail === 0 ? 'failed' : '—'))),
+          hasAvail ? h('td', { class: 'num' }, avail.length ? fmtPct(Math.min(...avail)) : '—') : null);
+      })),
+    );
+    this.tableBody.replaceChildren(times.length ? h('div', { class: 'table-wrap' }, table) : h('p', { class: 'note' }, 'No data for this range yet.'));
   }
 
   _renderLegend() {
@@ -206,8 +276,11 @@ export class LineChart {
     if (this._raf) cancelAnimationFrame(this._raf);
     this.canvas.removeEventListener('mousemove', this._onMove);
     this.canvas.removeEventListener('mouseleave', this._onLeave);
+    this.canvas.removeEventListener('keydown', this._onKey);
+    this.canvas.removeEventListener('blur', this._onLeave);
     this.el.remove();
     if (this.legend) this.legend.remove();
+    if (this.tableEl) this.tableEl.remove();
   }
 
   _layout(w, h) {
@@ -424,11 +497,41 @@ export class LineChart {
 
   _handleMove(e) {
     const rect = this.canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
+    this._kbIndex = -1;
+    this._hoverAt(e.clientX - rect.left, rect);
+  }
+
+  /** Left and Right step the tooltip through the points, Home and End jump
+   *  to the ends, Escape hides it. Each stop reuses the pointer hit-test at
+   *  the point's own x, so the keyboard sees exactly what a hover would. */
+  _handleKey(e) {
+    const times = this._times;
+    if (!times.length) return;
+    let i = this._kbIndex;
+    switch (e.key) {
+      case 'ArrowRight': i = i < 0 ? 0 : Math.min(times.length - 1, i + 1); break;
+      case 'ArrowLeft': i = i < 0 ? times.length - 1 : Math.max(0, i - 1); break;
+      case 'Home': i = 0; break;
+      case 'End': i = times.length - 1; break;
+      case 'Escape': if (this.hover) { e.preventDefault(); this._onLeave(); } return;
+      default: return;
+    }
+    e.preventDefault();
+    const rect = this.canvas.getBoundingClientRect();
+    const { w, h } = this._size || { w: rect.width, h: rect.height };
+    const { x } = this._scales(w, h);
+    this._kbIndex = i;
+    this._hoverAt(x(times[i]), rect, { announce: true, exactT: times[i] });
+  }
+
+  /** Hit-test the plot at canvas x `mx` and show the tooltip for the nearest
+   *  point of each series. `exactT` (from the keyboard) pins the time so a
+   *  wide plot cannot round to a neighbouring bucket. */
+  _hoverAt(mx, rect, { announce = false, exactT = null } = {}) {
     const { w, h } = this._size || { w: rect.width, h: rect.height };
     const { L, x } = this._scales(w, h);
     if (mx < L.left || mx > L.left + L.plotW) { this._onLeave(); return; }
-    const t = this.data.from + ((mx - L.left) / L.plotW) * (this.data.to - this.data.from);
+    const t = exactT != null ? exactT : this.data.from + ((mx - L.left) / L.plotW) * (this.data.to - this.data.from);
     // nearest point per series (binary search)
     const values = [];
     let bestT = null; let bestD = Infinity;
@@ -448,6 +551,7 @@ export class LineChart {
     if (!values.length) { this._onLeave(); return; }
     this.hover = { t: bestT, values };
     this._showTooltip(mx, values, bestT);
+    if (announce) this.liveEl.textContent = `${dateTime(bestT, { seconds: false })}: ${values.map((v) => `${v.name} ${v.v == null ? (v.avail === 0 ? 'failed' : 'no value') : fmtValue(v.v, this.opts.unit)}`).join(', ')}`;
     this.draw();
   }
 
@@ -568,11 +672,16 @@ export function sparkline(values, { width = 120, height = 28, color = null } = {
 /**
  * Per-bucket availability bar. points: HistoryPoint[]; segments are merged
  * down to `maxSegments` (worst availability wins within a merged bucket).
+ * `label` names what the bar is for ("Office router › Ping"); it and a
+ * summary of the periods become the bar's accessible name, since the
+ * coloured segments are a picture and their titles are never read out.
  */
-export function uptimeBar(points, { maxSegments = 90, bucketSeconds = 0, from, to } = {}) {
-  const wrap = h('div', { class: 'uptime-bar', role: 'img', 'aria-label': 'Availability per period' });
+export function uptimeBar(points, { maxSegments = 90, bucketSeconds = 0, from, to, label = '' } = {}) {
+  const name = label ? `Availability per period — ${label}` : 'Availability per period';
+  const wrap = h('div', { class: 'uptime-bar', role: 'img', 'aria-label': name });
   const pts = (points || []).map((p) => ({ t: +new Date(p.ts ?? p.t), avail: p.availability ?? p.avail, count: p.count })).filter((p) => isFinite(p.t)).sort((a, b) => a.t - b.t);
   if (!pts.length) {
+    wrap.setAttribute('aria-label', `${name}: no data`);
     for (let i = 0; i < 30; i++) wrap.append(h('span', { class: 'seg none' }));
     return wrap;
   }
@@ -589,6 +698,8 @@ export function uptimeBar(points, { maxSegments = 90, bucketSeconds = 0, from, t
     b.min = b.min == null ? p.avail : Math.min(b.min, p.avail);
     b.sum += p.avail; b.n++;
   }
+  const tally = { up: 0, partial: 0, down: 0, none: 0 };
+  let firstTrouble = null;
   buckets.forEach((b, i) => {
     let cls = 'none'; let label = 'No data';
     if (b.n) {
@@ -596,9 +707,16 @@ export function uptimeBar(points, { maxSegments = 90, bucketSeconds = 0, from, t
       cls = b.min >= 100 ? 'up' : b.min <= 0 && avg <= 0 ? 'down' : 'partial';
       label = `${fmtPct(avg)} available`;
     }
+    tally[cls]++;
     const t0 = start + i * segMs;
+    if (firstTrouble == null && (cls === 'down' || cls === 'partial')) firstTrouble = t0;
     wrap.append(h('span', { class: `seg ${cls}`, title: `${dateTime(t0, { seconds: false })} — ${label}` }));
   });
+  const words = [`${tally.up} of ${segs} periods fully up`];
+  if (tally.partial) words.push(`${tally.partial} partial`);
+  if (tally.down) words.push(`${tally.down} down`);
+  if (tally.none) words.push(`${tally.none} without data`);
+  wrap.setAttribute('aria-label', `${name}: ${words.join(', ')}${firstTrouble != null ? `, first trouble ${dateTime(firstTrouble, { seconds: false })}` : ''}`);
   return wrap;
 }
 

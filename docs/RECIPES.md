@@ -22,7 +22,9 @@ placeholders, from `internal/engine/automation.go` (`TriggerVars`) and
 | `{{success}}` | `true`/`false` for the run that fired the trigger |
 | `{{latencyMs}}`, `{{lossPct}}`, `{{statusCode}}` | numeric fields, empty string when not applicable |
 | `{{failures}}` | consecutive failures so far |
-| `{{event}}` | the condition that fired it, e.g. `down`, `recovered`, `test`, `manual` |
+| `{{metric}}`, `{{metric.label}}`, `{{metric.value}}`, `{{metric.status}}` | the metric a metric-scoped event (a hardware check's `disk:/srv` warning) or a `metric_over` condition fired on — key, label, reading and its own verdict; empty for a check-level event |
+| `{{metrics.<key>}}` | every named metric of the run — a hardware check's `{{metrics.cpu}}`, an SNMP OID's name. Characters other than letters, digits, dots and dashes in a key become `_`, so `disk:/srv` is `{{metrics.disk__srv}}` and `net:eth0.rx` is `{{metrics.net_eth0.rx}}` |
+| `{{event}}` | the condition that fired it, e.g. `down`, `recovered`, `metric_over`, `test`, `manual` |
 | `{{ts}}` | RFC 3339 timestamp of the result |
 | `{{instance}}` | this GWatch instance's name (Settings › General) |
 | `{{trigger.name}}` | the trigger's own name |
@@ -325,6 +327,102 @@ credential fails fast instead of hanging).
 
 You can equally use a *trigger* instead of an endpoint here — e.g. run
 `git pull` in a docs repo whenever a specific node (your CI runner) recovers.
+
+## 8. Record a number from a JSON API (Pi-hole, a router, a sensor)
+
+Not an automation recipe, but it pairs with one: a **JSON value** check can keep
+the number it reads on every run, chart it on the node page and alert on it,
+the same way an SNMP reading is handled. Anything that answers with JSON works —
+a Pi-hole's summary, a router's status API, a Zigbee bridge's sensor endpoint.
+
+Add a JSON value check to the Pi-hole node:
+- **URL**: `http://192.168.1.2/admin/api.php?summaryRaw&auth=<api token>`
+- **JSON path**: `ads_percentage_today`
+- **Expected value**: leave blank — the check is up as long as the path exists.
+- **Record this value**: on.
+  - **Metric name**: `Blocked` (this is the chart's title and the name
+    `/api/history?metric=` takes).
+  - **Unit**: `%`
+  - **Warn >**: `60` — an unusually high block rate usually means a device is
+    misbehaving. Leave the other thresholds blank.
+
+Every run now stores `"metrics": { "Blocked": 31.4 }` on its result, the node
+page draws a *Blocked today — recorded value* chart with a CSV link, and a run
+above 60 % marks the check degraded with "Blocked is 63.2 %, above the warning
+threshold of 60 %". Crossing a **Crit** threshold marks it down, which is what
+a trigger on the node's `down` condition (recipes 1–5) responds to.
+
+A value the API sends as a quoted string (`"temperature": "21.5"`) is read as a
+number too. A value that is text (`"status": "enabled"`) is not charted; it is
+kept as the last result's JSON value, which the inspector shows. Over the API
+the same check is:
+
+```json
+{ "type": "json", "name": "Blocked today", "intervalSeconds": 300,
+  "config": { "target": "http://192.168.1.2/admin/api.php?summaryRaw&auth=…",
+              "jsonPath": "ads_percentage_today", "jsonRecord": true,
+              "jsonMetric": "Blocked", "jsonUnit": "%", "jsonWarnAbove": 60 } }
+```
+
+See `docs/API.md` → **Named metrics** for the fields, and for the one limit:
+a recorded value is charted only as far back as raw results are retained.
+
+## 9. Tell me when two of my three DNS servers are down
+
+A trigger watches one node, so "Pi-hole is down" is a trigger. "Two of my
+three resolvers are down at once" is not about any one node — one resolver
+failing is an evening job, two is the household losing name resolution —
+and that is what a **rule** (Settings › Rules) is for. Per-node alerts and
+triggers carry on as before; the rule sits beside them.
+
+You have three DNS checks: `Pi-hole › DNS`, `Router › DNS` and a `Cloud DNS`
+node whose only check resolves through 1.1.1.1. In **Settings › Rules › New
+rule**:
+
+- **Name**: `Two of three DNS servers down`
+- **Met when**: *At least N conditions*, **How many**: `2`
+- **Conditions** (one row each):
+  - node `Pi-hole`, check `DNS`, status *Down*
+  - node `Router`, check `DNS`, status *Down*
+  - node `Cloud DNS`, check *Any check of this node*, status *Degraded or worse*
+- **Actions**: a *Pushover* action with your token and user key, priority
+  *High*. Leave title and message blank — the defaults read
+  `GWatch Home` / `Two of three DNS servers down is met: 2 of 3 conditions met — Pi-hole › DNS is down, Router › DNS is down`.
+  Add an *HTTP request* too if a dashboard should hear about it.
+- **Cooldown**: `30` minutes, so a resolver flapping at the threshold does not
+  page you every time it crosses it. The rule still changes state and is
+  recorded in the timeline; only the actions are held back.
+- **Also notify when the rule clears**: on. The same actions run once the
+  household is back to one or zero resolvers down, with `{{status}}` = `cleared`.
+
+Save, then press **Send a test** on the rule's row to see every action run
+once with sample values. Over the API the same rule is:
+
+```json
+POST /api/rules
+{ "name": "Two of three DNS servers down", "enabled": true,
+  "join": "at_least", "atLeast": 2,
+  "conditions": [
+    { "kind": "status", "checkId": 12, "status": "down" },
+    { "kind": "status", "checkId": 27, "status": "down" },
+    { "kind": "status", "nodeId": 4, "status": "degraded" } ],
+  "actions": [ { "type": "pushover", "token": "azG…", "userKey": "uQi…", "priority": "1" } ],
+  "cooldownMinutes": 30, "notifyCleared": true }
+```
+
+What to expect: the rule fires **once** when the second resolver goes down
+(a `rule_fired` entry in Incidents naming the two), stays met while a third
+fails too, and clears when it is back to one. A resolver under a maintenance
+window or silenced does not count while that lasts — patching the Pi-hole on
+Sunday night does not bring you halfway to a page. "Degraded or worse" holds
+while the Cloud DNS check is slow *and* while it is down.
+
+Placeholders a rule's actions can use, beside the usual ones: `{{rule.name}}`,
+`{{rule.met}}` (how many conditions hold), `{{rule.conditions}}` (which ones),
+`{{rule.summary}}`, `{{message}}`, `{{status}}` (`met` / `cleared`) and
+`{{event}}` (`rule_fired` / `rule_cleared`). See `docs/API.md` → **Rules**.
+Hold timers ("only if this lasts 5 minutes") and metric conditions are not
+part of rules yet.
 
 ## Testing a recipe
 

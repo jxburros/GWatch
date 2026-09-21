@@ -24,7 +24,7 @@ became, and what still needs a human:
 | 2.3 Slack / Teams / ntfy / Pushover | `internal/actions/notify.go` | — |
 | 2.4 scheduled backups, restore path | `internal/engine/backupjob.go`, `docs/RESTORE.md` | — |
 | 2.5 read-only remote access | viewer role + read-only keys, `docs/REMOTE-ACCESS.md` | Decision: bring your own VPN/reverse proxy; GWatch never becomes internet-facing |
-| 3.1 / 3.2 MCP server | separate module `mcp/` (`gwatch-mcp`), read-only by default | Decide the `mcp/vX.Y.Z` tag scheme before advertising `go install` |
+| 3.1 / 3.2 MCP server | separate module `mcp/` (`gwatch-mcp`), read-only by default; Settings › AI & MCP, `skill/` | Resolved: the tag scheme is `mcp/vX.Y.Z` (`docs/RELEASING.md`), and the in-app set-up page plus the versioned agent skill (#56) cover the "how do I set it up" gap |
 | 3.3 trigger recipes | `docs/RECIPES.md` | — |
 | 4.1 Windows installer | `scripts/installer/gwatch.iss`, `docs/INSTALL.md` | Not yet compiled on a Windows machine; run the CI job once and test install/upgrade/uninstall by hand |
 
@@ -189,6 +189,17 @@ promise.
 - **Done when**: a non-technical user can install, configure network access, and reach
   the web UI without touching PowerShell or the CLI.
 
+### 4.2 Container image
+- Done: a multi-arch image (`ghcr.io/jxburros/gwatch`, `linux/amd64` and `linux/arm64`)
+  published by the release workflow, with a Compose file and `docs/DOCKER.md` covering
+  what a container changes — the first account has to be created from inside it, ping
+  needs `NET_RAW` or the system ping method, discovery sees Docker's network unless
+  host/macvlan networking is used, and upgrades are a pull rather than the in-app
+  updater.
+- Still open: a first-run flow that doesn't need `docker exec` (a `gwatch user add`
+  command, or a setup screen when no account exists), and an official Home Assistant
+  add-on / Unraid template once the image has had some use.
+
 ---
 
 ## Open decisions (don't resolve casually)
@@ -203,6 +214,17 @@ promise.
   reselling unmodified GWatch or offering it as a paid hosted service without
   significant modification; deployment, support, and customization services remain
   fair game. Attribution is mandatory in every copy and derivative.
+- **Notification rules across nodes (#31)**: decided, as the smaller version. A rule
+  combines *status* conditions across nodes and checks (a check, or any check of a node,
+  down or degraded-or-worse) joined by all / any / at least N, and runs a list of the
+  existing trigger actions once when its conditions come together, with a cooldown and an
+  optional notification when it clears (Settings › Rules, `internal/engine/rules.go`,
+  `docs/API.md` → Rules). Per-node alerts, triggers and dependency suppression are
+  untouched; rules sit beside them. Two parts of the original proposal are deliberately
+  deferred, not rejected: **hold timers** ("only when this has lasted N minutes") and
+  **metric conditions** ("disk above 90 %"). The condition model carries a `kind` that is
+  always `status` today so either can be added without reshaping stored rules. Revisit
+  when someone has a rule that flaps or a threshold that is not a check's own.
 
 ## Explicit non-goals (keep scope from drifting toward Zabbix/PRTG)
 

@@ -19,9 +19,9 @@ function defaultCheck(type, settings) {
     case 'tcp': base.config = { port: 443 }; base.name = 'TCP port'; break;
     case 'dns': base.config = { recordType: 'A' }; break;
     case 'keyword': base.config = { method: 'GET', keyword: '', followRedirects: true }; break;
-    case 'json': base.config = { method: 'GET', jsonPath: '', jsonExpected: '' }; break;
+    case 'json': base.config = { method: 'GET', jsonPath: '', jsonExpected: '', jsonRecord: false, jsonMetric: '', jsonUnit: '' }; break;
     case 'custom': base.config = { command: '', workDir: '', env: {} }; base.name = 'Custom script'; break;
-    case 'system': base.config = { ...SYSTEM_DEFAULTS, hostSource: 'local' }; base.name = 'Hardware health'; break;
+    case 'system': base.config = { metricThresholds: SYSTEM_DEFAULTS.metricThresholds.map((t) => ({ ...t })), hostSource: 'local' }; base.name = 'Hardware health'; break;
     // A new SNMP check starts where every device is the same: v2c on 161 with
     // the community every one of them ships with, reading the one OID every
     // one of them answers. It is a working check before anything is typed.
@@ -44,8 +44,22 @@ function cleanCheck(c) {
   }
   for (const k of ['pingCount', 'certWarnDays', 'port']) if (cfg[k] != null) cfg[k] = Number(cfg[k]);
   for (const k of ['latencyWarnMs', 'packetLossWarnPct']) if (cfg[k] != null) cfg[k] = Number(cfg[k]);
+  if (out.type === 'system') {
+    // The editor writes the per-metric list; the flat fields it replaced are
+    // dropped so the server never sees the two disagree.
+    cfg.metricThresholds = cleanMetricThresholds(cfg.metricThresholds);
+    for (const k of LEGACY_THRESHOLD_KEYS) delete cfg[k];
+  }
   if (cfg.snmpPort != null) cfg.snmpPort = Number(cfg.snmpPort);
   if (cfg.snmpOids) cfg.snmpOids = cfg.snmpOids.map(cleanOidRow).filter((o) => o.oid || o.name);
+  // A json check that is not recording keeps none of the recording fields,
+  // and a threshold that is unset has to be absent rather than zero, for the
+  // same reason as an OID's (see cleanOidRow).
+  if (!cfg.jsonRecord) for (const k of ['jsonRecord', 'jsonMetric', 'jsonUnit', ...JSON_THRESHOLD_KEYS]) delete cfg[k];
+  for (const k of JSON_THRESHOLD_KEYS) {
+    if (cfg[k] === '' || cfg[k] == null || isNaN(Number(cfg[k]))) delete cfg[k];
+    else cfg[k] = Number(cfg[k]);
+  }
   out.config = cfg;
   if (out.alerts) {
     const a = {};
@@ -57,14 +71,96 @@ function cleanCheck(c) {
   return out;
 }
 
-// The hardware thresholds a new check starts with. They mirror
-// model.SystemDefaults on the server, which is what a check saved without
-// thresholds is given; keeping them here too means the editor shows the
-// numbers the check will use rather than a row of zeros.
+// The hardware thresholds a new check starts with, one entry per metric
+// family. They mirror model.SystemDefaults on the server, which is what a
+// check saved without thresholds is given; keeping them here too means the
+// editor shows the numbers the check will use rather than a row of blanks.
 const SYSTEM_DEFAULTS = {
-  cpuWarnPct: 90, memWarnPct: 90, memCritPct: 97, swapWarnPct: 50,
-  diskWarnPct: 85, diskCritPct: 95, loadWarnPerCore: 2,
+  metricThresholds: [
+    { metric: 'cpu', warn: 90 }, { metric: 'memory', warn: 90, crit: 97 }, { metric: 'swap', warn: 50 },
+    { metric: 'disk', warn: 85, crit: 95 }, { metric: 'inodes', warn: 85, crit: 95 }, { metric: 'load', warn: 2 },
+  ],
 };
+
+// The metric families a hardware check reports, in the order the editor shows
+// them. `unit` is what a threshold is measured in; `instances` says the family
+// is keyed per disk, interface or device, so an override can name one.
+// Mirrors model.MetricFamilies and model.SystemMetricUnit on the server.
+export const METRIC_FAMILIES = [
+  { key: 'cpu', label: 'Processor', unit: '%' },
+  { key: 'memory', label: 'Memory', unit: '%' },
+  { key: 'swap', label: 'Swap', unit: '%', note: 'Heavy swapping is a sign worth a warning; leave the critical level blank unless swap running out is itself an outage here.' },
+  { key: 'load', label: 'Load per core', unit: '', step: 0.1, note: 'Processor demand divided by the number of cores, so it means the same thing on a 2-core box and a 64-core one. On macOS, where processor utilisation is not readable, this is what the check watches instead.' },
+  { key: 'disk', label: 'Disk space', unit: '%', instances: 'a mount point, e.g. /srv or C:' },
+  { key: 'inodes', label: 'Inodes', unit: '%', instances: 'a mount point, e.g. /srv', note: 'A filesystem can run out of inodes with space to spare, and the failure looks identical to a full disk.' },
+  { key: 'net', label: 'Network throughput', unit: 'B/s', step: 1, instances: 'an interface, e.g. eth0 (or eth0.rx for one direction)', note: 'Bytes per second, received or sent, per interface. Blank means throughput is charted but never alerted on.' },
+  { key: 'diskio', label: 'Disk I/O', unit: 'B/s', step: 1, instances: 'a device, e.g. sda (or sda.read, sda.write; sda.busy is a percentage)', note: 'Bytes per second read or written, per device. Blank means it is charted but never alerted on.' },
+];
+
+// legacyMetricThresholds converts the flat per-family fields a hardware check
+// had before the list existed, with the same rules as the server's
+// EffectiveMetricThresholds: 0 is off, and inodes followed the disk pair.
+export function legacyMetricThresholds(cfg) {
+  const level = (v) => (Number(v) > 0 ? Number(v) : undefined);
+  const out = [];
+  const add = (metric, warn, crit) => { const t = { metric, warn: level(warn), crit: level(crit) }; if (t.warn != null || t.crit != null) out.push(t); };
+  add('cpu', cfg.cpuWarnPct, cfg.cpuCritPct);
+  add('memory', cfg.memWarnPct, cfg.memCritPct);
+  add('swap', cfg.swapWarnPct, 0);
+  add('load', cfg.loadWarnPerCore, cfg.loadCritPerCore);
+  add('disk', cfg.diskWarnPct, cfg.diskCritPct);
+  if (Number(cfg.diskCritPct) > 0) add('inodes', cfg.diskWarnPct, cfg.diskCritPct);
+  return out;
+}
+
+// metricThresholdErrors mirrors model.ValidateMetricThresholds: the same
+// rules, so the editor refuses what the server would.
+export function metricThresholdErrors(list) {
+  const seen = new Set();
+  const families = new Map(METRIC_FAMILIES.map((f) => [f.key, f]));
+  for (const t of list || []) {
+    const key = (t.metric || '').trim();
+    if (!key) return 'A threshold must name the metric it applies to.';
+    const [family, instance] = key.includes(':') ? [key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1)] : [key, ''];
+    const f = families.get(family);
+    if (!f) return `"${key}" is not a hardware metric — use one of ${METRIC_FAMILIES.map((x) => x.key).join(', ')}.`;
+    if (instance && !f.instances) return `${f.label} is one reading for the whole machine, so "${key}" cannot name an instance.`;
+    if (seen.has(key)) return `Two thresholds both apply to "${key}".`;
+    seen.add(key);
+    const pct = f.unit === '%' || (family === 'diskio' && instance.endsWith('.busy'));
+    const label = instance ? `${f.label} ${instance}` : f.label;
+    for (const [name, v] of [['warning', t.warn], ['critical', t.crit]]) {
+      if (v == null || v === '') continue;
+      if (isNaN(Number(v))) return `The ${label} ${name} threshold must be a number.`;
+      if (pct && (v < 0 || v > 100)) return `The ${label} ${name} threshold must be between 0 and 100.`;
+      if (v < 0) return `The ${label} ${name} threshold cannot be negative.`;
+    }
+    if (t.warn != null && t.warn !== '' && t.crit != null && t.crit !== '' && Number(t.warn) > 0 && Number(t.crit) > 0) {
+      if (!t.below && Number(t.crit) < Number(t.warn)) return `The ${label} critical threshold must be at or above its warning threshold.`;
+      if (t.below && Number(t.crit) > Number(t.warn)) return `The ${label} critical threshold must be at or below its warning threshold when less is worse.`;
+    }
+  }
+  return null;
+}
+
+// cleanMetricThreshold drops blank levels rather than sending zeros, so an
+// empty box means "off" on the server too. An entry with no level and no
+// instance is not worth keeping at all.
+function cleanMetricThresholds(list) {
+  const out = [];
+  for (const t of list || []) {
+    const metric = (t.metric || '').trim();
+    if (!metric) continue;
+    const row = { metric };
+    for (const k of ['warn', 'crit']) if (t[k] !== '' && t[k] != null && !isNaN(Number(t[k]))) row[k] = Number(t[k]);
+    if (t.below) row.below = true;
+    // An instance entry with no level is still meaningful: it switches the
+    // family's thresholds off for that one disk or interface.
+    if (row.warn == null && row.crit == null && !metric.includes(':')) continue;
+    out.push(row);
+  }
+  return out;
+}
 
 /*
  * Well-known OIDs from the standard MIBs, offered as presets so that setting
@@ -117,6 +213,26 @@ function oidRow(preset, index) {
 
 const SNMP_THRESHOLD_KEYS = ['warnAbove', 'critAbove', 'warnBelow', 'critBelow'];
 
+// The same four thresholds, as a json check names them on its config, each
+// with the wording the SNMP table uses for its column heading.
+const JSON_THRESHOLD_FIELDS = [['jsonWarnAbove', 'Warn >'], ['jsonCritAbove', 'Crit >'], ['jsonWarnBelow', 'Warn <'], ['jsonCritBelow', 'Crit <']];
+const JSON_THRESHOLD_KEYS = JSON_THRESHOLD_FIELDS.map(([k]) => k);
+
+// jsonRecordErrors mirrors internal/checks.validateJSONRecord: a recording
+// json check needs a path, a short name and thresholds that escalate in the
+// right order. Like snmpErrors, this is a courtesy; the server is the rule.
+function jsonRecordErrors(cfg) {
+  const e = {};
+  if (!cfg.jsonRecord) return e;
+  if (!(cfg.jsonPath || '').trim()) e.jsonPath = 'Recording a value needs a JSON path to read it from.';
+  if ((cfg.jsonMetric || '').trim().length > 64) e.jsonMetric = 'Keep the metric name to 64 characters or fewer.';
+  const num = (k) => (cfg[k] === '' || cfg[k] == null || isNaN(Number(cfg[k])) ? null : Number(cfg[k]));
+  const [wa, ca, wb, cb] = JSON_THRESHOLD_KEYS.map(num);
+  if (wa != null && ca != null && wa >= ca) e.jsonCritAbove = 'The critical "above" threshold must be above the warning one.';
+  if (wb != null && cb != null && wb <= cb) e.jsonCritBelow = 'The critical "below" threshold must be below the warning one.';
+  return e;
+}
+
 // snmpErrors mirrors internal/checks.validateSNMPCheck so that the editor can
 // say what is wrong beside the field rather than after a round trip. The
 // server refuses the same things again: this is a courtesy, not the rule.
@@ -163,14 +279,22 @@ function cleanOidRow(o) {
   return row;
 }
 
-// Warning/critical pairs, for the rule that a critical threshold cannot sit
-// below the warning it is supposed to escalate.
-const THRESHOLD_PAIRS = [
-  ['cpuWarnPct', 'cpuCritPct', 'processor'],
-  ['memWarnPct', 'memCritPct', 'memory'],
-  ['diskWarnPct', 'diskCritPct', 'disk'],
-  ['loadWarnPerCore', 'loadCritPerCore', 'load per core'],
-];
+// The flat threshold fields a hardware check had before the per-metric list.
+// A check that still carries them is converted when it is loaded (see
+// legacyMetricThresholds) and saved without them.
+const LEGACY_THRESHOLD_KEYS = ['cpuWarnPct', 'cpuCritPct', 'memWarnPct', 'memCritPct', 'swapWarnPct', 'diskWarnPct', 'diskCritPct', 'loadWarnPerCore', 'loadCritPerCore'];
+
+// adoptMetricThresholds gives a draft's hardware checks the list form: a check
+// loaded with only the flat fields is converted with the server's rules, so
+// the editor shows the thresholds the check has actually been using.
+function adoptMetricThresholds(checks) {
+  for (const c of checks || []) {
+    if (c.type !== 'system') continue;
+    c.config = c.config || {};
+    if (!c.config.metricThresholds?.length) c.config.metricThresholds = legacyMetricThresholds(c.config);
+    c.config.metricThresholds = c.config.metricThresholds.map((t) => ({ ...t }));
+  }
+}
 
 export async function mount(root, ctx) {
   const isNew = !ctx.params.id;
@@ -199,6 +323,7 @@ export async function mount(root, ctx) {
     delete state.draft.stateByCheck; delete state.draft.lastResults; delete state.draft.status; delete state.draft.inMaintenance;
   }
   if (state.destroyed) return {};
+  adoptMetricThresholds(state.draft.checks);
   const d = state.draft;
 
   ctx.setTitle(isNew ? 'Add node' : `Edit ${d.name}`, {
@@ -374,6 +499,33 @@ export async function mount(root, ctx) {
       ));
   }
 
+  // jsonRecordFields is the recording half of a json check (#55): a switch
+  // that reveals the metric name, its unit and the same four thresholds an
+  // SNMP reading has. The value is charted on the node page under that name,
+  // so the fields say what the chart will say.
+  function jsonRecordFields(c, err) {
+    const cfg = c.config;
+    const details = h('div', { class: 'stack-sm', style: { paddingTop: '8px' } });
+    details.hidden = !cfg.jsonRecord;
+    const record = checkbox({ label: 'Record this value', checked: !!cfg.jsonRecord, onChange: (v) => { cfg.jsonRecord = v; details.hidden = !v; } });
+    const name = textInput({ value: cfg.jsonMetric || '', placeholder: 'value', maxlength: 64, oninput: () => { cfg.jsonMetric = name.value; } });
+    const unit = textInput({ value: cfg.jsonUnit || '', placeholder: 'e.g. °C, %, ms', style: { minWidth: '64px' }, oninput: () => { cfg.jsonUnit = unit.value; } });
+    const thresholds = JSON_THRESHOLD_FIELDS.map(([k, label]) => {
+      const input = numberInput({ value: cfg[k] ?? '', step: 'any', placeholder: 'off', 'aria-label': `${label} threshold`, oninput: () => { cfg[k] = input.value; } });
+      return field({ label, input, error: err[k] });
+    });
+    details.append(
+      h('div', { class: 'form-grid' },
+        field({ label: 'Metric name', input: name, error: err.jsonMetric, help: 'Names the value in charts and in /api/history?metric=. Leave blank for "value".' }),
+        field({ label: 'Unit', input: unit, help: 'Shown beside the value. Optional.' })),
+      h('div', { class: 'form-grid-4' }, ...thresholds),
+      h('p', { class: 'note' }, 'Thresholds are strict: crossing a ', h('b', null, 'Warn'), ' value marks the check degraded, crossing a ', h('b', null, 'Crit'), ' value marks it down. Leave one blank to turn it off. A value that is text rather than a number is kept in the last result and never thresholded.'));
+    return h('div', { class: 'stack-sm' },
+      h('div', { style: { paddingTop: '6px' } }, record),
+      h('div', { class: 'help' }, 'Keeps the number the path points at on every run, so it can be charted over time and given thresholds — a temperature, a queue length, a count of blocked queries.'),
+      details);
+  }
+
   function typeFields(c, err) {
     const cfg = c.config;
     switch (c.type) {
@@ -401,7 +553,7 @@ export async function mount(root, ctx) {
       case 'json': {
         const path = textInput({ value: cfg.jsonPath || '', placeholder: 'e.g. status or data.items[0].name', oninput: () => { cfg.jsonPath = path.value; } });
         const exp = textInput({ value: cfg.jsonExpected || '', placeholder: 'Leave blank to only require the path to exist', oninput: () => { cfg.jsonExpected = exp.value; } });
-        return h('div', { class: 'stack' }, h('div', { class: 'form-grid' }, field({ label: 'JSON path', input: path, error: err.jsonPath, help: 'Dotted path into the response. Arrays use [index].' }), field({ label: 'Expected value', input: exp })), httpCommon(c, err), h('div', { class: 'form-grid-3' }, ...warnFields(c)));
+        return h('div', { class: 'stack' }, h('div', { class: 'form-grid' }, field({ label: 'JSON path', input: path, error: err.jsonPath, help: 'Dotted path into the response. Arrays use [index].' }), field({ label: 'Expected value', input: exp })), jsonRecordFields(c, err), httpCommon(c, err), h('div', { class: 'form-grid-3' }, ...warnFields(c)));
       }
       case 'cert': {
         const port = numberInput({ value: cfg.port || 443, min: 1, max: 65535, oninput: () => { cfg.port = Number(port.value); } });
@@ -742,53 +894,104 @@ export async function mount(root, ctx) {
       onChange: (v) => { cfg.diskMounts = v; },
     });
 
+    if (!Array.isArray(cfg.metricThresholds)) cfg.metricThresholds = legacyMetricThresholds(cfg);
+    const thresholdsEl = h('div', { class: 'stack-sm', 'aria-label': 'Hardware thresholds' });
+    const renderThresholds = () => {
+      clear(thresholdsEl);
+      for (const f of METRIC_FAMILIES) {
+        thresholdsEl.append(thresholdGroup(f, cfg, f.key === 'disk'
+          ? field({ label: 'Watch only these mount points', input: mounts, help: 'Leave empty to watch every filesystem.' })
+          : null));
+      }
+      thresholdsEl.append(instanceOverrides(cfg, renderThresholds));
+    };
+    renderThresholds();
+
     wrap.append(
       h('div', { class: 'form-grid' },
         field({ label: 'Read hardware from', input: source }),
         field({ label: 'Report down after no reading for', input: stale, help: 'A machine that stops reporting is the signal an agent exists to give.' })),
       sourceWrap,
       h('div', { class: 'section-title', style: { marginTop: '4px' } }, 'Warning and critical thresholds'),
-      h('p', { class: 'note' }, 'One check, one history line per metric, each with its own pair of thresholds below: crossing ', h('b', null, 'warning'), ' marks the check ', h('b', null, 'degraded'), '; crossing ', h('b', null, 'critical'), ' marks it ', h('b', null, 'down'), '. Filled in below at the defaults GWatch ships with — leave a threshold at 0 to turn it off.'),
-      h('div', { class: 'stack-sm' },
-        thresholdGroup('Processor', cfg, err, 'cpuWarnPct', 'cpuCritPct'),
-        thresholdGroup('Memory', cfg, err, 'memWarnPct', 'memCritPct'),
-        thresholdGroup('Swap', cfg, err, 'swapWarnPct', null,
-          'Swap has a warning only — heavy swapping can degrade this check, but never marks it down by itself.'),
-        thresholdGroup('Disk', cfg, err, 'diskWarnPct', 'diskCritPct', null,
-          field({ label: 'Watch only these mount points', input: mounts, help: 'Leave empty to watch every filesystem.' }))),
-      h('details', { class: 'collapsible' },
-        h('summary', null, icon('chevronRight'), 'Load average (used when processor use cannot be read)'),
-        h('div', { class: 'stack-sm', style: { paddingTop: '8px' } },
-          h('p', { class: 'note' }, 'Load per core is processor demand divided by the number of cores, so it means the same thing on a 2-core box and a 64-core one. On macOS, where processor utilisation is not readable without a native extension, this is what the check watches instead of processor use above.'),
-          thresholdGroup('Load per core', cfg, err, 'loadWarnPerCore', 'loadCritPerCore', null, null, { unit: '', step: 0.1 }))),
+      h('p', { class: 'note' }, 'One check, one line of history per metric, and each metric has its own verdict: crossing ', h('b', null, 'warning'), ' marks that metric — and so the check — ', h('b', null, 'degraded'), '; crossing ', h('b', null, 'critical'), ' marks it ', h('b', null, 'down'), '. A warning on the disk and a warning on memory are two incidents, not one. Leave a box blank to turn that level off.'),
+      err.metricThresholds ? h('div', { class: 'error', role: 'alert' }, err.metricThresholds) : null,
+      thresholdsEl,
     );
     return wrap;
   }
 
-  // thresholdGroup is one metric's warning/critical pair, boxed and labelled
-  // so the two numbers that escalate together read as a unit rather than as
-  // two rows in an unrelated grid, with the shipped default visible in each
-  // field even when it is 0 (off). `critKey` is null for a metric that only
-  // ever warns (see Swap, above); `extra` adds a further field to the box,
-  // used for Disk's mount-point filter.
-  function thresholdGroup(label, cfg, err, warnKey, critKey, note, extra, { unit = '%', step = 1 } = {}) {
-    const fields = [pctField(cfg, warnKey, 'Warning', null, { unit, step })];
-    if (critKey) fields.push(pctField(cfg, critKey, 'Critical', err[critKey], { unit, step }));
-    return h('div', { style: { border: '1px solid var(--line)', padding: '10px 12px 12px' } },
-      h('div', { class: 'section-title', style: { marginBottom: '8px' } }, label),
-      h('div', { class: 'form-grid' }, ...fields),
-      note ? h('p', { class: 'note', style: { marginTop: '6px' } }, note) : null,
+  // thresholdGroup is one metric family's warning/critical pair, boxed and
+  // labelled so the two numbers that escalate together read as a unit rather
+  // than as two rows in an unrelated grid, with the shipped default visible
+  // in each field. `extra` adds a further field to the box, used for Disk's
+  // mount-point filter.
+  function thresholdGroup(f, cfg, extra) {
+    const entry = familyEntry(cfg, f.key);
+    const def = SYSTEM_DEFAULTS.metricThresholds.find((t) => t.metric === f.key) || {};
+    return h('div', { class: 'threshold-group', 'data-metric': f.key, style: { border: '1px solid var(--line)', padding: '10px 12px 12px' } },
+      h('div', { class: 'section-title', style: { marginBottom: '8px' } }, f.label),
+      h('div', { class: 'form-grid' },
+        levelField(entry, 'warn', 'Warning', f, def.warn),
+        levelField(entry, 'crit', 'Critical', f, def.crit)),
+      f.note ? h('p', { class: 'note', style: { marginTop: '6px' } }, f.note) : null,
       extra ? h('div', { style: { marginTop: '10px' } }, extra) : null);
   }
 
-  function pctField(cfg, key, label, error, { unit = '%', step = 1 } = {}) {
-    const def = SYSTEM_DEFAULTS[key];
+  // familyEntry finds, or creates, the list entry for a family, so the
+  // family's boxes always have somewhere to write. A created entry with no
+  // level is dropped again on save (see cleanMetricThresholds).
+  function familyEntry(cfg, key) {
+    let entry = cfg.metricThresholds.find((t) => t.metric === key);
+    if (!entry) { entry = { metric: key }; cfg.metricThresholds.push(entry); }
+    return entry;
+  }
+
+  function levelField(entry, level, label, f, def) {
+    const unit = f.key === 'diskio' && (entry.metric || '').endsWith('.busy') ? '%' : f.unit;
     const input = numberInput({
-      value: cfg[key] ?? '', min: 0, max: unit === '%' ? 100 : undefined, step,
-      placeholder: def != null ? `Default (${def}${unit})` : 'Off',
-      oninput: () => { cfg[key] = Number(input.value) || 0; },
+      value: entry[level] ?? '', min: 0, max: unit === '%' ? 100 : undefined, step: f.step || 1,
+      placeholder: def != null ? `Default ${def}${unit}` : 'Off',
+      'aria-label': `${f.label}${entry.metric.includes(':') ? ' ' + entry.metric.slice(entry.metric.indexOf(':') + 1) : ''} ${label.toLowerCase()} threshold`,
+      oninput: () => { entry[level] = input.value === '' ? undefined : Number(input.value); },
     });
-    return field({ label, input: unit ? h('div', { class: 'input-with-unit' }, input, h('span', { class: 'unit' }, unit)) : input, error });
+    return field({ label, input: unit ? h('div', { class: 'input-with-unit' }, input, h('span', { class: 'unit' }, unit)) : input });
+  }
+
+  // instanceOverrides lists the thresholds that name one disk, interface or
+  // device, each overriding its family's pair for that instance alone, and
+  // offers a row for adding another.
+  function instanceOverrides(cfg, rerender) {
+    const rows = cfg.metricThresholds.filter((t) => (t.metric || '').includes(':'));
+    const box = h('div', { class: 'stack-sm', style: { border: '1px solid var(--line)', padding: '10px 12px 12px' } },
+      h('div', { class: 'section-title', style: { marginBottom: '4px' } }, 'One disk, interface or device'),
+      h('p', { class: 'note' }, 'An entry here replaces the family’s pair above for that one instance: a media disk that is always 90% full, an uplink that is meant to run hot. Both boxes blank means that instance is never alerted on.'));
+    for (const t of rows) {
+      const family = METRIC_FAMILIES.find((f) => f.key === t.metric.slice(0, t.metric.indexOf(':'))) || { key: '', label: t.metric, unit: '' };
+      box.append(h('div', { class: 'threshold-group threshold-instance', 'data-metric': t.metric },
+        h('div', { class: 'row-between' },
+          h('div', { class: 'small' }, h('b', null, family.label), ' ', h('code', null, t.metric.slice(t.metric.indexOf(':') + 1))),
+          h('button', { class: 'btn btn-sm icon-btn btn-danger', type: 'button', 'aria-label': `Remove the ${t.metric} threshold`, title: 'Remove', onclick: () => {
+            cfg.metricThresholds.splice(cfg.metricThresholds.indexOf(t), 1); rerender();
+          } }, icon('trash'))),
+        h('div', { class: 'form-grid' },
+          levelField(t, 'warn', 'Warning', family),
+          levelField(t, 'crit', 'Critical', family))));
+    }
+    const familySel = selectInput({ options: METRIC_FAMILIES.filter((f) => f.instances).map((f) => ({ value: f.key, label: f.label })), 'aria-label': 'Family of the instance threshold' });
+    const instanceIn = textInput({ placeholder: 'e.g. /srv, eth0, sda', 'aria-label': 'Which disk, interface or device' });
+    const addBtn = h('button', { class: 'btn btn-sm', type: 'button', onclick: () => {
+      const instance = instanceIn.value.trim();
+      if (!instance) { toast('Name the disk, interface or device first.', { kind: 'error' }); return; }
+      const key = `${familySel.value}:${instance}`;
+      if (cfg.metricThresholds.some((t) => t.metric === key)) { toast(`There is already a threshold for ${key}.`, { kind: 'error' }); return; }
+      cfg.metricThresholds.push({ metric: key });
+      rerender();
+    } }, icon('plus'), 'Add a threshold for one disk / interface');
+    box.append(h('div', { class: 'row', style: { gap: '8px', flexWrap: 'wrap', alignItems: 'end' } },
+      field({ label: 'Family', input: familySel }),
+      field({ label: 'Instance', input: instanceIn, help: METRIC_FAMILIES.find((f) => f.key === familySel.value)?.instances }),
+      addBtn));
+    return box;
   }
 
   // The machine list comes from the server, so a check cannot be pointed at a
@@ -864,15 +1067,13 @@ export async function mount(root, ctx) {
       if (c.type === 'cert' && c.config.port && (c.config.port < 1 || c.config.port > 65535)) e.port = 'Port must be 1–65535.';
       if (c.type === 'keyword' && !(c.config.keyword || '').trim()) e.keyword = 'Enter the text to look for.';
       if (c.type === 'json' && !(c.config.jsonPath || '').trim()) e.jsonPath = 'Enter a JSON path.';
+      if (c.type === 'json') Object.assign(e, jsonRecordErrors(c.config));
       if (c.type === 'custom' && !(c.config.command || '').trim()) e.command = 'Enter a command to run.';
       if (c.type === 'system') {
         if (c.config.hostSource === 'agent' && !c.config.agentId) e.agentId = 'Choose which registered machine this check reads.';
         if (c.config.hostSource === 'url' && !(c.config.metricsUrl || '').trim()) e.metricsUrl = 'Enter the metrics URL to read.';
-        for (const [warnKey, critKey, label] of THRESHOLD_PAIRS) {
-          const warn = Number(c.config[warnKey]) || 0;
-          const crit = Number(c.config[critKey]) || 0;
-          if (warn > 0 && crit > 0 && crit < warn) e[critKey] = `The ${label} critical threshold must be at or above its warning threshold.`;
-        }
+        const thresholdErr = metricThresholdErrors(c.config.metricThresholds);
+        if (thresholdErr) e.metricThresholds = thresholdErr;
       }
       if (c.type === 'snmp') Object.assign(e, snmpErrors(c.config));
       if (['http', 'keyword', 'json'].includes(c.type) && c.config.target && !/^(https?:\/\/)?[^\s/]+/.test(c.config.target.trim())) e.target = 'Enter a valid URL.';

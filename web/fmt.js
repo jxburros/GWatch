@@ -188,3 +188,56 @@ export function inGroup(n, group) {
   if (!want) return false;
   return nodeGroups(n).some((g) => String(g).trim().toLowerCase() === want);
 }
+
+/* ---------- Hardware metric keys ---------- */
+
+// A hardware check's metrics are keyed "cpu", "memory", "swap", "load" for
+// the readings a machine has one of, and "family:instance" for the rest:
+// "disk:/srv", "inodes:/srv", "net:eth0.rx", "diskio:sda.busy". These mirror
+// model.SplitMetricKey and model.SystemMetricUnit on the server.
+
+const METRIC_FAMILY_LABELS = { cpu: 'Processor', memory: 'Memory', swap: 'Swap', load: 'Load per core', disk: 'Disk', inodes: 'Inodes', net: 'Network', diskio: 'Disk I/O' };
+
+/** Splits a metric key into its family and instance ('' for a singleton). */
+export function metricFamily(key) {
+  const s = String(key || '');
+  const i = s.indexOf(':');
+  return i < 0 ? { family: s, instance: '' } : { family: s.slice(0, i), instance: s.slice(i + 1) };
+}
+
+/** The unit a hardware metric is measured in, from its key. */
+export function metricUnit(key) {
+  const { family, instance } = metricFamily(key);
+  switch (family) {
+    case 'cpu': case 'memory': case 'swap': case 'disk': case 'inodes': return '%';
+    case 'load': return '';
+    case 'net': return 'B/s';
+    case 'diskio': return instance.endsWith('.busy') ? '%' : 'B/s';
+  }
+  return '';
+}
+
+/** A metric key as a person reads it: "Disk /srv", "Network eth0 received". */
+export function metricLabel(key) {
+  const { family, instance } = metricFamily(key);
+  const base = METRIC_FAMILY_LABELS[family];
+  if (!base) return key;
+  if (!instance) return base;
+  if (family === 'inodes') return `Inodes on ${instance}`;
+  if (family === 'net' || family === 'diskio') {
+    const dot = instance.lastIndexOf('.');
+    if (dot > 0) {
+      const dir = { rx: 'received', tx: 'sent', read: 'read', write: 'write', busy: 'busy' }[instance.slice(dot + 1)];
+      if (dir) return `${family === 'net' ? 'Network' : 'Disk'} ${instance.slice(0, dot)} ${dir}`;
+    }
+  }
+  return `${base} ${instance}`;
+}
+
+/** A metric reading with its unit, the way an alert would say it. */
+export function metricValue(v, unit) {
+  if (v == null || isNaN(v)) return '—';
+  if (unit === '%') return pct(v, 0);
+  if (unit === 'B/s') return `${bytes(v)}/s`;
+  return Number(v).toFixed(2);
+}

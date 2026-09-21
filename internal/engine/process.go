@@ -163,8 +163,12 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 		if r.Details.ContentValue != "" {
 			st.LastContentValue = r.Details.ContentValue
 		}
-		// Generic degraded warnings (latency, packet loss ...).
-		if newStatus == model.StatusDegraded && !st.WarningActive {
+		// Generic degraded warnings (latency, packet loss ...). A check that
+		// judges its metrics one by one has its warnings tracked per metric
+		// below instead, so the same disk is not reported twice.
+		if len(r.Details.MetricResults) > 0 {
+			st.WarningActive = false
+		} else if newStatus == model.StatusDegraded && !st.WarningActive {
 			st.WarningActive = true
 			detail := strings.Join(r.Warnings, "; ")
 			if detail == "" {
@@ -183,6 +187,68 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 		if st.Status != newStatus {
 			st.Status = newStatus
 			st.LastChangeAt = ptrTime(now)
+		}
+	}
+
+	// Metrics judged one by one (a hardware check's processor, memory, each
+	// disk ...). Each has its own warning that begins and clears on its own
+	// timeline, the way certificate warnings do, so that "disk /srv is
+	// filling" stays open while "memory is high" comes and goes. This runs
+	// whether or not the check as a whole passed: a critical disk fails the
+	// check, and is still the disk's own incident.
+	if len(r.Details.MetricResults) > 0 {
+		var began []string
+		for _, mr := range r.Details.MetricResults {
+			prev := st.MetricStatus[mr.Key]
+			if prev == "" || prev == model.StatusUnknown {
+				prev = model.StatusUp
+			}
+			if mr.Status == prev {
+				continue
+			}
+			switch {
+			case mr.Status == model.StatusUp:
+				evm(&events, now, n, c, mr.Key, model.EventWarningCleared, mr.Label+" back to normal", fmt.Sprintf("%s is %s.", mr.Label, metricValue(mr)))
+			case prev == model.StatusUp || mr.Status == model.StatusDown:
+				// A new warning, or one that has escalated to critical: both
+				// are worth a line in the timeline.
+				title := mr.Label + " warning"
+				if mr.Status == model.StatusDown {
+					title = mr.Label + " critical"
+				}
+				evm(&events, now, n, c, mr.Key, model.EventWarning, title, mr.Reason)
+				if prev == model.StatusUp {
+					began = append(began, mr.Reason)
+				}
+			}
+		}
+		// A metric the machine no longer reports (an unplugged volume) has
+		// nothing left to warn about, so its incident closes rather than
+		// staying open forever.
+		seen := make(map[string]bool, len(r.Details.MetricResults))
+		for _, mr := range r.Details.MetricResults {
+			seen[mr.Key] = true
+		}
+		for key, status := range st.MetricStatus {
+			if !seen[key] && status != model.StatusUp {
+				evm(&events, now, n, c, key, model.EventWarningCleared, key+" no longer reported", "The machine stopped reporting this reading, so its warning is closed.")
+			}
+		}
+		st.MetricStatus = nil
+		for _, mr := range r.Details.MetricResults {
+			if mr.Status != model.StatusUp {
+				if st.MetricStatus == nil {
+					st.MetricStatus = map[string]model.Status{}
+				}
+				st.MetricStatus[mr.Key] = mr.Status
+			}
+		}
+		// One warning email for everything that began this run. A metric that
+		// went straight to critical is covered by the down alert instead.
+		if len(began) > 0 && r.Success && e.canWarn(c, n, st, settings, now) {
+			m := e.newMail("warning", c, n, r, st, settings)
+			m.message = strings.Join(began, "; ")
+			mails = append(mails, m)
 		}
 	}
 
@@ -240,7 +306,31 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 		e.sendMail(m)
 	}
 	e.fireTriggers(triggerContext{check: c, node: n, result: stored, state: snapshot, prev: prev, events: events})
+	// A status change may bring a notification rule's conditions together
+	// or apart; only the rules that look at this check need another look.
+	if prev != snapshot.Status {
+		e.evaluateRules(ctx, ptrInt64(c.ID))
+	}
 	return stored, nil
+}
+
+// evm appends an event about one of a check's metrics: the same shape as the
+// check-level events process writes, with Metric naming which reading it is
+// about so the timeline and the triggers can tell a disk from the memory.
+func evm(events *[]model.Event, now time.Time, n model.Node, c model.Check, metric string, t model.EventType, title, detail string) {
+	*events = append(*events, model.Event{Timestamp: now, Type: t, NodeID: ptrInt64(n.ID), CheckID: ptrInt64(c.ID), NodeName: n.Name, CheckName: c.Name, Title: title, Detail: detail, Metric: metric})
+}
+
+// metricValue renders a metric's reading with its unit, for event details and
+// email rows.
+func metricValue(mr model.MetricResult) string {
+	switch mr.Unit {
+	case "%":
+		return fmt.Sprintf("%.0f%%", mr.Value)
+	case "":
+		return fmt.Sprintf("%.2f", mr.Value)
+	}
+	return fmt.Sprintf("%.0f %s", mr.Value, mr.Unit)
 }
 
 func onlyCertWarning(r model.Result) bool {
@@ -471,6 +561,18 @@ func (e *Engine) newMail(kind string, c model.Check, n model.Node, r model.Resul
 	if r.Details.Cert != nil {
 		details["Certificate expires"] = fmt.Sprintf("%s (%d days)", r.Details.Cert.NotAfter.Local().Format("2006-01-02"), r.Details.Cert.DaysRemaining)
 	}
+	// One row per metric that is not within its thresholds, so a hardware
+	// alert says which disk rather than only that "the check" is degraded.
+	for _, mr := range r.Details.MetricResults {
+		if mr.Status == model.StatusUp {
+			continue
+		}
+		verdict := "warning"
+		if mr.Status == model.StatusDown {
+			verdict = "critical"
+		}
+		details[mr.Label] = fmt.Sprintf("%s (%s)", metricValue(mr), verdict)
+	}
 	if st.ConsecutiveFailures > 0 {
 		details["Consecutive failures"] = fmt.Sprintf("%d", st.ConsecutiveFailures)
 	}
@@ -579,5 +681,8 @@ func (e *Engine) Silence(ctx context.Context, checkID int64, d time.Duration) (m
 	}
 	e.recordEvent(evt)
 	e.broadcast(Update{Kind: "state", CheckID: c.ID, NodeID: n.ID})
+	// A silenced check stops counting towards the notification rules that
+	// look at it, and counts again once the silence is lifted.
+	e.evaluateRules(ctx, ptrInt64(c.ID))
 	return snapshot, nil
 }

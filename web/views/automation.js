@@ -25,12 +25,12 @@ const PUSHOVER_PRIORITIES = [
 export const CONDITIONS = [
   { value: 'down', label: 'Goes down' }, { value: 'recovered', label: 'Recovers' }, { value: 'degraded', label: 'Becomes degraded' }, { value: 'warning_cleared', label: 'Warning cleared' },
   { value: 'cert_warning', label: 'Certificate warning' }, { value: 'content_changed', label: 'Response changed' }, { value: 'affected_by_parent', label: 'Affected by dependency' },
-  { value: 'status_change', label: 'Any status change' }, { value: 'any_failure', label: 'Every failed run' }, { value: 'any_success', label: 'Every successful run' }, { value: 'latency_over', label: 'Latency above…' },
+  { value: 'status_change', label: 'Any status change' }, { value: 'any_failure', label: 'Every failed run' }, { value: 'any_success', label: 'Every successful run' }, { value: 'latency_over', label: 'Latency above…' }, { value: 'metric_over', label: 'A metric above…' },
 ];
 export const INTERPRETERS = [
   { value: 'sh', label: 'sh' }, { value: 'bash', label: 'bash' }, { value: 'powershell', label: 'PowerShell (pwsh / powershell)' }, { value: 'cmd', label: 'cmd.exe' }, { value: 'python', label: 'Python' }, { value: 'node', label: 'Node.js' }, { value: 'custom', label: 'Custom command…' },
 ];
-const PLACEHOLDERS = ['node.name', 'node.host', 'node.group', 'node.groups', 'check.name', 'check.type', 'target', 'status', 'prev_status', 'message', 'error', 'latencyMs', 'lossPct', 'statusCode', 'failures', 'event', 'ts', 'instance', 'body', 'query.<name>'];
+const PLACEHOLDERS = ['node.name', 'node.host', 'node.group', 'node.groups', 'check.name', 'check.type', 'target', 'status', 'prev_status', 'message', 'error', 'latencyMs', 'lossPct', 'statusCode', 'failures', 'event', 'ts', 'instance', 'metric', 'metric.label', 'metric.value', 'metric.status', 'metrics.<key>', 'body', 'query.<name>'];
 
 let metaCache = null;
 export async function automationMeta() {
@@ -124,7 +124,22 @@ export function actionEditor(action = {}, { nodes = [], defaultInterpreter = 'sh
   const cmd = textInput({ value: a.command || '', class: 'mono', placeholder: 'e.g. perl {{file}}  (the script path is appended when {{file}} is absent)', oninput: () => { a.command = cmd.value; } });
   const cmdField = field({ label: 'Command line', input: cmd }); cmdField.hidden = (a.interpreter || defaultInterpreter) !== 'custom';
   const code = textarea({ class: 'code', value: a.code || '', rows: 8, placeholder: '# your code here\necho "$GWATCH_NODE_NAME is {{status}}"', spellcheck: 'false', oninput: () => { a.code = code.value; } });
-  code.addEventListener('keydown', (e) => { if (e.key === 'Tab') { e.preventDefault(); const s = code.selectionStart; code.setRangeText('  ', s, code.selectionEnd, 'end'); a.code = code.value; } });
+  // Tab indents rather than leaving the box, so the box needs a way out:
+  // Shift+Tab always leaves, and Escape arms the next Tab to leave too. The
+  // Help page's Keyboard topic documents both. The first Escape is kept from
+  // the dialog around the editor (which would otherwise close on it); a
+  // second Escape, with Tab already armed, reaches the dialog as usual.
+  let tabLeaves = false;
+  code.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { if (!tabLeaves) { tabLeaves = true; e.preventDefault(); e.stopPropagation(); } return; }
+    if (e.key === 'Tab') {
+      if (e.shiftKey || tabLeaves) { tabLeaves = false; return; }
+      e.preventDefault(); const s = code.selectionStart; code.setRangeText('  ', s, code.selectionEnd, 'end'); a.code = code.value;
+      return;
+    }
+    tabLeaves = false;
+  });
+  code.addEventListener('blur', () => { tabLeaves = false; });
   const workDir = textInput({ value: a.workDir || '', class: 'mono', placeholder: 'Optional working directory', oninput: () => { a.workDir = workDir.value; } });
   const untrusted = checkbox({ label: 'This script may run untrusted input (I understand {{body}}, {{message}} and {{query.*}} can contain anything the sender chooses)', checked: !!a.allowUntrustedInput, onChange: (v) => { a.allowUntrustedInput = v; } });
   const untrustedField = h('div', { class: 'stack-sm' }, untrusted, h('p', { class: 'note' }, 'With a custom interpreter GWatch cannot know how to quote a value, so placeholders in the code are refused unless you tick this. Using the GWATCH_* environment variables instead is safer and needs no acknowledgement.'));
@@ -173,7 +188,7 @@ export function actionEditor(action = {}, { nodes = [], defaultInterpreter = 'sh
         typeArea.append(h('div', { class: 'form-grid' }, field({ label: 'Repository directory', input: repo, cls: 'span-2', help: 'The command runs in this directory on the computer running GWatch.' }), field({ label: 'Git arguments', input: gitArgs, cls: 'span-2', help: 'Everything after "git". Placeholders are expanded, e.g. commit -am "{{node.name}} {{status}}".' })));
         break;
       case 'script':
-        typeArea.append(h('div', { class: 'form-grid' }, field({ label: 'Interpreter', input: interp }), field({ label: 'Working directory', input: workDir }), h('div', { class: 'span-2' }, cmdField), field({ label: 'Code', input: code, cls: 'span-2' }), h('div', { class: 'span-2' }, untrustedField)));
+        typeArea.append(h('div', { class: 'form-grid' }, field({ label: 'Interpreter', input: interp }), field({ label: 'Working directory', input: workDir }), h('div', { class: 'span-2' }, cmdField), field({ label: 'Code', input: code, cls: 'span-2', help: 'Tab indents by two spaces; press Esc then Tab, or Shift+Tab, to leave the box.' }), h('div', { class: 'span-2' }, untrustedField)));
         break;
       case 'run_node':
         typeArea.append(field({ label: 'Node', input: nodeSel }));
@@ -228,7 +243,7 @@ export function actionTester(getAction, { nodeId = null } = {}) {
 export function openTriggerEditor(existing, { node, nodes = [] }) {
   return new Promise(async (resolve) => {
     const meta = await automationMeta();
-    const t = existing ? { ...existing, on: [...(existing.on || [])], action: { ...(existing.action || {}) } } : { nodeId: node.id, name: '', description: '', enabled: true, on: ['down'], checkId: null, latencyOverMs: 0, cooldownMinutes: 0, action: { type: 'http' } };
+    const t = existing ? { ...existing, on: [...(existing.on || [])], action: { ...(existing.action || {}) } } : { nodeId: node.id, name: '', description: '', enabled: true, on: ['down'], checkId: null, latencyOverMs: 0, metric: '', metricOver: 0, cooldownMinutes: 0, action: { type: 'http' } };
     let result = null;
     const name = textInput({ value: t.name, placeholder: 'e.g. Restart Plex container, Post to Discord, Pull config repo' });
     const desc = textInput({ value: t.description || '', placeholder: 'Optional note' });
@@ -236,7 +251,15 @@ export function openTriggerEditor(existing, { node, nodes = [] }) {
     const conds = h('div', { class: 'cond-chips', role: 'group', 'aria-label': 'Conditions' });
     const latency = numberInput({ value: t.latencyOverMs || '', min: 1, placeholder: 'ms' });
     const latencyField = field({ label: 'Latency threshold', input: h('div', { class: 'input-with-unit' }, latency, h('span', { class: 'unit' }, 'ms')) });
-    const syncLatency = () => { latencyField.hidden = !conds.querySelector('input[value="latency_over"]:checked'); };
+    // metric_over watches one named metric — a hardware check's "cpu" or
+    // "disk:/srv", an SNMP check's OID name — against a number of its own.
+    const metricKey = textInput({ value: t.metric || '', placeholder: 'e.g. cpu, disk:/srv, net:eth0.rx', 'aria-label': 'Metric key' });
+    const metricOver = numberInput({ value: t.metricOver || '', step: 'any', placeholder: 'value', 'aria-label': 'Metric threshold' });
+    const metricField = field({ label: 'Metric above', input: h('div', { class: 'row', style: { gap: '6px' } }, metricKey, metricOver), help: 'The key as it appears in the check’s last result (Inspect last result › Metrics).' });
+    const syncLatency = () => {
+      latencyField.hidden = !conds.querySelector('input[value="latency_over"]:checked');
+      metricField.hidden = !conds.querySelector('input[value="metric_over"]:checked');
+    };
     for (const c of CONDITIONS) conds.append(h('label', null, h('input', { type: 'checkbox', value: c.value, checked: t.on.includes(c.value), onchange: syncLatency }), c.label));
     syncLatency();
     const checkSel = selectInput({ options: [{ value: '', label: 'Any check on this node' }, ...(node.checks || []).map((c) => ({ value: c.id, label: c.name }))], value: t.checkId ?? '' });
@@ -245,7 +268,7 @@ export function openTriggerEditor(existing, { node, nodes = [] }) {
     const form = h('form', { class: 'stack', onsubmit: (e) => { e.preventDefault(); submit(); } },
       h('div', { class: 'form-grid' }, field({ label: 'Name', input: name }), field({ label: 'Description', input: desc })),
       field({ label: 'Run when this node…', input: conds }),
-      h('div', { class: 'form-grid-3' }, latencyField, field({ label: 'Only for', input: checkSel }), field({ label: 'Cooldown', input: h('div', { class: 'input-with-unit' }, cooldown, h('span', { class: 'unit' }, 'min')), help: 'Minimum time between two runs of this trigger.' })),
+      h('div', { class: 'form-grid-3' }, latencyField, metricField, field({ label: 'Only for', input: checkSel }), field({ label: 'Cooldown', input: h('div', { class: 'input-with-unit' }, cooldown, h('span', { class: 'unit' }, 'min')), help: 'Minimum time between two runs of this trigger.' })),
       h('div', null, h('div', { class: 'section-title' }, 'Action'), editor),
       actionTester(() => editor.value, { nodeId: node.id }),
       enabled,
@@ -254,7 +277,7 @@ export function openTriggerEditor(existing, { node, nodes = [] }) {
     async function submit() {
       const on = [...conds.querySelectorAll('input:checked')].map((i) => i.value);
       if (!on.length) { toast('Pick at least one condition', { kind: 'error' }); return; }
-      const payload = { ...t, name: name.value.trim() || 'Trigger', description: desc.value.trim(), enabled: enabled.input.checked, on, checkId: checkSel.value ? Number(checkSel.value) : null, latencyOverMs: Number(latency.value) || 0, cooldownMinutes: Number(cooldown.value) || 0, action: editor.value };
+      const payload = { ...t, name: name.value.trim() || 'Trigger', description: desc.value.trim(), enabled: enabled.input.checked, on, checkId: checkSel.value ? Number(checkSel.value) : null, latencyOverMs: Number(latency.value) || 0, metric: metricKey.value.trim(), metricOver: Number(metricOver.value) || 0, cooldownMinutes: Number(cooldown.value) || 0, action: editor.value };
       try {
         result = existing ? await api.put(`/api/triggers/${existing.id}`, payload) : await api.post('/api/triggers', payload);
         m.close();
@@ -267,7 +290,7 @@ export function openTriggerEditor(existing, { node, nodes = [] }) {
 
 /** One trigger row for lists. */
 export function triggerRow(t, { node, nodes = [], onChange } = {}) {
-  const condLabels = (t.on || []).map((c) => (CONDITIONS.find((x) => x.value === c) || { label: c }).label + (c === 'latency_over' && t.latencyOverMs ? ` ${t.latencyOverMs} ms` : ''));
+  const condLabels = (t.on || []).map((c) => (CONDITIONS.find((x) => x.value === c) || { label: c }).label + (c === 'latency_over' && t.latencyOverMs ? ` ${t.latencyOverMs} ms` : '') + (c === 'metric_over' && t.metric ? ` ${t.metric} > ${t.metricOver ?? 0}` : ''));
   const checkName = t.checkId ? (node?.checks || []).find((c) => c.id === t.checkId)?.name : null;
   const runBtn = h('button', { class: 'btn btn-sm admin-only', type: 'button', title: 'Run this trigger now', onclick: async () => {
     const done = busy(runBtn, 'Running…');

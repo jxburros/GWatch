@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -10,15 +9,12 @@ import (
 	"github.com/jxburros/GWatch/internal/logging"
 	"github.com/jxburros/GWatch/internal/model"
 	"github.com/jxburros/GWatch/internal/store"
+	"github.com/jxburros/GWatch/internal/store/storetest"
 )
 
 func newTestEngine(t *testing.T, dataDir string) (*Engine, *store.Store) {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "e.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t)
 	log, _ := logging.New("", nil)
 	e := New(st, log, Options{Version: "test", DataDir: dataDir})
 	e.ctx = context.Background()

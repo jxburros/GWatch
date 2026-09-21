@@ -233,6 +233,11 @@ func Validate(check model.Check, nodeHost string) error {
 		if check.Type == model.CheckKeyword && strings.TrimSpace(cfg.Keyword) == "" {
 			return errors.New("keyword checks need a keyword to look for")
 		}
+		if check.Type == model.CheckJSON && cfg.JSONRecord {
+			if err := validateJSONRecord(cfg); err != nil {
+				return err
+			}
+		}
 		switch cfg.ContentWatch {
 		case "", "hash", "redirect", "json":
 		case "header":
@@ -289,6 +294,31 @@ func Validate(check model.Check, nodeHost string) error {
 		if err := validateSNMPCheck(cfg); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// maxJSONMetricName bounds the metric name a recording json check may choose.
+// The name is a chart title and a query parameter, not a place for prose.
+const maxJSONMetricName = 64
+
+// validateJSONRecord checks the recording half of a json check: there has to
+// be a path to read, a name to store the value under, and thresholds that
+// escalate in the right order — the same rules validateSNMPCheck applies to
+// an OID, because the value ends up in the same place.
+func validateJSONRecord(cfg model.CheckConfig) error {
+	if strings.TrimSpace(cfg.JSONPath) == "" {
+		return errors.New("recording a JSON value needs a JSON path to read it from")
+	}
+	name := cfg.JSONMetricName()
+	if len(name) > maxJSONMetricName {
+		return fmt.Errorf("the metric name must be at most %d characters", maxJSONMetricName)
+	}
+	if cfg.JSONWarnAbove != nil && cfg.JSONCritAbove != nil && *cfg.JSONWarnAbove >= *cfg.JSONCritAbove {
+		return fmt.Errorf("%s: the critical threshold must be above the warning one", name)
+	}
+	if cfg.JSONWarnBelow != nil && cfg.JSONCritBelow != nil && *cfg.JSONWarnBelow <= *cfg.JSONCritBelow {
+		return fmt.Errorf("%s: the critical threshold must be below the warning one", name)
 	}
 	return nil
 }

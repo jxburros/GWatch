@@ -129,7 +129,7 @@ window.fetch = nativeFetch ? (...args) => nativeFetch(...args) : undefined;
 
 [
   'window', 'document', 'navigator', 'location', 'localStorage', 'sessionStorage',
-  'fetch', 'EventSource', 'ResizeObserver', 'IntersectionObserver',
+  'fetch', 'EventSource', 'ResizeObserver', 'IntersectionObserver', 'MutationObserver',
   'requestAnimationFrame', 'cancelAnimationFrame', 'getComputedStyle',
   'HTMLElement', 'HTMLCanvasElement', 'Node', 'Element', 'SVGElement',
 ].forEach(mirror);

@@ -9,6 +9,13 @@
 import { h, applyTheme, applyAccent } from './components.js';
 import { createWall } from './wall-render.js';
 
+// The same switch as entry.js: with ?mock=1 the in-browser mock backend
+// answers the one request this page makes, so the board can be looked at
+// (and its accessibility checked) with no service behind it.
+if (/(^|[?&])mock=1(&|$)/.test(location.search)) {
+  await import('./mock.js');
+}
+
 const root = document.getElementById('wall');
 if (!root) throw new Error('wall.html is missing its #wall element');
 const params = new URLSearchParams(location.search);

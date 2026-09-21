@@ -135,3 +135,90 @@ test('adding an snmp check starts it on v2c with an uptime reading', async (t) =
   assert.equal(rows[0].querySelector('input').value, '1.3.6.1.2.1.1.3.0');
   assert.ok([...card.querySelectorAll('select')].some((s) => s.value === '2c'), 'and on version 2c');
 });
+
+// #55: a json check can record the value it reads. The editor shows the
+// recording fields only once the switch is on, filled from the check.
+test('node editor shows a json check\'s recording fields behind its switch', async (t) => {
+  const node = window.__gwatchMock.nodes.find((n) => n.checks.some((c) => c.type === 'json' && c.config.jsonRecord));
+  const check = node.checks.find((c) => c.type === 'json' && c.config.jsonRecord);
+  const { root } = await mountView(nodeEditorView, { params: { id: String(node.id) } }, t);
+
+  const card = [...root.querySelectorAll('.editor-check')].find((c) => c.getAttribute('aria-label') === `${check.name} check`);
+  assert.ok(card, 'the recording json check has a card of its own');
+  const record = [...card.querySelectorAll('label.checkbox')].find((l) => l.textContent.includes('Record this value'));
+  assert.ok(record, 'the card offers to record the value');
+  assert.equal(record.input.checked, true, 'and the switch reflects the stored setting');
+
+  const inputs = [...card.querySelectorAll('input')];
+  assert.ok(inputs.some((i) => i.value === check.config.jsonMetric), 'the metric name is filled in');
+  assert.ok(inputs.some((i) => i.value === check.config.jsonUnit), 'the unit is filled in');
+  // The same four thresholds an SNMP reading has, worded the same way.
+  for (const label of ['Warn >', 'Crit >', 'Warn <', 'Crit <']) {
+    assert.ok(card.querySelector(`input[aria-label="${label} threshold"]`), `${label} is offered`);
+  }
+  assert.equal(card.querySelector('input[aria-label="Warn > threshold"]').value, String(check.config.jsonWarnAbove));
+
+  // Switching recording off hides the fields it governs.
+  record.input.checked = false;
+  record.input.dispatchEvent(new window.Event('change'));
+  assert.equal(card.querySelector('input[aria-label="Warn > threshold"]').closest('[hidden]') != null, true, 'the recording fields are hidden once the switch is off');
+});
+
+test('a json check that does not record keeps its recording fields folded away', async (t) => {
+  const node = window.__gwatchMock.nodes.find((n) => n.checks.some((c) => c.type === 'json' && !c.config.jsonRecord));
+  const check = node.checks.find((c) => c.type === 'json' && !c.config.jsonRecord);
+  const { root } = await mountView(nodeEditorView, { params: { id: String(node.id) } }, t);
+  const card = [...root.querySelectorAll('.editor-check')].find((c) => c.getAttribute('aria-label') === `${check.name} check`);
+  const record = [...card.querySelectorAll('label.checkbox')].find((l) => l.textContent.includes('Record this value'));
+  assert.ok(record, 'the switch is offered on every json check');
+  assert.equal(record.input.checked, false);
+  assert.ok(card.querySelector('input[aria-label="Warn > threshold"]').closest('[hidden]'), 'its fields stay hidden until it is switched on');
+});
+
+// #60: a hardware check's thresholds are a list, one boxed pair per family,
+// with instance overrides below; a check that still carries the flat fields
+// of an older configuration is converted the moment it is loaded.
+test('node editor renders a hardware check\'s thresholds per metric, with instance overrides', async (t) => {
+  const node = window.__gwatchMock.nodes.find((n) => n.checks.some((c) => c.type === 'system'));
+  const check = node.checks.find((c) => c.type === 'system');
+  const { root } = await mountView(nodeEditorView, { params: { id: String(node.id) } }, t);
+
+  const card = [...root.querySelectorAll('.editor-check')].find((c) => c.getAttribute('aria-label') === `${check.name} check`);
+  assert.ok(card, 'the hardware check has a card of its own');
+  const groups = [...card.querySelectorAll('.threshold-group')].map((g) => g.dataset.metric);
+  for (const family of ['cpu', 'memory', 'swap', 'load', 'disk', 'inodes', 'net', 'diskio']) assert.ok(groups.includes(family), `${family} has a threshold group`);
+  assert.ok(groups.includes('disk:/'), 'the configured instance override has its own row');
+
+  // The family boxes show the configured levels; a missing level is blank.
+  assert.equal(card.querySelector('[data-metric="disk"] input[aria-label="Disk space warning threshold"]').value, '85');
+  assert.equal(card.querySelector('[data-metric="disk"] input[aria-label="Disk space critical threshold"]').value, '95');
+  assert.equal(card.querySelector('[data-metric="swap"] input[aria-label="Swap critical threshold"]').value, '', 'an unset level is blank, not zero');
+
+  // Adding an override for another disk gives it a row of its own.
+  const instanceIn = card.querySelector('input[aria-label="Which disk, interface or device"]');
+  instanceIn.value = '/srv/media';
+  instanceIn.closest('.row').querySelector('button').click();
+  await settle();
+  assert.ok(root.querySelector('[data-metric="disk:/srv/media"]'), 'the new instance override is listed');
+  assert.equal(check.config.metricThresholds.filter((x) => x.metric === 'disk:/srv/media').length, 0, 'the mock\'s stored check is untouched until save');
+});
+
+test('node editor converts a hardware check\'s legacy flat thresholds to the list', () => {
+  const { legacyMetricThresholds, metricThresholdErrors } = nodeEditorView;
+  const list = legacyMetricThresholds({ cpuWarnPct: 80, memWarnPct: 90, memCritPct: 97, diskWarnPct: 70, diskCritPct: 90, loadWarnPerCore: 2 });
+  const byKey = Object.fromEntries(list.map((x) => [x.metric, x]));
+  assert.deepEqual(byKey.cpu, { metric: 'cpu', warn: 80, crit: undefined });
+  assert.deepEqual(byKey.disk, { metric: 'disk', warn: 70, crit: 90 });
+  assert.deepEqual(byKey.inodes, { metric: 'inodes', warn: 70, crit: 90 }, 'inodes follow the disk pair when the disk critical level is set');
+  assert.equal(byKey.swap, undefined, 'a zero level is off and gets no entry');
+
+  // The same rules as the server's ValidateMetricThresholds.
+  assert.equal(metricThresholdErrors(list), null);
+  assert.match(metricThresholdErrors([{ metric: 'gpu', warn: 1 }]), /not a hardware metric/);
+  assert.match(metricThresholdErrors([{ metric: 'cpu:0', warn: 1 }]), /cannot name an instance/);
+  assert.match(metricThresholdErrors([{ metric: 'disk', warn: 1 }, { metric: 'disk', warn: 2 }]), /both apply/);
+  assert.match(metricThresholdErrors([{ metric: 'disk:/srv', crit: 140 }]), /between 0 and 100/);
+  assert.match(metricThresholdErrors([{ metric: 'memory', warn: 90, crit: 50 }]), /at or above its warning/);
+  assert.match(metricThresholdErrors([{ metric: 'net:eth0', warn: 10, crit: 50, below: true }]), /at or below its warning/);
+  assert.equal(metricThresholdErrors([{ metric: 'net:eth0.rx', warn: 100, crit: 10, below: true }]), null);
+});

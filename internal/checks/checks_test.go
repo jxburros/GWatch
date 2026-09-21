@@ -3,6 +3,7 @@ package checks
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -412,6 +413,100 @@ func TestJSONCheck(t *testing.T) {
 	}
 }
 
+// #55: a json check can record the value it reads so it can be charted and
+// thresholded. Numbers (and strings holding numbers) become a metric; text
+// stays in the details only.
+func TestJSONRecord(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"temp":42.5,"asText":"17","name":"attic","status":"ok","flag":true}`))
+	}))
+	defer srv.Close()
+
+	// A number is recorded under the default name, with its unit in the message.
+	res := run(t, httpCheck(model.CheckJSON, srv.URL, model.CheckConfig{JSONPath: "temp", JSONRecord: true, JSONUnit: "°C"}), Options{})
+	if !res.Success || res.Status != model.StatusUp || res.Metrics["value"] != 42.5 || res.Details.JSONValue != "42.5" {
+		t.Fatalf("number: %+v", res)
+	}
+	if !strings.Contains(res.Message, `json "temp" = 42.5`) || !strings.Contains(res.Message, "recorded value = 42.5 °C") {
+		t.Errorf("message = %q, want the value and the recording", res.Message)
+	}
+
+	// A numeric string counts as a number, and the metric name is honoured.
+	res = run(t, httpCheck(model.CheckJSON, srv.URL, model.CheckConfig{JSONPath: "asText", JSONRecord: true, JSONMetric: " Attic "}), Options{})
+	if !res.Success || res.Metrics["Attic"] != 17 || len(res.Metrics) != 1 {
+		t.Fatalf("numeric string: %+v", res)
+	}
+
+	// Text is not a metric: it stays in the details, and the check is up
+	// because the path exists.
+	for _, path := range []string{"name", "flag"} {
+		res = run(t, httpCheck(model.CheckJSON, srv.URL, model.CheckConfig{JSONPath: path, JSONRecord: true}), Options{})
+		if !res.Success || res.Metrics != nil || res.Details.JSONValue == "" {
+			t.Errorf("%s: %+v", path, res)
+		}
+	}
+
+	// Recording sits alongside the equality test rather than replacing it.
+	res = run(t, httpCheck(model.CheckJSON, srv.URL, model.CheckConfig{JSONPath: "temp", JSONExpected: "40", JSONRecord: true}), Options{})
+	if res.Success || res.Metrics["value"] != 42.5 || res.Details.JSONMatched == nil || *res.Details.JSONMatched {
+		t.Errorf("expected mismatch still recorded: %+v", res)
+	}
+
+	// Thresholds: a warning degrades, a critical takes the check down, and the
+	// "matches" verdict is about JSONExpected, not the threshold.
+	res = run(t, httpCheck(model.CheckJSON, srv.URL, model.CheckConfig{JSONPath: "temp", JSONRecord: true, JSONUnit: "°C", JSONWarnAbove: f(40), JSONCritAbove: f(50)}), Options{})
+	if !res.Success || res.Status != model.StatusDegraded || len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "above the warning threshold of 40 °C") {
+		t.Errorf("warn above: %+v", res)
+	}
+	res = run(t, httpCheck(model.CheckJSON, srv.URL, model.CheckConfig{JSONPath: "temp", JSONRecord: true, JSONCritAbove: f(40)}), Options{})
+	if res.Success || res.Status != model.StatusDown || !strings.Contains(res.Error, "value is 42.5, above the critical threshold of 40") || res.Details.JSONMatched == nil || !*res.Details.JSONMatched {
+		t.Errorf("crit above: %+v", res)
+	}
+	if res.Metrics["value"] != 42.5 {
+		t.Errorf("a critical run still records the value: %+v", res.Metrics)
+	}
+	res = run(t, httpCheck(model.CheckJSON, srv.URL, model.CheckConfig{JSONPath: "temp", JSONRecord: true, JSONWarnBelow: f(45)}), Options{})
+	if !res.Success || res.Status != model.StatusDegraded || !strings.Contains(res.Warnings[0], "below the warning threshold of 45") {
+		t.Errorf("warn below: %+v", res)
+	}
+	res = run(t, httpCheck(model.CheckJSON, srv.URL, model.CheckConfig{JSONPath: "temp", JSONRecord: true, JSONCritBelow: f(45)}), Options{})
+	if res.Success || !strings.Contains(res.Message, "below the critical threshold of 45") {
+		t.Errorf("crit below: %+v", res)
+	}
+	// Text cannot breach a threshold.
+	res = run(t, httpCheck(model.CheckJSON, srv.URL, model.CheckConfig{JSONPath: "name", JSONRecord: true, JSONCritAbove: f(0)}), Options{})
+	if !res.Success || res.Status != model.StatusUp {
+		t.Errorf("text with thresholds: %+v", res)
+	}
+}
+
+func TestJSONNumber(t *testing.T) {
+	cases := []struct {
+		in   any
+		want float64
+		ok   bool
+	}{
+		{json.Number("42"), 42, true},
+		{json.Number("1e3"), 1000, true},
+		{float64(2.5), 2.5, true},
+		{"42.5", 42.5, true},
+		{" -7 ", -7, true},
+		{"", 0, false},
+		{"abc", 0, false},
+		{"NaN", 0, false},
+		{true, 0, false},
+		{nil, 0, false},
+		{map[string]any{"a": 1}, 0, false},
+	}
+	for _, tc := range cases {
+		got, ok := jsonNumber(tc.in)
+		if ok != tc.ok || (ok && got != tc.want) {
+			t.Errorf("jsonNumber(%#v) = %v, %v; want %v, %v", tc.in, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
 func TestContentWatch(t *testing.T) {
 	var body atomic.Value
 	body.Store("<html><!-- c1 --><script>var t=1</script>Hello   World</html>")
@@ -804,6 +899,12 @@ func TestValidate(t *testing.T) {
 		{"http header watch needs header", model.Check{Type: model.CheckHTTP, Config: model.CheckConfig{Target: "example.com", ContentWatch: "header"}}, "", "header"},
 		{"keyword needs keyword", model.Check{Type: model.CheckKeyword, Config: model.CheckConfig{Target: "example.com"}}, "", "keyword"},
 		{"json ok", model.Check{Type: model.CheckJSON, Config: model.CheckConfig{Target: "example.com", JSONPath: "a.b[0]"}}, "", ""},
+		{"json record ok", model.Check{Type: model.CheckJSON, Config: model.CheckConfig{Target: "example.com", JSONPath: "temp", JSONRecord: true, JSONWarnAbove: f(40), JSONCritAbove: f(50), JSONWarnBelow: f(10), JSONCritBelow: f(0)}}, "", ""},
+		{"json record needs path", model.Check{Type: model.CheckJSON, Config: model.CheckConfig{Target: "example.com", JSONRecord: true}}, "", "json path"},
+		{"json record long name", model.Check{Type: model.CheckJSON, Config: model.CheckConfig{Target: "example.com", JSONPath: "temp", JSONRecord: true, JSONMetric: strings.Repeat("x", 65)}}, "", "64 characters"},
+		{"json record crit above inside warn", model.Check{Type: model.CheckJSON, Config: model.CheckConfig{Target: "example.com", JSONPath: "temp", JSONRecord: true, JSONWarnAbove: f(50), JSONCritAbove: f(40)}}, "", "must be above"},
+		{"json record crit below inside warn", model.Check{Type: model.CheckJSON, Config: model.CheckConfig{Target: "example.com", JSONPath: "temp", JSONRecord: true, JSONWarnBelow: f(10), JSONCritBelow: f(20)}}, "", "must be below"},
+		{"json thresholds ignored when not recording", model.Check{Type: model.CheckJSON, Config: model.CheckConfig{Target: "example.com", JSONPath: "temp", JSONWarnAbove: f(50), JSONCritAbove: f(40)}}, "", ""},
 		{"tcp needs port", model.Check{Type: model.CheckTCP}, "192.168.1.10", "port"},
 		{"tcp port in target", model.Check{Type: model.CheckTCP}, "192.168.1.10:32400", ""},
 		{"tcp bad port", model.Check{Type: model.CheckTCP, Config: model.CheckConfig{Port: 70000}}, "h", "port"},

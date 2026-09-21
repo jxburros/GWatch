@@ -182,50 +182,28 @@ func evaluateHost(check model.Check, m model.HostMetrics, now time.Time) model.R
 			humanAge(age), m.Timestamp.Format(time.RFC3339)))
 	}
 
+	metrics := hostMetricResults(cfg, m)
+	res.Metrics = make(map[string]float64, len(metrics))
 	var warnings, critical []string
-	consider := func(label string, value *float64, warn, crit float64, format func(float64) string) {
-		if value == nil {
-			return
-		}
-		switch {
-		case crit > 0 && *value >= crit:
-			critical = append(critical, fmt.Sprintf("%s is %s, at or above the %s critical threshold", label, format(*value), format(crit)))
-		case warn > 0 && *value >= warn:
-			warnings = append(warnings, fmt.Sprintf("%s is %s, at or above the %s warning threshold", label, format(*value), format(warn)))
+	for _, mr := range metrics {
+		res.Metrics[mr.Key] = mr.Value
+		switch mr.Status {
+		case model.StatusDown:
+			critical = append(critical, mr.Reason)
+		case model.StatusDegraded:
+			warnings = append(warnings, mr.Reason)
 		}
 	}
-
-	consider("Processor use", m.CPU.UsagePct, cfg.CPUWarnPct, cfg.CPUCritPct, pctString)
-	// Where processor utilisation is unavailable — macOS has no cgo-free way
-	// to read it — load average per core carries the same meaning, so the
-	// check falls back to it rather than silently watching nothing.
-	consider("Load per core", m.CPU.LoadPerCore, cfg.LoadWarnPerCore, cfg.LoadCritPerCore, func(v float64) string {
-		return fmt.Sprintf("%.2f", v)
-	})
-	if m.Memory.TotalBytes > 0 {
-		used := m.Memory.UsedPct
-		consider("Memory use", &used, cfg.MemWarnPct, cfg.MemCritPct, pctString)
-	}
-	consider("Swap use", m.Memory.SwapUsedPct, cfg.SwapWarnPct, 0, pctString)
-
-	for _, fs := range selectedFilesystems(m, cfg.DiskMounts) {
-		used := fs.UsedPct
-		consider(fmt.Sprintf("Disk %s", fs.Mount), &used, cfg.DiskWarnPct, cfg.DiskCritPct, pctString)
-		if fs.InodesUsedPct != nil && cfg.DiskCritPct > 0 {
-			// A filesystem can run out of inodes with space to spare, and the
-			// failure looks identical to a full disk to whatever was writing.
-			consider(fmt.Sprintf("Inodes on %s", fs.Mount), fs.InodesUsedPct, cfg.DiskWarnPct, cfg.DiskCritPct, pctString)
-		}
-	}
+	res.Details.MetricResults = metrics
 
 	if len(critical) > 0 {
 		sort.Strings(critical)
-		res = failResult(strings.Join(critical, "; "))
-		res.Timestamp = now
-		res.Details.Host = &m
-		res.Details.HostAgeSec = &ageSec
-		res.Warnings = warnings
-		return res
+		fail := failResult(strings.Join(critical, "; "))
+		fail.Timestamp = now
+		fail.Details = res.Details
+		fail.Metrics = res.Metrics
+		fail.Warnings = warnings
+		return fail
 	}
 	sort.Strings(warnings)
 	res.Warnings = warnings
@@ -236,6 +214,102 @@ func evaluateHost(check model.Check, m model.HostMetrics, now time.Time) model.R
 		res.Message += " — " + strings.Join(m.Warnings, "; ")
 	}
 	return res
+}
+
+// hostMetricResults turns a reading into one MetricResult per metric the
+// machine reported, each judged against the threshold that governs its key.
+// Every reading is listed, thresholded or not, so that a disk nobody set a
+// threshold for is still charted and still shows in the inspector.
+func hostMetricResults(cfg model.CheckConfig, m model.HostMetrics) []model.MetricResult {
+	var out []model.MetricResult
+	add := func(key, label string, value *float64) {
+		if value == nil {
+			return
+		}
+		mr := model.MetricResult{Key: key, Label: label, Value: *value, Unit: model.SystemMetricUnit(key), Status: model.StatusUp}
+		if t, ok := cfg.ThresholdFor(key); ok {
+			mr.Status = t.Judge(*value)
+			mr.Reason = thresholdReason(mr, t)
+		}
+		out = append(out, mr)
+	}
+
+	add(model.MetricCPU, "Processor use", m.CPU.UsagePct)
+	// Where processor utilisation is unavailable — macOS has no cgo-free way
+	// to read it — load average per core carries the same meaning, so the
+	// check watches it as well rather than silently watching nothing.
+	add(model.MetricLoad, "Load per core", m.CPU.LoadPerCore)
+	if m.Memory.TotalBytes > 0 {
+		used := m.Memory.UsedPct
+		add(model.MetricMemory, "Memory use", &used)
+	}
+	add(model.MetricSwap, "Swap use", m.Memory.SwapUsedPct)
+
+	for _, fs := range selectedFilesystems(m, cfg.DiskMounts) {
+		used := fs.UsedPct
+		add(model.MetricKey(model.MetricDisk, fs.Mount), fmt.Sprintf("Disk %s", fs.Mount), &used)
+		// A filesystem can run out of inodes with space to spare, and the
+		// failure looks identical to a full disk to whatever was writing.
+		add(model.MetricKey(model.MetricInodes, fs.Mount), fmt.Sprintf("Inodes on %s", fs.Mount), fs.InodesUsedPct)
+	}
+	for _, n := range m.Interfaces {
+		add(model.MetricKey(model.MetricNet, n.Name+".rx"), fmt.Sprintf("Network %s received", n.Name), n.RxBytesPerSec)
+		add(model.MetricKey(model.MetricNet, n.Name+".tx"), fmt.Sprintf("Network %s sent", n.Name), n.TxBytesPerSec)
+	}
+	for _, d := range m.Disks {
+		add(model.MetricKey(model.MetricDiskIO, d.Name+".read"), fmt.Sprintf("Disk %s read", d.Name), d.ReadBytesPerSec)
+		add(model.MetricKey(model.MetricDiskIO, d.Name+".write"), fmt.Sprintf("Disk %s write", d.Name), d.WriteBytesPerSec)
+		add(model.MetricKey(model.MetricDiskIO, d.Name+".busy"), fmt.Sprintf("Disk %s busy", d.Name), d.BusyPct)
+	}
+	return out
+}
+
+// thresholdReason words a metric's verdict the way an alert should read it:
+// which reading, what it is, and which level it crossed. It is empty for a
+// metric that is within its thresholds.
+func thresholdReason(mr model.MetricResult, t model.MetricThreshold) string {
+	var level *float64
+	var word string
+	switch mr.Status {
+	case model.StatusDown:
+		level, word = t.Crit, "critical"
+	case model.StatusDegraded:
+		level, word = t.Warn, "warning"
+	default:
+		return ""
+	}
+	side := "at or above"
+	if t.Below {
+		side = "at or below"
+	}
+	return fmt.Sprintf("%s is %s, %s the %s %s threshold", mr.Label, metricString(mr.Value, mr.Unit), side, metricString(*level, mr.Unit), word)
+}
+
+// metricString renders a reading with its unit: whole percentages, two
+// decimals for a load average, and a rate in the largest unit that fits.
+func metricString(v float64, unit string) string {
+	switch unit {
+	case "%":
+		return pctString(v)
+	case "B/s":
+		return bytesPerSecond(v)
+	}
+	return fmt.Sprintf("%.2f", v)
+}
+
+// bytesPerSecond renders a throughput the way someone reading an alert would
+// say it, rather than as a ten-digit number of bytes.
+func bytesPerSecond(v float64) string {
+	units := []string{"B/s", "kB/s", "MB/s", "GB/s", "TB/s"}
+	i := 0
+	for v >= 1000 && i < len(units)-1 {
+		v /= 1000
+		i++
+	}
+	if i == 0 {
+		return fmt.Sprintf("%.0f %s", v, units[i])
+	}
+	return fmt.Sprintf("%.1f %s", v, units[i])
 }
 
 // selectedFilesystems narrows the reading to the mount points the check cares
@@ -320,38 +394,23 @@ func validateSystemCheck(cfg model.CheckConfig) error {
 			return err
 		}
 	}
-	pcts := map[string]float64{
-		"processor warning":  cfg.CPUWarnPct,
-		"processor critical": cfg.CPUCritPct,
-		"memory warning":     cfg.MemWarnPct,
-		"memory critical":    cfg.MemCritPct,
-		"swap warning":       cfg.SwapWarnPct,
-		"disk warning":       cfg.DiskWarnPct,
-		"disk critical":      cfg.DiskCritPct,
-	}
-	for name, v := range pcts {
+	// The deprecated flat fields are validated through the same rules as the
+	// list, by converting them first; a negative one is what the conversion
+	// would silently drop, so it is caught before that.
+	for name, v := range map[string]float64{
+		"processor warning": cfg.CPUWarnPct, "processor critical": cfg.CPUCritPct,
+		"memory warning": cfg.MemWarnPct, "memory critical": cfg.MemCritPct,
+		"swap warning": cfg.SwapWarnPct, "disk warning": cfg.DiskWarnPct, "disk critical": cfg.DiskCritPct,
+	} {
 		if v < 0 || v > 100 {
 			return fmt.Errorf("the %s threshold must be between 0 (off) and 100", name)
 		}
 	}
-	// A critical threshold below its warning threshold would report the
-	// machine down before it ever reported it degraded, which is not what
-	// anyone means by those two words.
-	for _, pair := range []struct {
-		name       string
-		warn, crit float64
-	}{
-		{"processor", cfg.CPUWarnPct, cfg.CPUCritPct},
-		{"memory", cfg.MemWarnPct, cfg.MemCritPct},
-		{"disk", cfg.DiskWarnPct, cfg.DiskCritPct},
-		{"load per core", cfg.LoadWarnPerCore, cfg.LoadCritPerCore},
-	} {
-		if pair.warn > 0 && pair.crit > 0 && pair.crit < pair.warn {
-			return fmt.Errorf("the %s critical threshold must be at or above its warning threshold", pair.name)
-		}
-	}
 	if cfg.LoadWarnPerCore < 0 || cfg.LoadCritPerCore < 0 {
 		return errors.New("load thresholds cannot be negative")
+	}
+	if err := model.ValidateMetricThresholds(cfg.EffectiveMetricThresholds()); err != nil {
+		return err
 	}
 	if cfg.StaleAfterSeconds < 0 {
 		return errors.New("the staleness limit cannot be negative")

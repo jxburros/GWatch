@@ -16,9 +16,32 @@ import { PANEL_TYPES, panelMeta, WALL_THEMES } from '../wall-render.js';
 export async function mount(root, ctx) {
   const state = { boards: [], nodes: [], groups: { groups: [], tags: [] }, id: Number(ctx.params.id) || null, destroyed: false, dirty: false };
 
-  const tabsEl = h('div', { class: 'chip-row', role: 'tablist', 'aria-label': 'Wallboards' });
-  const bodyEl = h('div', { class: 'stack' }, skeleton({ lines: 4 }));
+  // Switching board here changes what the page shows without changing its
+  // address, so these are real tabs: one panel, the selected tab in the tab
+  // order, and the arrow keys moving the selection along the row.
+  const panelId = uid('wallboard-panel');
+  const tabsEl = h('div', { class: 'chip-row', role: 'tablist', 'aria-label': 'Wallboards', onkeydown: onTabKey });
+  const bodyEl = h('div', { class: 'stack', role: 'tabpanel', id: panelId }, skeleton({ lines: 4 }));
   root.append(tabsEl, bodyEl);
+
+  function onTabKey(e) {
+    const tabs = [...tabsEl.querySelectorAll('[role="tab"]')];
+    const i = tabs.indexOf(document.activeElement);
+    if (i < 0 || !tabs.length) return;
+    let next;
+    switch (e.key) {
+      case 'ArrowRight': next = tabs[(i + 1) % tabs.length]; break;
+      case 'ArrowLeft': next = tabs[(i - 1 + tabs.length) % tabs.length]; break;
+      case 'Home': next = tabs[0]; break;
+      case 'End': next = tabs[tabs.length - 1]; break;
+      default: return;
+    }
+    e.preventDefault();
+    // Moving is selecting: the board shows as soon as its tab has focus.
+    state.id = Number(next.dataset.id);
+    render();
+    tabsEl.querySelector('[aria-selected="true"]')?.focus();
+  }
 
   function current() { return state.boards.find((b) => b.id === state.id) || state.boards[0] || null; }
 
@@ -49,13 +72,18 @@ export async function mount(root, ctx) {
 
     clear(tabsEl);
     for (const b of state.boards) {
+      const selected = b.id === state.id;
       tabsEl.append(h('button', {
-        type: 'button', role: 'tab',
-        class: `chip ${b.id === state.id ? 'active' : ''}`,
-        'aria-selected': b.id === state.id ? 'true' : 'false',
+        type: 'button', role: 'tab', id: `${panelId}-tab-${b.id}`,
+        class: `chip ${selected ? 'active' : ''}`,
+        'aria-selected': selected ? 'true' : 'false',
+        'aria-controls': panelId,
+        tabindex: selected ? 0 : -1,
+        dataset: { id: String(b.id) },
         onclick: () => { state.id = b.id; render(); },
       }, b.share?.enabled ? icon('link') : null, b.name));
     }
+    if (board) bodyEl.setAttribute('aria-labelledby', `${panelId}-tab-${board.id}`); else bodyEl.removeAttribute('aria-labelledby');
 
     clear(bodyEl);
     if (!board) {

@@ -8,7 +8,8 @@
 This is a plain-language walkthrough for installing GWatch with the setup program — no
 PowerShell or command line needed. If you're comfortable with PowerShell, or need to
 automate the install, see [Advanced: the PowerShell scripts](#advanced-the-powershell-scripts)
-below instead.
+below instead. Not on Windows? On a Linux server, a NAS or a Raspberry Pi the
+container image is the easy path — see [`DOCKER.md`](DOCKER.md).
 
 ## 1. Download the setup program
 
@@ -127,11 +128,46 @@ environment variable, on any platform. Inside that directory:
 
 - `gwatch.db` — the SQLite database;
 - `gwatch.key` — the key that encrypts secrets stored in the database;
+- `database.json` — only present when GWatch has been pointed at a PostgreSQL or
+  MySQL server instead of `gwatch.db`; see [`DATABASE.md`](DATABASE.md);
 - `logs/` — the service log;
 - `backups/` — encrypted backup archives, if you make any.
 
 See [`PRIVACY.md`](PRIVACY.md#what-gwatch-stores-and-where) for what's stored inside
 `gwatch.db` and why.
+
+## Using your own database server
+
+`gwatch.db` is the default and needs nothing from you. If you would rather GWatch kept
+its data on a PostgreSQL or MySQL/MariaDB server you already run, **Settings › Database**
+points it there (the change takes effect after a restart of the service), and
+`gwatch migrate-db` copies what is in `gwatch.db` across. [`DATABASE.md`](DATABASE.md)
+walks through it, including creating the database and user on the server.
+
+## Choosing the SQLite driver
+
+`gwatch.db` is an ordinary SQLite database whichever way GWatch was built, and the
+release downloads need nothing from you here — skip this section unless you build
+from source and have a reason to swap the library that reads and writes that file.
+
+The SQLite driver is chosen when the program is compiled, with a Go build tag; there
+is no setting, flag or environment variable for it at run time. The choices are:
+
+| Build | Driver | Notes |
+| --- | --- | --- |
+| `go build .` (no tag) | [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite) | The default. Pure Go, no C toolchain. What every release is built with. |
+| `go build -tags sqlite_ncruces .` | [ncruces/go-sqlite3](https://pkg.go.dev/github.com/ncruces/go-sqlite3) | Pure Go: SQLite compiled to WebAssembly, run by an embedded Wasm runtime. That runtime only compiles to native code on amd64 and arm64; on other CPUs (32-bit ARM, 386, RISC-V …) it falls back to a much slower interpreter. See the project's [support matrix](https://github.com/ncruces/go-sqlite3/wiki/Support-matrix) for the platform-by-platform limits before choosing it. |
+| `CGO_ENABLED=1 go build -tags sqlite_cgo .` | [mattn/go-sqlite3](https://pkg.go.dev/github.com/mattn/go-sqlite3) | The C SQLite library linked through cgo. Needs a C compiler (gcc/clang, or MinGW on Windows) and cannot be cross-compiled the way the releases are, so it is never used for a release build. |
+
+`make build-ncruces` and `make build-cgo` run the two alternative builds; `make build`
+is the default. The build tags are exclusive — pass at most one.
+
+Switching drivers does not change the database file: all three write the same
+format, so a `gwatch.db` made under one opens under another. To see which driver a
+running copy was built with, open **Settings › Retention** or **Settings › Backups**
+and look at the **Database driver** line beside the data directory paths, or read the
+`databaseDriver` field of `GET /api/health`. (The PostgreSQL and MySQL drivers are
+not a build choice: every binary has them, and `database.json` picks one at run time.)
 
 ## Upgrading
 

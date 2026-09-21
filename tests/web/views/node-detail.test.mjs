@@ -8,7 +8,7 @@ import '../../../web/mock.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as nodeDetailView from '../../../web/views/node-detail.js';
-import { mountView, settle } from '../view-harness.mjs';
+import { mountView, settle, waitFor } from '../view-harness.mjs';
 
 test('node detail view renders the node\'s header and its checks', async (t) => {
   const gateway = window.__gwatchMock.nodes.find((n) => n.name === 'Gateway');
@@ -64,4 +64,65 @@ test('node detail shows an snmp check\'s readings once the result is inspected',
   assert.ok(text.includes('Reported as text'), 'a non-numeric reading says so');
 
   await settle();
+});
+
+// #55: a json check that records its value is charted on the node page under
+// its metric name, with a CSV link, exactly as an SNMP reading is.
+test('node detail charts a json check\'s recorded value', async (t) => {
+  const node = window.__gwatchMock.nodes.find((n) => n.checks.some((c) => c.type === 'json' && c.config.jsonRecord));
+  const check = node.checks.find((c) => c.type === 'json' && c.config.jsonRecord);
+  const { root } = await mountView(nodeDetailView, { params: { id: String(node.id) } }, t);
+
+  const history = root.querySelector('section[aria-label="History"]');
+  const section = await waitFor(() => [...history.querySelectorAll('.section-title')].find((el) => el.textContent === `${check.name} — recorded value`)?.parentElement);
+  assert.ok(section.textContent.includes(`${check.config.jsonMetric} (${check.config.jsonUnit})`), 'the metric is named with its unit');
+  assert.ok(section.querySelector('canvas'), 'and drawn as a chart');
+  const csv = section.querySelector('a[download]');
+  assert.ok(csv, 'with a CSV link');
+  assert.ok(csv.getAttribute('href').includes(`metric=${encodeURIComponent(check.config.jsonMetric)}`), 'that asks for the metric by name');
+
+  await settle();
+});
+
+// #60: a hardware check's metrics are charted from its own results, grouped
+// by family — one axis for the percentages, one line per filesystem — and
+// each line can be exported by its key.
+test('node detail charts a hardware check\'s metrics by family', async (t) => {
+  const node = window.__gwatchMock.nodes.find((n) => n.checks.some((c) => c.type === 'system'));
+  const check = node.checks.find((c) => c.type === 'system');
+  const { root } = await mountView(nodeDetailView, { params: { id: String(node.id) } }, t);
+
+  const history = root.querySelector('section[aria-label="History"]');
+  const section = await waitFor(() => [...history.querySelectorAll('.section-title')].find((el) => el.textContent === `${check.name} — hardware metrics`)?.parentElement);
+  const groups = [...section.querySelectorAll('[data-group]')].map((g) => g.dataset.group);
+  assert.ok(groups.includes('usage'), 'processor, memory and swap share one chart');
+  assert.ok(groups.includes('disk'), 'the filesystems have a chart');
+  assert.ok(groups.includes('net'), 'so do the interfaces');
+  assert.ok(groups.includes('diskbusy'), 'disk busy % is kept off the bytes/s axis');
+  assert.ok(section.querySelector('[data-group="disk"] canvas'), 'and they are drawn');
+  assert.ok(section.querySelector('[data-group="disk"] button, [data-group="disk"] a[download]'), 'the disk chart has an export control');
+  assert.ok(section.querySelector('[data-group="usage"]').textContent.includes('Processor, memory and swap (%)'), 'the group is named with its unit');
+
+  // The hardware check is not in the latency chart: it measures a machine,
+  // not a round trip — but the node's other checks still are.
+  assert.ok([...history.querySelectorAll('.section-title')].some((el) => el.textContent === 'Latency / response time'));
+  await settle();
+});
+
+test('node detail shows a hardware check\'s per-metric verdicts in the inspector', async (t) => {
+  const node = window.__gwatchMock.nodes.find((n) => n.checks.some((c) => c.type === 'system'));
+  const check = node.checks.find((c) => c.type === 'system');
+  const { root } = await mountView(nodeDetailView, { params: { id: String(node.id) } }, t);
+
+  const card = root.querySelector(`section.check-card[aria-label="${check.name}"]`);
+  assert.ok(card, 'the hardware check has a card');
+  card.querySelector('button[aria-expanded]').click();
+  await settle();
+  const table = await waitFor(() => root.querySelector(`section.check-card[aria-label="${check.name}"] table.metric-results`));
+  const rows = [...table.querySelectorAll('tbody tr')];
+  assert.ok(rows.length >= 6, `one row per metric, got ${rows.length}`);
+  const media = rows.find((r) => r.dataset.metric === 'disk:/srv/media');
+  assert.ok(media, 'the media disk has a row');
+  assert.ok(media.textContent.includes('warning'), 'and its own verdict');
+  assert.ok(rows.find((r) => r.dataset.metric === 'cpu').textContent.includes('within thresholds'), 'while the processor is fine');
 });

@@ -9,6 +9,90 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## Unreleased
+
+The 2026-09-21 sprint: everything labelled `sprint-plan` in the tracker.
+
+### Added
+
+- **Hardware metrics stand on their own** (#60). A machine is still one
+  hardware check, but every reading it takes — processor, memory, swap, load,
+  each disk and its inodes, each network interface's traffic, each disk's
+  throughput — now has its own value, status, threshold, chart, incident and
+  trigger variable. Thresholds are a list (`metricThresholds`) with a family
+  entry such as `disk` and optional instance entries such as `disk:/srv`;
+  the old flat fields are converted the first time a check is saved. Warnings
+  and their clearing are recorded per metric, alert mails list every metric
+  that is not up, `/api/history?metric=disk:/srv` charts one series, the
+  node page groups the charts by family, triggers gain a `metric_over`
+  condition and `{{metric}}`/`{{metrics.<key>}}` placeholders, and bulk edit
+  can set a threshold across many machines. `docs/HARDWARE.md` has the new
+  "One check, many metrics".
+- **Notification rules across nodes** (#31, first version). Settings › Rules
+  holds rules such as "tell me when two of my three DNS servers are down": a
+  list of status conditions on any checks or whole nodes (down, or degraded
+  meaning degraded-or-worse), joined by all, any or at-least-N, with the same
+  actions triggers use, a cooldown and an optional notice when the rule
+  clears. Rules are re-evaluated on every status change and when maintenance
+  or silencing changes, fire once per crossing, record `rule_fired` and
+  `rule_cleared` in the timeline, and keep their state across restarts.
+  Per-node alerts and dependency-aware suppression are untouched. Hold timers
+  and metric conditions are deliberately left for later.
+- **JSON checks record the value they read** (#55). Tick "Record this value"
+  on a JSON check and the number at its path is stored with every run, charted
+  on the node page with its unit, exported per metric as CSV, and optionally
+  held to warning and critical thresholds above or below. A value that is not
+  a number is kept as text in the result details, as before. `docs/RECIPES.md`
+  shows it against a Pi-hole.
+- **Settings › AI & MCP** (#56) explains the MCP companion, walks through
+  setting it up (a read-only API key, `go install`, a copyable client
+  configuration with this install's address filled in, `gwatch-mcp check`),
+  lists what an assistant can and cannot do, and offers a downloadable
+  **agent skill** that teaches an assistant how to use GWatch well. The skill
+  is versioned on its own (`skill/VERSION`); GWatch remembers who last
+  downloaded it and when, and quietly notes on that card when a newer one has
+  shipped.
+- **Your own PostgreSQL or MySQL/MariaDB server can hold the database**
+  (#34). SQLite stays the zero-configuration default and every release is
+  tested against it first; an administrator who already runs a database
+  server can point GWatch at it with the `--db-*` flags, `GWATCH_DB_*`
+  variables or **Settings › Database**, which tests the connection and saves
+  `database.json` beside `gwatch.db` for the next restart. `gwatch
+  migrate-db` copies an existing SQLite install across in one go, backups and
+  restores are the same encrypted archive whichever database they came from,
+  and CI runs the store, API, engine and backup suites against PostgreSQL 16
+  and MySQL 8 as well as SQLite. `docs/DATABASE.md` covers choosing,
+  configuring and moving. The backup format is now version 2 and carries
+  accounts, API keys, agents, wallboards and hardware readings; older archives
+  still restore.
+- **A Docker image** (#51): `ghcr.io/jxburros/gwatch`, published for
+  linux/amd64 and linux/arm64 on every release, with a Compose file and
+  `docs/DOCKER.md` covering the `/data` volume, the first administrator
+  account, ping capabilities, discovery under bridge networking, hardware
+  readings (the container's, not the host's) and upgrading by pulling.
+- **The SQLite driver is a build-time choice** (#48). `modernc.org/sqlite`
+  stays the automatic default and is what releases ship; `-tags
+  sqlite_ncruces` or `-tags sqlite_cgo` swap in `ncruces/go-sqlite3` or
+  `mattn/go-sqlite3` for people building from source. CI runs the store under
+  all three, and Settings and `/api/health` say which one a build uses.
+
+- **An accessibility pass across the interface** (#38). Dialogs name
+  themselves by their heading, make the page behind them inert and hand focus
+  back where it came from; menus, wallboard tabs and the dashboard grid work
+  from the keyboard (arrows move a widget, Shift+arrows resize it); every
+  chart canvas can be stepped through with the arrow keys and offers a "View
+  as table" alternative; form errors are tied to their fields; the focus ring
+  survives forced-colours mode; and the skip link, which the hash router had
+  quietly broken, works again. Playwright runs axe over every route in both
+  themes in CI so it stays that way.
+
+### Changed
+
+- **The interface is responsive, not a phone app** (#54). The one piece of
+  code written for a finger — a touch handler on charts — is gone, along with
+  the comments that described narrow layouts as phone layouts. Narrow windows
+  and tablets still read fine; GWatch is built for a desk.
+
 ## 0.2.2
 
 The 2026-09-19 sprint: everything labelled `sprint-plan` in the tracker.

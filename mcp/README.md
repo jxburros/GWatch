@@ -10,6 +10,13 @@ imports GWatch's code; it talks to a running GWatch over the documented JSON API
 service that watches your network keeps its own attack surface and its own release cycle, and
 nothing here is on unless you turn it on.
 
+> **In the app:** GWatch's **Settings › AI & MCP** page walks through the same setup with your
+> own address filled in, mints the read-only key, and offers the **agent skill** — a short
+> [`SKILL.md`](../skill/SKILL.md) that teaches an assistant how to use these tools well (start with
+> the overview, how to drill into a problem, how to be careful with writes). The skill is versioned
+> on its own ([`skill/VERSION`](../skill/VERSION)); the page notes when the copy you downloaded has
+> fallen behind.
+
 ---
 
 ## Trust model — read this before `--allow-write`

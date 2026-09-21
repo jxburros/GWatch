@@ -30,12 +30,18 @@ import (
 
 // Server holds the dependencies of the HTTP handlers.
 type Server struct {
-	Engine    *engine.Engine
-	Store     *store.Store
-	Log       *logging.Logger
-	Web       fs.FS
+	Engine *engine.Engine
+	Store  *store.Store
+	Log    *logging.Logger
+	Web    fs.FS
+	// Skill holds the agent skill (skill/ in the repository) that Settings ›
+	// AI & MCP offers for download; see mcp.go. Optional.
+	Skill     fs.FS
 	BackupDir string
-	Version   string
+	// DataDir is where database.json lives (Settings › Database, see
+	// database.go). Optional: without it those routes report an error.
+	DataDir string
+	Version string
 	// Updater performs GitHub release checks and self-updates (optional).
 	Updater *Updater
 	// Network reports how the server is bound (optional).
@@ -142,6 +148,9 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "GET /api/settings", s.handleGetSettings)
 	s.route(mux, "PUT /api/settings", s.handlePutSettings)
 	s.route(mux, "POST /api/settings/test-email", s.handleTestEmail)
+	s.route(mux, "GET /api/database", s.handleGetDatabase)
+	s.route(mux, "PUT /api/database", s.handlePutDatabase)
+	s.route(mux, "POST /api/database/test", s.handleTestDatabase)
 	s.route(mux, "GET /api/retention/status", s.handleRetentionStatus)
 	s.route(mux, "POST /api/retention/run", s.handleRetentionRun)
 
@@ -165,6 +174,12 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "DELETE /api/triggers/{id}", s.handleDeleteTrigger)
 	s.route(mux, "POST /api/triggers/{id}/run", s.handleRunTrigger)
 	s.route(mux, "POST /api/actions/test", s.handleTestAction)
+	s.route(mux, "GET /api/rules", s.handleListRules)
+	s.route(mux, "POST /api/rules", s.handleSaveRule)
+	s.route(mux, "GET /api/rules/{id}", s.handleGetRule)
+	s.route(mux, "PUT /api/rules/{id}", s.handleSaveRule)
+	s.route(mux, "DELETE /api/rules/{id}", s.handleDeleteRule)
+	s.route(mux, "POST /api/rules/{id}/test", s.handleTestRule)
 	s.route(mux, "GET /api/automation/meta", s.handleAutomationMeta)
 
 	s.route(mux, "GET /api/endpoints", s.handleListEndpoints)
@@ -205,6 +220,9 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /api/update/apply", s.handleUpdateApply)
 
 	s.route(mux, "GET /api/logs", s.handleLogs)
+
+	s.route(mux, "GET /api/mcp/status", s.handleMCPStatus)
+	s.route(mux, "GET /api/mcp/skill", s.handleMCPSkill)
 
 	s.route(mux, "GET /api/me", s.handleMe)
 	s.route(mux, "GET /api/auth/setup", s.handleAuthSetup)
@@ -811,15 +829,15 @@ func (s *Server) normalizeNode(n *model.Node) error {
 			}
 			// A hardware check with no thresholds would watch a machine and
 			// never say anything, so a new one starts with the defaults
-			// written into it rather than applied invisibly at run time.
+			// written into it rather than applied invisibly at run time. A
+			// check saved with the flat fields of an older configuration is
+			// moved onto the per-metric list here, once, so from now on
+			// there is one place its thresholds live.
 			if !c.Config.HasSystemThresholds() {
-				d := model.SystemDefaults()
-				c.Config.CPUWarnPct, c.Config.CPUCritPct = d.CPUWarnPct, d.CPUCritPct
-				c.Config.MemWarnPct, c.Config.MemCritPct = d.MemWarnPct, d.MemCritPct
-				c.Config.SwapWarnPct = d.SwapWarnPct
-				c.Config.DiskWarnPct, c.Config.DiskCritPct = d.DiskWarnPct, d.DiskCritPct
-				c.Config.LoadWarnPerCore = d.LoadWarnPerCore
+				c.Config.MetricThresholds = model.SystemDefaults().MetricThresholds
 			}
+			c.Config.NormalizeMetricThresholds()
+			model.SortMetricThresholds(c.Config.MetricThresholds)
 		}
 		if c.Type == model.CheckSNMP {
 			// Version and port are what every device answers on unless it was
@@ -1318,7 +1336,7 @@ func (s *Server) historyFor(ctx context.Context, checkID int64, rangeName, metri
 		return model.HistorySeries{}, err
 	}
 	if metric = strings.TrimSpace(metric); metric != "" {
-		if !checkHasMetric(c, metric) {
+		if !s.checkHasMetric(ctx, c, metric) {
 			return model.HistorySeries{}, fmt.Errorf("check %d does not measure %q", checkID, metric)
 		}
 		return s.Store.HistoryMetric(ctx, c, n.Name, rng, time.Now(), metric)
@@ -1326,16 +1344,27 @@ func (s *Server) historyFor(ctx context.Context, checkID int64, rangeName, metri
 	return s.Store.History(ctx, c, n.Name, rng, time.Now())
 }
 
-// checkHasMetric reports whether a check is configured to measure a named
-// metric. Asking is what keeps /api/history from turning into a way to probe
-// for arbitrary names in stored results.
-func checkHasMetric(c model.Check, metric string) bool {
-	for _, o := range c.Config.SNMPOIDs {
-		if o.Name == metric {
-			return true
-		}
+// checkHasMetric reports whether a check measures a named metric — an SNMP
+// check's OIDs, the value a json check records, or a hardware check's
+// readings. Asking is what keeps /api/history from turning into a way to
+// probe for arbitrary names in stored results.
+//
+// A hardware check's disks, interfaces and devices are only known once the
+// machine has reported, so for that type a key the check's newest result
+// carried counts as measured too.
+func (s *Server) checkHasMetric(ctx context.Context, c model.Check, metric string) bool {
+	if _, ok := c.MetricUnits()[metric]; ok {
+		return true
 	}
-	return false
+	if c.Type != model.CheckSystem {
+		return false
+	}
+	recent, err := s.Store.RecentResults(ctx, c.ID, 1)
+	if err != nil || len(recent) == 0 {
+		return false
+	}
+	_, ok := recent[0].Metrics[metric]
+	return ok
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {

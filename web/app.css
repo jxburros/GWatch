@@ -22,6 +22,9 @@
   --accent-line: rgba(var(--accent-rgb), 0.55);
   /* A ring, not a bloom: the accent no longer glows anywhere. */
   --focus: 0 0 0 2px rgba(var(--accent-rgb), 0.55);
+  /* The same ring drawn inside the box, for controls whose parent clips
+     anything outside them (the rail, the tab strip, a scrolling widget). */
+  --focus-inset: inset 0 0 0 2px rgba(var(--accent-rgb), 0.55);
   /* Ink for anything filled with the accent. Teal is a fill colour, never a
      white-text background. */
   --on-accent: #0f1114;
@@ -102,8 +105,8 @@
   --gutter: clamp(0.875rem, 1.4vw, 1.75rem);
 
   /* #32 density tokens. Compact is the default: these are the tight values,
-     so a phone scrolling a hundred nodes does not spend most of its screen
-     on padding. `:root[data-density="comfortable"]` below restates every one
+     so a narrow window scrolling a hundred nodes does not spend most of its
+     screen on padding. `:root[data-density="comfortable"]` below restates every one
      of them at roughly today's pre-#32 numbers — turning density on never
      changes anything for someone who leaves it alone. */
   --row-pad-y: 0.375rem;
@@ -258,7 +261,21 @@ svg.icon { width: 1em; height: 1em; display: inline-block; vertical-align: -0.15
 .skip-link:focus { left: 8px; }
 .eyebrow { font-family: var(--mono); font-size: 0.65625rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--dim); }
 
-:focus-visible { outline: none; box-shadow: var(--focus); }
+:focus-visible { outline: 2px solid transparent; outline-offset: 2px; box-shadow: var(--focus); }
+/* Where an ancestor clips its overflow, the ring is drawn inside the control
+   instead of around it, so it is never cut off: the rail's links (the rail
+   hides its overflow to animate its width), the tab strip (which scrolls
+   sideways), a chart's canvas inside a scrolling widget body. */
+.rail .nav-link:focus-visible, .rail .brand:focus-visible, .tabs .tab:focus-visible, .chart canvas:focus-visible, .row-toggle:focus-visible { box-shadow: var(--focus-inset); outline-offset: -2px; }
+/* A forced-colours mode (Windows High Contrast) drops box-shadows, which is
+   why the ring above is also a transparent outline: here it is given the
+   system's highlight colour so focus stays visible. */
+@media (forced-colors: active) {
+  :focus-visible { outline-color: Highlight; box-shadow: none; }
+  .rail .nav-link:focus-visible, .rail .brand:focus-visible, .tabs .tab:focus-visible, .chart canvas:focus-visible, .row-toggle:focus-visible { outline-offset: -2px; }
+  .chip.active, .chip[aria-pressed="true"], .tab.active, .tab[aria-current="page"], .settings-nav a.active { outline: 2px solid Highlight; outline-offset: -2px; }
+  .modal, .menu, .tip { border-color: CanvasText; }
+}
 ::selection { background: rgba(var(--accent-rgb), 0.4); }
 
 @media (prefers-reduced-motion: reduce) {
@@ -723,6 +740,9 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 /* Chip input */
 .chip-input { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; padding: 4px 6px; min-height: 2.125rem; background: var(--elev); border: 1px solid var(--line-strong); cursor: text; }
 .chip-input:focus-within { border-color: var(--accent); box-shadow: var(--focus); }
+/* The list wrapper is only there for its role; its chips lay out as direct
+   children of the box, beside the input. */
+.chip-input .chip-items { display: contents; }
 .chip-input .chip-item { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 0.5rem; background: var(--elev-2); border: 1px solid var(--line); font-size: 0.75rem; font-weight: 600; font-family: var(--mono); }
 .chip-input .chip-item button { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0 2px; display: inline-flex; }
 .chip-input .chip-item button:hover { color: var(--text); }
@@ -760,6 +780,11 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .table td.mono, .table th.mono { font-family: var(--mono); font-size: 0.78125rem; font-variant-numeric: tabular-nums; }
 .table td.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .table-wrap { overflow: auto; }
+/* The button that opens a result row's detail: set like the cell text it
+   stands in, so the table reads as a table and only the focus ring says
+   "button". */
+.row-toggle { background: none; border: 0; padding: 0; margin: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.row-toggle:hover { color: var(--text); }
 .list { display: flex; flex-direction: column; }
 .list-item { display: flex; align-items: center; gap: 0.75rem; padding: var(--row-pad-y) 0; font-size: var(--list-font); border-bottom: 1px solid var(--line); }
 .list-item:last-child { border-bottom: 0; }
@@ -876,6 +901,12 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .chart-tooltip .tt-swatch { width: 0.5rem; height: 0.5rem; flex: none; }
 .chart-tooltip .tt-val { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .chart-tooltip .tt-fail { color: var(--down); font-weight: 600; }
+/* The chart's data as a table, folded away under the canvas. */
+.chart-data { margin-top: 4px; font-size: 0.75rem; }
+.chart-data summary { color: var(--muted); cursor: pointer; padding: 2px 0; width: max-content; }
+.chart-data summary:hover { color: var(--text); }
+.chart-data .table-wrap { max-height: 16rem; margin-top: 6px; border: 1px solid var(--line); }
+.chart-data .table th[scope="row"] { font-weight: 400; font-size: 0.78125rem; text-transform: none; letter-spacing: 0; color: var(--muted); }
 .chart-legend { display: flex; gap: 4px 0.875rem; flex-wrap: wrap; font-size: 0.75rem; color: var(--muted); margin-top: 6px; }
 .chart-legend .legend-item { display: inline-flex; align-items: center; gap: 6px; }
 .chart-legend .legend-swatch { width: 0.625rem; height: 3px; }
@@ -1025,6 +1056,8 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
    because a count without its label is not worth the extra 8px of numeral. */
 .widget[data-h="1"] .summary-headline { font-size: 0.9375rem; margin-bottom: 2px; }
 .widget[data-h="1"] .summary-counts { gap: 1.25rem; }
+/* At one row the counts ran a pixel past the body, which made it scroll. */
+.widget[data-h="1"] .summary-count .rule { margin: 0.5rem 0 0.375rem; }
 .widget[data-h="1"] .summary-count .n { font-size: 1.875rem; }
 .widget[data-h="1"] .summary-count .rule { height: 0.875rem; margin: 6px 0 4px; }
 .widget[data-h="1"] .summary-foot { margin-top: 2px; }
@@ -1212,6 +1245,13 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .action-badge.a-git { background: rgba(240, 80, 50, 0.14); color: var(--a-git); }
 .action-badge.a-script { background: rgba(62, 200, 184, 0.14); color: var(--a-script); }
 .action-badge.a-run_node { background: var(--up-soft); color: var(--up); }
+/* Notification rules (Settings › Rules): a condition is three selects and a
+   remove button in one line; each action of the list sits in its own box. */
+.rule-cond-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.4fr) minmax(0, 1fr) auto; gap: 0.5rem; align-items: center; }
+.rule-action { border: 1px solid var(--line); background: var(--elev); padding: 0.625rem 0.75rem; }
+.rule-action-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.5rem; }
+.rule-state { display: inline-flex; flex-wrap: wrap; gap: 0 0.25rem; }
+@media (max-width: 56.25rem) { .rule-cond-row { grid-template-columns: minmax(0, 1fr) auto; } }
 .cond-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .cond-chips label { display: inline-flex; align-items: center; gap: 5px; padding: 3px 0.5rem; border: 1px solid var(--line-strong); background: var(--elev); font-size: 0.75rem; cursor: pointer; font-family: var(--mono); }
 .cond-chips label:has(input:checked) { background: var(--accent-soft); border-color: var(--accent); }
@@ -1307,6 +1347,13 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
   padding: 0.625rem 0.75rem; background: var(--elev); border: 1px solid var(--accent-line); color: var(--text);
 }
 .agent-setup { font-family: var(--mono); font-size: 0.75rem; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+
+/* Settings › AI & MCP: numbered set-up steps and copyable code blocks. */
+.mcp-steps { margin: 0.5rem 0 0; padding-left: 1.5rem; display: flex; flex-direction: column; gap: 0.875rem; }
+.mcp-steps li > p { margin: 0.25rem 0; font-size: 0.875rem; color: var(--muted); line-height: 1.5; }
+.mcp-steps li > p.note { font-size: 0.78125rem; }
+.mcp-code { display: flex; align-items: flex-start; gap: 0.5rem; margin: 0.375rem 0; padding: 0.5rem 0.625rem; background: var(--bg-2, rgba(255,255,255,0.04)); border: 1px solid var(--line); border-radius: 8px; }
+.mcp-code > code { flex: 1; min-width: 0; }
 
 /* ---------- Settings ---------- */
 .settings-layout { display: grid; grid-template-columns: 13rem minmax(0, 1fr); gap: 1.5rem; align-items: start; }
@@ -1665,6 +1712,8 @@ kbd { font-family: var(--mono); font-size: 0.71875rem; padding: 2px 6px; border:
   .host-grid, .host-meters { grid-template-columns: 1fr; }
   .widget { grid-column: auto !important; grid-row: auto !important; min-height: 12.5rem; }
   .widget[data-h="2"] { min-height: 23.75rem; }
+  /* In a single column there is nothing to drag a widget across or resize it
+     against, so the grid editor's handles go with the grid. */
   .widget .rs, .widget-drag { display: none; }
   .app { flex-direction: column; }
   .rail { position: sticky; top: 0; bottom: auto; width: auto !important; height: auto; flex-direction: row; align-items: center; border-right: 0; border-bottom: 1px solid var(--line); overflow-x: auto; box-shadow: none !important; }
@@ -1720,8 +1769,8 @@ kbd { font-family: var(--mono); font-size: 0.71875rem; padding: 2px 6px; border:
   .template-grid, .type-picker, .widget-picker, .theme-options, .theme-options.density-options { grid-template-columns: 1fr; }
   .uptime-row { grid-template-columns: 1fr; gap: 4px; }
   .audit-toolbar { grid-template-columns: 1fr; }
-  /* A phone is not a wall, but a board opened on one should still be
-     readable: the grid collapses to one column and the panels stack. */
+  /* A narrow window is not a wall, but a board opened in one should still
+     be readable: the grid collapses to one column and the panels stack. */
   .wall { padding: 1rem; }
   .wall-grid { grid-template-columns: 1fr; grid-auto-rows: auto; }
   .wall-panel { grid-column: 1 / -1 !important; grid-row: auto !important; }
@@ -1822,9 +1871,9 @@ kbd { font-family: var(--mono); font-size: 0.71875rem; padding: 2px 6px; border:
    .indicator, so this animation and the orbs' own are stilled there. */
 @keyframes indicator-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
 
-/* Phones: this is the width at which the rail lies down across the top, and
-   two stacked lines of chrome above a small screen is one line too many, so
-   the orbs tuck in beside the title instead. */
+/* Narrow windows: this is the width at which the rail lies down across the
+   top, and two stacked lines of chrome above a small viewport is one line too
+   many, so the orbs tuck in beside the title instead. */
 @media (max-width: 56.25rem) {
   /* justify-content centred the two lines vertically while this was a
      column; laid on its side it has to go back to the left edge. */

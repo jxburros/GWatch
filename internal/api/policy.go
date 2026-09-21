@@ -116,6 +116,8 @@ var policies = []routePolicy{
 	{"GET", "/api/logs", levelViewer, keyDeny},
 	{"GET", "/api/export/logs.txt", levelViewer, keyDeny},
 	{"GET", "/api/triggers", levelViewer, keyDeny},
+	{"GET", "/api/rules", levelViewer, keyDeny},
+	{"GET", "/api/rules/{id}", levelViewer, keyDeny},
 	{"GET", "/api/endpoints", levelViewer, keyDeny},
 	{"GET", "/api/automation/meta", levelViewer, keyDeny},
 	{"GET", "/api/retention/status", levelViewer, keyDeny},
@@ -170,8 +172,18 @@ var policies = []routePolicy{
 	{"GET", "/api/settings", levelAdmin, keyDeny},
 	{"PUT", "/api/settings", levelAdmin, keyDeny},
 	{"POST", "/api/settings/test-email", levelAdmin, keyDeny},
+	// Which database GWatch keeps its data in (database.json). Reading it
+	// names a server; writing it moves the data. An integration key has no
+	// business with either.
+	{"GET", "/api/database", levelAdmin, keyDeny},
+	{"PUT", "/api/database", levelAdmin, keyDeny},
+	{"POST", "/api/database/test", levelAdmin, keyDeny},
 	{"POST", "/api/retention/run", levelAdmin, keyDeny},
 	{"GET", "/api/backups", levelAdmin, keyDeny},
+	// The agent skill is set-up material for the administrator configuring an
+	// assistant, not monitoring data, so an assistant's own key cannot read it.
+	{"GET", "/api/mcp/status", levelAdmin, keyDeny},
+	{"GET", "/api/mcp/skill", levelAdmin, keyDeny},
 	{"POST", "/api/backups", levelAdmin, keyDeny},
 	{"GET", "/api/backups/{name}/download", levelAdmin, keyDeny},
 	{"DELETE", "/api/backups/{name}", levelAdmin, keyDeny},
@@ -182,6 +194,10 @@ var policies = []routePolicy{
 	{"PUT", "/api/triggers/{id}", levelAdmin, keyDeny},
 	{"DELETE", "/api/triggers/{id}", levelAdmin, keyDeny},
 	{"POST", "/api/triggers/{id}/run", levelAdmin, keyDeny},
+	{"POST", "/api/rules", levelAdmin, keyDeny},
+	{"PUT", "/api/rules/{id}", levelAdmin, keyDeny},
+	{"DELETE", "/api/rules/{id}", levelAdmin, keyDeny},
+	{"POST", "/api/rules/{id}/test", levelAdmin, keyDeny},
 	{"POST", "/api/actions/test", levelAdmin, keyDeny},
 	{"POST", "/api/endpoints", levelAdmin, keyDeny},
 	{"PUT", "/api/endpoints/{id}", levelAdmin, keyDeny},

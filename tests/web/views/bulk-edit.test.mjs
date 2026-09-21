@@ -116,3 +116,17 @@ test('every bulk field declares a scope, a patch path and a summary', () => {
   setPath(body, bulkField('alertsCooldown').path, bulkValue(bulkField('alertsCooldown'), '30'));
   assert.deepEqual(body, { alerts: { enabled: false, cooldownMinutes: 30 } });
 });
+
+// #60: a hardware threshold travels as a one-entry list merged by key, with
+// blank levels left out so the server reads them as off.
+test('the hardware threshold bulk field sends one merged list entry', () => {
+  const f = bulkField('metricThresholds');
+  assert.equal(f.scope, 'check');
+  assert.equal(f.path, 'config.metricThresholds');
+  assert.deepEqual(bulkValue(f, { metric: ' disk:/srv ', warn: 90, crit: '' }), [{ metric: 'disk:/srv', warn: 90 }]);
+  assert.deepEqual(bulkValue(f, { metric: 'net', warn: '', crit: 5e6 }), [{ metric: 'net', crit: 5e6 }]);
+  assert.match(f.summary({ metric: 'disk', warn: 90, crit: '' }), /disk thresholds to warning 90, critical off/);
+  const body = {};
+  setPath(body, f.path, bulkValue(f, { metric: 'disk', warn: 90, crit: 98 }));
+  assert.deepEqual(body, { config: { metricThresholds: [{ metric: 'disk', warn: 90, crit: 98 }] } });
+});

@@ -55,6 +55,21 @@
     mkCheck(nas.id, 'ping', 'Ping', { config: { pingCount: 4, latencyWarnMs: 20 }, base: 0.7, noise: 0.4, interval: 60 }),
     mkCheck(nas.id, 'tcp', 'SSH (22)', { config: { port: 22 }, base: 1.8, noise: 0.3 }),
     mkCheck(nas.id, 'http', 'Web UI', { config: { target: 'https://nas.local:5001/', expectedStatus: '200-399', ignoreTlsErrors: true, certCheck: false }, base: 62, noise: 0.35, interval: 300 }),
+    // The machine itself, read from its agent (#60): every metric has its
+    // own verdict, and the media disk is the one over its line.
+    mkCheck(nas.id, 'system', 'Hardware health', {
+      config: {
+        hostSource: 'agent', agentId: 1,
+        metricThresholds: [
+          { metric: 'cpu', warn: 90 }, { metric: 'memory', warn: 90, crit: 97 }, { metric: 'swap', warn: 50 },
+          { metric: 'disk', warn: 85, crit: 95 }, { metric: 'inodes', warn: 85, crit: 95 }, { metric: 'load', warn: 2 },
+          { metric: 'disk:/', warn: 70, crit: 90 },
+        ],
+      },
+      base: 4, noise: 0.2, interval: 60, status: 'degraded',
+      warn: 'Disk /srv/media is 87%, at or above the 85% warning threshold',
+      message: 'CPU 21%, memory 41%, disk 87% (/srv/media)',
+    }),
   ];
   const ha = mkNode({ name: 'Home Assistant', host: 'homeassistant.local', group: 'Servers', tags: ['automation'], importance: 'normal', template: 'home-server' });
   ha.checks = [
@@ -81,6 +96,9 @@
     mkCheck(pihole.id, 'ping', 'Ping', { config: { pingCount: 4, latencyWarnMs: 30 }, base: 0.8, noise: 0.5, interval: 30 }),
     mkCheck(pihole.id, 'dns', 'Resolves via Pi-hole', { config: { target: 'www.example.org', dnsServer: '192.168.1.2', recordType: 'A' }, base: 3.2, noise: 0.5 }),
     mkCheck(pihole.id, 'http', 'Admin UI', { config: { target: 'http://192.168.1.2/admin/', expectedStatus: '200-399', certCheck: false }, base: 28, noise: 0.4, interval: 300 }),
+    // A json check that records the number it reads (#55), so the node page
+    // charts it the way it charts an SNMP reading.
+    mkCheck(pihole.id, 'json', 'Blocked today', { config: { target: 'http://192.168.1.2/admin/api.php?summaryRaw', jsonPath: 'ads_percentage_today', jsonRecord: true, jsonMetric: 'Blocked', jsonUnit: '%', jsonWarnAbove: 60 }, base: 31, noise: 0.4, interval: 300 }),
   ];
   const backupSrv = mkNode({ name: 'Backup server', host: '192.168.1.30', group: 'Servers', tags: ['storage'], template: 'home-server', notes: 'Weekly patching on Sunday nights.' });
   backupSrv.checks = [
@@ -164,6 +182,74 @@
     return v;
   }
 
+  // jsonReading is the number a recording json check reads at time t: a slow
+  // daily wave around a third, which is what a Pi-hole's blocked percentage
+  // tends to look like. Deterministic in t so a chart's points and the last
+  // result agree.
+  function jsonReading(check, t) {
+    return +(33 + 9 * Math.sin((t / DAY) * Math.PI * 2 + check.id)).toFixed(1);
+  }
+
+  // checkMetricUnits mirrors model.Check.MetricUnits: every named metric a
+  // check measures, with its unit — its OIDs for SNMP, its recorded value
+  // for a json check that records one.
+  function checkMetricUnits(c) {
+    const units = {};
+    if (c.type === 'snmp') for (const o of c.config?.snmpOids || []) if (o.name) units[o.name] = o.unit || '';
+    if (c.type === 'json' && c.config?.jsonRecord) units[(c.config.jsonMetric || '').trim() || 'value'] = c.config.jsonUnit || '';
+    // A hardware check measures whatever its newest reading carried, the way
+    // the service's checkHasMetric accepts a key from the latest result.
+    if (c.type === 'system') for (const m of systemMetricResults(c, mockReading('agent:1', 'nas.lan', 29))) units[m.key] = m.unit;
+    return units;
+  }
+
+  // systemMetricUnit and systemMetricResults mirror the service's
+  // model.SystemMetricUnit and checks.hostMetricResults: one entry per
+  // reading, each judged against the threshold that governs its key — the
+  // instance's own entry first, then its family's.
+  function systemMetricUnit(key) {
+    const [family, instance = ''] = key.includes(':') ? [key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1)] : [key];
+    if (['cpu', 'memory', 'swap', 'disk', 'inodes'].includes(family)) return '%';
+    if (family === 'net') return 'B/s';
+    if (family === 'diskio') return instance.endsWith('.busy') ? '%' : 'B/s';
+    return '';
+  }
+  function systemMetricResults(check, m) {
+    const list = check.config?.metricThresholds || [];
+    const find = (k) => list.find((t) => t.metric === k);
+    const governing = (key) => {
+      const direct = find(key); if (direct) return direct;
+      const colon = key.indexOf(':');
+      if (colon < 0) return null;
+      const family = key.slice(0, colon), instance = key.slice(colon + 1);
+      const dot = instance.lastIndexOf('.');
+      if (dot > 0 && (family === 'net' || family === 'diskio')) { const whole = find(`${family}:${instance.slice(0, dot)}`); if (whole) return whole; }
+      return find(family) || null;
+    };
+    const fmt = (v, unit) => (unit === '%' ? `${Math.round(v)}%` : unit === 'B/s' ? `${Math.round(v / 1000)} kB/s` : v.toFixed(2));
+    const out = [];
+    const add = (key, label, value) => {
+      if (value == null) return;
+      const unit = systemMetricUnit(key);
+      const r = { key, label, value, unit, status: 'up' };
+      const t = governing(key);
+      if (t) {
+        const past = (lvl) => lvl != null && lvl !== '' && (t.below ? value <= lvl : lvl > 0 && value >= lvl);
+        if (past(t.crit)) { r.status = 'down'; r.reason = `${label} is ${fmt(value, unit)}, at or above the ${fmt(t.crit, unit)} critical threshold`; }
+        else if (past(t.warn)) { r.status = 'degraded'; r.reason = `${label} is ${fmt(value, unit)}, at or above the ${fmt(t.warn, unit)} warning threshold`; }
+      }
+      out.push(r);
+    };
+    add('cpu', 'Processor use', m.cpu?.usagePct);
+    add('load', 'Load per core', m.cpu?.loadPerCore);
+    if (m.memory?.totalBytes) add('memory', 'Memory use', m.memory.usedPct);
+    add('swap', 'Swap use', m.memory?.swapUsedPct);
+    for (const fs of m.filesystems || []) { add(`disk:${fs.mount}`, `Disk ${fs.mount}`, fs.usedPct); add(`inodes:${fs.mount}`, `Inodes on ${fs.mount}`, fs.inodesUsedPct); }
+    for (const n of m.interfaces || []) { add(`net:${n.name}.rx`, `Network ${n.name} received`, n.rxBytesPerSec); add(`net:${n.name}.tx`, `Network ${n.name} sent`, n.txBytesPerSec); }
+    for (const d of m.disks || []) { add(`diskio:${d.name}.read`, `Disk ${d.name} read`, d.readBytesPerSec); add(`diskio:${d.name}.write`, `Disk ${d.name} write`, d.writeBytesPerSec); add(`diskio:${d.name}.busy`, `Disk ${d.name} busy`, d.busyPct); }
+    return out;
+  }
+
   function makeResult(check, node, t, r, { failed, latency, statusOverride } = {}) {
     const p = CHECK_PROFILES[check.id];
     const success = !failed;
@@ -192,6 +278,15 @@
           const dns = +(latency * 0.08).toFixed(1), connect = +(latency * 0.12).toFixed(1), tls = target.startsWith('https') ? +(latency * 0.25).toFixed(1) : 0, ttfb = +(latency * 0.85).toFixed(1);
           res.details = { statusCode: 200, finalUrl: target.startsWith('http') ? target : `https://${target}/`, redirects: check.id === site.checks[0].id ? 1 : 0, dnsMs: dns, connectMs: connect, tlsMs: tls, firstByteMs: ttfb, totalMs: +latency.toFixed(1), contentLength: 18422 + Math.floor(r() * 2000) };
           if (check.type === 'keyword') { res.details.keywordFound = true; res.message = res.message || `Keyword found · 200 in ${latency.toFixed(0)} ms`; }
+          else if (check.type === 'json' && check.config.jsonRecord) {
+            // A recording check keeps the number under its metric name, the
+            // way the service writes Result.metrics.
+            const name = (check.config.jsonMetric || '').trim() || 'value';
+            const v = jsonReading(check, t);
+            res.details.jsonValue = String(v); res.details.jsonMatched = true;
+            res.metrics = { [name]: v };
+            res.message = res.message || `json "${check.config.jsonPath}" = ${v}; recorded ${name} = ${v}${check.config.jsonUnit ? ' ' + check.config.jsonUnit : ''}`;
+          }
           else if (check.type === 'json') { res.details.jsonValue = check.config.jsonExpected || 'ok'; res.details.jsonMatched = true; res.message = res.message || `${check.config.jsonPath} = ${check.config.jsonExpected || 'present'} · ${latency.toFixed(0)} ms`; }
           else res.message = res.message || `OK 200 in ${latency.toFixed(0)} ms`;
           if (check.config.contentWatch === 'redirect') { res.details.contentValue = res.details.finalUrl; res.details.contentChanged = false; }
@@ -215,6 +310,22 @@
       case 'dns': {
         if (!failed) { const vals = check.config.expectedIps?.length ? check.config.expectedIps : ['93.184.215.14', '2606:2800:21f:cb07:6820:80da:af6b:8b2c']; res.details = { resolvedValues: vals, expectedMatch: check.config.expectedIps?.length ? true : null, resolver: check.config.dnsServer || 'system' }; res.message = res.message || `Resolved to ${vals[0]} in ${latency.toFixed(1)} ms`; }
         else { res.error = p.message; res.details = { resolver: check.config.dnsServer || 'system', resolvedValues: [] }; }
+        break;
+      }
+      case 'system': {
+        if (failed) { res.error = p.message || 'no hardware reading'; break; }
+        // The reading the check evaluated, the metrics it recorded and each
+        // one's own verdict — the shape the service's evaluateHost writes.
+        const reading = mockReading('agent:1', 'nas.lan', 29, t);
+        const rows = systemMetricResults(check, reading);
+        res.latencyMs = null;
+        res.details = { host: reading, hostAgeSeconds: 12, metricResults: rows };
+        res.metrics = Object.fromEntries(rows.map((m) => [m.key, m.value]));
+        res.warnings = rows.filter((m) => m.status === 'degraded').map((m) => m.reason);
+        const worst = rows.some((m) => m.status === 'down') ? 'down' : rows.some((m) => m.status === 'degraded') ? 'degraded' : 'up';
+        res.status = worst === 'down' ? 'down' : worst;
+        res.success = worst !== 'down';
+        res.message = res.message || `CPU ${Math.round(reading.cpu.usagePct)}%, memory ${Math.round(reading.memory.usedPct)}%`;
         break;
       }
       case 'snmp': {
@@ -327,6 +438,8 @@
   ev(23 * MIN, 'down', { node: gateway, check: gateway.checks[2], title: 'Admin page is down', detail: 'Connection refused' });
   ev(22 * MIN, 'down', { node: gateway, check: gateway.checks[1], title: 'DNS resolves example.com is down', detail: 'DNS lookup timed out after 5 s' });
   ev(21 * MIN + 30e3, 'alert_sent', { node: gateway, check: gateway.checks[0], title: 'Alert email sent', detail: 'To jeff@example.com, sam@example.com' });
+  ev(3 * DAY + 2 * HOUR + 5 * MIN, 'rule_cleared', { title: 'Rule cleared: Two of three DNS servers down', detail: 'Only 1 of 3 conditions still met (2 needed) — Gateway › DNS resolves example.com is down.' });
+  ev(21 * MIN, 'rule_fired', { title: 'Rule fired: Gateway and Plex both down', detail: '2 of 2 conditions met — Gateway › Ping is down, Plex › Ping is down. Ran pushover.' });
   ev(21 * MIN, 'down', { node: plex, check: plex.checks[0], title: 'Ping is down', detail: 'No reply (4 of 4 packets lost)' });
   ev(21 * MIN, 'affected_by_parent', { node: plex, check: plex.checks[0], title: 'Plex unavailable because Gateway is down', detail: 'Failures on Plex are attributed to the Gateway outage' });
   ev(21 * MIN, 'alert_suppressed', { node: plex, check: plex.checks[0], title: 'Alert suppressed', detail: 'suppressed — Gateway is down', meta: { reason: 'Gateway is down' } });
@@ -405,7 +518,7 @@
       lastCheckAt: runs[runs.length - 1] || null, lastSuccessAt: runs[runs.length - 1] || null, nextCheckAt: nexts[0] || null,
       checksTotal: all.length, checksEnabled: all.filter((c) => c.enabled && findNode(c.nodeId).enabled).length, checksRunning: 0,
       lastGap: { from: ago(2 * DAY + 6 * HOUR + 45 * MIN), to: ago(2 * DAY + 6 * HOUR), seconds: 2700 },
-      databasePath: 'C:\\ProgramData\\GWatch\\gwatch.db', databaseBytes: 48_300_000, dataDir: 'C:\\ProgramData\\GWatch', keyPath: 'C:\\ProgramData\\GWatch\\gwatch.key', backupDir: 'C:\\ProgramData\\GWatch\\backups', retention, backup: backupStatus,
+      databasePath: 'C:\\ProgramData\\GWatch\\gwatch.db', databaseBytes: 48_300_000, databaseDriver: 'modernc.org/sqlite', dataDir: 'C:\\ProgramData\\GWatch', keyPath: 'C:\\ProgramData\\GWatch\\gwatch.key', backupDir: 'C:\\ProgramData\\GWatch\\backups', retention, backup: backupStatus,
       recentErrors: events.filter((e) => e.type === 'internal_error').slice(0, 5), alertsEnabled: settings.alerts.enabled, smtpConfigured: !!settings.alerts.smtp.host, lastAlertAt: ago(21 * MIN + 30e3), lastAlertError: '', listenAddress: '127.0.0.1:7230', platform: 'windows/amd64',
     };
   }
@@ -454,22 +567,26 @@
   })();
 
   /* ---------- History ---------- */
-  // metricHistory serves one of an SNMP check's OIDs, the way the server does:
-  // raw points only, with the metric's value repeated in avgMs so the chart
-  // helpers can plot it without knowing it is not a latency.
+  // metricHistory serves one of a check's named metrics — an SNMP check's
+  // OID, a json check's recorded value — the way the server does: raw points
+  // only, with the metric's value repeated in avgMs so the chart helpers can
+  // plot it without knowing it is not a latency.
   function metricHistory(checkId, range, metric) {
     const base = history(checkId, range);
     const { c } = findCheck(checkId);
+    const units = checkMetricUnits(c);
+    if (!(metric in units)) throw Object.assign(new Error(`check ${checkId} does not measure "${metric}"`), { status: 400 });
     const o = (c.config?.snmpOids || []).find((x) => x.name === metric);
-    if (!o) throw Object.assign(new Error(`check ${checkId} does not measure "${metric}"`), { status: 400 });
     const r = rng(c.id * 977 + metric.length);
     const points = base.points.map((p) => {
-      if (p.avgMs == null) return { ...p, avgMs: null, minMs: null, maxMs: null, value: null };
-      const reading = snmpReading(o, +new Date(p.ts), r);
-      const v = reading.value != null ? reading.value : reading.rate;
+      if (p.avgMs == null && c.type !== 'system') return { ...p, avgMs: null, minMs: null, maxMs: null, value: null };
+      let v;
+      if (c.type === 'system') v = systemMetricResults(c, mockReading('agent:1', 'nas.lan', 29, +new Date(p.ts))).find((m) => m.key === metric)?.value;
+      else if (o) { const reading = snmpReading(o, +new Date(p.ts), r); v = reading.value != null ? reading.value : reading.rate; }
+      else v = jsonReading(c, +new Date(p.ts));
       return { ...p, value: v ?? null, avgMs: v ?? null, minMs: v ?? null, maxMs: v ?? null, jitterMs: null, lossPct: null };
     });
-    return { ...base, source: 'raw', bucketSeconds: 0, metric, metricUnit: o.unit || '', points };
+    return { ...base, source: 'raw', bucketSeconds: 0, metric, metricUnit: units[metric], points };
   }
 
   function history(checkId, range) {
@@ -508,7 +625,9 @@
       if (f > 0.60 && f < 0.63) lat *= 3.2 + r();
       if (f > 0.61 && f < 0.615) lat *= 1.5;
       const ok = failedFrac < 1;
-      const avg = ok ? +lat.toFixed(2) : null;
+      // A hardware check measures a machine rather than a round trip, so it
+      // has no latency to chart.
+      const avg = ok && c.type !== 'system' ? +lat.toFixed(2) : null;
       const loss = c.type === 'ping' ? (failedFrac >= 1 ? 100 : (f > 0.60 && f < 0.63 ? +(25 * r()).toFixed(1) : (r() < 0.02 ? 25 : 0))) : null;
       const pt = { ts: iso(t), avgMs: avg, minMs: ok ? +(lat * 0.85).toFixed(2) : null, maxMs: ok ? +(lat * (1.2 + (source === 'raw' ? 0 : r() * 0.5))).toFixed(2) : null, jitterMs: ok ? +(lat * 0.1).toFixed(2) : null, lossPct: loss, availability: +avail.toFixed(2), count, failures };
       points.push(pt);
@@ -621,6 +740,11 @@
   on('GET', /^\/api\/auth\/setup$/, () => ({ usersConfigured: false, loginRequired: false, accessPasswordSet: false, apiVersion: 1 }));
   on('GET', /^\/api\/users$/, () => []);
   on('GET', /^\/api\/apikeys$/, () => []);
+  // Settings › AI & MCP. The fixture has a download of an older skill behind
+  // it, so the "updated since" note is exercised. The download itself is a
+  // real file the service hands out; the mock only answers the status.
+  on('GET', /^\/api\/mcp\/status$/, () => ({ skillVersion: '1.1.0', lastDownloadedVersion: '1.0.0', lastDownloadedAt: iso(Date.now() - 9 * DAY), lastDownloadedBy: 'local', updateAvailable: true }));
+  on('GET', /^\/api\/mcp\/skill$/, () => ({ __csv: '---\nname: gwatch\nversion: 1.1.0\n---\n# Working with GWatch\n\n(The real service sends the skill; the demo sends this stand-in.)\n' }));
   on('GET', /^\/api\/overview$/, () => overview());
   on('GET', /^\/api\/wallboard$/, () => wallboard());
   on('GET', /^\/api\/wallboards$/, () => clone(wallboards));
@@ -678,7 +802,7 @@
   // Bulk edit. It mirrors internal/api/bulk.go closely enough that the screen
   // behaves the same here as against the service: the same selection rules,
   // the same whitelist, the same shape of answer.
-  const BULK_CONFIG_KEYS = ['certWarnDays', 'latencyWarnMs', 'packetLossWarnPct', 'pingMethod'];
+  const BULK_CONFIG_KEYS = ['certWarnDays', 'latencyWarnMs', 'metricThresholds', 'packetLossWarnPct', 'pingMethod'];
   on('PATCH', /^\/api\/nodes\/bulk$/, (m, body) => {
     const nodeIds = body?.nodeIds || [];
     const checkIds = body?.checkIds || [];
@@ -736,7 +860,16 @@
         if (cp.failureThreshold != null) c.failureThreshold = cp.failureThreshold;
         if (cp.enabled != null) c.enabled = !!cp.enabled;
         if ('alerts' in cp) c.alerts = cp.alerts ? { ...cp.alerts } : null;
-        if (cp.config) Object.assign(c.config, cp.config);
+        if (cp.config) {
+          const { metricThresholds, ...rest } = cp.config;
+          Object.assign(c.config, rest);
+          // Merged by metric key, and only onto a hardware check, the way
+          // the service does it.
+          if (metricThresholds && c.type === 'system') {
+            const keep = (c.config.metricThresholds || []).filter((t) => !metricThresholds.some((p) => p.metric === t.metric));
+            c.config.metricThresholds = [...keep, ...metricThresholds.map((t) => ({ ...t }))];
+          }
+        }
         c.updatedAt = iso(Date.now());
         if (cp.intervalSeconds != null && states[c.id]) states[c.id].nextRunAt = iso(Date.now() + c.intervalSeconds * 1000);
       }
@@ -752,6 +885,7 @@
         if (k === 'latencyWarnMs') changes.push(`latency warning → ${v} ms`);
         else if (k === 'packetLossWarnPct') changes.push(`packet loss warning → ${v} %`);
         else if (k === 'certWarnDays') changes.push(`certificate warning → ${v} days`);
+        else if (k === 'metricThresholds') for (const t of v) changes.push(`${t.metric} thresholds → warning ${t.warn ?? 'off'}, critical ${t.crit ?? 'off'}`);
         else changes.push(`ping method → ${v || 'global setting'}`);
       }
     }
@@ -824,6 +958,21 @@
   on('PUT', /^\/api\/settings$/, (m, body) => { settings = clone(body); if (settings.alerts?.smtp?.password) settings.alerts.smtp.password = '********'; if (settings.general?.accessPassword) settings.general.accessPassword = '********'; if (!settings.indicators?.length) settings.indicators = clone(DEFAULT_INDICATORS); addEvent('config_changed', { title: 'Settings changed' }); return clone(settings); });
   on('POST', /^\/api\/settings\/test-email$/, (m, body) => { if (!settings.alerts.smtp.host) throw err(400, 'SMTP host is not configured'); return { ok: true, message: `Test email sent to ${body?.to || settings.alerts.recipients.join(', ')} via ${settings.alerts.smtp.host}` }; });
   on('GET', /^\/api\/retention\/status$/, () => retention);
+  // Settings › Database: the connection GWatch opens at the next start
+  // (database.json), never the settings document. The demo runs on SQLite and
+  // remembers what was saved, so the "restart needed" banner can be seen.
+  let savedDB = { driver: 'sqlite', path: 'C:\\ProgramData\\GWatch\\gwatch.db' };
+  const dbStatus = () => ({
+    active: { driver: 'sqlite', label: 'modernc.org/sqlite', description: 'C:\\ProgramData\\GWatch\\gwatch.db', schemaVersion: 3, sizeBytes: 48_300_000 },
+    saved: clone(savedDB), source: savedDB.driver === 'sqlite' ? 'default' : 'file', file: 'C:\\ProgramData\\GWatch\\database.json', restartRequired: savedDB.driver !== 'sqlite',
+  });
+  const checkDB = (body) => {
+    if (!body || !['sqlite', 'postgres', 'mysql'].includes(body.driver)) throw err(400, `unknown database driver "${body?.driver}" (use sqlite, postgres or mysql)`);
+    if (body.driver !== 'sqlite') { if (!body.host) throw err(400, 'a database host is required'); if (!body.database) throw err(400, 'a database name is required'); if (!body.user) throw err(400, 'a database user is required'); if (/unreachable|nowhere/.test(body.host)) throw err(502, `Connection failed: connect to ${body.driver}://${body.user}@${body.host}:${body.port}/${body.database}: connection refused`); }
+  };
+  on('GET', /^\/api\/database$/, () => dbStatus());
+  on('POST', /^\/api\/database\/test$/, (m, body) => { checkDB(body); const v = body.driver === 'sqlite' ? 'SQLite 3.46.0' : body.driver === 'postgres' ? 'PostgreSQL 16.4 on x86_64-pc-linux-gnu' : '8.4.2 MySQL Community Server'; return { ok: true, driver: body.driver, serverVersion: v, database: body.driver === 'sqlite' ? 'C:\\ProgramData\\GWatch\\gwatch.db' : `${body.driver}://${body.user}@${body.host}:${body.port}/${body.database}`, message: `Connected (${v}).` }; });
+  on('PUT', /^\/api\/database$/, (m, body) => { checkDB(body); savedDB = body.driver === 'sqlite' ? { driver: 'sqlite', path: 'C:\\ProgramData\\GWatch\\gwatch.db' } : { ...body, password: body.password ? '********' : '' }; addEvent('config_changed', { title: 'Database connection changed', detail: body.driver === 'sqlite' ? 'Next start uses the SQLite file.' : `Next start uses ${body.driver}://${body.user}@${body.host}:${body.port}/${body.database}.` }); return dbStatus(); });
   on('POST', /^\/api\/retention\/run$/, () => { retention = { ...retention, lastRunAt: iso(Date.now()), lastDurationMs: 1830, deletedLastRun: 1043, rawRows: retention.rawRows - 1043, rollupRows5m: retention.rollupRows5m + 288 }; addEvent('retention', { title: 'Retention run finished', detail: 'Rolled up 1,043 raw results · 1.8 s' }); return retention; });
   on('GET', /^\/api\/backups$/, () => ({ backups: clone(backups), dir: 'C:\\ProgramData\\GWatch\\backups', status: backupStatus }));
   on('POST', /^\/api\/backups$/, (m, body) => { if (!body?.password) throw err(400, 'password is required'); const d = new Date(); const b = { fileName: `gwatch-${d.toISOString().slice(0, 10)}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}${body.includeHistory ? '' : '-config'}.gwbackup`, createdAt: iso(Date.now()), sizeBytes: body.includeHistory ? 13_400_000 : 41_000, includeHistory: !!body.includeHistory, encrypted: true }; backups.unshift(b); backupStatus = { lastBackupAt: b.createdAt, lastBackupOk: true, lastBackupFile: b.fileName, lastError: '', lastRestoreAt: backupStatus.lastRestoreAt }; addEvent('backup', { title: 'Backup created', detail: b.fileName }); return b; });
@@ -939,6 +1088,31 @@
   on('POST', /^\/api\/triggers$/, (m, body) => { const t = { ...body, id: triggers.length ? Math.max(...triggers.map((x) => x.id)) + 1 : 1, lastRunAt: null, lastStatus: '', lastOutput: '', runCount: 0, createdAt: iso(Date.now()), updatedAt: iso(Date.now()) }; triggers.push(t); addEvent('config_changed', { title: `Trigger saved: ${t.name}` }); return clone(t); });
   on('PUT', /^\/api\/triggers\/(\d+)$/, (m, body) => { const t = triggers.find((x) => x.id === Number(m[1])); if (!t) throw err(404, 'not found'); Object.assign(t, body, { id: t.id, updatedAt: iso(Date.now()) }); return clone(t); });
   on('DELETE', /^\/api\/triggers\/(\d+)$/, (m) => { const i = triggers.findIndex((x) => x.id === Number(m[1])); if (i < 0) throw err(404, 'not found'); triggers.splice(i, 1); return { ok: true }; });
+  // Notification rules (#31): two samples, one met by the Gateway outage.
+  const rules = [
+    { id: 1, name: 'Gateway and Plex both down', enabled: true, join: 'all', atLeast: 0,
+      conditions: [{ kind: 'status', nodeId: gateway.id, status: 'down' }, { kind: 'status', nodeId: plex.id, status: 'down' }],
+      actions: [{ type: 'pushover', token: 'a1b2c3', userKey: 'u1234', title: 'GWatch {{instance}}', message: '', priority: '1', timeoutSeconds: 30 }],
+      cooldownMinutes: 30, notifyCleared: true, createdAt: ago(12 * DAY), updatedAt: ago(2 * DAY),
+      state: { ruleId: 1, met: true, since: ago(21 * MIN), lastFiredAt: ago(21 * MIN) } },
+    { id: 2, name: 'Two of three DNS servers down', enabled: true, join: 'at_least', atLeast: 2,
+      conditions: [{ kind: 'status', checkId: gateway.checks[1].id, status: 'down' }, { kind: 'status', checkId: pihole.checks[1].id, status: 'down' }, { kind: 'status', nodeId: nas.id, status: 'degraded' }],
+      actions: [{ type: 'ntfy', server: '', topic: 'home-dns', title: '', message: '', priority: 'high', timeoutSeconds: 30 }, { type: 'http', method: 'POST', url: 'https://hooks.example.org/dns', body: '{"text":"{{message}}"}', timeoutSeconds: 30 }],
+      cooldownMinutes: 0, notifyCleared: false, createdAt: ago(5 * DAY), updatedAt: ago(5 * DAY),
+      state: { ruleId: 2, met: false, since: ago(3 * DAY), lastFiredAt: ago(3 * DAY + 2 * HOUR) } },
+  ];
+  const checkRule = (body) => {
+    if (!String(body.name || '').trim()) throw err(400, 'a name is required');
+    if (!(body.conditions || []).length) throw err(400, 'add at least one condition');
+    if (body.join === 'at_least' && (body.atLeast < 1 || body.atLeast > body.conditions.length)) throw err(400, `"at least" needs a count between 1 and ${body.conditions.length} (the number of conditions)`);
+    if (!(body.actions || []).length) throw err(400, 'add at least one action');
+  };
+  on('GET', /^\/api\/rules$/, () => clone(rules));
+  on('GET', /^\/api\/rules\/(\d+)$/, (m) => { const r = rules.find((x) => x.id === Number(m[1])); if (!r) throw err(404, 'not found'); return clone(r); });
+  on('POST', /^\/api\/rules$/, (m, body) => { checkRule(body); const r = { ...body, id: rules.length ? Math.max(...rules.map((x) => x.id)) + 1 : 1, createdAt: iso(Date.now()), updatedAt: iso(Date.now()) }; r.state = { ruleId: r.id, met: false, since: null, lastFiredAt: null }; rules.push(r); addEvent('config_changed', { title: `Rule saved: ${r.name}` }); return clone(r); });
+  on('PUT', /^\/api\/rules\/(\d+)$/, (m, body) => { const r = rules.find((x) => x.id === Number(m[1])); if (!r) throw err(404, 'not found'); checkRule(body); Object.assign(r, body, { id: r.id, state: r.state, updatedAt: iso(Date.now()) }); addEvent('config_changed', { title: `Rule saved: ${r.name}` }); return clone(r); });
+  on('DELETE', /^\/api\/rules\/(\d+)$/, (m) => { const i = rules.findIndex((x) => x.id === Number(m[1])); if (i < 0) throw err(404, 'not found'); const [r] = rules.splice(i, 1); addEvent('config_changed', { title: `Rule deleted: ${r.name}` }); return { ok: true }; });
+  on('POST', /^\/api\/rules\/(\d+)\/test$/, (m) => { const r = rules.find((x) => x.id === Number(m[1])); if (!r) throw err(404, 'not found'); return r.actions.map((a) => ({ ok: true, output: `${a.type}: sent (mock)`, startedAt: iso(Date.now()), durationMs: 42 })); });
   on('POST', /^\/api\/triggers\/(\d+)\/run$/, (m) => { const t = triggers.find((x) => x.id === Number(m[1])); if (!t) throw err(404, 'not found'); t.lastRunAt = iso(Date.now()); t.lastStatus = 'ok'; t.runCount++; t.lastOutput = 'mock run'; addEvent('trigger_fired', { nodeId: t.nodeId, nodeName: findNode(t.nodeId)?.name, title: `Trigger ran: ${t.name}`, detail: `${t.action.type} action on manual — mock run` }); return { ok: true, output: 'mock run', startedAt: t.lastRunAt, durationMs: 42 }; });
   on('POST', /^\/api\/actions\/test$/, (m, body) => ({ ok: true, output: `mock: would run a ${body?.action?.type} action`, startedAt: iso(Date.now()), durationMs: 12, statusCode: body?.action?.type === 'http' ? 200 : 0 }));
   on('GET', /^\/api\/endpoints$/, () => clone(endpoints));
@@ -1023,7 +1197,7 @@
 
   const hostSummaries = () => ([
     { key: 'local', name: settings.general.instanceName || 'This computer', source: 'local', status: 'up', stale: false, metrics: mockReading('local', 'studio-pc', 11) },
-    { key: 'agent:1', name: agents[0].name, source: 'agent', agent: clone(agents[0]), nodeId: null, status: 'up', stale: false, metrics: mockReading('agent:1', 'nas.lan', 29) },
+    { key: 'agent:1', name: agents[0].name, source: 'agent', agent: clone(agents[0]), nodeId: nas.id, nodeName: nas.name, status: 'up', stale: false, metrics: mockReading('agent:1', 'nas.lan', 29) },
   ]);
 
   on('GET', /^\/api\/hosts$/, () => hostSummaries());

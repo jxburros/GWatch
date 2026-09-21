@@ -33,7 +33,7 @@ func scanWallboard(sc interface{ Scan(...any) error }) (model.Wallboard, error) 
 
 // ListWallboards returns every wallboard, in the order they are shown.
 func (s *Store) ListWallboards(ctx context.Context) ([]model.Wallboard, error) {
-	rows, err := s.reader.QueryContext(ctx, "SELECT "+wallCols+" FROM wallboards ORDER BY sort_order, id")
+	rows, err := s.query(ctx, "SELECT "+wallCols+" FROM wallboards ORDER BY sort_order, id")
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +51,7 @@ func (s *Store) ListWallboards(ctx context.Context) ([]model.Wallboard, error) {
 
 // GetWallboard returns one wallboard.
 func (s *Store) GetWallboard(ctx context.Context, id int64) (model.Wallboard, error) {
-	row := s.reader.QueryRowContext(ctx, "SELECT "+wallCols+" FROM wallboards WHERE id = ?", id)
+	row := s.queryRow(ctx, "SELECT "+wallCols+" FROM wallboards WHERE id = ?", id)
 	b, err := scanWallboard(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return b, ErrNotFound
@@ -67,7 +67,7 @@ func (s *Store) WallboardByShareToken(ctx context.Context, token string) (model.
 	if token == "" {
 		return model.Wallboard{}, ErrNotFound
 	}
-	row := s.reader.QueryRowContext(ctx,
+	row := s.queryRow(ctx,
 		"SELECT "+wallCols+" FROM wallboards WHERE share_token = ? AND share_enabled = 1", token)
 	b, err := scanWallboard(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -94,16 +94,16 @@ func (s *Store) SaveWallboard(ctx context.Context, b model.Wallboard) (model.Wal
 	b.UpdatedAt = now
 	if b.ID == 0 {
 		b.CreatedAt = now
-		res, err := s.Exec(ctx, `INSERT INTO wallboards(name, sort_order, layout, panels, share_enabled, share_token, created_at, updated_at)
+		newID, err := s.insertID(ctx, `INSERT INTO wallboards(name, sort_order, layout, panels, share_enabled, share_token, created_at, updated_at)
 			VALUES (?,?,?,?,0,'',?,?)`, b.Name, b.SortOrder, jsonString(b.Layout), jsonString(b.Panels), fmtTime(now), fmtTime(now))
 		if err != nil {
 			return b, err
 		}
-		b.ID, _ = res.LastInsertId()
+		b.ID = newID
 		b.Share = model.WallboardLink{}
 		return b, nil
 	}
-	res, err := s.Exec(ctx, `UPDATE wallboards SET name=?, sort_order=?, layout=?, panels=?, updated_at=? WHERE id=?`,
+	res, err := s.exec(ctx, `UPDATE wallboards SET name=?, sort_order=?, layout=?, panels=?, updated_at=? WHERE id=?`,
 		b.Name, b.SortOrder, jsonString(b.Layout), jsonString(b.Panels), fmtTime(now), b.ID)
 	if err != nil {
 		return b, err
@@ -136,7 +136,7 @@ func (s *Store) SetWallboardShare(ctx context.Context, id int64, enabled bool, t
 		// is kept around waiting to be switched back on.
 		token = ""
 	}
-	if _, err := s.Exec(ctx, `UPDATE wallboards SET share_enabled=?, share_token=?, updated_at=? WHERE id=?`,
+	if _, err := s.exec(ctx, `UPDATE wallboards SET share_enabled=?, share_token=?, updated_at=? WHERE id=?`,
 		boolInt(enabled), token, fmtTime(time.Now()), id); err != nil {
 		return current, err
 	}
@@ -145,7 +145,7 @@ func (s *Store) SetWallboardShare(ctx context.Context, id int64, enabled bool, t
 
 // DeleteWallboard removes a wallboard.
 func (s *Store) DeleteWallboard(ctx context.Context, id int64) error {
-	res, err := s.Exec(ctx, "DELETE FROM wallboards WHERE id = ?", id)
+	res, err := s.exec(ctx, "DELETE FROM wallboards WHERE id = ?", id)
 	if err != nil {
 		return err
 	}

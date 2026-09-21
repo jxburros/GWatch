@@ -21,18 +21,14 @@ import (
 	"github.com/jxburros/GWatch/internal/logging"
 	"github.com/jxburros/GWatch/internal/mailer"
 	"github.com/jxburros/GWatch/internal/model"
-	"github.com/jxburros/GWatch/internal/store"
+	"github.com/jxburros/GWatch/internal/store/storetest"
 	"github.com/jxburros/GWatch/internal/update"
 )
 
 func newTestServer(t *testing.T) (*httptest.Server, *Server) {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t)
 	log, _ := logging.New("", nil)
 	run := func(ctx context.Context, c model.Check, o checks.Options) model.Result {
 		lat := 5.0
@@ -49,7 +45,13 @@ func newTestServer(t *testing.T) (*httptest.Server, *Server) {
 		"app.js":     &fstest.MapFile{Data: []byte("//js")},
 		"wall.html":  &fstest.MapFile{Data: []byte("<html>wall</html>")},
 	}
-	srv := &Server{Engine: eng, Store: st, Log: log, Web: web, BackupDir: filepath.Join(dir, "backups"), Version: "test", Updater: &Updater{Client: &update.Client{}, Version: "test", Log: log}}
+	// A stand-in for skill/ at the repository root; mcp_test.go reads it back.
+	skill := fstest.MapFS{
+		"SKILL.md":  &fstest.MapFile{Data: []byte("---\nname: gwatch\nversion: 2.3.4\n---\n# Working with GWatch\n")},
+		"README.md": &fstest.MapFile{Data: []byte("# The GWatch agent skill\n")},
+		"VERSION":   &fstest.MapFile{Data: []byte("2.3.4\n")},
+	}
+	srv := &Server{Engine: eng, Store: st, Log: log, Web: web, Skill: skill, BackupDir: filepath.Join(dir, "backups"), DataDir: dir, Version: "test", Updater: &Updater{Client: &update.Client{}, Version: "test", Log: log}}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return ts, srv
@@ -665,5 +667,54 @@ func TestHistoryServesANamedMetric(t *testing.T) {
 	// so /api/history cannot be used to fish for names in stored results.
 	if code := call(t, ts, "GET", fmt.Sprintf("/api/history?checkId=%d&metric=whatever", checkID), nil, nil); code != 400 {
 		t.Fatalf("unknown metric = %d, want 400", code)
+	}
+}
+
+// #55: a json check that records its value exposes it under the configured
+// metric name, with its unit; one that does not record has no metric to serve.
+func TestHistoryServesAJSONCheckMetric(t *testing.T) {
+	ts, srv := newTestServer(t)
+	ctx := context.Background()
+
+	node := model.Node{Name: "Pi-hole", Host: "192.168.1.2", Enabled: true, Importance: model.ImportanceNormal, Checks: []model.Check{
+		{
+			Type: model.CheckJSON, Name: "Blocked today", Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5,
+			Config: model.CheckConfig{Target: "http://192.168.1.2/admin/api.php", JSONPath: "ads_blocked_today", JSONRecord: true, JSONMetric: "Blocked", JSONUnit: "queries"},
+		},
+		{
+			Type: model.CheckJSON, Name: "Status", Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5,
+			Config: model.CheckConfig{Target: "http://192.168.1.2/admin/api.php", JSONPath: "status", JSONExpected: "enabled"},
+		},
+	}}
+	var created nodeDoc
+	if code := call(t, ts, "POST", "/api/nodes", node, &created); code != 201 {
+		t.Fatalf("create = %d", code)
+	}
+	recording, plain := created.Checks[0].ID, created.Checks[1].ID
+	if _, err := srv.Store.InsertResult(ctx, model.Result{
+		CheckID: recording, Timestamp: time.Now().Add(-time.Minute), Success: true, Status: model.StatusUp,
+		Metrics: map[string]float64{"Blocked": 1234},
+	}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	var series model.HistorySeries
+	if code := call(t, ts, "GET", fmt.Sprintf("/api/history?checkId=%d&range=24h&metric=Blocked", recording), nil, &series); code != 200 {
+		t.Fatalf("history = %d", code)
+	}
+	if series.Metric != "Blocked" || series.MetricUnit != "queries" {
+		t.Fatalf("series = %+v, want it to describe the metric", series)
+	}
+	if len(series.Points) != 1 || series.Points[0].Value == nil || *series.Points[0].Value != 1234 {
+		t.Fatalf("points = %+v, want the stored reading", series.Points)
+	}
+
+	// The default name is not this check's: it chose one.
+	if code := call(t, ts, "GET", fmt.Sprintf("/api/history?checkId=%d&metric=value", recording), nil, nil); code != 400 {
+		t.Fatalf("default name on a named metric = %d, want 400", code)
+	}
+	// A json check that is not recording measures nothing beyond latency.
+	if code := call(t, ts, "GET", fmt.Sprintf("/api/history?checkId=%d&metric=value", plain), nil, nil); code != 400 {
+		t.Fatalf("metric on a non-recording check = %d, want 400", code)
 	}
 }

@@ -181,9 +181,9 @@ function upFor(m) {
 }
 
 /** A labelled usage bar. Shading is by the display thresholds above. */
-function usageMeter(label, value, { detail = '' } = {}) {
+function usageMeter(label, value, { detail = '', level: given = null } = {}) {
   const known = value != null && !isNaN(value);
-  const level = !known ? '' : value >= CRIT_AT ? ' crit' : value >= WARN_AT ? ' warn' : '';
+  const level = !known ? '' : given != null ? given : value >= CRIT_AT ? ' crit' : value >= WARN_AT ? ' warn' : '';
   return h('div', { class: `meter${level}` },
     h('div', { class: 'meter-head' },
       h('span', { class: 'meter-label' }, label),
@@ -207,7 +207,10 @@ function usageMeter(label, value, { detail = '' } = {}) {
  * Returns { el, refresh, themeChanged, destroy }; the caller owns the element
  * and must call destroy when it drops it, or the charts leak.
  */
-export function hardwarePanel(key, { title = 'Hardware' } = {}) {
+// `metricStatus`, when given, returns the per-metric verdicts of the hardware
+// check that reads this machine ({ 'disk:/srv': 'degraded', ... }); the
+// meters are then shaded by those rather than by the display cut-offs above.
+export function hardwarePanel(key, { title = 'Hardware', metricStatus = null } = {}) {
   const state = { host: null, range: '24h', charts: [], destroyed: false };
 
   const headEl = h('div', null, skeleton({ lines: 3 }));
@@ -270,15 +273,28 @@ export function hardwarePanel(key, { title = 'Hardware' } = {}) {
       return;
     }
 
+    // The check's own verdict for each metric, where a check is watching this
+    // machine; the display cut-offs otherwise (the Machines list has no check
+    // to ask).
+    const verdicts = metricStatus ? metricStatus() : null;
+    const levelFor = (metricKey, value) => {
+      const st = verdicts?.[metricKey];
+      if (st === 'down') return ' crit';
+      if (st === 'degraded') return ' warn';
+      if (st === 'up') return '';
+      return meterLevel(value);
+    };
+
     snapEl.append(h('div', null,
       h('div', { class: 'section-title' }, 'Now'),
       h('div', { class: 'host-meters' },
-        usageMeter('Processor', cpuValue(m), { detail: cpuDetail(m) }),
+        usageMeter('Processor', cpuValue(m), { detail: cpuDetail(m), level: levelFor(m.cpu?.usagePct != null ? 'cpu' : 'load', cpuValue(m)) }),
         usageMeter('Memory', m.memory?.totalBytes ? m.memory.usedPct : null, {
           detail: m.memory?.totalBytes ? `${bytes(m.memory.usedBytes)} used, ${bytes(m.memory.availableBytes)} available` : '',
+          level: levelFor('memory', m.memory?.usedPct),
         }),
         m.memory?.swapTotalBytes
-          ? usageMeter('Swap', m.memory.swapUsedPct, { detail: `${bytes(m.memory.swapUsedBytes)} of ${bytes(m.memory.swapTotalBytes)}` })
+          ? usageMeter('Swap', m.memory.swapUsedPct, { detail: `${bytes(m.memory.swapUsedBytes)} of ${bytes(m.memory.swapTotalBytes)}`, level: levelFor('swap', m.memory.swapUsedPct) })
           : null,
       ),
     ));
@@ -294,7 +310,7 @@ export function hardwarePanel(key, { title = 'Hardware' } = {}) {
             pct(fs.usedPct, 0),
             bytes(fs.freeBytes),
             bytes(fs.totalBytes),
-            h('div', { class: 'meter meter-inline' + meterLevel(fs.usedPct) },
+            h('div', { class: 'meter meter-inline' + levelFor(`disk:${fs.mount}`, fs.usedPct) },
               h('div', { class: 'meter-track' }, h('div', { class: 'meter-fill', style: { width: `${fs.usedPct}%` } }))),
           ])),
       ));
@@ -422,6 +438,9 @@ export function hardwarePanel(key, { title = 'Hardware' } = {}) {
     el,
     ready: started,
     refresh: () => load().catch(() => {}),
+    // Redraws the snapshot from the reading already in hand, for when the
+    // check's verdicts changed but the machine has not reported again.
+    redraw() { if (state.host && !state.destroyed) renderSnapshot(); },
     themeChanged() { for (const c of state.charts) c.scheduleDraw?.(); },
     destroy() { state.destroyed = true; unsub(); clearCharts(); },
   };

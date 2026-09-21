@@ -1,6 +1,7 @@
 // GWatch is a local-only home network and service monitor. It runs as a
 // Windows background service (or a plain console process on any OS), keeps
-// its data in an embedded SQLite database and serves its web interface on
+// its data in an embedded SQLite database (or, when asked, on a PostgreSQL
+// or MySQL server — docs/DATABASE.md) and serves its web interface on
 // localhost.
 package main
 
@@ -26,6 +27,7 @@ import (
 	"github.com/kardianos/service"
 
 	"github.com/jxburros/GWatch/internal/api"
+	"github.com/jxburros/GWatch/internal/dbconfig"
 	"github.com/jxburros/GWatch/internal/engine"
 	"github.com/jxburros/GWatch/internal/logging"
 	"github.com/jxburros/GWatch/internal/model"
@@ -35,6 +37,14 @@ import (
 
 //go:embed web
 var webFiles embed.FS
+
+// The agent skill (skill/SKILL.md and friends) is served from Settings › AI &
+// MCP to signed-in administrators. It lives outside web/ on purpose: web/ is
+// served to anyone who can reach the port, and the skill is not part of the
+// interface.
+//
+//go:embed skill
+var skillFiles embed.FS
 
 // version is set at build time with -ldflags "-X main.version=1.2.3".
 var version = "dev"
@@ -52,6 +62,13 @@ const restartExitCode = 3
 type config struct {
 	dataDir string
 	listen  string
+	// db holds the --db-* flags. Empty fields were not given; the database
+	// is decided by dbconfig.Resolve (flags over environment over
+	// database.json over the SQLite default).
+	db dbconfig.Overrides
+	// replace lets migrate-db overwrite a target database that already
+	// holds data.
+	replace bool
 }
 
 func usage() {
@@ -64,9 +81,19 @@ Usage:
   gwatch uninstall                                           stop and remove the background service
   gwatch start | stop | restart | status                     control the installed service
   gwatch open                                                open the web interface in your browser
+  gwatch migrate-db [--db-* flags] [--replace]               copy the SQLite database into the PostgreSQL/MySQL database
+                                                             named by the flags or by database.json, then stop
   gwatch version
 
-Environment: GWATCH_DATA_DIR, GWATCH_LISTEN override the defaults.
+Database (docs/DATABASE.md): GWatch uses the SQLite file gwatch.db in the data directory unless told otherwise
+  --db-driver sqlite|postgres|mysql   --db-host HOST   --db-port N   --db-user USER   --db-name DATABASE
+  --db-password PW (prefer the GWATCH_DB_PASSWORD variable: a flag is visible to every user in the process list)
+  --db-schema SCHEMA (PostgreSQL)     --db-sslmode disable|prefer|require|verify-ca|verify-full
+  --db-dsn STRING (a complete connection string instead of the fields above)
+  The same settings can be saved in database.json in the data directory (Settings › Database does this),
+  which is how the background service finds them; flags and GWATCH_DB_* variables override the file.
+
+Environment: GWATCH_DATA_DIR, GWATCH_LISTEN, GWATCH_DB_* override the defaults.
 `, version)
 }
 
@@ -82,8 +109,21 @@ func main() {
 	cfg := config{}
 	fs.StringVar(&cfg.dataDir, "data-dir", envOr("GWATCH_DATA_DIR", defaultDataDir()), "directory for the database, logs and backups")
 	fs.StringVar(&cfg.listen, "listen", envOr("GWATCH_LISTEN", "127.0.0.1:7230"), "address to serve the web interface on (127.0.0.1:7230 = this computer only, 0.0.0.0:7230 = whole network)")
+	fs.StringVar(&cfg.db.Driver, "db-driver", "", "database to use: sqlite (default), postgres or mysql")
+	fs.StringVar(&cfg.db.Host, "db-host", "", "database server host")
+	fs.StringVar(&cfg.db.Port, "db-port", "", "database server port (5432 for PostgreSQL, 3306 for MySQL)")
+	fs.StringVar(&cfg.db.User, "db-user", "", "database user")
+	fs.StringVar(&cfg.db.Password, "db-password", "", "database password (prefer GWATCH_DB_PASSWORD)")
+	fs.StringVar(&cfg.db.Database, "db-name", "", "database name on the server")
+	fs.StringVar(&cfg.db.Schema, "db-schema", "", "PostgreSQL schema to keep the tables in")
+	fs.StringVar(&cfg.db.SSLMode, "db-sslmode", "", "TLS to the server: disable, prefer, require, verify-ca or verify-full")
+	fs.StringVar(&cfg.db.DSN, "db-dsn", "", "complete connection string, in place of the host/user/name flags")
+	fs.BoolVar(&cfg.replace, "replace", false, "migrate-db: empty the target database first if it already holds GWatch data")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
+	}
+	if cfg.db.Password != "" {
+		fmt.Fprintln(os.Stderr, "warning: a password given with --db-password is visible to every user of this computer in the process list; set GWATCH_DB_PASSWORD instead, or save it with Settings › Database")
 	}
 
 	switch cmd {
@@ -95,6 +135,12 @@ func main() {
 		return
 	case "open":
 		openBrowser("http://" + browserHost(cfg.listen))
+		return
+	case "migrate-db":
+		if err := migrateDB(context.Background(), cfg); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -128,6 +174,20 @@ func main() {
 		if err := os.MkdirAll(cfg.dataDir, 0o755); err != nil {
 			fmt.Fprintln(os.Stderr, "error: cannot create data directory:", err)
 			os.Exit(1)
+		}
+		// The service is started with --data-dir and --listen alone, so a
+		// database given here has to be written down for it to find.
+		if !cfg.db.Empty() {
+			dbCfg, _, err := dbconfig.Resolve(cfg.dataDir, cfg.db)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "error:", err)
+				os.Exit(2)
+			}
+			if err := dbconfig.Save(cfg.dataDir, dbCfg); err != nil {
+				fmt.Fprintln(os.Stderr, "error: cannot save database settings:", err)
+				os.Exit(1)
+			}
+			fmt.Printf("Database settings saved to %s (%s).\n", dbconfig.Path(cfg.dataDir), dbCfg.Describe())
 		}
 		if err := svc.Install(); err != nil {
 			fmt.Fprintln(os.Stderr, "error: install failed:", err, "(on Windows run this from an Administrator prompt)")
@@ -293,11 +353,34 @@ func runApp(ctx context.Context, cfg config, mode string, requestRestart func())
 	defer log.Close()
 	log.Printf("GWatch %s starting (%s mode), data dir %s", version, mode, cfg.dataDir)
 
-	st, err := store.Open(filepath.Join(cfg.dataDir, "gwatch.db"))
+	dbCfg, fromFile, err := dbconfig.Resolve(cfg.dataDir, cfg.db)
+	if err != nil {
+		return fmt.Errorf("database settings: %w", err)
+	}
+	source := "the default"
+	switch {
+	case !cfg.db.Empty():
+		source = "command-line flags"
+	case !dbconfig.FromEnv().Empty():
+		source = "GWATCH_DB_* variables"
+	case fromFile:
+		source = dbconfig.FileName
+	}
+	log.Printf("database: %s (%s, from %s)", dbCfg.Describe(), dbCfg.Normalized().Driver, source)
+	st, err := store.OpenDSN(ctx, dbCfg)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer st.Close()
+	if rep := st.LastMigration(); rep != nil {
+		log.Printf("database schema upgraded from version %d to %d (%s)", rep.FromVersion, rep.ToVersion, strings.Join(rep.Applied, "; "))
+		if rep.BackupPath != "" {
+			log.Printf("a copy of the database as it was before the upgrade is at %s", rep.BackupPath)
+		}
+		if rep.BackupSkipped != "" {
+			log.Printf("note: %s", rep.BackupSkipped)
+		}
+	}
 	if err := ensureDefaults(ctx, st); err != nil {
 		return err
 	}
@@ -311,6 +394,10 @@ func runApp(ctx context.Context, cfg config, mode string, requestRestart func())
 	if err != nil {
 		return err
 	}
+	skillFS, err := fs.Sub(skillFiles, "skill")
+	if err != nil {
+		return err
+	}
 	lm := &listenManager{base: cfg.listen, log: log}
 	updater := &api.Updater{
 		Client: &update.Client{}, Version: version, Restart: requestRestart, Log: log,
@@ -320,7 +407,7 @@ func runApp(ctx context.Context, cfg config, mode string, requestRestart func())
 	// Checks for new releases run in the background, and stop with the
 	// service. Whether they run at all is a setting (Settings › Updates).
 	go updater.Run(ctx)
-	srv := &api.Server{Engine: eng, Store: st, Log: log, Web: webFS, BackupDir: filepath.Join(cfg.dataDir, "backups"), Version: version,
+	srv := &api.Server{Engine: eng, Store: st, Log: log, Web: webFS, Skill: skillFS, BackupDir: filepath.Join(cfg.dataDir, "backups"), DataDir: cfg.dataDir, Version: version,
 		Updater: updater,
 		Network: func() model.NetworkInfo { return lm.info(eng.Settings().General) },
 	}

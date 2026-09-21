@@ -80,6 +80,11 @@ type Engine struct {
 	triggerLast map[int64]time.Time       // last run per trigger (cooldowns)
 	runner      *actions.Runner
 
+	// Notification rules (#31) and where each stands; see rules.go.
+	rules       []model.Rule
+	ruleStates  map[int64]*model.RuleState
+	rulesLoaded bool
+
 	// hosts samples this computer's hardware and holds the newest reading
 	// from every machine that reports in.
 	hosts *hostmon.Monitor
@@ -303,6 +308,9 @@ func (e *Engine) ReloadConfig(ctx context.Context) error {
 	_ = oldNodes
 	e.mu.Unlock()
 	if err := e.loadTriggers(ctx); err != nil {
+		return err
+	}
+	if err := e.loadRules(ctx); err != nil {
 		return err
 	}
 	e.broadcast(Update{Kind: "config"})
