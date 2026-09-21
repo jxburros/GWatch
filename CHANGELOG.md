@@ -9,6 +9,57 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## Unreleased
+
+The 2026-09-21 sprint: everything labelled `sprint-plan` in the tracker.
+
+### Added
+
+- **Hardware metrics stand on their own** (#60). A machine is still one
+  hardware check, but every reading it takes — processor, memory, swap, load,
+  each disk and its inodes, each network interface's traffic, each disk's
+  throughput — now has its own value, status, threshold, chart, incident and
+  trigger variable. Thresholds are a list (`metricThresholds`) with a family
+  entry such as `disk` and optional instance entries such as `disk:/srv`;
+  the old flat fields are converted the first time a check is saved. Warnings
+  and their clearing are recorded per metric, alert mails list every metric
+  that is not up, `/api/history?metric=disk:/srv` charts one series, the
+  node page groups the charts by family, triggers gain a `metric_over`
+  condition and `{{metric}}`/`{{metrics.<key>}}` placeholders, and bulk edit
+  can set a threshold across many machines. `docs/HARDWARE.md` has the new
+  "One check, many metrics".
+- **JSON checks record the value they read** (#55). Tick "Record this value"
+  on a JSON check and the number at its path is stored with every run, charted
+  on the node page with its unit, exported per metric as CSV, and optionally
+  held to warning and critical thresholds above or below. A value that is not
+  a number is kept as text in the result details, as before. `docs/RECIPES.md`
+  shows it against a Pi-hole.
+- **Settings › AI & MCP** (#56) explains the MCP companion, walks through
+  setting it up (a read-only API key, `go install`, a copyable client
+  configuration with this install's address filled in, `gwatch-mcp check`),
+  lists what an assistant can and cannot do, and offers a downloadable
+  **agent skill** that teaches an assistant how to use GWatch well. The skill
+  is versioned on its own (`skill/VERSION`); GWatch remembers who last
+  downloaded it and when, and quietly notes on that card when a newer one has
+  shipped.
+- **A Docker image** (#51): `ghcr.io/jxburros/gwatch`, published for
+  linux/amd64 and linux/arm64 on every release, with a Compose file and
+  `docs/DOCKER.md` covering the `/data` volume, the first administrator
+  account, ping capabilities, discovery under bridge networking, hardware
+  readings (the container's, not the host's) and upgrading by pulling.
+- **The SQLite driver is a build-time choice** (#48). `modernc.org/sqlite`
+  stays the automatic default and is what releases ship; `-tags
+  sqlite_ncruces` or `-tags sqlite_cgo` swap in `ncruces/go-sqlite3` or
+  `mattn/go-sqlite3` for people building from source. CI runs the store under
+  all three, and Settings and `/api/health` say which one a build uses.
+
+### Changed
+
+- **The interface is responsive, not a phone app** (#54). The one piece of
+  code written for a finger — a touch handler on charts — is gone, along with
+  the comments that described narrow layouts as phone layouts. Narrow windows
+  and tablets still read fine; GWatch is built for a desk.
+
 ## 0.2.2
 
 The 2026-09-19 sprint: everything labelled `sprint-plan` in the tracker.
