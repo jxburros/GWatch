@@ -131,6 +131,14 @@ func conditionsMet(t model.Trigger, tc triggerContext) []string {
 			ok = tc.result.Success
 		case "latency_over":
 			ok = t.LatencyOverMS > 0 && tc.result.LatencyMS != nil && *tc.result.LatencyMS > t.LatencyOverMS
+		case "metric_over":
+			// One of the check's named metrics — a hardware check's
+			// "disk:/srv", an SNMP check's OID — above a number of the
+			// trigger's own, whatever the check's thresholds say.
+			if t.Metric != "" {
+				v, has := tc.result.Metrics[t.Metric]
+				ok = has && v > t.MetricOver
+			}
 		}
 		if ok {
 			met = append(met, cond)
@@ -177,7 +185,68 @@ func TriggerVars(n model.Node, c model.Check, r model.Result, st model.CheckStat
 	if r.Details.StatusCode != 0 {
 		v["statusCode"] = strconv.Itoa(r.Details.StatusCode)
 	}
+	// Every named metric the run measured, as metrics.<key>: a hardware
+	// check's metrics.cpu, an SNMP check's OIDs. A placeholder name may only
+	// hold letters, digits, dots and dashes, so a key like "disk:/srv" is
+	// spelled "disk__srv" in a template (see MetricVarName).
+	for key, val := range r.Metrics {
+		v["metrics."+MetricVarName(key)] = strconv.FormatFloat(val, 'f', -1, 64)
+	}
+	// The firing metric, when the event is about one of them. They are set
+	// (empty) for every event so a template can name them safely.
+	v["metric"], v["metric.label"], v["metric.value"], v["metric.status"] = "", "", "", ""
 	return v
+}
+
+// MetricVarName is a metric key as it is spelled inside a {{metrics.<key>}}
+// placeholder: every character other than a letter, digit, dot or dash
+// becomes an underscore, so "disk:/srv" is "disk__srv" and "net:eth0.rx" is
+// "net_eth0.rx". Placeholder names and environment variables cannot carry
+// the originals.
+func MetricVarName(key string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-':
+			return r
+		}
+		return '_'
+	}, key)
+}
+
+// withMetric fills the metric.* placeholders for the metric an event is about.
+func withMetric(v actions.Vars, r model.Result, key string) {
+	if key == "" {
+		return
+	}
+	v["metric"] = key
+	if val, ok := r.Metrics[key]; ok {
+		v["metric.value"] = strconv.FormatFloat(val, 'f', -1, 64)
+	}
+	for _, mr := range r.Details.MetricResults {
+		if mr.Key == key {
+			v["metric.label"] = mr.Label
+			v["metric.status"] = string(mr.Status)
+			return
+		}
+	}
+}
+
+// firingMetric is the metric a condition fired on: for metric_over the one
+// the trigger names; otherwise the metric of the first event of the matching
+// kind that is about one. It is empty for a check-level event.
+func firingMetric(t model.Trigger, tc triggerContext, cond string) string {
+	if cond == "metric_over" {
+		return t.Metric
+	}
+	want := map[string]model.EventType{
+		"degraded": model.EventWarning, "warning_cleared": model.EventWarningCleared,
+	}[cond]
+	for _, ev := range tc.events {
+		if ev.Metric != "" && (want == "" || ev.Type == want) {
+			return ev.Metric
+		}
+	}
+	return ""
 }
 
 // fireTriggers evaluates the node's triggers against what just happened and
@@ -217,6 +286,7 @@ func (e *Engine) fireTriggers(tc triggerContext) {
 	e.mu.Unlock()
 	for _, d := range due {
 		vars := TriggerVars(tc.node, tc.check, tc.result, tc.state, d.cond)
+		withMetric(vars, tc.result, firingMetric(d.t, tc, d.cond))
 		vars["prev_status"] = string(tc.prev)
 		vars["instance"] = instance
 		vars["trigger.name"] = d.t.Name

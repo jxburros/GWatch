@@ -33,29 +33,65 @@ func systemCheck(cfg model.CheckConfig) model.Check {
 	return model.Check{ID: 1, Type: model.CheckSystem, Name: "Hardware", IntervalSeconds: 60, Config: cfg}
 }
 
-func TestEvaluateHostHealthy(t *testing.T) {
+// metricByKey finds one metric's verdict in a result.
+func metricByKey(t *testing.T, res model.Result, key string) model.MetricResult {
+	t.Helper()
+	for _, m := range res.Details.MetricResults {
+		if m.Key == key {
+			return m
+		}
+	}
+	t.Fatalf("no metric %q in %+v", key, res.Details.MetricResults)
+	return model.MetricResult{}
+}
+
+// Every reading becomes a metric with a key and its own verdict, and every one
+// is recorded under that key so it can be charted and asked for by name.
+func TestEvaluateHostRecordsEveryMetric(t *testing.T) {
 	now := time.Now()
-	res := evaluateHost(systemCheck(model.SystemDefaults()), healthyReading(now), now)
+	m := healthyReading(now)
+	m.Memory.SwapTotalBytes, m.Memory.SwapUsedPct = 1000, pct(3)
+	m.Filesystems[1].InodesUsedPct = pct(12)
+	m.Interfaces = []model.HostInterface{{Name: "eth0", RxBytesPerSec: pct(1500), TxBytesPerSec: pct(400)}}
+	m.Disks = []model.HostDiskIO{{Name: "sda", ReadBytesPerSec: pct(20000), WriteBytesPerSec: pct(5000), BusyPct: pct(7)}}
+
+	res := evaluateHost(systemCheck(model.SystemDefaults()), m, now)
 	if !res.Success {
 		t.Fatalf("a healthy machine should pass: %s", res.Error)
 	}
-	if len(res.Warnings) != 0 {
-		t.Errorf("unexpected warnings: %v", res.Warnings)
+	want := map[string]float64{
+		"cpu": 12, "load": 0.3, "memory": 40, "swap": 3,
+		"disk:/": 30, "disk:/srv": 50, "inodes:/srv": 12,
+		"net:eth0.rx": 1500, "net:eth0.tx": 400,
+		"diskio:sda.read": 20000, "diskio:sda.write": 5000, "diskio:sda.busy": 7,
+	}
+	for key, v := range want {
+		if got, ok := res.Metrics[key]; !ok || got != v {
+			t.Errorf("Metrics[%q] = %v (%v), want %v", key, got, ok, v)
+		}
+		mr := metricByKey(t, res, key)
+		if mr.Status != model.StatusUp || mr.Reason != "" {
+			t.Errorf("%s should be up with no reason, got %s %q", key, mr.Status, mr.Reason)
+		}
+		if mr.Unit != model.SystemMetricUnit(key) {
+			t.Errorf("%s unit = %q, want %q", key, mr.Unit, model.SystemMetricUnit(key))
+		}
+	}
+	if len(res.Metrics) != len(want) {
+		t.Errorf("recorded %d metrics, want %d: %v", len(res.Metrics), len(want), res.Metrics)
 	}
 	if res.Details.Host == nil || res.Details.Host.Hostname != "nas.local" {
 		t.Error("the reading should be attached to the result for the inspector")
-	}
-	if res.Details.HostAgeSec == nil || *res.Details.HostAgeSec > 1 {
-		t.Errorf("age of a fresh reading: %v", res.Details.HostAgeSec)
 	}
 	if !strings.Contains(res.Message, "CPU 12%") || !strings.Contains(res.Message, "disk 50% (/srv)") {
 		t.Errorf("message should summarise the reading, got %q", res.Message)
 	}
 }
 
-// Crossing a warning threshold is a degraded check; crossing the critical one
-// is a down check. They are different events, not the same alert twice.
-func TestEvaluateHostWarningVersusCritical(t *testing.T) {
+// Each metric has its own verdict; the check's is the worst of them. A
+// warning on the disk is a degraded check with the disk named, a critical one
+// is a down check — and the memory beside it stays up either way.
+func TestEvaluateHostJudgesMetricsSeparately(t *testing.T) {
 	now := time.Now()
 	cfg := model.SystemDefaults()
 
@@ -65,8 +101,15 @@ func TestEvaluateHostWarningVersusCritical(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("a warning should not fail the check: %s", res.Error)
 	}
-	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "Disk /srv") {
-		t.Fatalf("want one disk warning, got %v", res.Warnings)
+	disk := metricByKey(t, res, "disk:/srv")
+	if disk.Status != model.StatusDegraded || !strings.Contains(disk.Reason, "Disk /srv is 88%") || !strings.Contains(disk.Reason, "85% warning") {
+		t.Errorf("disk verdict: %+v", disk)
+	}
+	if mem := metricByKey(t, res, "memory"); mem.Status != model.StatusUp {
+		t.Errorf("memory should be unaffected by the disk, got %s", mem.Status)
+	}
+	if len(res.Warnings) != 1 || res.Warnings[0] != disk.Reason {
+		t.Errorf("the warnings list should carry the metric's reason, got %v", res.Warnings)
 	}
 	// finalize is what turns warnings into the degraded status.
 	if got := finalize(res, systemCheck(cfg), Options{}, now).Status; got != model.StatusDegraded {
@@ -79,13 +122,200 @@ func TestEvaluateHostWarningVersusCritical(t *testing.T) {
 	if res.Success {
 		t.Fatal("a critical threshold should fail the check")
 	}
+	if got := metricByKey(t, res, "disk:/srv").Status; got != model.StatusDown {
+		t.Errorf("disk verdict = %s, want down", got)
+	}
 	if !strings.Contains(res.Error, "Disk /srv is 96%") {
 		t.Errorf("error should name the filesystem and the figure, got %q", res.Error)
 	}
-	// Even a failing result keeps the reading, so the inspector can show what
-	// the machine looked like at the moment it went down.
-	if res.Details.Host == nil {
-		t.Error("the reading should survive a failure")
+	// Even a failing result keeps the reading and the metrics, so the
+	// inspector and the charts show what the machine looked like as it went.
+	if res.Details.Host == nil || res.Metrics["disk:/srv"] != 96 || len(res.Details.MetricResults) == 0 {
+		t.Error("the reading and metrics should survive a failure")
+	}
+}
+
+// A threshold for one instance replaces the family's for that instance alone.
+func TestEvaluateHostInstanceOverridesFamily(t *testing.T) {
+	now := time.Now()
+	cfg := model.CheckConfig{MetricThresholds: []model.MetricThreshold{
+		{Metric: model.MetricDisk, Warn: model.Float(85), Crit: model.Float(95)},
+		{Metric: "disk:/srv", Warn: model.Float(40)}, // the media disk is always fullish; no critical
+	}}
+	m := healthyReading(now)
+	m.Filesystems[0].UsedPct = 50 // / follows the family: fine
+	m.Filesystems[1].UsedPct = 99 // /srv follows its own entry: warning only
+	res := evaluateHost(systemCheck(cfg), m, now)
+	if !res.Success {
+		t.Fatalf("the override has no critical level, so the check must not fail: %s", res.Error)
+	}
+	if got := metricByKey(t, res, "disk:/").Status; got != model.StatusUp {
+		t.Errorf("/ = %s, want up", got)
+	}
+	if got := metricByKey(t, res, "disk:/srv").Status; got != model.StatusDegraded {
+		t.Errorf("/srv = %s, want degraded from its own threshold", got)
+	}
+
+	// An interface entry governs both of its directions; a direction entry
+	// governs only itself.
+	cfg = model.CheckConfig{MetricThresholds: []model.MetricThreshold{
+		{Metric: "net:eth0", Warn: model.Float(1000)},
+		{Metric: "net:eth1.tx", Crit: model.Float(10)},
+	}}
+	m = healthyReading(now)
+	m.Interfaces = []model.HostInterface{
+		{Name: "eth0", RxBytesPerSec: pct(5000), TxBytesPerSec: pct(10)},
+		{Name: "eth1", RxBytesPerSec: pct(5000), TxBytesPerSec: pct(50)},
+	}
+	res = evaluateHost(systemCheck(cfg), m, now)
+	for key, want := range map[string]model.Status{"net:eth0.rx": model.StatusDegraded, "net:eth0.tx": model.StatusUp, "net:eth1.rx": model.StatusUp, "net:eth1.tx": model.StatusDown} {
+		if got := metricByKey(t, res, key).Status; got != want {
+			t.Errorf("%s = %s, want %s", key, got, want)
+		}
+	}
+}
+
+// A "below" threshold is for a reading where less is worse.
+func TestEvaluateHostBelowThreshold(t *testing.T) {
+	now := time.Now()
+	cfg := model.CheckConfig{MetricThresholds: []model.MetricThreshold{
+		{Metric: "net:eth0.rx", Warn: model.Float(100), Crit: model.Float(10), Below: true},
+	}}
+	m := healthyReading(now)
+	m.Interfaces = []model.HostInterface{{Name: "eth0", RxBytesPerSec: pct(50)}}
+	res := evaluateHost(systemCheck(cfg), m, now)
+	rx := metricByKey(t, res, "net:eth0.rx")
+	if rx.Status != model.StatusDegraded || !strings.Contains(rx.Reason, "at or below") {
+		t.Errorf("50 B/s under a 100 B/s floor should warn, got %+v", rx)
+	}
+	m.Interfaces[0].RxBytesPerSec = pct(0)
+	if got := metricByKey(t, evaluateHost(systemCheck(cfg), m, now), "net:eth0.rx").Status; got != model.StatusDown {
+		t.Errorf("a silent interface should be critical, got %s", got)
+	}
+}
+
+// A check saved before the list existed keeps working: its flat fields are
+// read with the same meaning, inodes following the disk pair.
+func TestEvaluateHostReadsLegacyThresholds(t *testing.T) {
+	now := time.Now()
+	legacy := model.CheckConfig{CPUWarnPct: 90, MemWarnPct: 90, MemCritPct: 97, DiskWarnPct: 85, DiskCritPct: 95, LoadWarnPerCore: 2}
+	list := legacy.EffectiveMetricThresholds()
+	keys := map[string]model.MetricThreshold{}
+	for _, t := range list {
+		keys[t.Metric] = t
+	}
+	if len(keys) != 5 || keys["inodes"].Warn == nil || *keys["inodes"].Crit != 95 || keys["swap"].Warn != nil {
+		t.Fatalf("conversion = %+v", list)
+	}
+	if !legacy.HasSystemThresholds() {
+		t.Error("legacy fields count as thresholds")
+	}
+
+	m := healthyReading(now)
+	m.Filesystems[1].UsedPct = 88
+	m.Filesystems[1].InodesUsedPct = pct(96)
+	res := evaluateHost(systemCheck(legacy), m, now)
+	if got := metricByKey(t, res, "disk:/srv").Status; got != model.StatusDegraded {
+		t.Errorf("disk under legacy fields = %s, want degraded", got)
+	}
+	if got := metricByKey(t, res, "inodes:/srv").Status; got != model.StatusDown {
+		t.Errorf("inodes under legacy fields = %s, want down", got)
+	}
+	// Normalising moves the check onto the list and clears the flat fields.
+	legacy.NormalizeMetricThresholds()
+	if len(legacy.MetricThresholds) != 5 || legacy.DiskCritPct != 0 {
+		t.Errorf("normalised = %+v", legacy)
+	}
+}
+
+func TestEvaluateHostOnlyWatchesSelectedMounts(t *testing.T) {
+	now := time.Now()
+	cfg := model.SystemDefaults()
+	cfg.DiskMounts = []string{"/"}
+
+	m := healthyReading(now)
+	m.Filesystems[1].UsedPct = 99 // /srv is full, but the check does not watch it
+	res := evaluateHost(systemCheck(cfg), m, now)
+	if !res.Success || len(res.Warnings) != 0 {
+		t.Fatalf("a filesystem outside the list must be ignored: %v %v", res.Error, res.Warnings)
+	}
+	if _, ok := res.Metrics["disk:/srv"]; ok {
+		t.Error("an unwatched filesystem should not be recorded either")
+	}
+
+	// A named mount that is not present is not an error: a removable volume
+	// that is unplugged is not a hardware fault.
+	cfg.DiskMounts = []string{"/backup"}
+	if res := evaluateHost(systemCheck(cfg), m, now); !res.Success {
+		t.Errorf("an absent mount should not fail the check: %s", res.Error)
+	}
+}
+
+// Where a platform cannot report processor utilisation, load per core carries
+// the same meaning and the check must still watch something.
+func TestEvaluateHostFallsBackToLoadPerCore(t *testing.T) {
+	now := time.Now()
+	m := healthyReading(now)
+	m.CPU.UsagePct = nil
+	m.CPU.LoadPerCore = pct(4)
+	m.Warnings = []string{"processor utilisation is not available on macOS"}
+
+	res := evaluateHost(systemCheck(model.SystemDefaults()), m, now)
+	if got := metricByKey(t, res, "load").Status; got != model.StatusDegraded {
+		t.Fatalf("want a load warning, got %s", got)
+	}
+	if _, ok := res.Metrics["cpu"]; ok {
+		t.Error("an unavailable reading is absent, not zero")
+	}
+	// A collector gap is reported but is not itself a hardware problem.
+	if !res.Success {
+		t.Errorf("a collector gap should not fail the check: %s", res.Error)
+	}
+	if !strings.Contains(res.Message, "not available on macOS") {
+		t.Errorf("the collector's own warning should be surfaced, got %q", res.Message)
+	}
+}
+
+// A metric with no threshold is still measured and recorded, so a check can
+// watch the disk and merely chart everything else.
+func TestEvaluateHostUnthresholdedMetricIsRecordedNotJudged(t *testing.T) {
+	now := time.Now()
+	m := healthyReading(now)
+	m.CPU.UsagePct = pct(100)
+	m.Memory.UsedPct = 100
+
+	res := evaluateHost(systemCheck(model.CheckConfig{MetricThresholds: []model.MetricThreshold{{Metric: model.MetricDisk, Warn: model.Float(85)}}}), m, now)
+	if !res.Success || len(res.Warnings) != 0 {
+		t.Fatalf("metrics without thresholds must not warn: %v %v", res.Error, res.Warnings)
+	}
+	if res.Metrics["cpu"] != 100 || metricByKey(t, res, "cpu").Status != model.StatusUp {
+		t.Errorf("cpu should be recorded and up: %v", res.Metrics)
+	}
+	// A level of 0 on an "above" threshold is off, as the flat fields
+	// treated it, so an old configuration that says "0 means off" still does.
+	zero := model.CheckConfig{MetricThresholds: []model.MetricThreshold{{Metric: model.MetricCPU, Warn: model.Float(0)}}}
+	if got := metricByKey(t, evaluateHost(systemCheck(zero), m, now), "cpu").Status; got != model.StatusUp {
+		t.Errorf("a zero level should be off, got %s", got)
+	}
+}
+
+// A hardware check's chartable metrics: the four every machine has, plus any
+// instance a threshold names; the family entries themselves are not series.
+func TestSystemCheckMetricUnits(t *testing.T) {
+	cfg := model.SystemDefaults()
+	cfg.MetricThresholds = append(cfg.MetricThresholds, model.MetricThreshold{Metric: "disk:/srv", Warn: model.Float(90)})
+	units := systemCheck(cfg).MetricUnits()
+	for key, want := range map[string]string{"cpu": "%", "memory": "%", "swap": "%", "load": "", "disk:/srv": "%"} {
+		if got, ok := units[key]; !ok || got != want {
+			t.Errorf("units[%q] = %q (%v), want %q", key, got, ok, want)
+		}
+	}
+	if _, ok := units["disk"]; ok {
+		t.Error("a family is not a series of its own")
+	}
+	// A key the configuration never mentioned still has a unit, from its family.
+	if got := systemCheck(cfg).MetricUnit("net:eth0.rx"); got != "B/s" {
+		t.Errorf("unit of an unlisted interface = %q, want B/s", got)
 	}
 }
 
@@ -140,62 +370,6 @@ func TestStaleAfterHasAFloor(t *testing.T) {
 	slow := model.Check{Type: model.CheckSystem, IntervalSeconds: 300}
 	if got := staleAfter(slow); got != 900*time.Second {
 		t.Errorf("want three intervals, got %s", got)
-	}
-}
-
-func TestEvaluateHostOnlyWatchesSelectedMounts(t *testing.T) {
-	now := time.Now()
-	cfg := model.SystemDefaults()
-	cfg.DiskMounts = []string{"/"}
-
-	m := healthyReading(now)
-	m.Filesystems[1].UsedPct = 99 // /srv is full, but the check does not watch it
-	res := evaluateHost(systemCheck(cfg), m, now)
-	if !res.Success || len(res.Warnings) != 0 {
-		t.Fatalf("a filesystem outside the list must be ignored: %v %v", res.Error, res.Warnings)
-	}
-
-	// A named mount that is not present is not an error: a removable volume
-	// that is unplugged is not a hardware fault.
-	cfg.DiskMounts = []string{"/backup"}
-	if res := evaluateHost(systemCheck(cfg), m, now); !res.Success {
-		t.Errorf("an absent mount should not fail the check: %s", res.Error)
-	}
-}
-
-// Where a platform cannot report processor utilisation, load per core carries
-// the same meaning and the check must still watch something.
-func TestEvaluateHostFallsBackToLoadPerCore(t *testing.T) {
-	now := time.Now()
-	m := healthyReading(now)
-	m.CPU.UsagePct = nil
-	m.CPU.LoadPerCore = pct(4)
-	m.Warnings = []string{"processor utilisation is not available on macOS"}
-
-	res := evaluateHost(systemCheck(model.SystemDefaults()), m, now)
-	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "Load per core") {
-		t.Fatalf("want a load warning, got %v", res.Warnings)
-	}
-	// A collector gap is reported but is not itself a hardware problem.
-	if !res.Success {
-		t.Errorf("a collector gap should not fail the check: %s", res.Error)
-	}
-	if !strings.Contains(res.Message, "not available on macOS") {
-		t.Errorf("the collector's own warning should be surfaced, got %q", res.Message)
-	}
-}
-
-// A threshold set to zero is off, so a check can watch the disk and ignore
-// everything else.
-func TestEvaluateHostZeroThresholdIsOff(t *testing.T) {
-	now := time.Now()
-	m := healthyReading(now)
-	m.CPU.UsagePct = pct(100)
-	m.Memory.UsedPct = 100
-
-	res := evaluateHost(systemCheck(model.CheckConfig{DiskWarnPct: 85}), m, now)
-	if !res.Success || len(res.Warnings) != 0 {
-		t.Fatalf("thresholds left at zero should be off: %v %v", res.Error, res.Warnings)
 	}
 }
 
@@ -337,6 +511,14 @@ func TestValidateSystemCheck(t *testing.T) {
 		{"critical below warning", model.CheckConfig{DiskWarnPct: 90, DiskCritPct: 50}, "at or above its warning threshold"},
 		{"negative load", model.CheckConfig{LoadWarnPerCore: -1}, "cannot be negative"},
 		{"negative staleness", model.CheckConfig{StaleAfterSeconds: -5}, "cannot be negative"},
+		{"list: unknown metric", model.CheckConfig{MetricThresholds: []model.MetricThreshold{{Metric: "gpu", Warn: model.Float(50)}}}, "unknown hardware metric"},
+		{"list: instance on a singleton", model.CheckConfig{MetricThresholds: []model.MetricThreshold{{Metric: "cpu:0", Warn: model.Float(50)}}}, "cannot name an instance"},
+		{"list: duplicate", model.CheckConfig{MetricThresholds: []model.MetricThreshold{{Metric: "disk", Warn: model.Float(50)}, {Metric: "disk", Warn: model.Float(60)}}}, "both apply"},
+		{"list: percentage out of range", model.CheckConfig{MetricThresholds: []model.MetricThreshold{{Metric: "disk:/srv", Crit: model.Float(140)}}}, "between 0 (off) and 100"},
+		{"list: critical below warning", model.CheckConfig{MetricThresholds: []model.MetricThreshold{{Metric: "memory", Warn: model.Float(90), Crit: model.Float(50)}}}, "at or above its warning threshold"},
+		{"list: below with critical above warning", model.CheckConfig{MetricThresholds: []model.MetricThreshold{{Metric: "net:eth0", Warn: model.Float(10), Crit: model.Float(50), Below: true}}}, "at or below its warning threshold"},
+		{"list: negative rate", model.CheckConfig{MetricThresholds: []model.MetricThreshold{{Metric: "net", Warn: model.Float(-1)}}}, "cannot be negative"},
+		{"list: instance override is fine", model.CheckConfig{MetricThresholds: []model.MetricThreshold{{Metric: "disk", Warn: model.Float(85)}, {Metric: "disk:/srv", Warn: model.Float(95)}, {Metric: "diskio:sda.busy", Warn: model.Float(90)}}}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

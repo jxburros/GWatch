@@ -22,7 +22,9 @@ placeholders, from `internal/engine/automation.go` (`TriggerVars`) and
 | `{{success}}` | `true`/`false` for the run that fired the trigger |
 | `{{latencyMs}}`, `{{lossPct}}`, `{{statusCode}}` | numeric fields, empty string when not applicable |
 | `{{failures}}` | consecutive failures so far |
-| `{{event}}` | the condition that fired it, e.g. `down`, `recovered`, `test`, `manual` |
+| `{{metric}}`, `{{metric.label}}`, `{{metric.value}}`, `{{metric.status}}` | the metric a metric-scoped event (a hardware check's `disk:/srv` warning) or a `metric_over` condition fired on — key, label, reading and its own verdict; empty for a check-level event |
+| `{{metrics.<key>}}` | every named metric of the run — a hardware check's `{{metrics.cpu}}`, an SNMP OID's name. Characters other than letters, digits, dots and dashes in a key become `_`, so `disk:/srv` is `{{metrics.disk__srv}}` and `net:eth0.rx` is `{{metrics.net_eth0.rx}}` |
+| `{{event}}` | the condition that fired it, e.g. `down`, `recovered`, `metric_over`, `test`, `manual` |
 | `{{ts}}` | RFC 3339 timestamp of the result |
 | `{{instance}}` | this GWatch instance's name (Settings › General) |
 | `{{trigger.name}}` | the trigger's own name |

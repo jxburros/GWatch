@@ -504,7 +504,7 @@ func (s *Store) SetCheckEnabled(ctx context.Context, id int64, enabled bool) err
 
 // ---- check state ----
 
-const stateCols = `check_id, status, consecutive_failures, last_run_at, last_success_at, last_change_at, next_run_at, last_message, last_latency_ms, alert_active, alert_suppressed, suppress_reason, last_alert_at, silenced_until, affected_by_check_id, warning_active, cert_warning_active, last_content_hash, last_content_value`
+const stateCols = `check_id, status, consecutive_failures, last_run_at, last_success_at, last_change_at, next_run_at, last_message, last_latency_ms, alert_active, alert_suppressed, suppress_reason, last_alert_at, silenced_until, affected_by_check_id, warning_active, cert_warning_active, last_content_hash, last_content_value, metric_status`
 
 func scanState(sc interface{ Scan(...any) error }) (model.CheckState, error) {
 	var st model.CheckState
@@ -512,8 +512,12 @@ func scanState(sc interface{ Scan(...any) error }) (model.CheckState, error) {
 	var lat sql.NullFloat64
 	var affected sql.NullInt64
 	var alertActive, alertSuppressed, warn, certWarn int
-	if err := sc.Scan(&st.CheckID, &st.Status, &st.ConsecutiveFailures, &lastRun, &lastSuccess, &lastChange, &nextRun, &st.LastMessage, &lat, &alertActive, &alertSuppressed, &st.SuppressReason, &lastAlert, &silenced, &affected, &warn, &certWarn, &st.LastContentHash, &st.LastContentValue); err != nil {
+	var metricStatus string
+	if err := sc.Scan(&st.CheckID, &st.Status, &st.ConsecutiveFailures, &lastRun, &lastSuccess, &lastChange, &nextRun, &st.LastMessage, &lat, &alertActive, &alertSuppressed, &st.SuppressReason, &lastAlert, &silenced, &affected, &warn, &certWarn, &st.LastContentHash, &st.LastContentValue, &metricStatus); err != nil {
 		return st, err
+	}
+	if metricStatus != "" {
+		_ = json.Unmarshal([]byte(metricStatus), &st.MetricStatus)
 	}
 	st.LastRunAt = parseTime(lastRun)
 	st.LastSuccessAt = parseTime(lastSuccess)
@@ -566,15 +570,21 @@ func (s *Store) SaveState(ctx context.Context, st model.CheckState) error {
 }
 
 func saveStateTx(ctx context.Context, tx *sql.Tx, st model.CheckState) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO check_state(`+stateCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	// An empty map is stored as '' rather than "{}", so a check that tracks
+	// no metrics separately leaves the column as the default.
+	metricStatus := ""
+	if len(st.MetricStatus) > 0 {
+		metricStatus = jsonString(st.MetricStatus)
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO check_state(`+stateCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(check_id) DO UPDATE SET status=excluded.status, consecutive_failures=excluded.consecutive_failures, last_run_at=excluded.last_run_at,
 		last_success_at=excluded.last_success_at, last_change_at=excluded.last_change_at, next_run_at=excluded.next_run_at, last_message=excluded.last_message,
 		last_latency_ms=excluded.last_latency_ms, alert_active=excluded.alert_active, alert_suppressed=excluded.alert_suppressed, suppress_reason=excluded.suppress_reason,
 		last_alert_at=excluded.last_alert_at, silenced_until=excluded.silenced_until, affected_by_check_id=excluded.affected_by_check_id, warning_active=excluded.warning_active,
-		cert_warning_active=excluded.cert_warning_active, last_content_hash=excluded.last_content_hash, last_content_value=excluded.last_content_value`,
+		cert_warning_active=excluded.cert_warning_active, last_content_hash=excluded.last_content_hash, last_content_value=excluded.last_content_value, metric_status=excluded.metric_status`,
 		st.CheckID, string(st.Status), st.ConsecutiveFailures, fmtTimePtr(st.LastRunAt), fmtTimePtr(st.LastSuccessAt), fmtTimePtr(st.LastChangeAt), fmtTimePtr(st.NextRunAt),
 		st.LastMessage, nullFloat(st.LastLatencyMS), boolInt(st.AlertActive), boolInt(st.AlertSuppressed), st.SuppressReason, fmtTimePtr(st.LastAlertAt), fmtTimePtr(st.SilencedUntil),
-		nullInt64(st.AffectedByCheckID), boolInt(st.WarningActive), boolInt(st.CertWarningActive), st.LastContentHash, st.LastContentValue)
+		nullInt64(st.AffectedByCheckID), boolInt(st.WarningActive), boolInt(st.CertWarningActive), st.LastContentHash, st.LastContentValue, metricStatus)
 	return err
 }
 
@@ -713,14 +723,14 @@ func (s *Store) ResultsBetween(ctx context.Context, checkID int64, from, to time
 
 // ---- events ----
 
-const eventCols = `id, ts, type, node_id, check_id, node_name, check_name, title, detail, meta, actor`
+const eventCols = `id, ts, type, node_id, check_id, node_name, check_name, title, detail, meta, actor, metric`
 
 func scanEvent(sc interface{ Scan(...any) error }) (model.Event, error) {
 	var e model.Event
 	var ts int64
 	var node, check sql.NullInt64
 	var meta sql.NullString
-	if err := sc.Scan(&e.ID, &ts, &e.Type, &node, &check, &e.NodeName, &e.CheckName, &e.Title, &e.Detail, &meta, &e.Actor); err != nil {
+	if err := sc.Scan(&e.ID, &ts, &e.Type, &node, &check, &e.NodeName, &e.CheckName, &e.Title, &e.Detail, &meta, &e.Actor, &e.Metric); err != nil {
 		return e, err
 	}
 	e.Timestamp = time.UnixMilli(ts).Local()
@@ -740,8 +750,8 @@ func (s *Store) InsertEvent(ctx context.Context, e model.Event) (model.Event, er
 	if len(e.Meta) > 0 {
 		meta = string(e.Meta)
 	}
-	res, err := s.Exec(ctx, `INSERT INTO events(ts, type, node_id, check_id, node_name, check_name, title, detail, meta, actor) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		e.Timestamp.UnixMilli(), string(e.Type), nullInt64(e.NodeID), nullInt64(e.CheckID), e.NodeName, e.CheckName, e.Title, e.Detail, meta, e.Actor)
+	res, err := s.Exec(ctx, `INSERT INTO events(ts, type, node_id, check_id, node_name, check_name, title, detail, meta, actor, metric) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		e.Timestamp.UnixMilli(), string(e.Type), nullInt64(e.NodeID), nullInt64(e.CheckID), e.NodeName, e.CheckName, e.Title, e.Detail, meta, e.Actor, e.Metric)
 	if err != nil {
 		return e, err
 	}

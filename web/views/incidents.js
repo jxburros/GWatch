@@ -2,7 +2,7 @@
 
 import { api, qs } from '../api.js';
 import { h, icon, clear, replace, eventIcon, eventMeta, EVENT_META, toast, openModal, field, selectInput, textarea, emptyState, skeleton } from '../components.js';
-import { dayHeading, dayKey, timeShort, relTime } from '../fmt.js';
+import { dayHeading, dayKey, timeShort, relTime, metricLabel } from '../fmt.js';
 
 const TYPE_GROUPS = [
   { value: '', label: 'All events' },
@@ -125,7 +125,10 @@ export async function mount(root, ctx) {
     return h('article', { class: 'event-row' },
       eventIcon(ev.type),
       h('div', { class: 'ev-body' },
-        h('div', { class: 'row', style: { gap: '8px' } }, h('span', { class: 'ev-type' }, m.label), ev.nodeName ? h('a', { class: 'ev-node', href: `#/nodes/${ev.nodeId}` }, ev.nodeName, ev.checkName ? ` › ${ev.checkName}` : '') : null),
+        h('div', { class: 'row', style: { gap: '8px' } }, h('span', { class: 'ev-type' }, m.label), ev.nodeName ? h('a', { class: 'ev-node', href: `#/nodes/${ev.nodeId}` }, ev.nodeName, ev.checkName ? ` › ${ev.checkName}` : '') : null,
+          // The metric an event is about, when it is about one (a hardware
+          // check's disk rather than the check as a whole).
+          ev.metric ? h('span', { class: 'tag ev-metric', title: ev.metric }, metricLabel(ev.metric)) : null),
         h('div', { class: 'ev-title' }, ev.title || m.label),
         detail.length ? h('div', { class: 'ev-detail' }, detail.join(' · ')) : null),
       h('div', { class: 'ev-time', title: new Date(ev.ts).toLocaleString() }, timeShort(ev.ts, { seconds: true }), h('div', { class: 'dim' }, relTime(ev.ts))));

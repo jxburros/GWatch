@@ -2,7 +2,7 @@
 // backend can provide (timings, redirects, certificate, ping packets, DNS…).
 
 import { h, icon, statusPill, checkTypeLabel } from '../components.js';
-import { ms as fmtMs, pct, dateTime, dateShort, relTime, plural, bytes, duration, num } from '../fmt.js';
+import { ms as fmtMs, pct, dateTime, dateShort, relTime, plural, bytes, duration, num, metricValue } from '../fmt.js';
 
 function kv(pairs) {
   const dl = h('dl', { class: 'kv' });
@@ -103,6 +103,27 @@ function snmpTable(rows, check, result) {
     awaitingSecondSample && result?.success
       ? h('p', { class: 'note' }, 'A counter has no rate until a second sample exists to compare it against, so the first run after GWatch starts leaves those rows blank.')
       : null);
+}
+
+/**
+ * metricResultsTable lists a hardware check's metrics with each one's reading
+ * and verdict, the table the check-level status is the worst row of.
+ */
+export function metricResultsTable(rows) {
+  const verdict = { up: ['within thresholds', 'text-up'], degraded: ['warning', 'text-degraded'], down: ['critical', 'text-down'] };
+  const table = h('table', { class: 'table metric-results' }, h('thead', null, h('tr', null,
+    h('th', null, 'Metric'), h('th', { class: 'num' }, 'Value'), h('th', null, 'Verdict'), h('th', null, 'Why'))));
+  const tb = h('tbody');
+  for (const r of rows) {
+    const [label, cls] = verdict[r.status] || [r.status || '—', 'dim'];
+    tb.append(h('tr', { 'data-metric': r.key },
+      h('td', null, r.label || r.key, h('div', { class: 'mono dim small' }, r.key)),
+      h('td', { class: 'num mono' }, metricValue(r.value, r.unit)),
+      h('td', { class: cls }, label),
+      h('td', { class: 'dim small' }, r.reason || '')));
+  }
+  table.append(tb);
+  return h('div', null, h('div', { class: 'section-title' }, 'Metrics'), h('div', { class: 'table-wrap' }, table));
 }
 
 export function certBlock(cert) {
@@ -238,6 +259,10 @@ export function resultInspector(result, check, { compact = false } = {}) {
       right.push(h('div', null, h('div', { class: 'section-title' }, 'Disks'),
         kv(m.filesystems.map((fs) => [fs.mount, `${pct(fs.usedPct, 0)} used — ${bytes(fs.freeBytes)} free of ${bytes(fs.totalBytes)}`, { mono: true }]))));
     }
+    // Each metric's own verdict: the disk that crossed its threshold sits
+    // beside the memory that did not, rather than both hiding behind one
+    // status for the check.
+    if (d.metricResults?.length) left.push(metricResultsTable(d.metricResults));
     if (m.warnings?.length) {
       // A gap in the reading is not a hardware problem, but hiding it would
       // leave the reader wondering why a figure is missing.

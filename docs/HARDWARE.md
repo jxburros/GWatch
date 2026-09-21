@@ -171,25 +171,72 @@ memory check, a disk check and so on would multiply that bookkeeping without
 buying anything, since every reading already arrives as a single snapshot of
 the whole machine.
 
-What is not shared is the threshold: every metric — processor, memory, swap,
-disk, load — has its own warning/critical pair on that one check, edited as
-its own group in the check editor, and its own coloured line on the machine's
-history charts (grouped as *Processor and memory*, *Network throughput* and
-*Disk throughput*). One check does not mean one number; it means one place to
-configure all of them and one place to see whether the machine, as a whole, is
-fine.
+What is not shared is anything else. The check collects everything in one
+go, but from there on **each metric is its own thing**:
+
+- **Its own key.** `cpu`, `memory`, `swap` and `load` for the readings a
+  machine has one of; `disk:/srv`, `inodes:/srv`, `net:eth0.rx`,
+  `net:eth0.tx`, `diskio:sda.read`, `diskio:sda.write`, `diskio:sda.busy` for
+  the ones it may have several of. The key is how the metric is named
+  everywhere: in the last result, in charts, in triggers, in the API.
+- **Its own verdict.** Every run judges every metric against the threshold
+  that governs it and records the verdict (`up`, `degraded` or `down`) with
+  the reading. The check's status is the worst of them — a disk at its
+  warning level is a degraded check, a disk at its critical level is a down
+  check — but *Inspect last result › Metrics* shows the whole table, so the
+  memory that is fine is not hidden behind the disk that is not.
+- **Its own thresholds.** The check carries a list of warning/critical pairs,
+  one per metric family (Processor, Memory, Swap, Load per core, Disk space,
+  Inodes, Network throughput, Disk I/O), edited as boxed groups in the check
+  editor. Below them, *One disk, interface or device* adds an entry for a
+  single instance — `disk:/srv`, `net:eth0` — which replaces the family's
+  pair for that instance alone. A media disk that lives at 90% can have its
+  own line while every other disk keeps the default; an entry with both boxes
+  blank turns alerting off for that one instance. Leave a box blank to turn
+  that level off; a family with nothing set is still measured and charted,
+  just never alerted on.
+- **Its own incidents.** A metric crossing its warning level opens a warning
+  on the timeline naming that metric — *Disk /srv warning* — and it closes
+  when *that* metric comes back, whatever the others are doing. Two disks
+  over their lines are two incidents; the memory clearing does not close the
+  disk's. The alert email lists every metric that is not within its
+  thresholds, one row each. Going down (a critical level, or a machine that
+  stops reporting) and recovering stay per check, as does the alert cooldown.
+- **Its own chart.** The node page charts the hardware check's metrics by
+  family — processor, memory and swap on one percentage axis, one line per
+  filesystem, one per interface direction — from the check's own results, so
+  the charted line is the very number the thresholds judged. Each line has a
+  CSV export, and `GET /api/history?checkId=…&metric=disk:/srv` serves it.
+  The machine panel above still draws the reading-level history charts; its
+  meters take their colour from the check's verdicts once a check is watching
+  the machine.
+- **Its own trigger.** The `metric_over` condition fires when one named
+  metric is above a number of the trigger's own; the `{{metric}}`,
+  `{{metric.label}}`, `{{metric.value}}` and `{{metric.status}}`
+  placeholders name the metric a warning is about, and `{{metrics.<key>}}`
+  carries every reading — see [`RECIPES.md`](RECIPES.md#placeholders).
+- **Its own bulk edit.** *Bulk edit › Hardware threshold* sets one metric's
+  pair across every selected hardware check and leaves their other
+  thresholds alone.
+
+One check does not mean one number; it means one place to configure all of
+them and one place to see whether the machine, as a whole, is fine.
 
 **A machine that stops reporting is down.** That is the whole point of an agent
 that pushes: silence is the signal. By default a check reports down after three
 missed intervals (at least a minute); change it under "Report down after no
-reading for".
-
-Set a threshold to 0 to ignore that reading entirely — a check that only
-watches disk space is a perfectly good check.
+reading for". This is the one verdict that is the check's rather than any
+metric's.
 
 Use "Watch only these mount points" to name the filesystems you care about. A
 named mount that is not currently mounted is ignored rather than failed: a
-removable volume that is unplugged is not a hardware fault.
+removable volume that is unplugged is not a hardware fault — and a warning it
+had open is closed, since there is nothing left to warn about.
+
+Checks saved before the per-metric list existed carried one flat pair per
+family (`cpuWarnPct`, `diskCritPct` and so on). They keep working unchanged
+— the flat fields are read with the same meaning — and are moved onto the
+list the next time the check is saved.
 
 ## Storage and retention
 

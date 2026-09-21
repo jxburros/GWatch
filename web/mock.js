@@ -55,6 +55,21 @@
     mkCheck(nas.id, 'ping', 'Ping', { config: { pingCount: 4, latencyWarnMs: 20 }, base: 0.7, noise: 0.4, interval: 60 }),
     mkCheck(nas.id, 'tcp', 'SSH (22)', { config: { port: 22 }, base: 1.8, noise: 0.3 }),
     mkCheck(nas.id, 'http', 'Web UI', { config: { target: 'https://nas.local:5001/', expectedStatus: '200-399', ignoreTlsErrors: true, certCheck: false }, base: 62, noise: 0.35, interval: 300 }),
+    // The machine itself, read from its agent (#60): every metric has its
+    // own verdict, and the media disk is the one over its line.
+    mkCheck(nas.id, 'system', 'Hardware health', {
+      config: {
+        hostSource: 'agent', agentId: 1,
+        metricThresholds: [
+          { metric: 'cpu', warn: 90 }, { metric: 'memory', warn: 90, crit: 97 }, { metric: 'swap', warn: 50 },
+          { metric: 'disk', warn: 85, crit: 95 }, { metric: 'inodes', warn: 85, crit: 95 }, { metric: 'load', warn: 2 },
+          { metric: 'disk:/', warn: 70, crit: 90 },
+        ],
+      },
+      base: 4, noise: 0.2, interval: 60, status: 'degraded',
+      warn: 'Disk /srv/media is 87%, at or above the 85% warning threshold',
+      message: 'CPU 21%, memory 41%, disk 87% (/srv/media)',
+    }),
   ];
   const ha = mkNode({ name: 'Home Assistant', host: 'homeassistant.local', group: 'Servers', tags: ['automation'], importance: 'normal', template: 'home-server' });
   ha.checks = [
@@ -182,7 +197,57 @@
     const units = {};
     if (c.type === 'snmp') for (const o of c.config?.snmpOids || []) if (o.name) units[o.name] = o.unit || '';
     if (c.type === 'json' && c.config?.jsonRecord) units[(c.config.jsonMetric || '').trim() || 'value'] = c.config.jsonUnit || '';
+    // A hardware check measures whatever its newest reading carried, the way
+    // the service's checkHasMetric accepts a key from the latest result.
+    if (c.type === 'system') for (const m of systemMetricResults(c, mockReading('agent:1', 'nas.lan', 29))) units[m.key] = m.unit;
     return units;
+  }
+
+  // systemMetricUnit and systemMetricResults mirror the service's
+  // model.SystemMetricUnit and checks.hostMetricResults: one entry per
+  // reading, each judged against the threshold that governs its key — the
+  // instance's own entry first, then its family's.
+  function systemMetricUnit(key) {
+    const [family, instance = ''] = key.includes(':') ? [key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1)] : [key];
+    if (['cpu', 'memory', 'swap', 'disk', 'inodes'].includes(family)) return '%';
+    if (family === 'net') return 'B/s';
+    if (family === 'diskio') return instance.endsWith('.busy') ? '%' : 'B/s';
+    return '';
+  }
+  function systemMetricResults(check, m) {
+    const list = check.config?.metricThresholds || [];
+    const find = (k) => list.find((t) => t.metric === k);
+    const governing = (key) => {
+      const direct = find(key); if (direct) return direct;
+      const colon = key.indexOf(':');
+      if (colon < 0) return null;
+      const family = key.slice(0, colon), instance = key.slice(colon + 1);
+      const dot = instance.lastIndexOf('.');
+      if (dot > 0 && (family === 'net' || family === 'diskio')) { const whole = find(`${family}:${instance.slice(0, dot)}`); if (whole) return whole; }
+      return find(family) || null;
+    };
+    const fmt = (v, unit) => (unit === '%' ? `${Math.round(v)}%` : unit === 'B/s' ? `${Math.round(v / 1000)} kB/s` : v.toFixed(2));
+    const out = [];
+    const add = (key, label, value) => {
+      if (value == null) return;
+      const unit = systemMetricUnit(key);
+      const r = { key, label, value, unit, status: 'up' };
+      const t = governing(key);
+      if (t) {
+        const past = (lvl) => lvl != null && lvl !== '' && (t.below ? value <= lvl : lvl > 0 && value >= lvl);
+        if (past(t.crit)) { r.status = 'down'; r.reason = `${label} is ${fmt(value, unit)}, at or above the ${fmt(t.crit, unit)} critical threshold`; }
+        else if (past(t.warn)) { r.status = 'degraded'; r.reason = `${label} is ${fmt(value, unit)}, at or above the ${fmt(t.warn, unit)} warning threshold`; }
+      }
+      out.push(r);
+    };
+    add('cpu', 'Processor use', m.cpu?.usagePct);
+    add('load', 'Load per core', m.cpu?.loadPerCore);
+    if (m.memory?.totalBytes) add('memory', 'Memory use', m.memory.usedPct);
+    add('swap', 'Swap use', m.memory?.swapUsedPct);
+    for (const fs of m.filesystems || []) { add(`disk:${fs.mount}`, `Disk ${fs.mount}`, fs.usedPct); add(`inodes:${fs.mount}`, `Inodes on ${fs.mount}`, fs.inodesUsedPct); }
+    for (const n of m.interfaces || []) { add(`net:${n.name}.rx`, `Network ${n.name} received`, n.rxBytesPerSec); add(`net:${n.name}.tx`, `Network ${n.name} sent`, n.txBytesPerSec); }
+    for (const d of m.disks || []) { add(`diskio:${d.name}.read`, `Disk ${d.name} read`, d.readBytesPerSec); add(`diskio:${d.name}.write`, `Disk ${d.name} write`, d.writeBytesPerSec); add(`diskio:${d.name}.busy`, `Disk ${d.name} busy`, d.busyPct); }
+    return out;
   }
 
   function makeResult(check, node, t, r, { failed, latency, statusOverride } = {}) {
@@ -245,6 +310,22 @@
       case 'dns': {
         if (!failed) { const vals = check.config.expectedIps?.length ? check.config.expectedIps : ['93.184.215.14', '2606:2800:21f:cb07:6820:80da:af6b:8b2c']; res.details = { resolvedValues: vals, expectedMatch: check.config.expectedIps?.length ? true : null, resolver: check.config.dnsServer || 'system' }; res.message = res.message || `Resolved to ${vals[0]} in ${latency.toFixed(1)} ms`; }
         else { res.error = p.message; res.details = { resolver: check.config.dnsServer || 'system', resolvedValues: [] }; }
+        break;
+      }
+      case 'system': {
+        if (failed) { res.error = p.message || 'no hardware reading'; break; }
+        // The reading the check evaluated, the metrics it recorded and each
+        // one's own verdict — the shape the service's evaluateHost writes.
+        const reading = mockReading('agent:1', 'nas.lan', 29, t);
+        const rows = systemMetricResults(check, reading);
+        res.latencyMs = null;
+        res.details = { host: reading, hostAgeSeconds: 12, metricResults: rows };
+        res.metrics = Object.fromEntries(rows.map((m) => [m.key, m.value]));
+        res.warnings = rows.filter((m) => m.status === 'degraded').map((m) => m.reason);
+        const worst = rows.some((m) => m.status === 'down') ? 'down' : rows.some((m) => m.status === 'degraded') ? 'degraded' : 'up';
+        res.status = worst === 'down' ? 'down' : worst;
+        res.success = worst !== 'down';
+        res.message = res.message || `CPU ${Math.round(reading.cpu.usagePct)}%, memory ${Math.round(reading.memory.usedPct)}%`;
         break;
       }
       case 'snmp': {
@@ -496,9 +577,10 @@
     const o = (c.config?.snmpOids || []).find((x) => x.name === metric);
     const r = rng(c.id * 977 + metric.length);
     const points = base.points.map((p) => {
-      if (p.avgMs == null) return { ...p, avgMs: null, minMs: null, maxMs: null, value: null };
+      if (p.avgMs == null && c.type !== 'system') return { ...p, avgMs: null, minMs: null, maxMs: null, value: null };
       let v;
-      if (o) { const reading = snmpReading(o, +new Date(p.ts), r); v = reading.value != null ? reading.value : reading.rate; }
+      if (c.type === 'system') v = systemMetricResults(c, mockReading('agent:1', 'nas.lan', 29, +new Date(p.ts))).find((m) => m.key === metric)?.value;
+      else if (o) { const reading = snmpReading(o, +new Date(p.ts), r); v = reading.value != null ? reading.value : reading.rate; }
       else v = jsonReading(c, +new Date(p.ts));
       return { ...p, value: v ?? null, avgMs: v ?? null, minMs: v ?? null, maxMs: v ?? null, jitterMs: null, lossPct: null };
     });
@@ -541,7 +623,9 @@
       if (f > 0.60 && f < 0.63) lat *= 3.2 + r();
       if (f > 0.61 && f < 0.615) lat *= 1.5;
       const ok = failedFrac < 1;
-      const avg = ok ? +lat.toFixed(2) : null;
+      // A hardware check measures a machine rather than a round trip, so it
+      // has no latency to chart.
+      const avg = ok && c.type !== 'system' ? +lat.toFixed(2) : null;
       const loss = c.type === 'ping' ? (failedFrac >= 1 ? 100 : (f > 0.60 && f < 0.63 ? +(25 * r()).toFixed(1) : (r() < 0.02 ? 25 : 0))) : null;
       const pt = { ts: iso(t), avgMs: avg, minMs: ok ? +(lat * 0.85).toFixed(2) : null, maxMs: ok ? +(lat * (1.2 + (source === 'raw' ? 0 : r() * 0.5))).toFixed(2) : null, jitterMs: ok ? +(lat * 0.1).toFixed(2) : null, lossPct: loss, availability: +avail.toFixed(2), count, failures };
       points.push(pt);
@@ -716,7 +800,7 @@
   // Bulk edit. It mirrors internal/api/bulk.go closely enough that the screen
   // behaves the same here as against the service: the same selection rules,
   // the same whitelist, the same shape of answer.
-  const BULK_CONFIG_KEYS = ['certWarnDays', 'latencyWarnMs', 'packetLossWarnPct', 'pingMethod'];
+  const BULK_CONFIG_KEYS = ['certWarnDays', 'latencyWarnMs', 'metricThresholds', 'packetLossWarnPct', 'pingMethod'];
   on('PATCH', /^\/api\/nodes\/bulk$/, (m, body) => {
     const nodeIds = body?.nodeIds || [];
     const checkIds = body?.checkIds || [];
@@ -774,7 +858,16 @@
         if (cp.failureThreshold != null) c.failureThreshold = cp.failureThreshold;
         if (cp.enabled != null) c.enabled = !!cp.enabled;
         if ('alerts' in cp) c.alerts = cp.alerts ? { ...cp.alerts } : null;
-        if (cp.config) Object.assign(c.config, cp.config);
+        if (cp.config) {
+          const { metricThresholds, ...rest } = cp.config;
+          Object.assign(c.config, rest);
+          // Merged by metric key, and only onto a hardware check, the way
+          // the service does it.
+          if (metricThresholds && c.type === 'system') {
+            const keep = (c.config.metricThresholds || []).filter((t) => !metricThresholds.some((p) => p.metric === t.metric));
+            c.config.metricThresholds = [...keep, ...metricThresholds.map((t) => ({ ...t }))];
+          }
+        }
         c.updatedAt = iso(Date.now());
         if (cp.intervalSeconds != null && states[c.id]) states[c.id].nextRunAt = iso(Date.now() + c.intervalSeconds * 1000);
       }
@@ -790,6 +883,7 @@
         if (k === 'latencyWarnMs') changes.push(`latency warning → ${v} ms`);
         else if (k === 'packetLossWarnPct') changes.push(`packet loss warning → ${v} %`);
         else if (k === 'certWarnDays') changes.push(`certificate warning → ${v} days`);
+        else if (k === 'metricThresholds') for (const t of v) changes.push(`${t.metric} thresholds → warning ${t.warn ?? 'off'}, critical ${t.crit ?? 'off'}`);
         else changes.push(`ping method → ${v || 'global setting'}`);
       }
     }
@@ -1061,7 +1155,7 @@
 
   const hostSummaries = () => ([
     { key: 'local', name: settings.general.instanceName || 'This computer', source: 'local', status: 'up', stale: false, metrics: mockReading('local', 'studio-pc', 11) },
-    { key: 'agent:1', name: agents[0].name, source: 'agent', agent: clone(agents[0]), nodeId: null, status: 'up', stale: false, metrics: mockReading('agent:1', 'nas.lan', 29) },
+    { key: 'agent:1', name: agents[0].name, source: 'agent', agent: clone(agents[0]), nodeId: nas.id, nodeName: nas.name, status: 'up', stale: false, metrics: mockReading('agent:1', 'nas.lan', 29) },
   ]);
 
   on('GET', /^\/api\/hosts$/, () => hostSummaries());

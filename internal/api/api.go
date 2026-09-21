@@ -817,15 +817,15 @@ func (s *Server) normalizeNode(n *model.Node) error {
 			}
 			// A hardware check with no thresholds would watch a machine and
 			// never say anything, so a new one starts with the defaults
-			// written into it rather than applied invisibly at run time.
+			// written into it rather than applied invisibly at run time. A
+			// check saved with the flat fields of an older configuration is
+			// moved onto the per-metric list here, once, so from now on
+			// there is one place its thresholds live.
 			if !c.Config.HasSystemThresholds() {
-				d := model.SystemDefaults()
-				c.Config.CPUWarnPct, c.Config.CPUCritPct = d.CPUWarnPct, d.CPUCritPct
-				c.Config.MemWarnPct, c.Config.MemCritPct = d.MemWarnPct, d.MemCritPct
-				c.Config.SwapWarnPct = d.SwapWarnPct
-				c.Config.DiskWarnPct, c.Config.DiskCritPct = d.DiskWarnPct, d.DiskCritPct
-				c.Config.LoadWarnPerCore = d.LoadWarnPerCore
+				c.Config.MetricThresholds = model.SystemDefaults().MetricThresholds
 			}
+			c.Config.NormalizeMetricThresholds()
+			model.SortMetricThresholds(c.Config.MetricThresholds)
 		}
 		if c.Type == model.CheckSNMP {
 			// Version and port are what every device answers on unless it was
@@ -1324,7 +1324,7 @@ func (s *Server) historyFor(ctx context.Context, checkID int64, rangeName, metri
 		return model.HistorySeries{}, err
 	}
 	if metric = strings.TrimSpace(metric); metric != "" {
-		if !checkHasMetric(c, metric) {
+		if !s.checkHasMetric(ctx, c, metric) {
 			return model.HistorySeries{}, fmt.Errorf("check %d does not measure %q", checkID, metric)
 		}
 		return s.Store.HistoryMetric(ctx, c, n.Name, rng, time.Now(), metric)
@@ -1332,12 +1332,26 @@ func (s *Server) historyFor(ctx context.Context, checkID int64, rangeName, metri
 	return s.Store.History(ctx, c, n.Name, rng, time.Now())
 }
 
-// checkHasMetric reports whether a check is configured to measure a named
-// metric — an SNMP check's OIDs, or the value a json check records. Asking is
-// what keeps /api/history from turning into a way to probe for arbitrary
-// names in stored results.
-func checkHasMetric(c model.Check, metric string) bool {
-	_, ok := c.MetricUnits()[metric]
+// checkHasMetric reports whether a check measures a named metric — an SNMP
+// check's OIDs, the value a json check records, or a hardware check's
+// readings. Asking is what keeps /api/history from turning into a way to
+// probe for arbitrary names in stored results.
+//
+// A hardware check's disks, interfaces and devices are only known once the
+// machine has reported, so for that type a key the check's newest result
+// carried counts as measured too.
+func (s *Server) checkHasMetric(ctx context.Context, c model.Check, metric string) bool {
+	if _, ok := c.MetricUnits()[metric]; ok {
+		return true
+	}
+	if c.Type != model.CheckSystem {
+		return false
+	}
+	recent, err := s.Store.RecentResults(ctx, c.ID, 1)
+	if err != nil || len(recent) == 0 {
+		return false
+	}
+	_, ok := recent[0].Metrics[metric]
 	return ok
 }
 
