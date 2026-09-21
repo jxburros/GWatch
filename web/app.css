@@ -1056,6 +1056,8 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
    because a count without its label is not worth the extra 8px of numeral. */
 .widget[data-h="1"] .summary-headline { font-size: 0.9375rem; margin-bottom: 2px; }
 .widget[data-h="1"] .summary-counts { gap: 1.25rem; }
+/* At one row the counts ran a pixel past the body, which made it scroll. */
+.widget[data-h="1"] .summary-count .rule { margin: 0.5rem 0 0.375rem; }
 .widget[data-h="1"] .summary-count .n { font-size: 1.875rem; }
 .widget[data-h="1"] .summary-count .rule { height: 0.875rem; margin: 6px 0 4px; }
 .widget[data-h="1"] .summary-foot { margin-top: 2px; }

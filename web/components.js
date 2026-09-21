@@ -526,10 +526,12 @@ let idSeq = 0;
 export function uid(prefix = 'f') { return `${prefix}-${++idSeq}`; }
 
 export function field({ label, input, help, error, id, cls = '' }) {
-  // A composite control (chipInput, say) exposes the element that actually
-  // takes typing as `.input`; the label and the descriptions point at that,
-  // not at the box around it.
-  const control = input?.input instanceof Node ? input.input : input;
+  // The label and the descriptions point at the element that actually takes
+  // the input, not at whatever wraps it: a composite control (chipInput, say)
+  // exposes that element as `.input`; a plain wrapper — a number beside its
+  // unit, a select beside a field — holds it as its first form control.
+  const isControl = (el) => el instanceof Element && el.matches('input, select, textarea, button');
+  const control = input?.input instanceof Node ? input.input : (isControl(input) || !(input instanceof Element)) ? input : (input.querySelector('input, select, textarea') || input);
   const fid = id || control?.id || uid();
   if (control && control.id !== fid) control.id = fid;
   const helpId = help ? `${fid}-help` : null;

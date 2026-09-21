@@ -126,10 +126,12 @@ export function actionEditor(action = {}, { nodes = [], defaultInterpreter = 'sh
   const code = textarea({ class: 'code', value: a.code || '', rows: 8, placeholder: '# your code here\necho "$GWATCH_NODE_NAME is {{status}}"', spellcheck: 'false', oninput: () => { a.code = code.value; } });
   // Tab indents rather than leaving the box, so the box needs a way out:
   // Shift+Tab always leaves, and Escape arms the next Tab to leave too. The
-  // Help page's Keyboard topic documents both.
+  // Help page's Keyboard topic documents both. The first Escape is kept from
+  // the dialog around the editor (which would otherwise close on it); a
+  // second Escape, with Tab already armed, reaches the dialog as usual.
   let tabLeaves = false;
   code.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { tabLeaves = true; return; }
+    if (e.key === 'Escape') { if (!tabLeaves) { tabLeaves = true; e.preventDefault(); e.stopPropagation(); } return; }
     if (e.key === 'Tab') {
       if (e.shiftKey || tabLeaves) { tabLeaves = false; return; }
       e.preventDefault(); const s = code.selectionStart; code.setRangeText('  ', s, code.selectionEnd, 'end'); a.code = code.value;

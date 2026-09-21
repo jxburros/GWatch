@@ -334,6 +334,19 @@ export async function mount(root, ctx) {
     head.append(actions);
     const body = h('div', { class: 'widget-body' });
     card.append(head, body);
+    // A body that scrolls but holds nothing focusable cannot be scrolled from
+    // the keyboard, so it becomes a named region in the tab order. A body with
+    // a link or button in it is reachable through that already. Most bodies
+    // fill in after a fetch, so this is re-judged whenever the content changes.
+    const judgeScroll = () => {
+      if (!body.isConnected) return;
+      const needs = body.scrollHeight > body.clientHeight && !body.querySelector('a[href], button, input, select, textarea, [tabindex]');
+      if (needs) { body.setAttribute('role', 'region'); body.setAttribute('aria-label', w.title || meta.label); body.tabIndex = 0; }
+      else { body.removeAttribute('role'); body.removeAttribute('aria-label'); body.removeAttribute('tabindex'); }
+    };
+    let judgePending = 0;
+    new MutationObserver(() => { if (!judgePending) judgePending = requestAnimationFrame(() => { judgePending = 0; judgeScroll(); }); }).observe(body, { childList: true, subtree: true });
+    requestAnimationFrame(judgeScroll);
     // Kept on the card so a live update can rewrite just this widget's body
     // rather than the whole grid — see refreshWidgets(). The action bar is
     // noted as it stands now, before the body is rendered, because a body may

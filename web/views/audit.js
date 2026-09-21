@@ -104,8 +104,8 @@ export async function mount(root, ctx) {
   /* ---------- Service log ---------- */
   async function tabLog() {
     const box = h('pre', { class: 'log-box', tabindex: 0, 'aria-label': 'Log output' });
-    const limit = selectInput({ options: [100, 200, 500, 1000].map((n) => ({ value: n, label: `Last ${n} lines` })), value: 200 });
-    const level = selectInput({ options: [{ value: '', label: 'All levels' }, { value: 'warn', label: 'Warnings and errors' }, { value: 'error', label: 'Errors only' }], value: '' });
+    const limit = selectInput({ options: [100, 200, 500, 1000].map((n) => ({ value: n, label: `Last ${n} lines` })), value: 200, 'aria-label': 'How many lines to show' });
+    const level = selectInput({ options: [{ value: '', label: 'All levels' }, { value: 'warn', label: 'Warnings and errors' }, { value: 'error', label: 'Errors only' }], value: '', 'aria-label': 'Which log levels to show' });
     const search = h('input', { type: 'search', placeholder: 'Filter lines…', 'aria-label': 'Filter log lines' });
     const follow = checkbox({ label: 'Follow', checked: true });
     const fileEl = h('div', { class: 'mono small muted' });
