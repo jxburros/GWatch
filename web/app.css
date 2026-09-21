@@ -220,6 +220,20 @@ body::before {
   background: var(--wash);
   pointer-events: none; z-index: 0;
 }
+/* A topology diagram sits almost below perception behind the interface. It is
+   an SVG mask rather than a coloured illustration, so it automatically takes
+   the selected accent and stays equally quiet in both themes. */
+body::after {
+  content: "";
+  position: fixed; inset: -3%;
+  background: rgba(var(--accent-rgb), 0.5);
+  -webkit-mask: url("signal-field.svg") center / cover no-repeat;
+  mask: url("signal-field.svg") center / cover no-repeat;
+  opacity: 0.14;
+  pointer-events: none; z-index: 0;
+  animation: signal-field-drift 28s ease-in-out infinite alternate;
+}
+:root[data-theme="light"] body::after { opacity: 0.1; }
 .app { position: relative; z-index: 1; }
 h1, h2, h3, h4 { margin: 0; font-weight: 700; letter-spacing: -0.02em; }
 h1 { font-size: 1.25rem; }
@@ -251,6 +265,7 @@ svg.icon { width: 1em; height: 1em; display: inline-block; vertical-align: -0.15
   *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
   .view-enter, .view-enter > *, .view-enter .widget, .view-enter .node-row, .title-enter, .indicator, .tip { animation: none !important; }
   .empty .empty-icon { animation: none !important; }
+  body::after, .topbar::after, .empty .empty-icon::before { animation: none !important; }
 }
 
 /* ---------- Layout: rail + main ---------- */
@@ -382,6 +397,16 @@ html.rail-pinned .main, body.rail-pinned .main { margin-left: var(--rail-expande
   background: color-mix(in srgb, var(--rail-active-bg) 88%, transparent);
   backdrop-filter: blur(10px);
   border-bottom: 2px solid var(--accent);
+}
+/* A single quiet sweep suggests live telemetry without turning navigation into
+   a loading indicator. The solid accent rule remains visible underneath it. */
+.topbar::after {
+  content: "";
+  position: absolute; left: 0; bottom: -2px; width: 18%; height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.85), transparent);
+  transform: translateX(-120%);
+  animation: signal-scan 9s var(--ease) infinite;
+  pointer-events: none;
 }
 /* The header says where you are and nothing else. Settings is the one control
    it carries, in the far corner, because it belongs to the application rather
@@ -557,6 +582,18 @@ html.rail-pinned .main, body.rail-pinned .main { margin-left: var(--rail-expande
   50% { box-shadow: 0 0 0 3px rgba(var(--orb), 0.16), 0 0 calc(18px * var(--glow-strength)) rgba(var(--orb), 1); }
 }
 
+@keyframes signal-field-drift {
+  from { transform: translate3d(-0.6%, -0.35%, 0) scale(1.01); }
+  to { transform: translate3d(0.6%, 0.35%, 0) scale(1.025); }
+}
+@keyframes signal-scan {
+  0%, 70% { transform: translateX(-120%); opacity: 0; }
+  74% { opacity: 0.75; }
+  94% { transform: translateX(660%); opacity: 0.75; }
+  100% { transform: translateX(660%); opacity: 0; }
+}
+@keyframes reticle-turn { to { transform: rotate(1turn); } }
+
 /* ---------- Motion ---------- */
 /* Everything below is short, single-shot and low-travel. `.view-enter` is put on
    the view for one navigation only (app.js removes it again), so live refreshes
@@ -730,12 +767,35 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 
 /* ---------- Empty / skeleton / banners ---------- */
 .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 0.5rem; padding: 2.25rem 1.25rem; color: var(--muted); }
-.empty .empty-icon { font-size: 2.125rem; color: var(--dim); display: inline-flex; animation: drift 6s ease-in-out infinite; }
+.empty .empty-icon {
+  position: relative; width: 4.25rem; height: 4.25rem;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--accent-hover); font-size: 1.5rem;
+  animation: drift 6s ease-in-out infinite;
+}
+.empty .empty-icon::before {
+  content: ""; position: absolute; inset: -0.75rem;
+  background: var(--accent);
+  -webkit-mask: url("signal-reticle.svg") center / contain no-repeat;
+  mask: url("signal-reticle.svg") center / contain no-repeat;
+  opacity: 0.7;
+  animation: reticle-turn 24s linear infinite;
+}
+.empty .empty-icon::after {
+  content: ""; position: absolute; inset: 0.75rem;
+  border: 1px solid var(--accent-line);
+  background: var(--accent-soft);
+  transform: rotate(45deg);
+}
+.empty .empty-icon > .icon { position: relative; z-index: 1; }
 @keyframes drift { 0%, 100% { transform: translateY(-2px); } 50% { transform: translateY(2px); } }
 .empty h3 { color: var(--text); font-size: 0.9375rem; }
 .empty p { max-width: 26.25rem; font-size: 0.8125rem; }
 .empty .btn { margin-top: 6px; }
 .empty-compact { padding: 1.125rem 0.625rem; }
+.empty-compact .empty-icon { width: 2.75rem; height: 2.75rem; font-size: 1.125rem; }
+.empty-compact .empty-icon::before { inset: -0.45rem; opacity: 0.45; }
+.empty-compact .empty-icon::after { inset: 0.5rem; }
 .skeleton { display: flex; flex-direction: column; gap: 0.625rem; }
 .skeleton-line { height: 0.75rem; background: linear-gradient(90deg, var(--elev) 0%, var(--elev-2) 50%, var(--elev) 100%); background-size: 200% 100%; animation: shimmer 1.4s ease-in-out infinite; }
 .skeleton-block { background: var(--elev); animation: shimmer 1.4s ease-in-out infinite; }
@@ -909,6 +969,15 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
   box-shadow: 0 0 0 1px var(--line), inset 0 1px 0 var(--panel-edge);
   transition: box-shadow var(--dur) var(--ease);
 }
+.widget::before {
+  content: ""; position: absolute; left: 0; top: 0; z-index: 2;
+  width: 2.75rem; height: 2px; background: var(--accent);
+  transform: scaleX(0.2); transform-origin: left;
+  opacity: 0.55;
+  transition: transform var(--dur-slow) var(--ease), opacity var(--dur) var(--ease);
+  pointer-events: none;
+}
+.widget:hover::before, .widget:focus-within::before { transform: scaleX(1); opacity: 1; }
 .widget:hover { z-index: 2; box-shadow: 0 0 0 1px var(--accent-line), inset 0 1px 0 var(--panel-edge); }
 .widget-head {
   display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
@@ -1676,7 +1745,7 @@ kbd { font-family: var(--mono); font-size: 0.71875rem; padding: 2px 6px; border:
   .rail, .topbar, .page-bar, .toasts { display: none; }
   .main { margin-left: 0; }
   body { background-image: none; }
-  body::before { display: none; }
+  body::before, body::after { display: none; }
   .card, .widget, .node-rows, .timeline, .filter-bar { box-shadow: none; background-image: none; }
   .card > .card-head:first-child, .widget-head { background: none; }
   .orb { box-shadow: none; animation: none; }
