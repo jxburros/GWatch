@@ -11,13 +11,15 @@ const TYPE_OPTIONS = [{ value: '', label: 'All event types' }, ...Object.entries
 
 export async function mount(root, ctx) {
   const state = { tab: TABS.some((t) => t.id === ctx.params.tab) ? ctx.params.tab : 'events', nodes: [], destroyed: false, refresh: null };
-  const tabs = h('div', { class: 'tabs', role: 'tablist' });
+  // Each "tab" is a link to its own address (#/audit/log), so to assistive
+  // technology this is navigation with a current page, not a tab widget.
+  const tabs = h('nav', { class: 'tabs', 'aria-label': 'Audit sections' });
   const panel = h('div');
   root.append(tabs, panel);
 
   function renderTabs() {
     clear(tabs);
-    for (const t of TABS) tabs.append(h('a', { class: `tab ${t.id === state.tab ? 'active' : ''}`, role: 'tab', 'aria-selected': t.id === state.tab ? 'true' : 'false', href: `#/audit/${t.id}` }, t.label));
+    for (const t of TABS) tabs.append(h('a', { class: `tab ${t.id === state.tab ? 'active' : ''}`, 'aria-current': t.id === state.tab ? 'page' : null, href: `#/audit/${t.id}` }, t.label));
   }
 
   async function loadNodes() { try { state.nodes = await api.get('/api/nodes'); } catch { state.nodes = []; } }

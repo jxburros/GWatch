@@ -105,7 +105,10 @@ export async function mount(root, ctx) {
   const widgetEls = new Map();
 
   const grid = h('div', { class: 'dash-grid' });
-  const tabs = h('div', { class: 'dash-tabs', role: 'tablist', 'aria-label': 'Dashboards' });
+  // The dashboard chips are links to addresses (#/dashboard/2), so they are
+  // navigation with a current page rather than tabs — which also lets the
+  // "New" button sit beside them without pretending to be one.
+  const tabs = h('nav', { class: 'dash-tabs', 'aria-label': 'Dashboards' });
   root.append(tabs, grid);
 
   /* ---------- Data ---------- */
@@ -157,9 +160,9 @@ export async function mount(root, ctx) {
     clear(tabs);
     for (const d of state.dashboards) {
       const active = state.current && d.id === state.current.id;
-      tabs.append(h('a', { class: `chip ${active ? 'active' : ''}`, role: 'tab', 'aria-selected': active ? 'true' : 'false', href: `#/dashboard/${d.id}` }, d.name));
+      tabs.append(h('a', { class: `chip ${active ? 'active' : ''}`, 'aria-current': active ? 'page' : null, href: `#/dashboard/${d.id}` }, d.name));
     }
-    tabs.append(h('button', { class: 'chip', type: 'button', title: 'New dashboard', onclick: newDashboard }, icon('plus'), 'New'));
+    tabs.append(h('button', { class: 'chip admin-only', type: 'button', 'aria-label': 'New dashboard', title: 'New dashboard', onclick: newDashboard }, icon('plus'), 'New'));
   }
 
   /* ---------- Dashboard CRUD ---------- */
