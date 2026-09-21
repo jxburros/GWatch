@@ -42,6 +42,19 @@ The 2026-09-21 sprint: everything labelled `sprint-plan` in the tracker.
   is versioned on its own (`skill/VERSION`); GWatch remembers who last
   downloaded it and when, and quietly notes on that card when a newer one has
   shipped.
+- **Your own PostgreSQL or MySQL/MariaDB server can hold the database**
+  (#34). SQLite stays the zero-configuration default and every release is
+  tested against it first; an administrator who already runs a database
+  server can point GWatch at it with the `--db-*` flags, `GWATCH_DB_*`
+  variables or **Settings › Database**, which tests the connection and saves
+  `database.json` beside `gwatch.db` for the next restart. `gwatch
+  migrate-db` copies an existing SQLite install across in one go, backups and
+  restores are the same encrypted archive whichever database they came from,
+  and CI runs the store, API, engine and backup suites against PostgreSQL 16
+  and MySQL 8 as well as SQLite. `docs/DATABASE.md` covers choosing,
+  configuring and moving. The backup format is now version 2 and carries
+  accounts, API keys, agents, wallboards and hardware readings; older archives
+  still restore.
 - **A Docker image** (#51): `ghcr.io/jxburros/gwatch`, published for
   linux/amd64 and linux/arm64 on every release, with a Compose file and
   `docs/DOCKER.md` covering the `/data` volume, the first administrator

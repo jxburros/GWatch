@@ -11,7 +11,7 @@ export const ROUTES = [
   'dashboard', 'nodes', 'nodes/new', 'nodes/bulk', `nodes/${FIRST_NODE}`, `nodes/${FIRST_NODE}/edit`,
   'charts', 'incidents', 'audit', 'audit/log', 'audit/exports',
   'settings/general', 'settings/appearance', 'settings/indicators', 'settings/users', 'settings/network', 'settings/alerts',
-  'settings/automation', 'settings/hardware', 'settings/mcp', 'settings/retention', 'settings/maintenance', 'settings/backups',
+  'settings/automation', 'settings/hardware', 'settings/mcp', 'settings/retention', 'settings/maintenance', 'settings/backups', 'settings/database',
   'settings/updates', 'settings/health', 'settings/about',
   'help', 'wallboards', 'wallboard', 'login', 'onboarding',
 ];
