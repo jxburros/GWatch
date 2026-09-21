@@ -53,6 +53,16 @@ The 2026-09-21 sprint: everything labelled `sprint-plan` in the tracker.
   `mattn/go-sqlite3` for people building from source. CI runs the store under
   all three, and Settings and `/api/health` say which one a build uses.
 
+- **An accessibility pass across the interface** (#38). Dialogs name
+  themselves by their heading, make the page behind them inert and hand focus
+  back where it came from; menus, wallboard tabs and the dashboard grid work
+  from the keyboard (arrows move a widget, Shift+arrows resize it); every
+  chart canvas can be stepped through with the arrow keys and offers a "View
+  as table" alternative; form errors are tied to their fields; the focus ring
+  survives forced-colours mode; and the skip link, which the hash router had
+  quietly broken, works again. Playwright runs axe over every route in both
+  themes in CI so it stays that way.
+
 ### Changed
 
 - **The interface is responsive, not a phone app** (#54). The one piece of
