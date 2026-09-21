@@ -22,6 +22,9 @@
   --accent-line: rgba(var(--accent-rgb), 0.55);
   /* A ring, not a bloom: the accent no longer glows anywhere. */
   --focus: 0 0 0 2px rgba(var(--accent-rgb), 0.55);
+  /* The same ring drawn inside the box, for controls whose parent clips
+     anything outside them (the rail, the tab strip, a scrolling widget). */
+  --focus-inset: inset 0 0 0 2px rgba(var(--accent-rgb), 0.55);
   /* Ink for anything filled with the accent. Teal is a fill colour, never a
      white-text background. */
   --on-accent: #0f1114;
@@ -258,7 +261,21 @@ svg.icon { width: 1em; height: 1em; display: inline-block; vertical-align: -0.15
 .skip-link:focus { left: 8px; }
 .eyebrow { font-family: var(--mono); font-size: 0.65625rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--dim); }
 
-:focus-visible { outline: none; box-shadow: var(--focus); }
+:focus-visible { outline: 2px solid transparent; outline-offset: 2px; box-shadow: var(--focus); }
+/* Where an ancestor clips its overflow, the ring is drawn inside the control
+   instead of around it, so it is never cut off: the rail's links (the rail
+   hides its overflow to animate its width), the tab strip (which scrolls
+   sideways), a chart's canvas inside a scrolling widget body. */
+.rail .nav-link:focus-visible, .rail .brand:focus-visible, .tabs .tab:focus-visible, .chart canvas:focus-visible, .row-toggle:focus-visible { box-shadow: var(--focus-inset); outline-offset: -2px; }
+/* A forced-colours mode (Windows High Contrast) drops box-shadows, which is
+   why the ring above is also a transparent outline: here it is given the
+   system's highlight colour so focus stays visible. */
+@media (forced-colors: active) {
+  :focus-visible { outline-color: Highlight; box-shadow: none; }
+  .rail .nav-link:focus-visible, .rail .brand:focus-visible, .tabs .tab:focus-visible, .chart canvas:focus-visible, .row-toggle:focus-visible { outline-offset: -2px; }
+  .chip.active, .chip[aria-pressed="true"], .tab.active, .tab[aria-current="page"], .settings-nav a.active { outline: 2px solid Highlight; outline-offset: -2px; }
+  .modal, .menu, .tip { border-color: CanvasText; }
+}
 ::selection { background: rgba(var(--accent-rgb), 0.4); }
 
 @media (prefers-reduced-motion: reduce) {
