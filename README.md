@@ -106,6 +106,7 @@ Then open <http://127.0.0.1:7230> — monitoring runs only while this process ru
 
 | Document | What it covers |
 |---|---|
+| [`docs/USER-GUIDE.md`](docs/USER-GUIDE.md) | **Start here.** Every screen and setting in the interface, in order: nodes and check types, discovery, bulk edit, dashboards, charts, alerts, rules, automation, wallboards, and the corners most people never find |
 | [`docs/API.md`](docs/API.md) | The JSON API: authentication and roles, every endpoint, custom checks, platform notes |
 | [`docs/INSTALL.md`](docs/INSTALL.md) | The Windows installer walkthrough, the PowerShell scripts, upgrading, uninstalling |
 | [`docs/DATABASE.md`](docs/DATABASE.md) | Keeping the data on your own PostgreSQL or MySQL/MariaDB server instead of the SQLite file: setup, `database.json`, TLS, `gwatch migrate-db` |
