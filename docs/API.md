@@ -287,9 +287,65 @@ echoed as written, so an `Authorization` header on an HTTP check is stored in th
 - `GET /api/checks/{id}/results?limit=50` → `[Result]` newest first.
 - `GET /api/checks/{id}/state` → CheckState.
 
-A ping check's config is `pingCount` (packets per run, default 4, maximum 20) and
-`pingMethod` (`""` to follow `general.pingMethod`, or `auto`/`builtin`/`system` to
-override it), plus the usual `target`, `latencyWarnMs` and `packetLossWarnPct`.
+### Node and Check objects
+
+A `Node` is `{id, name, host, groups, group, tags, notes, importance, enabled,
+dependsOnNodeId, template, createdAt, updatedAt, checks}`. `host` is the default target
+its checks inherit when their own `config.target` is empty; `importance` is `low`,
+`normal`, `high` or `critical`; `dependsOnNodeId` is the parent used for
+dependency-aware alert suppression; `template` records which template the node was
+created from and is informational only. `group` is the deprecated single-group alias
+described above.
+
+A `Check` is `{id, nodeId, type, name, enabled, intervalSeconds, timeoutSeconds,
+retries, failureThreshold, config, alerts, sortOrder, createdAt, updatedAt}`.
+`intervalSeconds` is bounded below by `general.minIntervalSeconds` (10 by default) and
+by a hard floor of 10 seconds that no setting lifts; `timeoutSeconds` bounds one
+attempt; `retries` is how many immediate retries happen inside a single run before it
+counts as a failure; and `failureThreshold` is how many consecutive failed runs make
+the check `down` (`0` follows `alerts.failureThreshold`).
+`alerts` is an optional per-check `AlertOverride`; `sortOrder` is the position in the
+node's list.
+
+### Check config by type
+
+Every type reads `config.target`, which overrides the node's `host`: a hostname or IP
+for `ping`, `tcp`, `dns` and `cert`, a URL for `http`, `keyword` and `json` (the scheme
+is optional and `https` is assumed). `latencyWarnMs` and `packetLossWarnPct` are the
+warning thresholds on any type that measures them (`0` means off, and an unset value
+falls back to `general.latencyWarnMs` / `general.packetLossWarnPct`).
+
+| type | config fields |
+| --- | --- |
+| `ping` | `pingCount` (packets per run, default 4, max 20), `pingMethod` (`""` follows `general.pingMethod`, else `auto`/`builtin`/`system`) |
+| `http` | `method` (default `GET`), `expectedStatus` (`"200"`, `"200-299"`, `"200,301,302"`; default `"200-399"`), `followRedirects` (default `true`), `headers`, `body`, `ignoreTlsErrors`, `certCheck` (also judge certificate expiry — default `true` on https), `certWarnDays`, `contentWatch`, `contentHeader` |
+| `keyword` | everything `http` takes, plus `keyword` (the text that must be present) and `keywordAbsent` (`true` inverts it: the text must **not** be present) |
+| `json` | everything `http` takes, plus `jsonPath` (dotted, e.g. `status` or `data.items[0].name`), `jsonExpected` (empty means "the path must merely exist") and the recording fields `jsonRecord`, `jsonMetric`, `jsonUnit`, `jsonWarnAbove`, `jsonCritAbove`, `jsonWarnBelow`, `jsonCritBelow` — see [Named metrics](#named-metrics) |
+| `cert` | `port` (default 443), `certWarnDays` (warn this many days before expiry, default 14) |
+| `tcp` | `port` (required) |
+| `dns` | `recordType` (`A` — the default, which resolves A and AAAA — or `CNAME`, `MX`, `TXT`), `expectedIps` (optional list; every resolved value must be in it) and `dnsServer` (optional resolver `host[:port]`; the system resolver otherwise) |
+| `custom` | `command`, `workDir`, `env` — see the output contract above |
+| `system` | `hostSource`, `agentId`, `metricsUrl`, `metricsToken`, `metricThresholds`, `diskMounts`, `staleAfterSeconds` — see [Hardware check metrics](#hardware-check-metrics) |
+| `snmp` | the `snmp*` fields in the table above |
+
+`contentWatch` turns an `http`, `keyword` or `json` check into a change watch as well:
+`""` (off), `"hash"` (the body's digest), `"header"` (the header named by
+`contentHeader`, e.g. `ETag` or `Last-Modified`), `"redirect"` (the final URL), or
+`"keyword"` / `"json"` (the text or value the check already extracts). A change records
+a `content_changed` event and marks the check degraded.
+
+A `system` check's `hostSource` says which machine it reads: `local` (the computer
+GWatch runs on), `agent` (the newest reading pushed by the registered machine named by
+`agentId`) or `url` (scraped from `metricsUrl`, with `metricsToken` as the bearer
+token). `staleAfterSeconds` is how old a reading may be before the check calls the
+machine down; `0` means three times the check's interval. See
+[`HARDWARE.md`](HARDWARE.md).
+
+The flat hardware thresholds `cpuWarnPct`, `cpuCritPct`, `memWarnPct`, `memCritPct`,
+`swapWarnPct`, `diskWarnPct`, `diskCritPct`, `loadWarnPerCore` and `loadCritPerCore`
+are **deprecated**. They are still read, so an older configuration keeps working, and
+are converted into `metricThresholds` the first time the check is saved; nothing writes
+them any more.
 
 A `Result` is one observation: `{id, checkId, ts, success, status, message, error,
 latencyMs, minMs, maxMs, jitterMs, stddevMs, lossPct, details, attempts, warnings}`.
@@ -714,6 +770,39 @@ check's `warning` / `warning_cleared` for `disk:/srv` — carries the metric's k
 `metric` (see [Hardware check metrics](#hardware-check-metrics)). It is absent on
 every other event.
 
+### Event types
+
+`Event.type` is one of:
+
+| type | recorded when |
+| --- | --- |
+| `down` | a check crossed its failure threshold |
+| `recovered` | a check that was down answered again |
+| `warning` | a check went degraded — a threshold crossed, high latency, packet loss. Carries `metric` when it is one reading rather than the whole check |
+| `warning_cleared` | the degraded condition went away |
+| `cert_warning` | a TLS certificate is expiring, or is not valid |
+| `cert_warning_cleared` | the certificate is valid and no longer close to expiry |
+| `content_changed` | a `contentWatch` saw the response differ from the previous observation |
+| `alert_sent` | an alert email went out |
+| `alert_suppressed` | an alert was not sent — cooldown, silencing, maintenance, or a parent node being down |
+| `alert_failed` | an alert email could not be delivered |
+| `silenced` / `unsilenced` | a check or node was silenced for a while, or released early |
+| `maintenance_began` / `maintenance_ended` | a maintenance window opened or closed |
+| `config_changed` | nodes, checks, settings, the database configuration or anything else in the configuration was changed |
+| `affected_by_parent` | a check was not alerted on because the node it depends on is down |
+| `service_started` / `service_stopped` | the monitoring service came up or shut down |
+| `monitor_gap` | the monitoring computer was asleep or offline, so there is a hole in the history |
+| `internal_error` | GWatch itself hit an error worth surfacing |
+| `backup` / `restore` | a backup was written, or an archive restored |
+| `retention` | a rollup + cleanup pass ran |
+| `note` | a human annotation, from `POST /api/events/note` |
+| `trigger_fired` | an automation trigger ran its action |
+| `endpoint_called` | a custom inbound endpoint was invoked |
+| `update` | an application update was checked for or applied — and the agent-skill download |
+| `auth` | a sign-in, sign-out, failed sign-in, or an account or API-key change |
+| `discovery` | a subnet was swept, or nodes were added from a sweep |
+| `rule_fired` / `rule_cleared` | a notification rule's conditions came together, or came apart again |
+
 ## Maintenance windows
 
 - `GET /api/maintenance` → `[MaintenanceWindow]` (each with extra `"active": bool`).
@@ -722,7 +811,7 @@ every other event.
 
 ## Dashboards
 
-- `GET /api/dashboards` → `[Dashboard]`.
+- `GET /api/dashboards` → `[Dashboard]`. `GET /api/dashboards/{id}` → one `Dashboard`.
 - `POST /api/dashboards` body `{name, widgets}` → Dashboard. `PUT /api/dashboards/{id}`, `DELETE /api/dashboards/{id}`.
 - A default "Overview" dashboard is created on first run.
 
@@ -936,6 +1025,52 @@ assistant up, not for the assistant: both are admin-only and refuse every API ke
 - `POST /api/settings/test-email` body `{ "to": "optional@override" }` → `{ "ok": true, "message": "..." }` or error.
 - `GET /api/retention/status` → `RetentionStatus`. `POST /api/retention/run` → runs rollup+cleanup now → RetentionStatus.
 
+`Settings` is `{ general, alerts, retention, backups, updates, indicators }`.
+
+**`general`**
+
+| field | default | meaning |
+| --- | --- | --- |
+| `instanceName` | `GWatch` | the name shown in the header and in alert emails |
+| `defaultIntervalSeconds` | `60` | the interval a new check is created with |
+| `defaultTimeoutSeconds` | `10` | the per-attempt timeout a new check is created with |
+| `maxConcurrentChecks` | `8` | how many checks the scheduler runs at once |
+| `minIntervalSeconds` | `10` | the floor every check's interval is validated against (overload protection). Values under 5 are raised to 5 on save, and a check is refused below 10 seconds regardless |
+| `wallboardRefreshSeconds` | `15` | how often a wallboard redraws |
+| `latencyWarnMs` | `0` (off) | the global latency warning threshold a check inherits |
+| `packetLossWarnPct` | `0` (off) | the global packet-loss warning threshold a check inherits |
+| `pingMethod` | `auto` | `auto`, `builtin` (GWatch's own ICMP sender) or `system` (the platform `ping`). Anything else is a `400`; an empty value, which is what settings saved before this existed contain, reads as `auto` |
+| `theme` | `dark` | `dark`, `light` or `system` |
+| `accentColor` | `#43c9c0` | hex colour used for the accent |
+| `remoteAccess` | `false` | rebinds the listener to every interface, live |
+| `accessPassword` | — | the legacy shared password for other devices (user accounts replace it) |
+| `updateRepo` | `jxburros/GWatch` | the GitHub `owner/repo` checked for releases |
+| `requireLoginLocally` | `false` | makes a browser on this computer sign in too. Refused while no administrator account exists, and ignored until one does |
+
+**`alerts`**
+
+| field | default | meaning |
+| --- | --- | --- |
+| `enabled` | `false` | whether alert email is sent at all |
+| `recipients` | `[]` | where alerts go |
+| `failureThreshold` | `2` | consecutive failed runs before a check is alerted on (a check's own `failureThreshold` overrides it) |
+| `cooldownMinutes` | `60` | the minimum gap between two alerts about the same check |
+| `notifyRecovery` | `true` | also mail when a check recovers |
+| `notifyWarnings` | `true` | also mail on a degraded condition |
+| `certWarnDays` | `14` | how many days before expiry a certificate starts warning |
+| `smtp` | port `587`, `starttls` | `{ host, port, username, password, from, security }`; `security` is `starttls`, `tls` or `none` |
+
+**`retention`** — all in days; `0` means "keep forever".
+
+| field | default | what it bounds |
+| --- | --- | --- |
+| `rawDays` | `30` | individual results (and so any named-metric series — see [Named metrics](#named-metrics)) |
+| `fiveMinDays` | `180` | the 5-minute rollups |
+| `hourlyDays` | `730` | the hourly rollups |
+| `dailyDays` | `0` | the daily rollups |
+| `eventDays` | `730` | the incident/event timeline |
+| `hostDays` | `90` | hardware readings, which are whole snapshots rather than one number |
+
 ### Database
 
 Which database GWatch keeps its data in ([`DATABASE.md`](DATABASE.md)). This is not part of
@@ -1016,9 +1151,9 @@ See [`RESTORE.md`](RESTORE.md) for the end-to-end restore-to-a-new-machine proce
 ## Logs
 
 - `GET /api/logs?limit=200` → `{ "lines": ["...", ...], "file": "path" }`.
-- `GET /api/version` → `{ "version": "...", "platform": "windows/amd64", "apiVersion": 1 }` (see Versioning).
+- `GET /api/version` → `{ "version": "...", "platform": "windows/amd64", "apiVersion": 1 }` (see Versioning). `platform` is included only for an authenticated caller; an anonymous one gets `version` and `apiVersion` alone.
 
 ## Server-sent events
 
-- `GET /api/stream` (text/event-stream) emits `event: update` with `data: {"kind":"result"|"state"|"event"|"config"|"health"|"maintenance"|"trigger"|"endpoint"|"discovery","checkId":..,"nodeId":..}` whenever something changes. The UI uses it to refresh without polling; falling back to polling every 15s is fine.
+- `GET /api/stream` (text/event-stream) emits `event: update` with `data: {"kind":"result"|"state"|"event"|"config"|"health"|"host"|"maintenance"|"trigger"|"endpoint"|"discovery"|"rule","checkId":..,"nodeId":..}` whenever something changes. The UI uses it to refresh without polling; falling back to polling every 15s is fine. A `"host"` update means a new hardware reading arrived, and a `"rule"` update that a notification rule changed or fired; neither carries a `checkId` or `nodeId`.
 - A `"discovery"` update carries the sweep's counters instead of a check or node, a few times a second while one is running and once more when it stops: `{"kind":"discovery","discovery":{"id":"6f1c…","state":"running","scanned":118,"total":254,"responders":9}}`. The results themselves are read from `GET /api/discovery/{id}`.

@@ -43,8 +43,9 @@ one overrides the one above it:
    finds a server: the service is started with `--data-dir` alone, and reads the file.
 3. **Environment variables** `GWATCH_DB_DRIVER`, `GWATCH_DB_HOST`, `GWATCH_DB_PORT`,
    `GWATCH_DB_USER`, `GWATCH_DB_PASSWORD`, `GWATCH_DB_NAME`, `GWATCH_DB_SCHEMA`,
-   `GWATCH_DB_SSLMODE`, `GWATCH_DB_DSN`. The natural way to configure a container
-   ([`DOCKER.md`](DOCKER.md)).
+   `GWATCH_DB_SSLMODE`, `GWATCH_DB_DSN`, plus `GWATCH_DB_PATH` for the SQLite file's
+   location (it has no flag of its own; leave it unset to keep `gwatch.db` in the data
+   directory). The natural way to configure a container ([`DOCKER.md`](DOCKER.md)).
 4. **Command-line flags** `--db-driver`, `--db-host`, `--db-port`, `--db-user`,
    `--db-password`, `--db-name`, `--db-schema`, `--db-sslmode`, `--db-dsn`.
 

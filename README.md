@@ -11,7 +11,9 @@ database (or on your own PostgreSQL/MySQL server — [`docs/DATABASE.md`](docs/D
 when something changes, and shows everything in a compact dark or light web interface
 served on `http://127.0.0.1:7230` (optionally to the rest of your LAN).
 
-No cloud account, no AI features, never exposed to the internet by itself. The product
+No cloud account, no AI features in the product itself, never exposed to the internet
+by itself. (An optional, separate MCP companion can let an assistant *read* your
+monitoring if you set one up — see [`mcp/README.md`](mcp/README.md).) The product
 brief that defines the scope lives in [`local-network-monitoring-product-brief.md`](local-network-monitoring-product-brief.md).
 
 > **GWatch is in beta (0.2.2).** It works and it looks after your data, but the
@@ -20,24 +22,35 @@ brief that defines the scope lives in [`local-network-monitoring-product-brief.m
 > release. [`CHANGELOG.md`](CHANGELOG.md) lists what is in this version and the gaps it
 > ships with. Please [report anything that looks wrong](https://github.com/jxburros/GWatch/issues).
 
-## What's new in 0.2.2
+## What's new
 
-Since 0.2.1: SNMP checks for routers, switches and access points; subnet discovery;
-bulk edit across nodes and checks; nodes can belong to more than one group; status
-indicators in the header; compact lists by default with a "Breathing room" mode; a
-"Ping only" template; ping's own ICMP sender with a method setting and standard
-deviation reporting; the default port moved to 7230; hardware check thresholds shown
-per metric; brighter dark-theme text with WCAG contrast everywhere; a shorter README
-with the detail moved into `docs/`; several security fixes (rate-limited endpoint
-tokens, enforced `Content-Type`, security headers on every response, enforced database
-schema versioning); and CI now runs on Linux and macOS as well as Windows. Full detail
-in [`CHANGELOG.md`](CHANGELOG.md).
+**0.2.2 (current release).** Since 0.2.1: SNMP checks for routers, switches and access
+points; subnet discovery; bulk edit across nodes and checks; nodes can belong to more
+than one group; status indicators in the header; compact lists by default with a
+"Breathing room" mode; a "Ping only" template; ping's own ICMP sender with a method
+setting and standard deviation reporting; the default port moved to 7230; hardware check
+thresholds shown per metric; brighter dark-theme text with WCAG contrast everywhere; a
+shorter README with the detail moved into `docs/`; several security fixes (rate-limited
+endpoint tokens, enforced `Content-Type`, security headers on every response, enforced
+database schema versioning); and CI now runs on Linux and macOS as well as Windows.
+
+**Unreleased** (the `Unreleased` section of the changelog). Hardware metrics stand on their own — every reading has
+its own value, status, threshold, chart, incident and trigger variable; notification
+rules across nodes ("tell me when two of my three DNS servers are down"); JSON checks can
+record and chart the value they read; a **Settings › AI & MCP** page with a downloadable
+agent skill; the database can live on your own PostgreSQL or MySQL/MariaDB server; an
+official Docker image; a build-time choice of SQLite driver; and an accessibility pass
+across the whole interface. Full detail for both in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## What it does
 
 - **Check types**: Ping, HTTP/S, HTTPS certificate, TCP port, DNS, Keyword, JSON, Custom
-  script (run your own command), and Hardware health (this computer, or any machine you
-  install the small agent on — processor, memory, disk, network).
+  script (run your own command), Hardware health (this computer, or any machine you
+  install the small agent on — processor, memory, swap, load, disks, inodes, network and
+  disk throughput) and SNMP (readings off a router, switch or access point).
+- **Every reading stands on its own**: each hardware metric, each SNMP OID and a JSON
+  check's recorded value has its own value, status, threshold, chart, incident and
+  trigger variable.
 - **Nodes** group several checks, with templates, groups, tags, dependencies and importance.
 - **Discovery**: ping a subnet, see what answers with its name and open ports, and add the
   devices you tick as nodes — with a template suggested for each. No nmap, nothing to install.
@@ -45,6 +58,8 @@ in [`CHANGELOG.md`](CHANGELOG.md).
   enabled, alert overrides — across as many nodes and checks as you tick, in one go.
 - **Alerts by email** after N consecutive failures, on recovery, or for warnings, with
   cooldowns, silencing, maintenance windows and dependency-aware suppression.
+- **Notification rules** across nodes — "tell me when two of my three DNS servers are
+  down" — joined by all, any or at-least-N, with the same actions triggers use.
 - **Incident timeline**, **dashboards**, a **Charts** tab and an **Audit** tab with full
   history — retained and rolled up automatically so the database never grows without bound.
 - **Automation**: triggers and custom inbound endpoints run webhooks, Slack/Teams/ntfy/
@@ -53,8 +68,14 @@ in [`CHANGELOG.md`](CHANGELOG.md).
   The interface is responsive, so a narrow window or a tablet can read it, but it is built
   for a desk: GWatch is not a phone app and is not designed to run on phone hardware.
 - **Accounts and API keys**, scoped read-only or read-write, plus opt-in **remote access**.
+- **Your choice of database**: the embedded SQLite file by default, or your own
+  PostgreSQL or MySQL/MariaDB server, with `gwatch migrate-db` to move an install across.
+- **Runs anywhere**: a Windows service, a console program on Linux/macOS, or the official
+  multi-arch Docker image.
 - **Self-updating**, with every release cryptographically signed and verified before install.
 - **Backups**: one-click, password-encrypted, restorable on a new machine in one step.
+- **Keyboard- and screen-reader-accessible** throughout, with a "View as table"
+  alternative for every chart; CI runs axe over every route in both themes.
 
 ## Install
 
@@ -65,10 +86,12 @@ a port and whether to allow other devices on your network, then installs and sta
 uninstalling): [`docs/INSTALL.md`](docs/INSTALL.md).
 
 **Docker** — `docker run -d --name gwatch -p 7230:7230 -v gwatch-data:/data --cap-add NET_RAW ghcr.io/jxburros/gwatch:latest`,
-then open `http://<the docker host>:7230` and create the first administrator account.
-Multi-arch (`linux/amd64`, `linux/arm64`), a `docker-compose.yml` in the repository root,
-and what changes inside a container (ping, discovery, hardware readings, upgrades):
-[`docs/DOCKER.md`](docs/DOCKER.md).
+then create the first administrator account with one `docker exec` (a request from your
+browser does not arrive over loopback, so the no-password local shortcut does not apply
+in a container) and open `http://<the docker host>:7230`. Multi-arch (`linux/amd64`,
+`linux/arm64`), a `docker-compose.yml` in the repository root, the exact first-run
+command, and what else changes inside a container (ping, discovery, hardware readings,
+upgrades): [`docs/DOCKER.md`](docs/DOCKER.md).
 
 **Linux/macOS** — run it straight from source (Go 1.26+):
 

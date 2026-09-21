@@ -30,7 +30,9 @@ type SendFunc func(ctx context.Context, settings model.SMTPSettings, msg mailer.
 
 // Update is broadcast to API subscribers whenever something changes.
 type Update struct {
-	Kind    string `json:"kind"` // result | state | event | config | maintenance | health | discovery
+	// Kind is one of: result | state | event | config | health | host |
+	// maintenance | trigger | endpoint | discovery | rule.
+	Kind    string `json:"kind"`
 	CheckID int64  `json:"checkId,omitempty"`
 	NodeID  int64  `json:"nodeId,omitempty"`
 	// Discovery carries a subnet sweep's progress. A sweep is the one thing

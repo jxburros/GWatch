@@ -1,5 +1,6 @@
 // Package checks executes the individual monitor types (ping, http, cert,
-// tcp, dns, keyword, json) and turns the outcome into a model.Result.
+// tcp, dns, keyword, json, custom, system and snmp) and turns the outcome into
+// a model.Result.
 //
 // Run never returns an error: every failure, including a configuration
 // problem, is reported as a Result with Success=false so that the engine can
