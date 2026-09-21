@@ -7,7 +7,7 @@
 GWatch is a calm monitor for a home network and its services. It runs as a Windows
 background service (or a plain console program on Linux/macOS), checks your router,
 servers, websites and APIs on a schedule, keeps long-term history in an embedded SQLite
-database, sends email alerts that do not spam, can run webhooks / git commands / scripts
+database (or on your own PostgreSQL/MySQL server — [`docs/DATABASE.md`](docs/DATABASE.md)), sends email alerts that do not spam, can run webhooks / git commands / scripts
 when something changes, and shows everything in a compact dark or light web interface
 served on `http://127.0.0.1:7230` (optionally to the rest of your LAN).
 
@@ -85,6 +85,7 @@ Then open <http://127.0.0.1:7230> — monitoring runs only while this process ru
 |---|---|
 | [`docs/API.md`](docs/API.md) | The JSON API: authentication and roles, every endpoint, custom checks, platform notes |
 | [`docs/INSTALL.md`](docs/INSTALL.md) | The Windows installer walkthrough, the PowerShell scripts, upgrading, uninstalling |
+| [`docs/DATABASE.md`](docs/DATABASE.md) | Keeping the data on your own PostgreSQL or MySQL/MariaDB server instead of the SQLite file: setup, `database.json`, TLS, `gwatch migrate-db` |
 | [`docs/DOCKER.md`](docs/DOCKER.md) | Running GWatch in a container: the first account, the `/data` volume, ping and discovery inside Docker, upgrading by pulling |
 | [`docs/HARDWARE.md`](docs/HARDWARE.md) | Hardware health, the agent, its trust model, and what each platform can measure |
 | [`docs/SNMP.md`](docs/SNMP.md) | SNMP checks: enabling SNMP on a router or switch, choosing OIDs, interface traffic in bits per second |

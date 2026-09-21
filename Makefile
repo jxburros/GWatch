@@ -4,7 +4,7 @@
 VERSION ?= $(shell tr -d ' \t\r\n' < VERSION)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build build-ncruces build-cgo windows docker rsrc agent agent-all test test-race cover fmt fmt-check vet tidy-check web-check web-test web-e2e ci run keygen sign verify-release mcp-build mcp-test mcp-fmt
+.PHONY: build build-ncruces build-cgo windows docker rsrc agent agent-all test test-race test-postgres test-mysql cover fmt fmt-check vet tidy-check web-check web-test web-e2e ci run keygen sign verify-release mcp-build mcp-test mcp-fmt
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/gwatch .
@@ -66,6 +66,15 @@ agent-all:
 
 test:
 	go vet ./... && go test ./...
+
+# The same store-facing suites against a server (docs/DATABASE.md). Point the
+# DSN at a throwaway server whose user may CREATE SCHEMA / CREATE DATABASE.
+PG_TEST_DSN ?= postgres://gwatch:gwatch@localhost:5432/gwatch?sslmode=disable
+MYSQL_TEST_DSN ?= gwatch:gwatch@tcp(127.0.0.1:3306)/gwatch
+test-postgres:
+	GWATCH_TEST_DB=postgres GWATCH_TEST_PG_DSN='$(PG_TEST_DSN)' go test -count=1 ./internal/store/... ./internal/backup/... ./internal/api/... ./internal/engine/... ./internal/hostmon/...
+test-mysql:
+	GWATCH_TEST_DB=mysql GWATCH_TEST_MYSQL_DSN='$(MYSQL_TEST_DSN)' go test -count=1 ./internal/store/... ./internal/backup/... ./internal/api/... ./internal/engine/... ./internal/hostmon/...
 
 # What CI runs: the race detector catches scheduler/logger data races.
 test-race:

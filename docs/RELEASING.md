@@ -22,6 +22,11 @@ local `httptest` servers and a fake in-process DNS resolver, and ping output is 
 from fixtures, so the tests are deterministic on a CI runner. See the [`Makefile`](../Makefile)
 for what each target actually runs.
 
+By default every test runs on SQLite. The store, backup, API, engine and hostmon suites
+also run against a PostgreSQL or MySQL server when `GWATCH_TEST_DB` and a DSN are set —
+see [`DATABASE.md`](DATABASE.md#for-developers); CI does this on the Linux job with
+service containers.
+
 ## Continuous integration
 
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on every push and pull
@@ -30,7 +35,7 @@ request as three jobs:
 | Job | Runner | What it does |
 |---|---|---|
 | `ci` ("Lint, build, test (Windows)") | `windows-latest` | gofmt, vet, `go mod tidy`/`verify`, build + full test suite, the mcp/ module, web-asset `node --check`, PowerShell script parsing, and compiles both Inno Setup installers |
-| `linux` ("Test (Linux)") | `ubuntu-latest` | gofmt, vet, build, full test suite (root and mcp/), a `-race` pass over `internal/engine`, `internal/api`, `internal/store` and `internal/hostmon`, and `govulncheck` for both modules |
+| `linux` ("Test (Linux)") | `ubuntu-latest` | gofmt, vet, build, full test suite (root and mcp/), a `-race` pass over `internal/engine`, `internal/api`, `internal/store` and `internal/hostmon`, the store/backup/api suites against PostgreSQL 16 and MySQL 8 service containers ([`DATABASE.md`](DATABASE.md#for-developers)), and `govulncheck` for both modules |
 | `macos` ("Test (macOS)") | `macos-latest` | vet + test only — deliberately lean, but this is what actually compiles and exercises `internal/sysmetrics/collect_darwin.go` |
 | `docker` ("Container image") | `ubuntu-latest` | builds the `Dockerfile` for `linux/amd64`, checks `gwatch version` inside it, then starts the container and waits for `/api/health` to answer 200 |
 

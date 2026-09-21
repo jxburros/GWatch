@@ -51,7 +51,9 @@ Override it with `--data-dir` or the `GWATCH_DATA_DIR` environment variable.
 The directory holds:
 
 - `gwatch.db` — an embedded SQLite database, the single home for everything
-  below;
+  below (unless you pointed GWatch at your own PostgreSQL or MySQL server, in
+  which case the same tables live there and `database.json` in this directory
+  says where — [`DATABASE.md`](DATABASE.md));
 - `gwatch.key` — the key file used to encrypt secrets stored in that database,
   created on first run with mode `0600`;
 - `logs/` — the service log;

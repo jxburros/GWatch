@@ -203,6 +203,36 @@ jobs:
   linux:
     name: Test (Linux)
     runs-on: ubuntu-latest
+    # The store can keep GWatch's data on a PostgreSQL or MySQL server instead
+    # of the SQLite file (docs/DATABASE.md). Two service containers let the
+    # suites that open a database run against each one below, after the
+    # SQLite pass; a dialect bug shows up here rather than on somebody's
+    # server. The test user needs CREATE SCHEMA / CREATE DATABASE, since every
+    # test works in a schema of its own, so it is the superuser on both.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: gwatch
+          POSTGRES_PASSWORD: gwatch
+          POSTGRES_DB: gwatch
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U gwatch"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: gwatch
+          MYSQL_DATABASE: gwatch
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -pgwatch --silent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -230,6 +260,21 @@ jobs:
       # and the agent-facing hardware-monitoring code.
       - name: Race tests
         run: go test -race -count=1 ./internal/engine/... ./internal/api/... ./internal/store/... ./internal/hostmon/...
+
+      # The same suites on the two server backends. The store's own tests are
+      # the point; backup covers the SQLite-to-server copy behind
+      # "gwatch migrate-db", and api the Settings › Database routes.
+      - name: Store under PostgreSQL
+        env:
+          GWATCH_TEST_DB: postgres
+          GWATCH_TEST_PG_DSN: postgres://gwatch:gwatch@localhost:5432/gwatch?sslmode=disable
+        run: go test -count=1 ./internal/store/... ./internal/backup/... ./internal/api/...
+
+      - name: Store under MySQL
+        env:
+          GWATCH_TEST_DB: mysql
+          GWATCH_TEST_MYSQL_DSN: root:gwatch@tcp(127.0.0.1:3306)/gwatch
+        run: go test -count=1 ./internal/store/... ./internal/backup/... ./internal/api/...
 
       # The SQLite driver is picked by build tag (internal/store/driver.go).
       # Everything above ran on the default, modernc.org/sqlite; these two

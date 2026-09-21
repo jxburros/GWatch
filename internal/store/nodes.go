@@ -43,7 +43,7 @@ func scanNode(sc interface{ Scan(...any) error }) (model.Node, error) {
 
 // ListNodes returns all nodes with their checks, ordered by name.
 func (s *Store) ListNodes(ctx context.Context) ([]model.Node, error) {
-	rows, err := s.reader.QueryContext(ctx, "SELECT "+nodeCols+" FROM nodes ORDER BY name COLLATE NOCASE")
+	rows, err := s.query(ctx, "SELECT "+nodeCols+" FROM nodes ORDER BY "+s.d.ci("name"))
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +78,7 @@ func (s *Store) ListNodes(ctx context.Context) ([]model.Node, error) {
 
 // GetNode returns a node with its checks.
 func (s *Store) GetNode(ctx context.Context, id int64) (model.Node, error) {
-	row := s.reader.QueryRowContext(ctx, "SELECT "+nodeCols+" FROM nodes WHERE id = ?", id)
+	row := s.queryRow(ctx, "SELECT "+nodeCols+" FROM nodes WHERE id = ?", id)
 	n, err := scanNode(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return n, ErrNotFound
@@ -105,14 +105,14 @@ func (s *Store) CreateNode(ctx context.Context, n model.Node) (model.Node, error
 	if n.Importance == "" {
 		n.Importance = model.ImportanceNormal
 	}
-	err := s.WriteTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `INSERT INTO nodes(name, host, group_name, "groups", tags, notes, importance, enabled, depends_on_node_id, template, created_at, updated_at)
+	err := s.writeTx(ctx, func(tx *wtx) error {
+		newID, err := tx.insertID(ctx, `INSERT INTO nodes(name, host, group_name, "groups", tags, notes, importance, enabled, depends_on_node_id, template, created_at, updated_at)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 			n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), n.Template, fmtTime(now), fmtTime(now))
 		if err != nil {
 			return err
 		}
-		n.ID, _ = res.LastInsertId()
+		n.ID = newID
 		for i := range n.Checks {
 			n.Checks[i].NodeID = n.ID
 			n.Checks[i].ID = 0
@@ -147,8 +147,8 @@ func (s *Store) UpdateNode(ctx context.Context, n model.Node) (model.Node, []int
 		n.DependsOnNode = nil
 	}
 	var deleted []int64
-	err := s.WriteTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `UPDATE nodes SET name=?, host=?, group_name=?, "groups"=?, tags=?, notes=?, importance=?, enabled=?, depends_on_node_id=?, template=?, updated_at=? WHERE id=?`,
+	err := s.writeTx(ctx, func(tx *wtx) error {
+		res, err := tx.exec(ctx, `UPDATE nodes SET name=?, host=?, group_name=?, "groups"=?, tags=?, notes=?, importance=?, enabled=?, depends_on_node_id=?, template=?, updated_at=? WHERE id=?`,
 			n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), n.Template, fmtTime(now), n.ID)
 		if err != nil {
 			return err
@@ -157,7 +157,7 @@ func (s *Store) UpdateNode(ctx context.Context, n model.Node) (model.Node, []int
 			return ErrNotFound
 		}
 		existing := map[int64]bool{}
-		rows, err := tx.QueryContext(ctx, "SELECT id FROM checks WHERE node_id = ?", n.ID)
+		rows, err := tx.query(ctx, "SELECT id FROM checks WHERE node_id = ?", n.ID)
 		if err != nil {
 			return err
 		}
@@ -189,7 +189,7 @@ func (s *Store) UpdateNode(ctx context.Context, n model.Node) (model.Node, []int
 		}
 		for id := range existing {
 			if !keep[id] {
-				if _, err := tx.ExecContext(ctx, "DELETE FROM checks WHERE id = ?", id); err != nil {
+				if _, err := tx.exec(ctx, "DELETE FROM checks WHERE id = ?", id); err != nil {
 					return err
 				}
 				deleted = append(deleted, id)
@@ -202,7 +202,7 @@ func (s *Store) UpdateNode(ctx context.Context, n model.Node) (model.Node, []int
 
 // SetNodeEnabled toggles a node.
 func (s *Store) SetNodeEnabled(ctx context.Context, id int64, enabled bool) error {
-	res, err := s.Exec(ctx, "UPDATE nodes SET enabled=?, updated_at=? WHERE id=?", boolInt(enabled), fmtTime(time.Now()), id)
+	res, err := s.exec(ctx, "UPDATE nodes SET enabled=?, updated_at=? WHERE id=?", boolInt(enabled), fmtTime(time.Now()), id)
 	if err != nil {
 		return err
 	}
@@ -214,7 +214,7 @@ func (s *Store) SetNodeEnabled(ctx context.Context, id int64, enabled bool) erro
 
 // DeleteNode removes a node, its checks, results, rollups and state.
 func (s *Store) DeleteNode(ctx context.Context, id int64) error {
-	res, err := s.Exec(ctx, "DELETE FROM nodes WHERE id = ?", id)
+	res, err := s.exec(ctx, "DELETE FROM nodes WHERE id = ?", id)
 	if err != nil {
 		return err
 	}
@@ -275,7 +275,7 @@ func (s *Store) BulkUpdate(ctx context.Context, nodes []model.Node, checks []mod
 	}
 	now := time.Now()
 	res := BulkResult{}
-	err := s.WriteTx(ctx, func(tx *sql.Tx) error {
+	err := s.writeTx(ctx, func(tx *wtx) error {
 		res = BulkResult{}
 		for _, n := range nodes {
 			n.SyncGroups()
@@ -288,7 +288,7 @@ func (s *Store) BulkUpdate(ctx context.Context, nodes []model.Node, checks []mod
 			if n.DependsOnNode != nil && *n.DependsOnNode == n.ID {
 				n.DependsOnNode = nil
 			}
-			out, err := tx.ExecContext(ctx, `UPDATE nodes SET group_name=?, "groups"=?, tags=?, importance=?, enabled=?, depends_on_node_id=?, updated_at=? WHERE id=?`,
+			out, err := tx.exec(ctx, `UPDATE nodes SET group_name=?, "groups"=?, tags=?, importance=?, enabled=?, depends_on_node_id=?, updated_at=? WHERE id=?`,
 				n.Group, jsonString(n.Groups), jsonString(n.Tags), string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), fmtTime(now), n.ID)
 			if err != nil {
 				return err
@@ -390,7 +390,7 @@ func (s *Store) scanCheck(sc interface{ Scan(...any) error }) (model.Check, erro
 	return c, nil
 }
 
-func (s *Store) insertCheck(ctx context.Context, tx *sql.Tx, c model.Check) (model.Check, error) {
+func (s *Store) insertCheck(ctx context.Context, tx *wtx, c model.Check) (model.Check, error) {
 	now := time.Now()
 	c.CreatedAt, c.UpdatedAt = now, now
 	var alerts any
@@ -404,18 +404,18 @@ func (s *Store) insertCheck(ctx context.Context, tx *sql.Tx, c model.Check) (mod
 	if err := s.sealCheckConfig(&stored); err != nil {
 		return c, err
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO checks(node_id, type, name, enabled, interval_seconds, timeout_seconds, retries, failure_threshold, config, alerts, sort_order, created_at, updated_at)
+	newID, err := tx.insertID(ctx, `INSERT INTO checks(node_id, type, name, enabled, interval_seconds, timeout_seconds, retries, failure_threshold, config, alerts, sort_order, created_at, updated_at)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		c.NodeID, string(c.Type), c.Name, boolInt(c.Enabled), c.IntervalSeconds, c.TimeoutSeconds, c.Retries, c.FailureThreshold, jsonString(stored), alerts, c.SortOrder, fmtTime(now), fmtTime(now))
 	if err != nil {
 		return c, err
 	}
-	c.ID, _ = res.LastInsertId()
-	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO check_state(check_id, status) VALUES (?, 'unknown')`, c.ID)
+	c.ID = newID
+	_, err = tx.exec(ctx, s.d.insertIgnore("check_state", []string{"check_id", "status"}), c.ID, "unknown")
 	return c, err
 }
 
-func (s *Store) updateCheck(ctx context.Context, tx *sql.Tx, c model.Check) (model.Check, error) {
+func (s *Store) updateCheck(ctx context.Context, tx *wtx, c model.Check) (model.Check, error) {
 	now := time.Now()
 	c.UpdatedAt = now
 	var alerts any
@@ -426,7 +426,7 @@ func (s *Store) updateCheck(ctx context.Context, tx *sql.Tx, c model.Check) (mod
 	if err := s.sealCheckConfig(&stored); err != nil {
 		return c, err
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE checks SET node_id=?, type=?, name=?, enabled=?, interval_seconds=?, timeout_seconds=?, retries=?, failure_threshold=?, config=?, alerts=?, sort_order=?, updated_at=? WHERE id=?`,
+	res, err := tx.exec(ctx, `UPDATE checks SET node_id=?, type=?, name=?, enabled=?, interval_seconds=?, timeout_seconds=?, retries=?, failure_threshold=?, config=?, alerts=?, sort_order=?, updated_at=? WHERE id=?`,
 		c.NodeID, string(c.Type), c.Name, boolInt(c.Enabled), c.IntervalSeconds, c.TimeoutSeconds, c.Retries, c.FailureThreshold, jsonString(stored), alerts, c.SortOrder, fmtTime(now), c.ID)
 	if err != nil {
 		return c, err
@@ -437,13 +437,13 @@ func (s *Store) updateCheck(ctx context.Context, tx *sql.Tx, c model.Check) (mod
 	if affected, _ := res.RowsAffected(); affected == 0 {
 		return c, ErrNotFound
 	}
-	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO check_state(check_id, status) VALUES (?, 'unknown')`, c.ID)
+	_, err = tx.exec(ctx, s.d.insertIgnore("check_state", []string{"check_id", "status"}), c.ID, "unknown")
 	return c, err
 }
 
 // ListChecks returns all checks ordered by node and sort order.
 func (s *Store) ListChecks(ctx context.Context) ([]model.Check, error) {
-	rows, err := s.reader.QueryContext(ctx, "SELECT "+checkCols+" FROM checks ORDER BY node_id, sort_order, id")
+	rows, err := s.query(ctx, "SELECT "+checkCols+" FROM checks ORDER BY node_id, sort_order, id")
 	if err != nil {
 		return nil, err
 	}
@@ -464,7 +464,7 @@ func (s *Store) ListChecks(ctx context.Context) ([]model.Check, error) {
 
 // ListChecksForNode returns the checks belonging to a node.
 func (s *Store) ListChecksForNode(ctx context.Context, nodeID int64) ([]model.Check, error) {
-	rows, err := s.reader.QueryContext(ctx, "SELECT "+checkCols+" FROM checks WHERE node_id = ? ORDER BY sort_order, id", nodeID)
+	rows, err := s.query(ctx, "SELECT "+checkCols+" FROM checks WHERE node_id = ? ORDER BY sort_order, id", nodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -482,7 +482,7 @@ func (s *Store) ListChecksForNode(ctx context.Context, nodeID int64) ([]model.Ch
 
 // GetCheck returns one check.
 func (s *Store) GetCheck(ctx context.Context, id int64) (model.Check, error) {
-	row := s.reader.QueryRowContext(ctx, "SELECT "+checkCols+" FROM checks WHERE id = ?", id)
+	row := s.queryRow(ctx, "SELECT "+checkCols+" FROM checks WHERE id = ?", id)
 	c, err := s.scanCheck(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, ErrNotFound
@@ -492,7 +492,7 @@ func (s *Store) GetCheck(ctx context.Context, id int64) (model.Check, error) {
 
 // SetCheckEnabled toggles a check.
 func (s *Store) SetCheckEnabled(ctx context.Context, id int64, enabled bool) error {
-	res, err := s.Exec(ctx, "UPDATE checks SET enabled=?, updated_at=? WHERE id=?", boolInt(enabled), fmtTime(time.Now()), id)
+	res, err := s.exec(ctx, "UPDATE checks SET enabled=?, updated_at=? WHERE id=?", boolInt(enabled), fmtTime(time.Now()), id)
 	if err != nil {
 		return err
 	}
@@ -505,6 +505,9 @@ func (s *Store) SetCheckEnabled(ctx context.Context, id int64, enabled bool) err
 // ---- check state ----
 
 const stateCols = `check_id, status, consecutive_failures, last_run_at, last_success_at, last_change_at, next_run_at, last_message, last_latency_ms, alert_active, alert_suppressed, suppress_reason, last_alert_at, silenced_until, affected_by_check_id, warning_active, cert_warning_active, last_content_hash, last_content_value, metric_status`
+
+// stateColList is stateCols as a slice, for the generated upsert.
+var stateColList = strings.Split(strings.ReplaceAll(stateCols, " ", ""), ",")
 
 func scanState(sc interface{ Scan(...any) error }) (model.CheckState, error) {
 	var st model.CheckState
@@ -536,7 +539,7 @@ func scanState(sc interface{ Scan(...any) error }) (model.CheckState, error) {
 
 // ListStates returns the live state of every check.
 func (s *Store) ListStates(ctx context.Context) (map[int64]model.CheckState, error) {
-	rows, err := s.reader.QueryContext(ctx, "SELECT "+stateCols+" FROM check_state")
+	rows, err := s.query(ctx, "SELECT "+stateCols+" FROM check_state")
 	if err != nil {
 		return nil, err
 	}
@@ -554,7 +557,7 @@ func (s *Store) ListStates(ctx context.Context) (map[int64]model.CheckState, err
 
 // GetState returns the state of one check.
 func (s *Store) GetState(ctx context.Context, checkID int64) (model.CheckState, error) {
-	row := s.reader.QueryRowContext(ctx, "SELECT "+stateCols+" FROM check_state WHERE check_id = ?", checkID)
+	row := s.queryRow(ctx, "SELECT "+stateCols+" FROM check_state WHERE check_id = ?", checkID)
 	st, err := scanState(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.CheckState{CheckID: checkID, Status: model.StatusUnknown}, nil
@@ -564,24 +567,19 @@ func (s *Store) GetState(ctx context.Context, checkID int64) (model.CheckState, 
 
 // SaveState upserts the state of a check.
 func (s *Store) SaveState(ctx context.Context, st model.CheckState) error {
-	return s.WriteTx(ctx, func(tx *sql.Tx) error {
-		return saveStateTx(ctx, tx, st)
+	return s.writeTx(ctx, func(tx *wtx) error {
+		return s.saveStateTx(ctx, tx, st)
 	})
 }
 
-func saveStateTx(ctx context.Context, tx *sql.Tx, st model.CheckState) error {
+func (s *Store) saveStateTx(ctx context.Context, tx *wtx, st model.CheckState) error {
 	// An empty map is stored as '' rather than "{}", so a check that tracks
 	// no metrics separately leaves the column as the default.
 	metricStatus := ""
 	if len(st.MetricStatus) > 0 {
 		metricStatus = jsonString(st.MetricStatus)
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO check_state(`+stateCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(check_id) DO UPDATE SET status=excluded.status, consecutive_failures=excluded.consecutive_failures, last_run_at=excluded.last_run_at,
-		last_success_at=excluded.last_success_at, last_change_at=excluded.last_change_at, next_run_at=excluded.next_run_at, last_message=excluded.last_message,
-		last_latency_ms=excluded.last_latency_ms, alert_active=excluded.alert_active, alert_suppressed=excluded.alert_suppressed, suppress_reason=excluded.suppress_reason,
-		last_alert_at=excluded.last_alert_at, silenced_until=excluded.silenced_until, affected_by_check_id=excluded.affected_by_check_id, warning_active=excluded.warning_active,
-		cert_warning_active=excluded.cert_warning_active, last_content_hash=excluded.last_content_hash, last_content_value=excluded.last_content_value, metric_status=excluded.metric_status`,
+	_, err := tx.exec(ctx, insertValues("check_state", stateColList)+" "+s.d.upsertClause([]string{"check_id"}, stateColList),
 		st.CheckID, string(st.Status), st.ConsecutiveFailures, fmtTimePtr(st.LastRunAt), fmtTimePtr(st.LastSuccessAt), fmtTimePtr(st.LastChangeAt), fmtTimePtr(st.NextRunAt),
 		st.LastMessage, nullFloat(st.LastLatencyMS), boolInt(st.AlertActive), boolInt(st.AlertSuppressed), st.SuppressReason, fmtTimePtr(st.LastAlertAt), fmtTimePtr(st.SilencedUntil),
 		nullInt64(st.AffectedByCheckID), boolInt(st.WarningActive), boolInt(st.CertWarningActive), st.LastContentHash, st.LastContentValue, metricStatus)
@@ -617,15 +615,15 @@ func scanResult(sc interface{ Scan(...any) error }) (model.Result, error) {
 
 // InsertResult stores a raw result and returns it with the id set.
 func (s *Store) InsertResult(ctx context.Context, r model.Result) (model.Result, error) {
-	err := s.WriteTx(ctx, func(tx *sql.Tx) error {
+	err := s.writeTx(ctx, func(tx *wtx) error {
 		var err error
-		r, err = insertResultTx(ctx, tx, r)
+		r, err = s.insertResultTx(ctx, tx, r)
 		return err
 	})
 	return r, err
 }
 
-func insertResultTx(ctx context.Context, tx *sql.Tx, r model.Result) (model.Result, error) {
+func (s *Store) insertResultTx(ctx context.Context, tx *wtx, r model.Result) (model.Result, error) {
 	if r.Timestamp.IsZero() {
 		r.Timestamp = time.Now()
 	}
@@ -636,25 +634,25 @@ func insertResultTx(ctx context.Context, tx *sql.Tx, r model.Result) (model.Resu
 	if len(r.Metrics) > 0 {
 		metrics = jsonString(r.Metrics)
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO results(check_id, ts, success, status, message, error, latency_ms, min_ms, max_ms, jitter_ms, stddev_ms, loss_pct, attempts, details, warnings, metrics)
+	newID, err := tx.insertID(ctx, `INSERT INTO results(check_id, ts, success, status, message, error, latency_ms, min_ms, max_ms, jitter_ms, stddev_ms, loss_pct, attempts, details, warnings, metrics)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		r.CheckID, r.Timestamp.UnixMilli(), boolInt(r.Success), string(r.Status), r.Message, r.Error, nullFloat(r.LatencyMS), nullFloat(r.MinMS), nullFloat(r.MaxMS), nullFloat(r.JitterMS), nullFloat(r.StdDevMS), nullFloat(r.LossPct), r.Attempts, jsonString(r.Details), jsonString(r.Warnings), metrics)
 	if err != nil {
 		return r, err
 	}
-	r.ID, _ = res.LastInsertId()
+	r.ID = newID
 	return r, nil
 }
 
 // RecordResult stores a result and its updated state atomically.
 func (s *Store) RecordResult(ctx context.Context, r model.Result, st model.CheckState) (model.Result, error) {
-	err := s.WriteTx(ctx, func(tx *sql.Tx) error {
+	err := s.writeTx(ctx, func(tx *wtx) error {
 		var err error
-		r, err = insertResultTx(ctx, tx, r)
+		r, err = s.insertResultTx(ctx, tx, r)
 		if err != nil {
 			return err
 		}
-		return saveStateTx(ctx, tx, st)
+		return s.saveStateTx(ctx, tx, st)
 	})
 	return r, err
 }
@@ -664,7 +662,7 @@ func (s *Store) RecentResults(ctx context.Context, checkID int64, limit int) ([]
 	if limit <= 0 || limit > 5000 {
 		limit = 50
 	}
-	rows, err := s.reader.QueryContext(ctx, "SELECT "+resultCols+" FROM results WHERE check_id = ? ORDER BY ts DESC LIMIT ?", checkID, limit)
+	rows, err := s.query(ctx, "SELECT "+resultCols+" FROM results WHERE check_id = ? ORDER BY ts DESC LIMIT ?", checkID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -682,7 +680,7 @@ func (s *Store) RecentResults(ctx context.Context, checkID int64, limit int) ([]
 
 // LastResults returns the latest result for every check.
 func (s *Store) LastResults(ctx context.Context) (map[int64]model.Result, error) {
-	rows, err := s.reader.QueryContext(ctx, "SELECT "+resultCols+" FROM results WHERE id IN (SELECT MAX(id) FROM results GROUP BY check_id)")
+	rows, err := s.query(ctx, "SELECT "+resultCols+" FROM results WHERE id IN (SELECT MAX(id) FROM results GROUP BY check_id)")
 	if err != nil {
 		return nil, err
 	}
@@ -705,7 +703,7 @@ func (s *Store) LastResults(ctx context.Context) (map[int64]model.Result, error)
 // result recorded in the same millisecond the caller asks in — a chart drawn
 // immediately after a check ran would miss the very result that prompted it.
 func (s *Store) ResultsBetween(ctx context.Context, checkID int64, from, to time.Time) ([]model.Result, error) {
-	rows, err := s.reader.QueryContext(ctx, "SELECT "+resultCols+" FROM results WHERE check_id = ? AND ts >= ? AND ts <= ? ORDER BY ts ASC", checkID, from.UnixMilli(), to.UnixMilli())
+	rows, err := s.query(ctx, "SELECT "+resultCols+" FROM results WHERE check_id = ? AND ts >= ? AND ts <= ? ORDER BY ts ASC", checkID, from.UnixMilli(), to.UnixMilli())
 	if err != nil {
 		return nil, err
 	}
@@ -750,12 +748,12 @@ func (s *Store) InsertEvent(ctx context.Context, e model.Event) (model.Event, er
 	if len(e.Meta) > 0 {
 		meta = string(e.Meta)
 	}
-	res, err := s.Exec(ctx, `INSERT INTO events(ts, type, node_id, check_id, node_name, check_name, title, detail, meta, actor, metric) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+	newID, err := s.insertID(ctx, `INSERT INTO events(ts, type, node_id, check_id, node_name, check_name, title, detail, meta, actor, metric) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 		e.Timestamp.UnixMilli(), string(e.Type), nullInt64(e.NodeID), nullInt64(e.CheckID), e.NodeName, e.CheckName, e.Title, e.Detail, meta, e.Actor, e.Metric)
 	if err != nil {
 		return e, err
 	}
-	e.ID, _ = res.LastInsertId()
+	e.ID = newID
 	return e, nil
 }
 
@@ -815,7 +813,7 @@ func (s *Store) ListEvents(ctx context.Context, f EventFilter) ([]model.Event, e
 	}
 	q += " ORDER BY id DESC LIMIT ?"
 	args = append(args, f.Limit)
-	rows, err := s.reader.QueryContext(ctx, q, args...)
+	rows, err := s.query(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -855,7 +853,7 @@ func scanMW(sc interface{ Scan(...any) error }) (model.MaintenanceWindow, error)
 
 // ListMaintenance returns all windows.
 func (s *Store) ListMaintenance(ctx context.Context) ([]model.MaintenanceWindow, error) {
-	rows, err := s.reader.QueryContext(ctx, "SELECT "+mwCols+" FROM maintenance_windows ORDER BY start_at DESC, id DESC")
+	rows, err := s.query(ctx, "SELECT "+mwCols+" FROM maintenance_windows ORDER BY start_at DESC, id DESC")
 	if err != nil {
 		return nil, err
 	}
@@ -878,15 +876,15 @@ func (s *Store) SaveMaintenance(ctx context.Context, m model.MaintenanceWindow) 
 	}
 	if m.ID == 0 {
 		m.CreatedAt = time.Now()
-		res, err := s.Exec(ctx, `INSERT INTO maintenance_windows(name, node_id, group_name, enabled, start_at, end_at, weekdays, duration_minutes, notes, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		newID, err := s.insertID(ctx, `INSERT INTO maintenance_windows(name, node_id, group_name, enabled, start_at, end_at, weekdays, duration_minutes, notes, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 			m.Name, nullInt64(m.NodeID), m.Group, boolInt(m.Enabled), fmtTime(m.StartAt), fmtTime(m.EndAt), jsonString(m.Weekdays), m.DurationMinutes, m.Notes, fmtTime(m.CreatedAt))
 		if err != nil {
 			return m, err
 		}
-		m.ID, _ = res.LastInsertId()
+		m.ID = newID
 		return m, nil
 	}
-	res, err := s.Exec(ctx, `UPDATE maintenance_windows SET name=?, node_id=?, group_name=?, enabled=?, start_at=?, end_at=?, weekdays=?, duration_minutes=?, notes=? WHERE id=?`,
+	res, err := s.exec(ctx, `UPDATE maintenance_windows SET name=?, node_id=?, group_name=?, enabled=?, start_at=?, end_at=?, weekdays=?, duration_minutes=?, notes=? WHERE id=?`,
 		m.Name, nullInt64(m.NodeID), m.Group, boolInt(m.Enabled), fmtTime(m.StartAt), fmtTime(m.EndAt), jsonString(m.Weekdays), m.DurationMinutes, m.Notes, m.ID)
 	if err != nil {
 		return m, err
@@ -899,7 +897,7 @@ func (s *Store) SaveMaintenance(ctx context.Context, m model.MaintenanceWindow) 
 
 // DeleteMaintenance removes a window.
 func (s *Store) DeleteMaintenance(ctx context.Context, id int64) error {
-	res, err := s.Exec(ctx, "DELETE FROM maintenance_windows WHERE id = ?", id)
+	res, err := s.exec(ctx, "DELETE FROM maintenance_windows WHERE id = ?", id)
 	if err != nil {
 		return err
 	}
@@ -929,7 +927,7 @@ func scanDash(sc interface{ Scan(...any) error }) (model.Dashboard, error) {
 
 // ListDashboards returns all dashboards.
 func (s *Store) ListDashboards(ctx context.Context) ([]model.Dashboard, error) {
-	rows, err := s.reader.QueryContext(ctx, "SELECT "+dashCols+" FROM dashboards ORDER BY sort_order, id")
+	rows, err := s.query(ctx, "SELECT "+dashCols+" FROM dashboards ORDER BY sort_order, id")
 	if err != nil {
 		return nil, err
 	}
@@ -947,7 +945,7 @@ func (s *Store) ListDashboards(ctx context.Context) ([]model.Dashboard, error) {
 
 // GetDashboard returns one dashboard.
 func (s *Store) GetDashboard(ctx context.Context, id int64) (model.Dashboard, error) {
-	row := s.reader.QueryRowContext(ctx, "SELECT "+dashCols+" FROM dashboards WHERE id = ?", id)
+	row := s.queryRow(ctx, "SELECT "+dashCols+" FROM dashboards WHERE id = ?", id)
 	d, err := scanDash(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return d, ErrNotFound
@@ -972,14 +970,14 @@ func (s *Store) SaveDashboard(ctx context.Context, d model.Dashboard) (model.Das
 	d.UpdatedAt = now
 	if d.ID == 0 {
 		d.CreatedAt = now
-		res, err := s.Exec(ctx, `INSERT INTO dashboards(name, sort_order, widgets, created_at, updated_at) VALUES (?,?,?,?,?)`, d.Name, d.SortOrder, jsonString(d.Widgets), fmtTime(now), fmtTime(now))
+		newID, err := s.insertID(ctx, `INSERT INTO dashboards(name, sort_order, widgets, created_at, updated_at) VALUES (?,?,?,?,?)`, d.Name, d.SortOrder, jsonString(d.Widgets), fmtTime(now), fmtTime(now))
 		if err != nil {
 			return d, err
 		}
-		d.ID, _ = res.LastInsertId()
+		d.ID = newID
 		return d, nil
 	}
-	res, err := s.Exec(ctx, `UPDATE dashboards SET name=?, sort_order=?, widgets=?, updated_at=? WHERE id=?`, d.Name, d.SortOrder, jsonString(d.Widgets), fmtTime(now), d.ID)
+	res, err := s.exec(ctx, `UPDATE dashboards SET name=?, sort_order=?, widgets=?, updated_at=? WHERE id=?`, d.Name, d.SortOrder, jsonString(d.Widgets), fmtTime(now), d.ID)
 	if err != nil {
 		return d, err
 	}
@@ -991,7 +989,7 @@ func (s *Store) SaveDashboard(ctx context.Context, d model.Dashboard) (model.Das
 
 // DeleteDashboard removes a dashboard.
 func (s *Store) DeleteDashboard(ctx context.Context, id int64) error {
-	res, err := s.Exec(ctx, "DELETE FROM dashboards WHERE id = ?", id)
+	res, err := s.exec(ctx, "DELETE FROM dashboards WHERE id = ?", id)
 	if err != nil {
 		return err
 	}
@@ -1006,7 +1004,7 @@ func (s *Store) DeleteDashboard(ctx context.Context, id int64) error {
 // GetSetting reads a JSON value into out. Returns ErrNotFound when unset.
 func (s *Store) GetSetting(ctx context.Context, key string, out any) error {
 	var raw string
-	err := s.reader.QueryRowContext(ctx, "SELECT value FROM settings WHERE key = ?", key).Scan(&raw)
+	err := s.queryRow(ctx, `SELECT value FROM settings WHERE "key" = ?`, key).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -1018,7 +1016,7 @@ func (s *Store) GetSetting(ctx context.Context, key string, out any) error {
 
 // PutSetting stores a JSON value.
 func (s *Store) PutSetting(ctx context.Context, key string, v any) error {
-	_, err := s.Exec(ctx, `INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, jsonString(v))
+	_, err := s.exec(ctx, insertValues("settings", []string{`"key"`, "value"})+" "+s.d.upsertClause([]string{`"key"`}, []string{`"key"`, "value"}), key, jsonString(v))
 	return err
 }
 
@@ -1100,7 +1098,7 @@ func (s *Store) migrateCheckSecrets(ctx context.Context) error {
 		cfg model.CheckConfig
 	}
 	var todo []pending
-	rows, err := s.reader.QueryContext(ctx, "SELECT id, config FROM checks")
+	rows, err := s.query(ctx, "SELECT id, config FROM checks")
 	if err != nil {
 		// A database this old may not have the table yet; that is not this
 		// migration's problem.
@@ -1133,7 +1131,7 @@ func (s *Store) migrateCheckSecrets(ctx context.Context) error {
 		if err := s.sealCheckConfig(&cfg); err != nil {
 			return err
 		}
-		if _, err := s.Exec(ctx, "UPDATE checks SET config = ? WHERE id = ?", jsonString(cfg), p.id); err != nil {
+		if _, err := s.exec(ctx, "UPDATE checks SET config = ? WHERE id = ?", jsonString(cfg), p.id); err != nil {
 			return err
 		}
 	}

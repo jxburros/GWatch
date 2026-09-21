@@ -956,6 +956,21 @@
   on('PUT', /^\/api\/settings$/, (m, body) => { settings = clone(body); if (settings.alerts?.smtp?.password) settings.alerts.smtp.password = '********'; if (settings.general?.accessPassword) settings.general.accessPassword = '********'; if (!settings.indicators?.length) settings.indicators = clone(DEFAULT_INDICATORS); addEvent('config_changed', { title: 'Settings changed' }); return clone(settings); });
   on('POST', /^\/api\/settings\/test-email$/, (m, body) => { if (!settings.alerts.smtp.host) throw err(400, 'SMTP host is not configured'); return { ok: true, message: `Test email sent to ${body?.to || settings.alerts.recipients.join(', ')} via ${settings.alerts.smtp.host}` }; });
   on('GET', /^\/api\/retention\/status$/, () => retention);
+  // Settings › Database: the connection GWatch opens at the next start
+  // (database.json), never the settings document. The demo runs on SQLite and
+  // remembers what was saved, so the "restart needed" banner can be seen.
+  let savedDB = { driver: 'sqlite', path: 'C:\\ProgramData\\GWatch\\gwatch.db' };
+  const dbStatus = () => ({
+    active: { driver: 'sqlite', label: 'modernc.org/sqlite', description: 'C:\\ProgramData\\GWatch\\gwatch.db', schemaVersion: 3, sizeBytes: 48_300_000 },
+    saved: clone(savedDB), source: savedDB.driver === 'sqlite' ? 'default' : 'file', file: 'C:\\ProgramData\\GWatch\\database.json', restartRequired: savedDB.driver !== 'sqlite',
+  });
+  const checkDB = (body) => {
+    if (!body || !['sqlite', 'postgres', 'mysql'].includes(body.driver)) throw err(400, `unknown database driver "${body?.driver}" (use sqlite, postgres or mysql)`);
+    if (body.driver !== 'sqlite') { if (!body.host) throw err(400, 'a database host is required'); if (!body.database) throw err(400, 'a database name is required'); if (!body.user) throw err(400, 'a database user is required'); if (/unreachable|nowhere/.test(body.host)) throw err(502, `Connection failed: connect to ${body.driver}://${body.user}@${body.host}:${body.port}/${body.database}: connection refused`); }
+  };
+  on('GET', /^\/api\/database$/, () => dbStatus());
+  on('POST', /^\/api\/database\/test$/, (m, body) => { checkDB(body); const v = body.driver === 'sqlite' ? 'SQLite 3.46.0' : body.driver === 'postgres' ? 'PostgreSQL 16.4 on x86_64-pc-linux-gnu' : '8.4.2 MySQL Community Server'; return { ok: true, driver: body.driver, serverVersion: v, database: body.driver === 'sqlite' ? 'C:\\ProgramData\\GWatch\\gwatch.db' : `${body.driver}://${body.user}@${body.host}:${body.port}/${body.database}`, message: `Connected (${v}).` }; });
+  on('PUT', /^\/api\/database$/, (m, body) => { checkDB(body); savedDB = body.driver === 'sqlite' ? { driver: 'sqlite', path: 'C:\\ProgramData\\GWatch\\gwatch.db' } : { ...body, password: body.password ? '********' : '' }; addEvent('config_changed', { title: 'Database connection changed', detail: body.driver === 'sqlite' ? 'Next start uses the SQLite file.' : `Next start uses ${body.driver}://${body.user}@${body.host}:${body.port}/${body.database}.` }); return dbStatus(); });
   on('POST', /^\/api\/retention\/run$/, () => { retention = { ...retention, lastRunAt: iso(Date.now()), lastDurationMs: 1830, deletedLastRun: 1043, rawRows: retention.rawRows - 1043, rollupRows5m: retention.rollupRows5m + 288 }; addEvent('retention', { title: 'Retention run finished', detail: 'Rolled up 1,043 raw results · 1.8 s' }); return retention; });
   on('GET', /^\/api\/backups$/, () => ({ backups: clone(backups), dir: 'C:\\ProgramData\\GWatch\\backups', status: backupStatus }));
   on('POST', /^\/api\/backups$/, (m, body) => { if (!body?.password) throw err(400, 'password is required'); const d = new Date(); const b = { fileName: `gwatch-${d.toISOString().slice(0, 10)}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}${body.includeHistory ? '' : '-config'}.gwbackup`, createdAt: iso(Date.now()), sizeBytes: body.includeHistory ? 13_400_000 : 41_000, includeHistory: !!body.includeHistory, encrypted: true }; backups.unshift(b); backupStatus = { lastBackupAt: b.createdAt, lastBackupOk: true, lastBackupFile: b.fileName, lastError: '', lastRestoreAt: backupStatus.lastRestoreAt }; addEvent('backup', { title: 'Backup created', detail: b.fileName }); return b; });

@@ -128,11 +128,21 @@ environment variable, on any platform. Inside that directory:
 
 - `gwatch.db` — the SQLite database;
 - `gwatch.key` — the key that encrypts secrets stored in the database;
+- `database.json` — only present when GWatch has been pointed at a PostgreSQL or
+  MySQL server instead of `gwatch.db`; see [`DATABASE.md`](DATABASE.md);
 - `logs/` — the service log;
 - `backups/` — encrypted backup archives, if you make any.
 
 See [`PRIVACY.md`](PRIVACY.md#what-gwatch-stores-and-where) for what's stored inside
 `gwatch.db` and why.
+
+## Using your own database server
+
+`gwatch.db` is the default and needs nothing from you. If you would rather GWatch kept
+its data on a PostgreSQL or MySQL/MariaDB server you already run, **Settings › Database**
+points it there (the change takes effect after a restart of the service), and
+`gwatch migrate-db` copies what is in `gwatch.db` across. [`DATABASE.md`](DATABASE.md)
+walks through it, including creating the database and user on the server.
 
 ## Choosing the SQLite driver
 
@@ -155,8 +165,9 @@ is the default. The build tags are exclusive — pass at most one.
 Switching drivers does not change the database file: all three write the same
 format, so a `gwatch.db` made under one opens under another. To see which driver a
 running copy was built with, open **Settings › Retention** or **Settings › Backups**
-and look at the **SQLite driver** line beside the data directory paths, or read the
-`databaseDriver` field of `GET /api/health`.
+and look at the **Database driver** line beside the data directory paths, or read the
+`databaseDriver` field of `GET /api/health`. (The PostgreSQL and MySQL drivers are
+not a build choice: every binary has them, and `database.json` picks one at run time.)
 
 ## Upgrading
 

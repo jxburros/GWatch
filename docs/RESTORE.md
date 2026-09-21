@@ -66,8 +66,16 @@ new machine's remote-access password is set and you are not calling from
 - All **nodes** and their **checks**, with the same internal IDs, so any
   restored history lines up correctly (dependencies between nodes are
   preserved too).
-- **Dashboards** and **saved charts**.
+- **Dashboards**, **saved charts** and **wallboards** (with their projection
+  addresses, so a display already showing a board keeps working).
 - **Maintenance windows**, **triggers** and **custom endpoints** (automation).
+- **User accounts** (with their password hashes), **API keys** and **hardware agents**,
+  from archives made by this version or newer (backup format 2). These are *merged*:
+  an account, key or agent already on the new machine is left exactly as it is, so a
+  restore never overwrites the password of the administrator doing the restoring, and
+  never resurrects a key that was deliberately revoked here. An archive from an older
+  version has none of these and leaves them untouched.
+- Optionally, **hardware readings**, along with the rest of the history.
 - **Settings**: general, alerts (including SMTP configuration), retention
   policy, network access, appearance, and the automatic-backup schedule.
 - Optionally, **history**: raw results, rollups (5-minute/hourly/daily) and the
@@ -88,13 +96,13 @@ new machine's remote-access password is set and you are not calling from
   passwords are only ever stored encrypted/hashed as GWatch normally does —
   restoring them onto a new machine works the same as restoring any other
   setting.
-- **User accounts, sessions and API keys.** They are not in the archive and a
-  restore leaves whatever the new machine already has alone. That cuts both
-  ways on purpose: restoring a backup never costs you your sign-in, and it
-  never resurrects an account or a key you deliberately removed. On a machine
-  with no accounts yet, a browser on that machine is an administrator, so you
-  can always get in after a restore and create them again under
-  **Settings › Users & access**.
+- **Browser sessions and pairing codes.** Everyone signs in once more on the new
+  machine, and a machine still waiting to be enrolled needs a new code. On a machine
+  with no accounts yet, a browser on that machine is an administrator, so you can
+  always get in after a restore.
+- **`database.json`**, if the old machine kept its data on a PostgreSQL or MySQL
+  server ([`DATABASE.md`](DATABASE.md)). Which database the new machine uses is its
+  own decision; a backup restores onto any of them.
 - Log files under `logs/` are local operational logs and are not part of a
   backup archive.
 - Anything you changed on the new machine *before* restoring is discarded —

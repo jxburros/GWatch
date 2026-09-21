@@ -38,7 +38,10 @@ type Server struct {
 	// AI & MCP offers for download; see mcp.go. Optional.
 	Skill     fs.FS
 	BackupDir string
-	Version   string
+	// DataDir is where database.json lives (Settings › Database, see
+	// database.go). Optional: without it those routes report an error.
+	DataDir string
+	Version string
 	// Updater performs GitHub release checks and self-updates (optional).
 	Updater *Updater
 	// Network reports how the server is bound (optional).
@@ -145,6 +148,9 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "GET /api/settings", s.handleGetSettings)
 	s.route(mux, "PUT /api/settings", s.handlePutSettings)
 	s.route(mux, "POST /api/settings/test-email", s.handleTestEmail)
+	s.route(mux, "GET /api/database", s.handleGetDatabase)
+	s.route(mux, "PUT /api/database", s.handlePutDatabase)
+	s.route(mux, "POST /api/database/test", s.handleTestDatabase)
 	s.route(mux, "GET /api/retention/status", s.handleRetentionStatus)
 	s.route(mux, "POST /api/retention/run", s.handleRetentionRun)
 

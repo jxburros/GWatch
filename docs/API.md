@@ -80,8 +80,8 @@ administrator, whatever its scope:
   charts. A key may lay a wallboard out; it may not project one.
 
 **Denied to every key, whatever its scope** (403, not 401):
-`GET|PUT /api/settings`, `POST /api/settings/test-email`, `GET /api/network`,
-everything under `/api/backups`, `GET /api/export/config.json`, `GET /api/logs`,
+`GET|PUT /api/settings`, `POST /api/settings/test-email`, `GET|PUT /api/database`,
+`POST /api/database/test`, `GET /api/network`, everything under `/api/backups`, `GET /api/export/config.json`, `GET /api/logs`,
 `GET /api/export/logs.txt`, everything under `/api/triggers` (including `GET`),
 everything under `/api/endpoints` (including `GET`), `POST /api/actions/test`,
 `GET /api/automation/meta`, `GET /api/retention/status`, `POST /api/retention/run`,
@@ -164,7 +164,7 @@ companion that lets an AI assistant use this API with a key, is documented in
 
 ## Health & overview
 
-- `GET /api/health` → `model.Health` (service mode, scheduler, last/next check, db size, retention status, backup status, recent internal errors, alert config state). Also carries the on-disk paths: `dataDir` (the data directory), `databasePath` (`<dataDir>/gwatch.db`), `keyPath` (`<dataDir>/gwatch.key`) and `backupDir` (`<dataDir>/backups`) — see [`INSTALL.md`](INSTALL.md#where-your-data-lives) — and `databaseDriver`, the SQLite driver the running binary was built with (see [`INSTALL.md`](INSTALL.md#choosing-the-sqlite-driver)).
+- `GET /api/health` → `model.Health` (service mode, scheduler, last/next check, db size, retention status, backup status, recent internal errors, alert config state). Also carries the on-disk paths: `dataDir` (the data directory), `databasePath` (`<dataDir>/gwatch.db`, or a password-free `postgres://user@host:port/db` when GWatch is on a server — [`DATABASE.md`](DATABASE.md)), `keyPath` (`<dataDir>/gwatch.key`) and `backupDir` (`<dataDir>/backups`) — see [`INSTALL.md`](INSTALL.md#where-your-data-lives) — and `databaseDriver`, the database driver in use: the SQLite driver the binary was built with (see [`INSTALL.md`](INSTALL.md#choosing-the-sqlite-driver)), or the PostgreSQL/MySQL one.
 - `GET /api/overview` → 
   ```json
   {
@@ -888,6 +888,19 @@ assistant up, not for the assistant: both are admin-only and refuse every API ke
 - All three passwords are stored encrypted in the database with the local `gwatch.key` file; the API request and response bodies are unchanged.
 - `POST /api/settings/test-email` body `{ "to": "optional@override" }` → `{ "ok": true, "message": "..." }` or error.
 - `GET /api/retention/status` → `RetentionStatus`. `POST /api/retention/run` → runs rollup+cleanup now → RetentionStatus.
+
+### Database
+
+Which database GWatch keeps its data in ([`DATABASE.md`](DATABASE.md)). This is not part of
+`Settings`: it has to be known before the database is open, so it lives in `database.json`
+in the data directory and a change takes effect at the next start. The running process is
+never switched over by these routes.
+
+- `GET /api/database` → `{ "active": { "driver": "sqlite|postgres|mysql", "label", "description", "schemaVersion", "sizeBytes" }, "saved": DBConfig, "source": "default|file", "file": "<dataDir>/database.json", "restartRequired": bool }`. `active` is the database this process is using; `saved` is what the next start will use, with `password` (and `dsn`) masked as `"********"` when set; `restartRequired` is true when the two differ.
+- `POST /api/database/test` body `DBConfig` → `{ "ok": true, "driver", "serverVersion", "database", "message" }`, or `400` for an incomplete config and `502` when the connection fails. Opens a connection with the given details and runs `SELECT version()`; writes nothing. A masked password means "the saved one".
+- `PUT /api/database` body `DBConfig` → the same document as `GET`, after validating, testing the connection (a server that cannot be reached is not saved) and writing `database.json`. `driver: "sqlite"` removes the file instead. Recorded as a `config_changed` event.
+
+`DBConfig` is `{ "driver", "host", "port", "user", "password", "database", "schema", "sslMode", "dsn" }` — the fields of `database.json`.
 
 ### Indicators
 
