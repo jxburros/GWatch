@@ -139,7 +139,6 @@ export class LineChart {
     this._onLeave = () => { this.hover = null; this.tooltip.hidden = true; this.draw(); };
     this.canvas.addEventListener('mousemove', this._onMove);
     this.canvas.addEventListener('mouseleave', this._onLeave);
-    this.canvas.addEventListener('touchstart', (e) => { if (e.touches[0]) this._handleMove(e.touches[0]); }, { passive: true });
     this._raf = 0;
     // Resolved lazily from the canvas's own computed background, so a chart on
     // a wallboard panel paints that panel's colour rather than a card's.

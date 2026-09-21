@@ -50,6 +50,8 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 - **Automation**: triggers and custom inbound endpoints run webhooks, Slack/Teams/ntfy/
   Pushover notifications, git commands or scripts when something changes.
 - **Wallboards** for a spare monitor or tablet, with an optional no-sign-in projected view.
+  The interface is responsive, so a narrow window or a tablet can read it, but it is built
+  for a desk: GWatch is not a phone app and is not designed to run on phone hardware.
 - **Accounts and API keys**, scoped read-only or read-write, plus opt-in **remote access**.
 - **Self-updating**, with every release cryptographically signed and verified before install.
 - **Backups**: one-click, password-encrypted, restorable on a new machine in one step.
