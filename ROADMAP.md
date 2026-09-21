@@ -214,6 +214,17 @@ promise.
   reselling unmodified GWatch or offering it as a paid hosted service without
   significant modification; deployment, support, and customization services remain
   fair game. Attribution is mandatory in every copy and derivative.
+- **Notification rules across nodes (#31)**: decided, as the smaller version. A rule
+  combines *status* conditions across nodes and checks (a check, or any check of a node,
+  down or degraded-or-worse) joined by all / any / at least N, and runs a list of the
+  existing trigger actions once when its conditions come together, with a cooldown and an
+  optional notification when it clears (Settings › Rules, `internal/engine/rules.go`,
+  `docs/API.md` → Rules). Per-node alerts, triggers and dependency suppression are
+  untouched; rules sit beside them. Two parts of the original proposal are deliberately
+  deferred, not rejected: **hold timers** ("only when this has lasted N minutes") and
+  **metric conditions** ("disk above 90 %"). The condition model carries a `kind` that is
+  always `status` today so either can be added without reshaping stored rules. Revisit
+  when someone has a rule that flaps or a threshold that is not a check's own.
 
 ## Explicit non-goals (keep scope from drifting toward Zabbix/PRTG)
 

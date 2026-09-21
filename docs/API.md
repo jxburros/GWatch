@@ -700,7 +700,7 @@ arrival time. See [`HARDWARE.md`](HARDWARE.md).
 
 ## Events / incidents
 
-- `GET /api/events?limit=100&before=ID&nodeId=&checkId=&type=&q=&since=&until=` → `[Event]` newest first. A `type` filter also includes its counterpart (down+recovered, warning+warning_cleared, cert_warning+cert_warning_cleared, silenced+unsilenced, maintenance_began+maintenance_ended, alert_sent+alert_failed) unless `exact=1`. `q` is a case-insensitive search over title, detail, node and check name; `since`/`until` accept RFC 3339, `2006-01-02T15:04` or `2006-01-02`.
+- `GET /api/events?limit=100&before=ID&nodeId=&checkId=&type=&q=&since=&until=` → `[Event]` newest first. A `type` filter also includes its counterpart (down+recovered, warning+warning_cleared, cert_warning+cert_warning_cleared, silenced+unsilenced, maintenance_began+maintenance_ended, alert_sent+alert_failed, rule_fired+rule_cleared) unless `exact=1`. `q` is a case-insensitive search over title, detail, node and check name; `since`/`until` accept RFC 3339, `2006-01-02T15:04` or `2006-01-02`.
 - `POST /api/events/note` body `{ "nodeId": null|id, "text": "rebooted router" }` → Event (timeline annotation).
 
 Every `Event` carries an optional `actor` naming who caused it — `"local"`, `"password"`,
@@ -850,6 +850,53 @@ Unknown names become an empty literal. Elsewhere — URL, body, headers, git arg
 
 With `interpreter: "custom"` the language is whatever `command` runs, so GWatch has no quoting rule to apply: a `code` containing any `{{placeholder}}` is rejected with 400 unless `allowUntrustedInput` is `true`, which opts into raw expansion. Reading the `GWATCH_*` environment variables instead works in every interpreter and needs no acknowledgement.
 `ActionResult` is `{ ok, output, error, statusCode, startedAt, durationMs }`.
+
+## Rules
+
+A **rule** is a notification that looks at several checks at once, where a trigger looks at one node: "two of my three DNS servers are down", "the gateway and the switch are both unreachable". Rules sit beside the per-node alerts, triggers and dependency-aware suppression and change none of them (Settings › Rules; recipe 9 in [`docs/RECIPES.md`](RECIPES.md)).
+
+- `GET /api/rules` → `[Rule]`, each with its `state`. `GET /api/rules/{id}` → one. Viewers may read them in the browser; no API key may (they carry webhook URLs and tokens, like triggers).
+- `POST /api/rules`, `PUT /api/rules/{id}`, `DELETE /api/rules/{id}` — administrators. Each is recorded in the audit timeline as `config_changed` ("Rule saved: …", "Rule deleted: …").
+- `POST /api/rules/{id}/test` → `[ActionResult]`, one per action: runs the actions once with sample values (`event` = `test`), recording nothing.
+
+A rule:
+
+```json
+{ "id": 3, "name": "Two of three DNS servers down", "enabled": true,
+  "join": "at_least", "atLeast": 2,
+  "conditions": [
+    { "kind": "status", "checkId": 12, "status": "down" },
+    { "kind": "status", "checkId": 27, "status": "down" },
+    { "kind": "status", "nodeId": 4, "status": "degraded" } ],
+  "actions": [ { "type": "pushover", "token": "…", "userKey": "…" } ],
+  "cooldownMinutes": 30, "notifyCleared": true,
+  "state": { "ruleId": 3, "met": false, "since": "2026-09-20T07:12:00Z", "lastFiredAt": "2026-09-19T22:40:11Z" },
+  "createdAt": "…", "updatedAt": "…" }
+```
+
+| field | meaning |
+|---|---|
+| `join` | `all` (every condition), `any` (at least one) or `at_least` (at least `atLeast` of them; `1 ≤ atLeast ≤ len(conditions)`) |
+| `conditions[].kind` | always `status` today; the field exists so another kind can be added later without reshaping stored rules |
+| `conditions[].checkId` / `nodeId` | exactly one of the two. A check condition holds while that check is at the status; a node condition holds while **any** of the node's enabled checks is |
+| `conditions[].status` | `down`, or `degraded` — which means **degraded or worse**, so a check that went from degraded to down still satisfies it |
+| `actions` | one or more `Action`s (the table above), all run when the rule fires |
+| `cooldownMinutes` | shortest time between two runs of the actions (0 = none) |
+| `notifyCleared` | also run the actions, with `event` = `rule_cleared`, when the conditions come apart |
+| `state` | read-only: `met`, `since` (when `met` last changed), `lastFiredAt` (when the actions last ran) |
+
+Validation (400 with the reason): a name, at least one condition and one action, a known join, a count in range for `at_least`, every condition naming an existing node or check (and only one of the two), each action valid the way a trigger's is.
+
+**Semantics.**
+- The engine re-evaluates the rules that mention a check whenever that check's status changes, when a check is silenced or unsilenced, when a maintenance window opens or closes, and on every configuration reload. A rule saved while its conditions already hold fires right away; one that no longer holds after an edit clears. On start-up the stored state is trusted, so a restart neither fires a rule again nor forgets that it is waiting to clear.
+- A rule fires **once** on the way from not-met to met: it runs its actions, records a `rule_fired` event (no node or check; the title is the rule's name and the detail says which conditions held and what ran) and stays met until the conditions come apart, when it records `rule_cleared` and, with `notifyCleared`, runs the actions again. Both events carry the same `Detail` sentence, e.g. `2 of 3 conditions met — Pi-hole › DNS is down, Router › DNS is down.`
+- **Cooldown:** a firing inside `cooldownMinutes` of the last run still changes the state and records `rule_fired`, with the actions held back (the detail says so); the clearing that follows such a firing is quiet too, even with `notifyCleared`.
+- **Maintenance and silence:** a check under an active maintenance window or silenced does not count towards any rule while that lasts, and counts again afterwards. A disabled check or node never counts. A disabled rule is put back to not-met without firing anything.
+- Rules are exported and restored with the backup configuration (`rules` in `config.json`; an older archive without it restores as before). A restored rule starts not-met.
+
+**Placeholders** for a rule's actions, beside the ones every action gets: `rule.id`, `rule.name`, `rule.join`, `rule.needed`, `rule.total`, `rule.met` (how many conditions hold), `rule.conditions` (`Pi-hole › DNS is down, Router › DNS is down`), `rule.summary` (`Rule 'Two of three DNS servers down' fired: 2 of 3 conditions met — …`), `message` (the sentence after the colon), `status` (`met` or `cleared`), `event` (`rule_fired`, `rule_cleared` or `test`), `ts`, `instance`. `node.name` carries the rule's name and `check.name`, `node.host`, `target` are empty, so the default Slack, Teams, ntfy and Pushover text ("{{node.name}} is {{status}}: {{message}}") reads as a sentence without a rule-specific template.
+
+**Deliberately not included yet:** hold timers ("only when the conditions have held for N minutes") and metric conditions ("disk above 90 %"). The model is shaped for them — `kind` on a condition — but neither is built.
 
 ## Updates
 

@@ -367,6 +367,63 @@ the same check is:
 See `docs/API.md` → **Named metrics** for the fields, and for the one limit:
 a recorded value is charted only as far back as raw results are retained.
 
+## 9. Tell me when two of my three DNS servers are down
+
+A trigger watches one node, so "Pi-hole is down" is a trigger. "Two of my
+three resolvers are down at once" is not about any one node — one resolver
+failing is an evening job, two is the household losing name resolution —
+and that is what a **rule** (Settings › Rules) is for. Per-node alerts and
+triggers carry on as before; the rule sits beside them.
+
+You have three DNS checks: `Pi-hole › DNS`, `Router › DNS` and a `Cloud DNS`
+node whose only check resolves through 1.1.1.1. In **Settings › Rules › New
+rule**:
+
+- **Name**: `Two of three DNS servers down`
+- **Met when**: *At least N conditions*, **How many**: `2`
+- **Conditions** (one row each):
+  - node `Pi-hole`, check `DNS`, status *Down*
+  - node `Router`, check `DNS`, status *Down*
+  - node `Cloud DNS`, check *Any check of this node*, status *Degraded or worse*
+- **Actions**: a *Pushover* action with your token and user key, priority
+  *High*. Leave title and message blank — the defaults read
+  `GWatch Home` / `Two of three DNS servers down is met: 2 of 3 conditions met — Pi-hole › DNS is down, Router › DNS is down`.
+  Add an *HTTP request* too if a dashboard should hear about it.
+- **Cooldown**: `30` minutes, so a resolver flapping at the threshold does not
+  page you every time it crosses it. The rule still changes state and is
+  recorded in the timeline; only the actions are held back.
+- **Also notify when the rule clears**: on. The same actions run once the
+  household is back to one or zero resolvers down, with `{{status}}` = `cleared`.
+
+Save, then press **Send a test** on the rule's row to see every action run
+once with sample values. Over the API the same rule is:
+
+```json
+POST /api/rules
+{ "name": "Two of three DNS servers down", "enabled": true,
+  "join": "at_least", "atLeast": 2,
+  "conditions": [
+    { "kind": "status", "checkId": 12, "status": "down" },
+    { "kind": "status", "checkId": 27, "status": "down" },
+    { "kind": "status", "nodeId": 4, "status": "degraded" } ],
+  "actions": [ { "type": "pushover", "token": "azG…", "userKey": "uQi…", "priority": "1" } ],
+  "cooldownMinutes": 30, "notifyCleared": true }
+```
+
+What to expect: the rule fires **once** when the second resolver goes down
+(a `rule_fired` entry in Incidents naming the two), stays met while a third
+fails too, and clears when it is back to one. A resolver under a maintenance
+window or silenced does not count while that lasts — patching the Pi-hole on
+Sunday night does not bring you halfway to a page. "Degraded or worse" holds
+while the Cloud DNS check is slow *and* while it is down.
+
+Placeholders a rule's actions can use, beside the usual ones: `{{rule.name}}`,
+`{{rule.met}}` (how many conditions hold), `{{rule.conditions}}` (which ones),
+`{{rule.summary}}`, `{{message}}`, `{{status}}` (`met` / `cleared`) and
+`{{event}}` (`rule_fired` / `rule_cleared`). See `docs/API.md` → **Rules**.
+Hold timers ("only if this lasts 5 minutes") and metric conditions are not
+part of rules yet.
+
 ## Testing a recipe
 
 Before saving, or any time after, use **Test this action** in the trigger or
