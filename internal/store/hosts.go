@@ -113,7 +113,7 @@ func (s *Store) CreateAgent(ctx context.Context, name string, nodeID *int64, pre
 	id, err := s.insertID(ctx, `INSERT INTO agents(name, node_id, token_hash, prefix, enabled, created_by, created_at)
 		VALUES (?,?,?,?,1,?,?)`, name, nodeID, tokenHash, prefix, createdBy, fmtTime(time.Now()))
 	if err != nil {
-		if isUniqueViolation(err) {
+		if s.d.isUniqueViolation(err) {
 			return model.Agent{}, ErrDuplicate
 		}
 		return model.Agent{}, err
@@ -171,7 +171,7 @@ func (s *Store) UpdateAgent(ctx context.Context, id int64, name string, nodeID *
 		return model.Agent{}, errors.New("a name is required")
 	}
 	res, err := s.exec(ctx, `UPDATE agents SET name = ?, node_id = ?, enabled = ? WHERE id = ?`,
-		name, nodeID, enabled, id)
+		name, nodeID, boolInt(enabled), id)
 	if err != nil {
 		return model.Agent{}, err
 	}
@@ -295,7 +295,7 @@ func (s *Store) CreatePairingCode(ctx context.Context, name string, nodeID *int6
 	id, err := s.insertID(ctx, `INSERT INTO agent_pairings(name, node_id, code_hash, created_by, created_at, expires_at)
 		VALUES (?,?,?,?,?,?)`, name, nodeID, codeHash, createdBy, fmtTime(time.Now()), fmtTime(expiresAt))
 	if err != nil {
-		if isUniqueViolation(err) {
+		if s.d.isUniqueViolation(err) {
 			return model.PairingCode{}, ErrDuplicate
 		}
 		return model.PairingCode{}, err
@@ -441,15 +441,7 @@ func (s *Store) SaveHostSample(ctx context.Context, sample model.HostSample) err
 	if err != nil {
 		return fmt.Errorf("encode metrics: %w", err)
 	}
-	_, err = s.exec(ctx, `INSERT INTO host_samples
-		(host_key, ts, cpu_pct, mem_pct, swap_pct, disk_pct, load_per_core, net_rx_bps, net_tx_bps, disk_read_bps, disk_write_bps, metrics)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(host_key, ts) DO UPDATE SET
-			cpu_pct = excluded.cpu_pct, mem_pct = excluded.mem_pct, swap_pct = excluded.swap_pct,
-			disk_pct = excluded.disk_pct, load_per_core = excluded.load_per_core,
-			net_rx_bps = excluded.net_rx_bps, net_tx_bps = excluded.net_tx_bps,
-			disk_read_bps = excluded.disk_read_bps, disk_write_bps = excluded.disk_write_bps,
-			metrics = excluded.metrics`,
+	_, err = s.exec(ctx, insertValues("host_samples", hostSampleColList)+" "+s.d.upsertClause([]string{"host_key", "ts"}, hostSampleColList),
 		sample.Key, sample.Timestamp.UnixMilli(),
 		sample.CPUPct, sample.MemPct, sample.SwapPct, sample.DiskPct, sample.LoadPerCore,
 		sample.NetRxBytesSec, sample.NetTxBytesSec, sample.DiskReadBytes, sample.DiskWriteBytes,
@@ -558,6 +550,8 @@ func (s *Store) DeleteHostSamples(ctx context.Context, key string) error {
 }
 
 const hostSampleCols = `host_key, ts, cpu_pct, mem_pct, swap_pct, disk_pct, load_per_core, net_rx_bps, net_tx_bps, disk_read_bps, disk_write_bps, metrics`
+
+var hostSampleColList = strings.Split(strings.ReplaceAll(hostSampleCols, " ", ""), ",")
 
 func scanHostSample(sc interface{ Scan(...any) error }) (model.HostSample, error) {
 	var sample model.HostSample

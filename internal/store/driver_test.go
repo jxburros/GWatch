@@ -73,7 +73,7 @@ func TestDataSourceNameApplies(t *testing.T) {
 // driver name the constants point at is actually registered with
 // database/sql in this build.
 func TestDriverLabel(t *testing.T) {
-	s := &Store{}
+	s := &Store{d: sqliteDialect{}}
 	if s.Driver() == "" {
 		t.Fatal("empty driver label")
 	}

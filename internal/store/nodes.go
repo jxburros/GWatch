@@ -43,7 +43,7 @@ func scanNode(sc interface{ Scan(...any) error }) (model.Node, error) {
 
 // ListNodes returns all nodes with their checks, ordered by name.
 func (s *Store) ListNodes(ctx context.Context) ([]model.Node, error) {
-	rows, err := s.query(ctx, "SELECT "+nodeCols+" FROM nodes ORDER BY name COLLATE NOCASE")
+	rows, err := s.query(ctx, "SELECT "+nodeCols+" FROM nodes ORDER BY "+s.d.ci("name"))
 	if err != nil {
 		return nil, err
 	}
@@ -411,7 +411,7 @@ func (s *Store) insertCheck(ctx context.Context, tx *wtx, c model.Check) (model.
 		return c, err
 	}
 	c.ID = newID
-	_, err = tx.exec(ctx, `INSERT OR IGNORE INTO check_state(check_id, status) VALUES (?, 'unknown')`, c.ID)
+	_, err = tx.exec(ctx, s.d.insertIgnore("check_state", []string{"check_id", "status"}), c.ID, "unknown")
 	return c, err
 }
 
@@ -437,7 +437,7 @@ func (s *Store) updateCheck(ctx context.Context, tx *wtx, c model.Check) (model.
 	if affected, _ := res.RowsAffected(); affected == 0 {
 		return c, ErrNotFound
 	}
-	_, err = tx.exec(ctx, `INSERT OR IGNORE INTO check_state(check_id, status) VALUES (?, 'unknown')`, c.ID)
+	_, err = tx.exec(ctx, s.d.insertIgnore("check_state", []string{"check_id", "status"}), c.ID, "unknown")
 	return c, err
 }
 
@@ -506,6 +506,9 @@ func (s *Store) SetCheckEnabled(ctx context.Context, id int64, enabled bool) err
 
 const stateCols = `check_id, status, consecutive_failures, last_run_at, last_success_at, last_change_at, next_run_at, last_message, last_latency_ms, alert_active, alert_suppressed, suppress_reason, last_alert_at, silenced_until, affected_by_check_id, warning_active, cert_warning_active, last_content_hash, last_content_value, metric_status`
 
+// stateColList is stateCols as a slice, for the generated upsert.
+var stateColList = strings.Split(strings.ReplaceAll(stateCols, " ", ""), ",")
+
 func scanState(sc interface{ Scan(...any) error }) (model.CheckState, error) {
 	var st model.CheckState
 	var lastRun, lastSuccess, lastChange, nextRun, lastAlert, silenced sql.NullString
@@ -565,23 +568,18 @@ func (s *Store) GetState(ctx context.Context, checkID int64) (model.CheckState, 
 // SaveState upserts the state of a check.
 func (s *Store) SaveState(ctx context.Context, st model.CheckState) error {
 	return s.writeTx(ctx, func(tx *wtx) error {
-		return saveStateTx(ctx, tx, st)
+		return s.saveStateTx(ctx, tx, st)
 	})
 }
 
-func saveStateTx(ctx context.Context, tx *wtx, st model.CheckState) error {
+func (s *Store) saveStateTx(ctx context.Context, tx *wtx, st model.CheckState) error {
 	// An empty map is stored as '' rather than "{}", so a check that tracks
 	// no metrics separately leaves the column as the default.
 	metricStatus := ""
 	if len(st.MetricStatus) > 0 {
 		metricStatus = jsonString(st.MetricStatus)
 	}
-	_, err := tx.exec(ctx, `INSERT INTO check_state(`+stateCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(check_id) DO UPDATE SET status=excluded.status, consecutive_failures=excluded.consecutive_failures, last_run_at=excluded.last_run_at,
-		last_success_at=excluded.last_success_at, last_change_at=excluded.last_change_at, next_run_at=excluded.next_run_at, last_message=excluded.last_message,
-		last_latency_ms=excluded.last_latency_ms, alert_active=excluded.alert_active, alert_suppressed=excluded.alert_suppressed, suppress_reason=excluded.suppress_reason,
-		last_alert_at=excluded.last_alert_at, silenced_until=excluded.silenced_until, affected_by_check_id=excluded.affected_by_check_id, warning_active=excluded.warning_active,
-		cert_warning_active=excluded.cert_warning_active, last_content_hash=excluded.last_content_hash, last_content_value=excluded.last_content_value, metric_status=excluded.metric_status`,
+	_, err := tx.exec(ctx, insertValues("check_state", stateColList)+" "+s.d.upsertClause([]string{"check_id"}, stateColList),
 		st.CheckID, string(st.Status), st.ConsecutiveFailures, fmtTimePtr(st.LastRunAt), fmtTimePtr(st.LastSuccessAt), fmtTimePtr(st.LastChangeAt), fmtTimePtr(st.NextRunAt),
 		st.LastMessage, nullFloat(st.LastLatencyMS), boolInt(st.AlertActive), boolInt(st.AlertSuppressed), st.SuppressReason, fmtTimePtr(st.LastAlertAt), fmtTimePtr(st.SilencedUntil),
 		nullInt64(st.AffectedByCheckID), boolInt(st.WarningActive), boolInt(st.CertWarningActive), st.LastContentHash, st.LastContentValue, metricStatus)
@@ -619,13 +617,13 @@ func scanResult(sc interface{ Scan(...any) error }) (model.Result, error) {
 func (s *Store) InsertResult(ctx context.Context, r model.Result) (model.Result, error) {
 	err := s.writeTx(ctx, func(tx *wtx) error {
 		var err error
-		r, err = insertResultTx(ctx, tx, r)
+		r, err = s.insertResultTx(ctx, tx, r)
 		return err
 	})
 	return r, err
 }
 
-func insertResultTx(ctx context.Context, tx *wtx, r model.Result) (model.Result, error) {
+func (s *Store) insertResultTx(ctx context.Context, tx *wtx, r model.Result) (model.Result, error) {
 	if r.Timestamp.IsZero() {
 		r.Timestamp = time.Now()
 	}
@@ -650,11 +648,11 @@ func insertResultTx(ctx context.Context, tx *wtx, r model.Result) (model.Result,
 func (s *Store) RecordResult(ctx context.Context, r model.Result, st model.CheckState) (model.Result, error) {
 	err := s.writeTx(ctx, func(tx *wtx) error {
 		var err error
-		r, err = insertResultTx(ctx, tx, r)
+		r, err = s.insertResultTx(ctx, tx, r)
 		if err != nil {
 			return err
 		}
-		return saveStateTx(ctx, tx, st)
+		return s.saveStateTx(ctx, tx, st)
 	})
 	return r, err
 }
@@ -1006,7 +1004,7 @@ func (s *Store) DeleteDashboard(ctx context.Context, id int64) error {
 // GetSetting reads a JSON value into out. Returns ErrNotFound when unset.
 func (s *Store) GetSetting(ctx context.Context, key string, out any) error {
 	var raw string
-	err := s.queryRow(ctx, "SELECT value FROM settings WHERE key = ?", key).Scan(&raw)
+	err := s.queryRow(ctx, `SELECT value FROM settings WHERE "key" = ?`, key).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -1018,7 +1016,7 @@ func (s *Store) GetSetting(ctx context.Context, key string, out any) error {
 
 // PutSetting stores a JSON value.
 func (s *Store) PutSetting(ctx context.Context, key string, v any) error {
-	_, err := s.exec(ctx, `INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, jsonString(v))
+	_, err := s.exec(ctx, insertValues("settings", []string{`"key"`, "value"})+" "+s.d.upsertClause([]string{`"key"`}, []string{`"key"`, "value"}), key, jsonString(v))
 	return err
 }
 

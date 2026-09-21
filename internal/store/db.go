@@ -12,12 +12,12 @@ import (
 
 // query runs a read on the reader pool.
 func (s *Store) query(ctx context.Context, q string, args ...any) (*sql.Rows, error) {
-	return s.reader.QueryContext(ctx, q, args...)
+	return s.reader.QueryContext(ctx, s.d.rebind(q), args...)
 }
 
 // queryRow runs a single-row read on the reader pool.
 func (s *Store) queryRow(ctx context.Context, q string, args ...any) *sql.Row {
-	return s.reader.QueryRowContext(ctx, q, args...)
+	return s.reader.QueryRowContext(ctx, s.d.rebind(q), args...)
 }
 
 // exec runs a single write statement on the writer, serialised with every
@@ -25,7 +25,7 @@ func (s *Store) queryRow(ctx context.Context, q string, args ...any) *sql.Row {
 func (s *Store) exec(ctx context.Context, q string, args ...any) (sql.Result, error) {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
-	return s.writer.ExecContext(ctx, q, args...)
+	return s.writer.ExecContext(ctx, s.d.rebind(q), args...)
 }
 
 // insertID runs an INSERT into a table whose primary key is a generated id
@@ -33,7 +33,7 @@ func (s *Store) exec(ctx context.Context, q string, args ...any) (sql.Result, er
 func (s *Store) insertID(ctx context.Context, q string, args ...any) (int64, error) {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
-	return lastInsertID(ctx, s.writer, q, args...)
+	return s.d.insertID(ctx, s.writer, s.d.rebind(q), args...)
 }
 
 // wtx is a write transaction in progress. It wraps *sql.Tx so that the
@@ -44,37 +44,29 @@ type wtx struct {
 }
 
 func (t *wtx) exec(ctx context.Context, q string, args ...any) (sql.Result, error) {
-	return t.tx.ExecContext(ctx, q, args...)
+	return t.tx.ExecContext(ctx, t.s.d.rebind(q), args...)
 }
 
 func (t *wtx) query(ctx context.Context, q string, args ...any) (*sql.Rows, error) {
-	return t.tx.QueryContext(ctx, q, args...)
+	return t.tx.QueryContext(ctx, t.s.d.rebind(q), args...)
 }
 
 func (t *wtx) queryRow(ctx context.Context, q string, args ...any) *sql.Row {
-	return t.tx.QueryRowContext(ctx, q, args...)
+	return t.tx.QueryRowContext(ctx, t.s.d.rebind(q), args...)
 }
 
 func (t *wtx) prepare(ctx context.Context, q string) (*sql.Stmt, error) {
-	return t.tx.PrepareContext(ctx, q)
+	return t.tx.PrepareContext(ctx, t.s.d.rebind(q))
 }
 
 func (t *wtx) insertID(ctx context.Context, q string, args ...any) (int64, error) {
-	return lastInsertID(ctx, t.tx, q, args...)
+	return t.s.d.insertID(ctx, t.tx, t.s.d.rebind(q), args...)
 }
 
-// execer is what lastInsertID needs from a *sql.DB or a *sql.Tx.
+// execer is what a dialect's insertID needs from a *sql.DB or a *sql.Tx.
 type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
-func lastInsertID(ctx context.Context, ex execer, q string, args ...any) (int64, error) {
-	res, err := ex.ExecContext(ctx, q, args...)
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
 }
 
 // writeTx runs fn inside a serialised write transaction.

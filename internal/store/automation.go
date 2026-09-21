@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jxburros/GWatch/internal/model"
@@ -186,7 +185,7 @@ func scanEndpoint(sc interface{ Scan(...any) error }) (model.Endpoint, error) {
 
 // ListEndpoints returns every custom endpoint.
 func (s *Store) ListEndpoints(ctx context.Context) ([]model.Endpoint, error) {
-	rows, err := s.query(ctx, "SELECT "+endpointCols+" FROM endpoints ORDER BY name COLLATE NOCASE, id")
+	rows, err := s.query(ctx, "SELECT "+endpointCols+" FROM endpoints ORDER BY "+s.d.ci("name")+", id")
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +230,7 @@ func (s *Store) SaveEndpoint(ctx context.Context, e model.Endpoint) (model.Endpo
 		newID, err := s.insertID(ctx, `INSERT INTO endpoints(name, slug, description, enabled, method, token, allow_no_token, action, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 			e.Name, e.Slug, e.Description, boolInt(e.Enabled), e.Method, e.Token, boolInt(e.AllowNoToken), jsonString(e.Action), fmtTime(now), fmtTime(now))
 		if err != nil {
-			if strings.Contains(err.Error(), "UNIQUE") {
+			if s.d.isUniqueViolation(err) {
 				return e, fmt.Errorf("an endpoint with the slug %q already exists", e.Slug)
 			}
 			return e, err
@@ -242,7 +241,7 @@ func (s *Store) SaveEndpoint(ctx context.Context, e model.Endpoint) (model.Endpo
 	res, err := s.exec(ctx, `UPDATE endpoints SET name=?, slug=?, description=?, enabled=?, method=?, token=?, allow_no_token=?, action=?, updated_at=? WHERE id=?`,
 		e.Name, e.Slug, e.Description, boolInt(e.Enabled), e.Method, e.Token, boolInt(e.AllowNoToken), jsonString(e.Action), fmtTime(now), e.ID)
 	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE") {
+		if s.d.isUniqueViolation(err) {
 			return e, fmt.Errorf("an endpoint with the slug %q already exists", e.Slug)
 		}
 		return e, err

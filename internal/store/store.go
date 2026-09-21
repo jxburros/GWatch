@@ -1,7 +1,9 @@
-// Package store is the SQLite persistence layer. It uses two connection pools:
-// a single-connection writer (so writes are naturally queued and serialised)
-// and a small reader pool. The database runs in WAL mode so readers never
-// block the background writer.
+// Package store is the persistence layer. It keeps GWatch's data in an
+// embedded SQLite file by default, or in a PostgreSQL or MySQL/MariaDB
+// server when an administrator asks for one (docs/DATABASE.md, dialect.go).
+// It uses two connection pools: a single-connection writer (so writes are
+// naturally queued and serialised) and a small reader pool. Under SQLite the
+// database runs in WAL mode so readers never block the background writer.
 package store
 
 import (
@@ -20,18 +22,23 @@ import (
 	"github.com/jxburros/GWatch/internal/secrets"
 )
 
-// KeyFileName is the name of the machine-local secrets key file kept next to
-// the database file.
+// KeyFileName is the name of the machine-local secrets key file kept in the
+// data directory (next to the database file, when the database is a file).
 const KeyFileName = "gwatch.key"
 
 // ErrNotFound is returned when a row does not exist.
 var ErrNotFound = errors.New("not found")
 
-// Store wraps the SQLite database.
+// Store wraps the database.
 type Store struct {
-	path    string
-	writer  *sql.DB
-	reader  *sql.DB
+	cfg    DBConfig
+	d      dialect
+	writer *sql.DB
+	reader *sql.DB
+	// wmu serialises writes. The single-connection writer pool would queue
+	// them anyway; the mutex makes the ordering explicit and lets a write
+	// transaction hold the writer for its whole span. It is taken for every
+	// dialect (dialect.serializeWrites), servers included.
 	wmu     sync.Mutex
 	secrets *secrets.Box
 
@@ -41,58 +48,25 @@ type Store struct {
 	lastMigration *MigrationReport
 }
 
-// Open opens (creating if needed) the database at path and applies the schema.
-// Secrets stored in the settings row are encrypted with the key file
-// "gwatch.key" kept alongside the database, which is created if missing.
+// Open opens (creating if needed) the SQLite database at path and applies
+// the schema. Secrets stored in the settings row are encrypted with the key
+// file "gwatch.key" kept alongside the database, which is created if missing.
+// For a server database, see OpenDSN.
 func Open(path string) (*Store, error) {
 	return OpenWithKeyFile(path, filepath.Join(filepath.Dir(path), KeyFileName))
 }
 
 // OpenWithKeyFile is Open with an explicit path for the secrets key file.
 func OpenWithKeyFile(path, keyFile string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, fmt.Errorf("create data dir: %w", err)
-	}
-	// Which SQLite driver this is, and what its connection string looks like,
-	// is decided at build time — see driver.go.
-	writer, err := sql.Open(driverName, dataSourceName(path, true))
-	if err != nil {
-		return nil, err
-	}
-	writer.SetMaxOpenConns(1)
-	writer.SetMaxIdleConns(1)
-	writer.SetConnMaxLifetime(0)
+	return OpenDSN(context.Background(), DBConfig{Driver: "sqlite", Path: path, KeyFile: keyFile})
+}
 
-	reader, err := sql.Open(driverName, dataSourceName(path, false))
-	if err != nil {
-		writer.Close()
-		return nil, err
-	}
-	reader.SetMaxOpenConns(4)
-	reader.SetMaxIdleConns(4)
-	reader.SetConnMaxLifetime(0)
-
+func loadSecrets(keyFile string) (*secrets.Box, error) {
 	box, err := secrets.Load(keyFile)
 	if err != nil {
-		writer.Close()
-		reader.Close()
 		return nil, fmt.Errorf("load secrets key: %w", err)
 	}
-
-	s := &Store{path: path, writer: writer, reader: reader, secrets: box}
-	if err := s.migrate(); err != nil {
-		s.Close()
-		return nil, err
-	}
-	if err := s.migrateSecrets(context.Background()); err != nil {
-		s.Close()
-		return nil, err
-	}
-	if err := s.migrateCheckSecrets(context.Background()); err != nil {
-		s.Close()
-		return nil, err
-	}
-	return s, nil
+	return box, nil
 }
 
 // SecretsHealthy reports the last secrets problem seen while loading settings
@@ -110,8 +84,21 @@ func (s *Store) setSecretsErr(err error) {
 	s.secmu.Unlock()
 }
 
-// Path returns the database file path.
-func (s *Store) Path() string { return s.path }
+// Path describes where the data is: the database file path under SQLite,
+// and a password-free "postgres://user@host:port/db" for a server.
+func (s *Store) Path() string { return s.cfg.Describe() }
+
+// Config returns the connection settings the store was opened with, with
+// the password redacted.
+func (s *Store) Config() DBConfig { return s.cfg.Redacted() }
+
+// Backend names the database in use: "sqlite", "postgres" or "mysql".
+func (s *Store) Backend() string { return s.d.name() }
+
+// Driver names the database driver this store runs on, for the Settings
+// pages and the health payload: which SQLite driver the build was compiled
+// with, or the server driver.
+func (s *Store) Driver() string { return s.d.label() }
 
 // Close closes both pools.
 func (s *Store) Close() error {
@@ -123,38 +110,29 @@ func (s *Store) Close() error {
 	return err2
 }
 
-// SizeBytes returns the size of the database file (plus WAL) on disk.
+// SizeBytes returns how much storage the database takes: the file plus its
+// WAL under SQLite, the tables' data and indexes on a server.
 func (s *Store) SizeBytes() int64 {
-	var total int64
-	for _, p := range []string{s.path, s.path + "-wal"} {
-		if fi, err := os.Stat(p); err == nil {
-			total += fi.Size()
-		}
-	}
-	return total
+	return s.d.sizeBytes(context.Background(), s)
 }
 
 // Checkpoint forces a WAL checkpoint so the main file reflects all writes.
+// It is a no-op on a server database, which has no file to bring up to date.
 func (s *Store) Checkpoint(ctx context.Context) error {
-	s.wmu.Lock()
-	defer s.wmu.Unlock()
-	_, err := s.writer.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
-	return err
+	return s.d.checkpoint(ctx, s)
 }
 
-// Vacuum reclaims space after large deletions.
+// Vacuum reclaims space after large deletions. A no-op on a server database,
+// whose own maintenance takes care of that.
 func (s *Store) Vacuum(ctx context.Context) error {
-	s.wmu.Lock()
-	defer s.wmu.Unlock()
-	_, err := s.writer.ExecContext(ctx, "VACUUM")
-	return err
+	return s.d.vacuum(ctx, s)
 }
 
 const schema = `
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
 
 CREATE TABLE IF NOT EXISTS settings (
-  key TEXT PRIMARY KEY,
+  "key" TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
 
@@ -345,8 +323,9 @@ CREATE TABLE IF NOT EXISTS api_keys (
 
 // addedColumns lists columns added to tables that older databases created
 // before the column existed. CREATE TABLE IF NOT EXISTS leaves such a table
-// alone, so each one is added with ALTER TABLE when PRAGMA table_info shows it
-// missing. Adding an entry here is the way to extend an existing table.
+// alone, so each one is added with ALTER TABLE when the catalogue shows it
+// missing. The DDL is written in SQLite's form and translated for the other
+// databases like the schema itself (dialect.ddl). Adding an entry here is the way to extend an existing table.
 //
 // This runs before the numbered migrations below, on every open, regardless
 // of schema_version: it predates the version-tracked mechanism and a step may
@@ -431,7 +410,7 @@ func migrateBackfillCheckState(ctx context.Context, tx *wtx) error {
 func migrateBackfillNodeGroups(ctx context.Context, tx *wtx) error {
 	_, err := tx.exec(ctx, `
 		UPDATE nodes
-		SET "groups" = json_array(group_name)
+		SET "groups" = `+tx.s.d.jsonArray("group_name")+`
 		WHERE trim(coalesce(group_name, '')) != ''
 		  AND ("groups" IS NULL OR trim("groups") = '' OR "groups" = '[]')`)
 	return err
@@ -441,10 +420,11 @@ func migrateBackfillNodeGroups(ctx context.Context, tx *wtx) error {
 // date. It is nil when the database was freshly created or was already at
 // currentSchemaVersion, since neither case touches or backs up anything.
 type MigrationReport struct {
-	FromVersion int
-	ToVersion   int
-	BackupPath  string   // the gwatch.db.before-vN copy made before migrating, if any
-	Applied     []string // migration names, in the order they ran
+	FromVersion   int
+	ToVersion     int
+	BackupPath    string   // the gwatch.db.before-vN copy made before migrating, if any
+	BackupSkipped string   // why no copy was made (a server database), if none was
+	Applied       []string // migration names, in the order they ran
 }
 
 // LastMigration returns the report from the migration Open ran, or nil if
@@ -474,30 +454,28 @@ func (s *Store) migrate() error {
 	fresh := stored == 0
 
 	if !fresh && stored < currentSchemaVersion {
-		backupPath, err := s.backupBeforeMigration(currentSchemaVersion)
-		if err != nil {
-			return fmt.Errorf("back up database before migrating: %w", err)
+		s.lastMigration = &MigrationReport{FromVersion: stored, ToVersion: currentSchemaVersion}
+		if s.d.fileBacked() {
+			backupPath, err := s.backupBeforeMigration(currentSchemaVersion)
+			if err != nil {
+				return fmt.Errorf("back up database before migrating: %w", err)
+			}
+			s.lastMigration.BackupPath = backupPath
+		} else {
+			// A server database is not a file GWatch can copy. The report
+			// says so, and docs/DATABASE.md asks for a server-side backup
+			// (pg_dump, mysqldump) before upgrading.
+			s.lastMigration.BackupSkipped = fmt.Sprintf("no pre-migration copy was made: the database is on a %s server, which GWatch cannot copy — take a server-side backup before upgrading", s.d.name())
 		}
-		s.lastMigration = &MigrationReport{FromVersion: stored, ToVersion: currentSchemaVersion, BackupPath: backupPath}
 	}
 
-	if err := s.writeTx(ctx, func(tx *wtx) error {
-		if _, err := tx.exec(ctx, schema); err != nil {
-			return fmt.Errorf("apply schema: %w", err)
-		}
-		if _, err := tx.exec(ctx, automationSchema); err != nil {
-			return fmt.Errorf("apply automation schema: %w", err)
-		}
-		if _, err := tx.exec(ctx, hostSchema); err != nil {
-			return fmt.Errorf("apply hardware schema: %w", err)
-		}
-		if fresh {
-			_, err := tx.exec(ctx, "INSERT INTO schema_version(version) VALUES (?)", currentSchemaVersion)
-			return err
-		}
-		return nil
-	}); err != nil {
+	if err := s.applySchema(ctx); err != nil {
 		return err
+	}
+	if fresh {
+		if _, err := s.exec(ctx, "INSERT INTO schema_version(version) VALUES (?)", currentSchemaVersion); err != nil {
+			return fmt.Errorf("record schema version: %w", err)
+		}
 	}
 
 	if err := s.addMissingColumns(ctx); err != nil {
@@ -515,16 +493,15 @@ func (s *Store) migrate() error {
 // at all. It returns 0 for a database that has no schema_version table or
 // row yet, which migrate() treats as fresh.
 func (s *Store) storedSchemaVersion(ctx context.Context) (int, error) {
-	var haveTable int
-	if err := s.queryRow(ctx,
-		"SELECT count(*) FROM sqlite_master WHERE type='table' AND name='schema_version'").Scan(&haveTable); err != nil {
+	have, err := s.d.hasTable(ctx, s, "schema_version")
+	if err != nil {
 		return 0, fmt.Errorf("check schema_version table: %w", err)
 	}
-	if haveTable == 0 {
+	if !have {
 		return 0, nil
 	}
 	var version int
-	err := s.queryRow(ctx, "SELECT version FROM schema_version LIMIT 1").Scan(&version)
+	err = s.queryRow(ctx, "SELECT version FROM schema_version LIMIT 1").Scan(&version)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
@@ -572,7 +549,7 @@ func (s *Store) backupBeforeMigration(targetVersion int) (string, error) {
 	if err := s.Checkpoint(context.Background()); err != nil {
 		return "", fmt.Errorf("checkpoint: %w", err)
 	}
-	dest := fmt.Sprintf("%s.before-v%d", s.path, targetVersion)
+	dest := fmt.Sprintf("%s.before-v%d", s.cfg.Path, targetVersion)
 	if _, err := os.Stat(dest); err == nil {
 		// A backup from an earlier attempt is already there; do not clobber
 		// it, keep both.
@@ -580,7 +557,7 @@ func (s *Store) backupBeforeMigration(targetVersion int) (string, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("stat %s: %w", dest, err)
 	}
-	if err := copyFile(s.path, dest); err != nil {
+	if err := copyFile(s.cfg.Path, dest); err != nil {
 		return "", err
 	}
 	return dest, nil
@@ -635,9 +612,7 @@ func (s *Store) addMissingColumns(ctx context.Context) error {
 		if len(have) == 0 || have[c.column] {
 			continue // the table does not exist, or the column is already there
 		}
-		// "duplicate column" is SQLite's own message, so all three drivers
-		// (see driver.go) report it with that text.
-		if _, err := s.exec(ctx, c.ddl); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		if _, err := s.exec(ctx, s.d.ddl(c.ddl)); err != nil && !s.d.isDuplicateColumn(err) {
 			return fmt.Errorf("add %s.%s: %w", c.table, c.column, err)
 		}
 		have[c.column] = true
@@ -645,26 +620,27 @@ func (s *Store) addMissingColumns(ctx context.Context) error {
 	return nil
 }
 
+// tableColumns lists the columns of table, or nothing if the table does not
+// exist.
 func (s *Store) tableColumns(ctx context.Context, table string) (map[string]bool, error) {
-	// PRAGMA takes no bound parameters; table names here are compile-time
-	// constants from addedColumns, never user input. table_info is answered
-	// by SQLite itself, so its shape is the same under every driver.
-	rows, err := s.query(ctx, "PRAGMA table_info("+table+")")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	have := map[string]bool{}
-	for rows.Next() {
-		var cid, notNull, pk int
-		var name, typ string
-		var dflt sql.NullString
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
-			return nil, err
+	return s.d.tableColumns(ctx, s, table)
+}
+
+// applySchema runs the CREATE TABLE / CREATE INDEX statements, translated
+// for the database in use, one at a time and outside any transaction: MySQL
+// commits DDL implicitly anyway, and every statement is an IF NOT EXISTS
+// (or treated as one) so running them again is harmless.
+func (s *Store) applySchema(ctx context.Context) error {
+	for _, stmt := range s.d.schema(schemaStatements()) {
+		if _, err := s.exec(ctx, stmt); err != nil {
+			upper := strings.ToUpper(stmt)
+			if strings.HasPrefix(upper, "CREATE") && strings.Contains(upper, "INDEX") && s.d.isDuplicateIndex(err) {
+				continue
+			}
+			return fmt.Errorf("apply schema: %w\n%s", err, stmt)
 		}
-		have[name] = true
 	}
-	return have, rows.Err()
+	return nil
 }
 
 // ---- helpers ----

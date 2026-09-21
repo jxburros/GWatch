@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jxburros/GWatch/internal/model"
@@ -16,14 +17,27 @@ const (
 	Bucket1d = 86400
 )
 
+// rollupCols are the columns of a rollup row, in the order every rollup
+// statement reads and writes them; rollupKeys is its primary key.
+const rollupCols = `check_id, bucket_seconds, bucket_start, count, success_count, fail_count, min_ms, max_ms, avg_ms, avg_jitter_ms, avg_loss_pct, availability`
+
+var (
+	rollupColList = strings.Split(strings.ReplaceAll(rollupCols, " ", ""), ",")
+	rollupKeys    = []string{"check_id", "bucket_seconds", "bucket_start"}
+)
+
 // RollupFromRaw (re)computes 5-minute buckets from raw results whose
 // timestamp is in [from, to). Buckets are upserted so the call is idempotent.
 func (s *Store) RollupFromRaw(ctx context.Context, from, to time.Time) (int64, error) {
 	fromB := from.Unix() - from.Unix()%Bucket5m
 	toB := to.Unix() - to.Unix()%Bucket5m + Bucket5m
+	// The bucket size is a parameter in the SELECT list, where a server
+	// cannot infer its type, hence the cast; the millisecond-to-second step
+	// must be an integer division on every database.
+	sec := s.d.intDiv("ts", "1000")
 	res, err := s.exec(ctx, `
-		INSERT INTO rollups(check_id, bucket_seconds, bucket_start, count, success_count, fail_count, min_ms, max_ms, avg_ms, avg_jitter_ms, avg_loss_pct, availability)
-		SELECT check_id, ?, (ts/1000) - ((ts/1000) % ?) AS b,
+		INSERT INTO rollups(`+rollupCols+`)
+		SELECT check_id, `+s.d.castInt("?")+`, `+sec+` - (`+sec+` % `+s.d.castInt("?")+`) AS b,
 		       COUNT(*), SUM(success), COUNT(*) - SUM(success),
 		       MIN(CASE WHEN success = 1 THEN COALESCE(min_ms, latency_ms) END),
 		       MAX(CASE WHEN success = 1 THEN COALESCE(max_ms, latency_ms) END),
@@ -32,10 +46,7 @@ func (s *Store) RollupFromRaw(ctx context.Context, from, to time.Time) (int64, e
 		       100.0 * SUM(success) / COUNT(*)
 		FROM results WHERE ts >= ? AND ts < ?
 		GROUP BY check_id, b
-		ON CONFLICT(check_id, bucket_seconds, bucket_start) DO UPDATE SET
-		  count=excluded.count, success_count=excluded.success_count, fail_count=excluded.fail_count,
-		  min_ms=excluded.min_ms, max_ms=excluded.max_ms, avg_ms=excluded.avg_ms, avg_jitter_ms=excluded.avg_jitter_ms,
-		  avg_loss_pct=excluded.avg_loss_pct, availability=excluded.availability`,
+		`+s.d.upsertClause(rollupKeys, rollupColList),
 		Bucket5m, Bucket5m, fromB*1000, toB*1000)
 	if err != nil {
 		return 0, err
@@ -49,8 +60,8 @@ func (s *Store) RollupUp(ctx context.Context, srcBucket, dstBucket int, from, to
 	fromB := from.Unix() - from.Unix()%int64(dstBucket)
 	toB := to.Unix() - to.Unix()%int64(dstBucket) + int64(dstBucket)
 	res, err := s.exec(ctx, `
-		INSERT INTO rollups(check_id, bucket_seconds, bucket_start, count, success_count, fail_count, min_ms, max_ms, avg_ms, avg_jitter_ms, avg_loss_pct, availability)
-		SELECT check_id, ?, bucket_start - (bucket_start % ?) AS b,
+		INSERT INTO rollups(`+rollupCols+`)
+		SELECT check_id, `+s.d.castInt("?")+`, bucket_start - (bucket_start % `+s.d.castInt("?")+`) AS b,
 		       SUM(count), SUM(success_count), SUM(fail_count),
 		       MIN(min_ms), MAX(max_ms),
 		       CASE WHEN SUM(CASE WHEN avg_ms IS NOT NULL THEN success_count ELSE 0 END) > 0
@@ -62,10 +73,7 @@ func (s *Store) RollupUp(ctx context.Context, srcBucket, dstBucket int, from, to
 		       100.0 * SUM(success_count) / SUM(count)
 		FROM rollups WHERE bucket_seconds = ? AND bucket_start >= ? AND bucket_start < ?
 		GROUP BY check_id, b
-		ON CONFLICT(check_id, bucket_seconds, bucket_start) DO UPDATE SET
-		  count=excluded.count, success_count=excluded.success_count, fail_count=excluded.fail_count,
-		  min_ms=excluded.min_ms, max_ms=excluded.max_ms, avg_ms=excluded.avg_ms, avg_jitter_ms=excluded.avg_jitter_ms,
-		  avg_loss_pct=excluded.avg_loss_pct, availability=excluded.availability`,
+		`+s.d.upsertClause(rollupKeys, rollupColList),
 		dstBucket, dstBucket, srcBucket, fromB, toB)
 	if err != nil {
 		return 0, err
@@ -142,7 +150,7 @@ func (s *Store) Counts(ctx context.Context) (raw, r5m, r1h, r1d, events int64, e
 
 // RollupsBetween returns buckets of a size for a check in [from, to).
 func (s *Store) RollupsBetween(ctx context.Context, checkID int64, bucket int, from, to time.Time) ([]model.Rollup, error) {
-	rows, err := s.query(ctx, `SELECT check_id, bucket_seconds, bucket_start, count, success_count, fail_count, min_ms, max_ms, avg_ms, avg_jitter_ms, avg_loss_pct, availability
+	rows, err := s.query(ctx, `SELECT `+rollupCols+`
 		FROM rollups WHERE check_id = ? AND bucket_seconds = ? AND bucket_start >= ? AND bucket_start < ? ORDER BY bucket_start`, checkID, bucket, from.Unix(), to.Unix())
 	if err != nil {
 		return nil, err
@@ -252,7 +260,7 @@ func (s *Store) History(ctx context.Context, check model.Check, nodeName string,
 		// already trimmed the raw data covering this window, the 5-minute
 		// rollups reach further back than the raw rows, so use them instead.
 		var minRaw, minRollup sql.NullInt64
-		_ = s.queryRow(ctx, "SELECT MIN(ts)/1000 FROM results WHERE check_id = ? AND ts >= ?", check.ID, series.From.UnixMilli()).Scan(&minRaw)
+		_ = s.queryRow(ctx, "SELECT "+s.d.intDiv("MIN(ts)", "1000")+" FROM results WHERE check_id = ? AND ts >= ?", check.ID, series.From.UnixMilli()).Scan(&minRaw)
 		_ = s.queryRow(ctx, "SELECT MIN(bucket_start) FROM rollups WHERE check_id = ? AND bucket_seconds = ? AND bucket_start >= ?", check.ID, Bucket5m, series.From.Unix()).Scan(&minRollup)
 		if minRollup.Valid && (!minRaw.Valid || minRollup.Int64+Bucket5m*2 < minRaw.Int64) {
 			bucket = Bucket5m
@@ -369,7 +377,7 @@ func (s *Store) AllResults(ctx context.Context, fn func(model.Result) error) err
 
 // AllRollups streams every rollup to fn.
 func (s *Store) AllRollups(ctx context.Context, fn func(model.Rollup) error) error {
-	rows, err := s.query(ctx, `SELECT check_id, bucket_seconds, bucket_start, count, success_count, fail_count, min_ms, max_ms, avg_ms, avg_jitter_ms, avg_loss_pct, availability FROM rollups ORDER BY check_id, bucket_seconds, bucket_start`)
+	rows, err := s.query(ctx, `SELECT `+rollupCols+` FROM rollups ORDER BY check_id, bucket_seconds, bucket_start`)
 	if err != nil {
 		return err
 	}
@@ -412,9 +420,7 @@ func (s *Store) AllEvents(ctx context.Context, fn func(model.Event) error) error
 // InsertRollupsBatch upserts rollups in one transaction.
 func (s *Store) InsertRollupsBatch(ctx context.Context, rollups []model.Rollup) error {
 	return s.writeTx(ctx, func(tx *wtx) error {
-		stmt, err := tx.prepare(ctx, `INSERT INTO rollups(check_id, bucket_seconds, bucket_start, count, success_count, fail_count, min_ms, max_ms, avg_ms, avg_jitter_ms, avg_loss_pct, availability)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(check_id, bucket_seconds, bucket_start) DO UPDATE SET count=excluded.count, success_count=excluded.success_count, fail_count=excluded.fail_count,
-			min_ms=excluded.min_ms, max_ms=excluded.max_ms, avg_ms=excluded.avg_ms, avg_jitter_ms=excluded.avg_jitter_ms, avg_loss_pct=excluded.avg_loss_pct, availability=excluded.availability`)
+		stmt, err := tx.prepare(ctx, insertValues("rollups", rollupColList)+" "+s.d.upsertClause(rollupKeys, rollupColList))
 		if err != nil {
 			return err
 		}
@@ -432,7 +438,7 @@ func (s *Store) InsertRollupsBatch(ctx context.Context, rollups []model.Rollup) 
 func (s *Store) InsertResultsBatch(ctx context.Context, results []model.Result) error {
 	return s.writeTx(ctx, func(tx *wtx) error {
 		for _, r := range results {
-			if _, err := insertResultTx(ctx, tx, r); err != nil {
+			if _, err := s.insertResultTx(ctx, tx, r); err != nil {
 				return err
 			}
 		}
@@ -512,8 +518,15 @@ func (s *Store) CreateNodeWithID(ctx context.Context, n model.Node) error {
 				c.ID, n.ID, string(c.Type), c.Name, boolInt(c.Enabled), c.IntervalSeconds, c.TimeoutSeconds, c.Retries, c.FailureThreshold, jsonString(stored), alerts, c.SortOrder, fmtTime(c.CreatedAt), fmtTime(c.UpdatedAt)); err != nil {
 				return err
 			}
-			if _, err := tx.exec(ctx, `INSERT OR IGNORE INTO check_state(check_id, status) VALUES (?, 'unknown')`, c.ID); err != nil {
+			if _, err := tx.exec(ctx, s.d.insertIgnore("check_state", []string{"check_id", "status"}), c.ID, "unknown"); err != nil {
 				return err
+			}
+		}
+		// The rows above carried their own ids; make sure the next generated
+		// one lands after them.
+		for _, table := range []string{"nodes", "checks"} {
+			if err := s.d.syncSequence(ctx, tx, table); err != nil {
+				return fmt.Errorf("sync %s ids: %w", table, err)
 			}
 		}
 		return nil

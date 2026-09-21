@@ -15,15 +15,14 @@ import "strings"
 // dataSourceName (the connection string for one of the two pools). Nothing
 // else in the package should know which driver it is running on.
 //
-// Two places in store.go lean on the underlying SQLite library rather than the
-// Go driver, and behave the same under all three: tableColumns reads PRAGMA
-// table_info, and addMissingColumns treats an error containing "duplicate
-// column" as "already there" — that text is SQLite's own message, so every
-// driver reports it the same way.
-
-// Driver names the SQLite driver this build was compiled with, for the
-// Settings pages and the health payload.
-func (s *Store) Driver() string { return driverLabel }
+// Two places in dialect_sqlite.go lean on the underlying SQLite library
+// rather than the Go driver, and behave the same under all three:
+// tableColumns reads PRAGMA table_info, and isDuplicateColumn matches
+// "duplicate column" — that text is SQLite's own message, so every driver
+// reports it the same way.
+//
+// The PostgreSQL and MySQL drivers are not build-tagged: they are always
+// compiled in, and DBConfig.Driver picks one at run time (config.go).
 
 // sqliteFileURI turns a database path into the "file:" URI SQLite's URI
 // parser expects, ready for query parameters to be appended.

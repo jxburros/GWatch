@@ -16,10 +16,6 @@ import (
 // example a second account with the same user name.
 var ErrDuplicate = errors.New("already exists")
 
-func isUniqueViolation(err error) bool {
-	return err != nil && strings.Contains(strings.ToLower(err.Error()), "unique constraint")
-}
-
 // ---- users ----
 
 const userCols = `id, username, role, created_at, updated_at, last_login_at`
@@ -47,7 +43,7 @@ func (s *Store) CreateUser(ctx context.Context, username, passwordHash string, r
 	id, err := s.insertID(ctx, `INSERT INTO users(username, password_hash, role, created_at, updated_at) VALUES (?,?,?,?,?)`,
 		username, passwordHash, string(role), now, now)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if s.d.isUniqueViolation(err) {
 			return model.User{}, fmt.Errorf("a user named %q %w", username, ErrDuplicate)
 		}
 		return model.User{}, err
@@ -67,7 +63,7 @@ func (s *Store) GetUser(ctx context.Context, id int64) (model.User, error) {
 // GetUserByName returns one account by user name (case-insensitive) together
 // with its stored password hash.
 func (s *Store) GetUserByName(ctx context.Context, username string) (model.User, string, error) {
-	row := s.queryRow(ctx, "SELECT "+userCols+", password_hash FROM users WHERE username = ? COLLATE NOCASE", strings.TrimSpace(username))
+	row := s.queryRow(ctx, "SELECT "+userCols+", password_hash FROM users WHERE "+s.d.ciEq("username"), strings.TrimSpace(username))
 	var u model.User
 	var created, updated, hash string
 	var lastLogin sql.NullString
@@ -85,7 +81,7 @@ func (s *Store) GetUserByName(ctx context.Context, username string) (model.User,
 
 // ListUsers returns every account, ordered by user name.
 func (s *Store) ListUsers(ctx context.Context) ([]model.User, error) {
-	rows, err := s.query(ctx, "SELECT "+userCols+" FROM users ORDER BY username COLLATE NOCASE")
+	rows, err := s.query(ctx, "SELECT "+userCols+" FROM users ORDER BY "+s.d.ci("username"))
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +250,7 @@ func (s *Store) CreateAPIKey(ctx context.Context, name, prefix, keyHash string, 
 	id, err := s.insertID(ctx, `INSERT INTO api_keys(name, prefix, key_hash, scope, created_by, created_at) VALUES (?,?,?,?,?,?)`,
 		name, prefix, keyHash, string(scope), createdBy, fmtTime(time.Now()))
 	if err != nil {
-		if isUniqueViolation(err) {
+		if s.d.isUniqueViolation(err) {
 			return model.APIKey{}, ErrDuplicate
 		}
 		return model.APIKey{}, err

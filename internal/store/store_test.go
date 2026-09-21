@@ -3,7 +3,6 @@ package store
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -16,16 +15,6 @@ import (
 	"github.com/jxburros/GWatch/internal/model"
 	"github.com/jxburros/GWatch/internal/secrets"
 )
-
-func openTest(t *testing.T) *Store {
-	t.Helper()
-	s, err := Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { s.Close() })
-	return s
-}
 
 func f(v float64) *float64 { return &v }
 
@@ -225,7 +214,7 @@ func TestEventsSettingsDashboardsMaintenance(t *testing.T) {
 func rawSettingsRow(t *testing.T, s *Store) string {
 	t.Helper()
 	var raw string
-	if err := s.queryRow(context.Background(), "SELECT value FROM settings WHERE key = 'settings'").Scan(&raw); err != nil {
+	if err := s.queryRow(context.Background(), `SELECT value FROM settings WHERE "key" = 'settings'`).Scan(&raw); err != nil {
 		t.Fatalf("read raw settings: %v", err)
 	}
 	return raw
@@ -278,11 +267,10 @@ func TestSettingsEmptySecretsStayEmpty(t *testing.T) {
 }
 
 func TestPlaintextSettingsMigratedOnOpen(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
+	cfg := testConfig(t)
 	ctx := context.Background()
 
-	s, err := Open(dbPath)
+	s, err := OpenDSN(ctx, cfg)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -298,7 +286,7 @@ func TestPlaintextSettingsMigratedOnOpen(t *testing.T) {
 	}
 	s.Close()
 
-	s2, err := Open(dbPath)
+	s2, err := OpenDSN(ctx, cfg)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -320,11 +308,10 @@ func TestPlaintextSettingsMigratedOnOpen(t *testing.T) {
 }
 
 func TestWrongKeyFileYieldsEmptySecrets(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
+	cfg := testConfig(t)
 	ctx := context.Background()
 
-	s, err := Open(dbPath)
+	s, err := OpenDSN(ctx, cfg)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -338,10 +325,10 @@ func TestWrongKeyFileYieldsEmptySecrets(t *testing.T) {
 	s.Close()
 
 	// Replace the key file: the rest of the settings must still load.
-	if err := os.Remove(filepath.Join(dir, KeyFileName)); err != nil {
+	if err := os.Remove(cfg.KeyFile); err != nil {
 		t.Fatalf("remove key: %v", err)
 	}
-	s2, err := Open(dbPath)
+	s2, err := OpenDSN(ctx, cfg)
 	if err != nil {
 		t.Fatalf("reopen with new key: %v", err)
 	}
@@ -368,37 +355,29 @@ func TestWrongKeyFileYieldsEmptySecrets(t *testing.T) {
 // data migrations — a check with no matching check_state row (the gap the
 // version-2 step closes) and a node whose group is only in group_name, with
 // no groups list (what the version-3 step fills in).
-func rawOldShapeDB(t *testing.T, path string) {
+func rawOldShapeDB(t *testing.T, cfg DBConfig) {
 	t.Helper()
-	db, err := sql.Open(driverName, dataSourceName(path, true))
-	if err != nil {
-		t.Fatalf("open raw db: %v", err)
-	}
-	defer db.Close()
-	for _, stmt := range []string{schema, automationSchema, hostSchema} {
-		if _, err := db.Exec(stmt); err != nil {
-			t.Fatalf("apply schema: %v", err)
-		}
-	}
+	db, d := rawDB(t, cfg)
+	rawSchema(t, db, d, schema, automationSchema, hostSchema)
 	if _, err := db.Exec("INSERT INTO schema_version(version) VALUES (1)"); err != nil {
 		t.Fatalf("seed schema_version: %v", err)
 	}
 	now := fmtTime(time.Now())
-	if _, err := db.Exec(`INSERT INTO nodes(id, name, group_name, created_at, updated_at) VALUES (1, 'Router', 'Home Network', ?, ?)`, now, now); err != nil {
+	if _, err := db.Exec(d.rebind(`INSERT INTO nodes(id, name, group_name, created_at, updated_at) VALUES (1, 'Router', 'Home Network', ?, ?)`), now, now); err != nil {
 		t.Fatalf("seed node: %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO checks(id, node_id, type, name, created_at, updated_at) VALUES (1, 1, 'ping', 'Ping', ?, ?)`, now, now); err != nil {
+	if _, err := db.Exec(d.rebind(`INSERT INTO checks(id, node_id, type, name, created_at, updated_at) VALUES (1, 1, 'ping', 'Ping', ?, ?)`), now, now); err != nil {
 		t.Fatalf("seed check: %v", err)
 	}
 	// Deliberately no check_state row for check 1.
 }
 
 func TestOldDatabaseMigratesAndBacksUp(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
-	rawOldShapeDB(t, dbPath)
+	cfg := testConfig(t)
+	dbPath := cfg.Path
+	rawOldShapeDB(t, cfg)
 
-	s, err := Open(dbPath)
+	s, err := OpenDSN(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -434,17 +413,27 @@ func TestOldDatabaseMigratesAndBacksUp(t *testing.T) {
 		t.Fatalf("group alias = %q, want the first group", n.Group)
 	}
 
-	backupPath := fmt.Sprintf("%s.before-v%d", dbPath, currentSchemaVersion)
-	if fi, err := os.Stat(backupPath); err != nil || fi.Size() == 0 {
-		t.Fatalf("pre-migration backup missing or empty: %v", err)
-	}
-
 	rep := s.LastMigration()
 	if rep == nil {
 		t.Fatal("expected a migration report")
 	}
-	if rep.FromVersion != 1 || rep.ToVersion != currentSchemaVersion || rep.BackupPath != backupPath {
+	if rep.FromVersion != 1 || rep.ToVersion != currentSchemaVersion {
 		t.Fatalf("migration report = %+v", rep)
+	}
+	if isFileBacked() {
+		backupPath := fmt.Sprintf("%s.before-v%d", dbPath, currentSchemaVersion)
+		if fi, err := os.Stat(backupPath); err != nil || fi.Size() == 0 {
+			t.Fatalf("pre-migration backup missing or empty: %v", err)
+		}
+		if rep.BackupPath != backupPath || rep.BackupSkipped != "" {
+			t.Fatalf("migration report = %+v", rep)
+		}
+	} else {
+		// A server database cannot be copied; the report has to say so
+		// rather than stay quiet about it.
+		if rep.BackupPath != "" || !strings.Contains(rep.BackupSkipped, "server") {
+			t.Fatalf("migration report on a server = %+v", rep)
+		}
 	}
 	if len(rep.Applied) != currentSchemaVersion-1 {
 		t.Fatalf("migration report should name every step that ran: %+v", rep)
@@ -523,13 +512,9 @@ func TestNodeGroupsRoundTripAndCount(t *testing.T) {
 }
 
 func TestOpenFreshDatabaseIsAtCurrentVersionWithNoBackup(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
-	s, err := Open(dbPath)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	defer s.Close()
+	cfg := testConfig(t)
+	dbPath := cfg.Path
+	s := openCfg(t, cfg)
 
 	v, err := s.SchemaVersion(context.Background())
 	if err != nil {
@@ -541,9 +526,11 @@ func TestOpenFreshDatabaseIsAtCurrentVersionWithNoBackup(t *testing.T) {
 	if rep := s.LastMigration(); rep != nil {
 		t.Fatalf("fresh database should not report a migration: %+v", rep)
 	}
-	matches, _ := filepath.Glob(dbPath + ".before-v*")
-	if len(matches) != 0 {
-		t.Fatalf("fresh database should not get a pre-migration backup: %v", matches)
+	if isFileBacked() {
+		matches, _ := filepath.Glob(dbPath + ".before-v*")
+		if len(matches) != 0 {
+			t.Fatalf("fresh database should not get a pre-migration backup: %v", matches)
+		}
 	}
 }
 
@@ -552,13 +539,13 @@ func TestOpenFreshDatabaseIsAtCurrentVersionWithNoBackup(t *testing.T) {
 // puts the previous exe back (the documented rollback), and that older
 // build must fail closed instead of touching the file.
 func TestOpenRefusesNewerSchemaVersion(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
-	s, err := Open(dbPath)
+	cfg := testConfig(t)
+	dbPath := cfg.Path
+	ctx := context.Background()
+	s, err := OpenDSN(ctx, cfg)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	ctx := context.Background()
 	future := currentSchemaVersion + 1
 	if _, err := s.exec(ctx, "UPDATE schema_version SET version = ?", future); err != nil {
 		t.Fatalf("bump version: %v", err)
@@ -570,12 +557,14 @@ func TestOpenRefusesNewerSchemaVersion(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	before, err := os.ReadFile(dbPath)
-	if err != nil {
-		t.Fatalf("read before: %v", err)
+	var before []byte
+	if isFileBacked() {
+		if before, err = os.ReadFile(dbPath); err != nil {
+			t.Fatalf("read before: %v", err)
+		}
 	}
 
-	if _, err := Open(dbPath); err == nil {
+	if _, err := OpenDSN(ctx, cfg); err == nil {
 		t.Fatal("expected Open to refuse a newer-schema database")
 	} else {
 		msg := err.Error()
@@ -584,27 +573,34 @@ func TestOpenRefusesNewerSchemaVersion(t *testing.T) {
 		}
 	}
 
-	after, err := os.ReadFile(dbPath)
-	if err != nil {
-		t.Fatalf("read after: %v", err)
-	}
-	if !bytes.Equal(before, after) {
-		t.Fatal("refused open modified the database file")
-	}
-	matches, _ := filepath.Glob(dbPath + ".before-v*")
-	if len(matches) != 0 {
-		t.Fatalf("refused open should not create a backup: %v", matches)
+	if isFileBacked() {
+		after, err := os.ReadFile(dbPath)
+		if err != nil {
+			t.Fatalf("read after: %v", err)
+		}
+		if !bytes.Equal(before, after) {
+			t.Fatal("refused open modified the database file")
+		}
+		matches, _ := filepath.Glob(dbPath + ".before-v*")
+		if len(matches) != 0 {
+			t.Fatalf("refused open should not create a backup: %v", matches)
+		}
+	} else {
+		// No file to compare on a server: check the one row the refusal
+		// must not have touched.
+		db, d := rawDB(t, cfg)
+		var v int
+		if err := db.QueryRow(d.rebind("SELECT version FROM schema_version")).Scan(&v); err != nil || v != future {
+			t.Fatalf("schema_version after refused open = %d, %v; want %d untouched", v, err, future)
+		}
 	}
 }
 
 func TestKeyFileCreatedNextToDatabase(t *testing.T) {
-	dir := t.TempDir()
-	s, err := Open(filepath.Join(dir, "test.db"))
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	defer s.Close()
-	fi, err := os.Stat(filepath.Join(dir, KeyFileName))
+	cfg := testConfig(t)
+	s := openCfg(t, cfg)
+	_ = s
+	fi, err := os.Stat(cfg.KeyFile)
 	if err != nil {
 		t.Fatalf("key file: %v", err)
 	}
@@ -715,11 +711,10 @@ func TestCheckSecretsSealedAtRest(t *testing.T) {
 }
 
 func TestPlaintextCheckSecretsMigratedOnOpen(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
+	cfg := testConfig(t)
 	ctx := context.Background()
 
-	s, err := Open(dbPath)
+	s, err := OpenDSN(ctx, cfg)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -737,7 +732,7 @@ func TestPlaintextCheckSecretsMigratedOnOpen(t *testing.T) {
 	}
 	s.Close()
 
-	s2, err := Open(dbPath)
+	s2, err := OpenDSN(ctx, cfg)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
