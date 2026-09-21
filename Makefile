@@ -4,7 +4,7 @@
 VERSION ?= $(shell tr -d ' \t\r\n' < VERSION)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build build-ncruces build-cgo windows docker rsrc agent agent-all test test-race cover fmt fmt-check vet tidy-check web-check web-test ci run keygen sign verify-release mcp-build mcp-test mcp-fmt
+.PHONY: build build-ncruces build-cgo windows docker rsrc agent agent-all test test-race cover fmt fmt-check vet tidy-check web-check web-test web-e2e ci run keygen sign verify-release mcp-build mcp-test mcp-fmt
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/gwatch .
@@ -105,6 +105,12 @@ web-check:
 # `npm ci` run once first (devDependencies only; see package.json).
 web-test:
 	npm test
+# The browser suite (tests/e2e/): Playwright drives Chromium through every
+# page in mock mode with an axe-core accessibility scan, and walks the Help
+# page's keyboard contract. Needs Chromium once:
+# `npx playwright install --with-deps chromium`.
+web-e2e:
+	npm run test:e2e
 
 # The MCP companion (mcp/) is a separate Go module with its own go.mod and its
 # own version, so the root `./...` above never sees it — these targets are how
@@ -121,7 +127,7 @@ mcp-test:
 mcp-fmt:
 	cd mcp && gofmt -w .
 
-ci: fmt-check vet tidy-check test-race mcp-test mcp-build web-test
+ci: fmt-check vet tidy-check test-race mcp-test mcp-build web-test web-e2e
 
 run:
 	go run . run --data-dir ./data
