@@ -405,7 +405,7 @@
       lastCheckAt: runs[runs.length - 1] || null, lastSuccessAt: runs[runs.length - 1] || null, nextCheckAt: nexts[0] || null,
       checksTotal: all.length, checksEnabled: all.filter((c) => c.enabled && findNode(c.nodeId).enabled).length, checksRunning: 0,
       lastGap: { from: ago(2 * DAY + 6 * HOUR + 45 * MIN), to: ago(2 * DAY + 6 * HOUR), seconds: 2700 },
-      databasePath: 'C:\\ProgramData\\GWatch\\gwatch.db', databaseBytes: 48_300_000, dataDir: 'C:\\ProgramData\\GWatch', keyPath: 'C:\\ProgramData\\GWatch\\gwatch.key', backupDir: 'C:\\ProgramData\\GWatch\\backups', retention, backup: backupStatus,
+      databasePath: 'C:\\ProgramData\\GWatch\\gwatch.db', databaseBytes: 48_300_000, databaseDriver: 'modernc.org/sqlite', dataDir: 'C:\\ProgramData\\GWatch', keyPath: 'C:\\ProgramData\\GWatch\\gwatch.key', backupDir: 'C:\\ProgramData\\GWatch\\backups', retention, backup: backupStatus,
       recentErrors: events.filter((e) => e.type === 'internal_error').slice(0, 5), alertsEnabled: settings.alerts.enabled, smtpConfigured: !!settings.alerts.smtp.host, lastAlertAt: ago(21 * MIN + 30e3), lastAlertError: '', listenAddress: '127.0.0.1:7230', platform: 'windows/amd64',
     };
   }

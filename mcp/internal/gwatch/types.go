@@ -230,6 +230,7 @@ type Health struct {
 	ChecksEnabled    int        `json:"checksEnabled"`
 	ChecksRunning    int        `json:"checksRunning"`
 	DatabaseBytes    int64      `json:"databaseBytes"`
+	DatabaseDriver   string     `json:"databaseDriver"`
 	AlertsEnabled    bool       `json:"alertsEnabled"`
 	SMTPConfigured   bool       `json:"smtpConfigured"`
 	LastAlertError   string     `json:"lastAlertError,omitempty"`

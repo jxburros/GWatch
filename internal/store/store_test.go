@@ -370,8 +370,7 @@ func TestWrongKeyFileYieldsEmptySecrets(t *testing.T) {
 // no groups list (what the version-3 step fills in).
 func rawOldShapeDB(t *testing.T, path string) {
 	t.Helper()
-	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=temp_store(MEMORY)", filepath.ToSlash(path))
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open(driverName, dataSourceName(path, true))
 	if err != nil {
 		t.Fatalf("open raw db: %v", err)
 	}

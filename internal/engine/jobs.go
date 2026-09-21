@@ -310,6 +310,7 @@ func (e *Engine) Health(ctx context.Context) model.Health {
 		LastGap:          e.lastGap,
 		DatabasePath:     e.store.Path(),
 		DatabaseBytes:    e.store.SizeBytes(),
+		DatabaseDriver:   e.store.Driver(),
 		DataDir:          e.opts.DataDir,
 		KeyPath:          filepath.Join(e.opts.DataDir, store.KeyFileName),
 		BackupDir:        filepath.Join(e.opts.DataDir, "backups"),

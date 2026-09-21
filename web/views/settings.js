@@ -688,6 +688,7 @@ export async function mount(root, ctx) {
     const row = (k, v) => { if (v) dl.append(h('dt', null, k), h('dd', { class: 'mono' }, v)); };
     row('Data directory', hl.dataDir);
     row('Database', hl.databasePath);
+    row('SQLite driver', hl.databaseDriver);
     row('Key file', hl.keyPath);
     row('Backups folder', hl.backupDir);
     return h('div', { style: { marginTop: '10px' } }, dl,

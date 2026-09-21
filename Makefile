@@ -4,13 +4,25 @@
 VERSION ?= $(shell tr -d ' \t\r\n' < VERSION)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build windows rsrc agent agent-all test test-race cover fmt fmt-check vet tidy-check web-check web-test ci run keygen sign verify-release mcp-build mcp-test mcp-fmt
+.PHONY: build build-ncruces build-cgo windows rsrc agent agent-all test test-race cover fmt fmt-check vet tidy-check web-check web-test ci run keygen sign verify-release mcp-build mcp-test mcp-fmt
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/gwatch .
 
 windows:
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/gwatch.exe .
+
+# The SQLite driver is a build-time choice (internal/store/driver.go and
+# docs/INSTALL.md, "Choosing the SQLite driver"). `build` above uses the
+# default, modernc.org/sqlite, and so do the releases. These two are the
+# opt-in alternatives for people building from source.
+build-ncruces:
+	CGO_ENABLED=0 go build -tags sqlite_ncruces -trimpath -ldflags "$(LDFLAGS)" -o dist/gwatch .
+
+# Links the C SQLite library through cgo: needs a C compiler on PATH and does
+# not cross-compile, so it is never used for a release build.
+build-cgo:
+	CGO_ENABLED=1 go build -tags sqlite_cgo -trimpath -ldflags "$(LDFLAGS)" -o dist/gwatch .
 
 # The two Windows setup programs are built by Inno Setup, which only runs on
 # Windows, so there is no make target for them — see scripts/build-installer.ps1

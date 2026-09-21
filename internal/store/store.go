@@ -18,8 +18,6 @@ import (
 	"time"
 
 	"github.com/jxburros/GWatch/internal/secrets"
-
-	_ "modernc.org/sqlite"
 )
 
 // KeyFileName is the name of the machine-local secrets key file kept next to
@@ -55,9 +53,9 @@ func OpenWithKeyFile(path, keyFile string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
-	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=temp_store(MEMORY)", filepath.ToSlash(path))
-
-	writer, err := sql.Open("sqlite", dsn)
+	// Which SQLite driver this is, and what its connection string looks like,
+	// is decided at build time — see driver.go.
+	writer, err := sql.Open(driverName, dataSourceName(path, true))
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +63,7 @@ func OpenWithKeyFile(path, keyFile string) (*Store, error) {
 	writer.SetMaxIdleConns(1)
 	writer.SetConnMaxLifetime(0)
 
-	reader, err := sql.Open("sqlite", dsn)
+	reader, err := sql.Open(driverName, dataSourceName(path, false))
 	if err != nil {
 		writer.Close()
 		return nil, err
@@ -655,6 +653,8 @@ func (s *Store) addMissingColumns(ctx context.Context) error {
 		if len(have) == 0 || have[c.column] {
 			continue // the table does not exist, or the column is already there
 		}
+		// "duplicate column" is SQLite's own message, so all three drivers
+		// (see driver.go) report it with that text.
 		if _, err := s.Exec(ctx, c.ddl); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("add %s.%s: %w", c.table, c.column, err)
 		}
@@ -665,7 +665,8 @@ func (s *Store) addMissingColumns(ctx context.Context) error {
 
 func (s *Store) tableColumns(ctx context.Context, table string) (map[string]bool, error) {
 	// PRAGMA takes no bound parameters; table names here are compile-time
-	// constants from addedColumns, never user input.
+	// constants from addedColumns, never user input. table_info is answered
+	// by SQLite itself, so its shape is the same under every driver.
 	rows, err := s.reader.QueryContext(ctx, "PRAGMA table_info("+table+")")
 	if err != nil {
 		return nil, err
