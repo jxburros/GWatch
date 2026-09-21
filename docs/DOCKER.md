@@ -221,3 +221,4 @@ image carries. To build your own from a checkout, `make docker` produces
 | `GWATCH_DATA_DIR` | `/data` | Where the database, key, logs and backups live. Change the volume, not this |
 | `GWATCH_LISTEN` | `0.0.0.0:7230` | Address and port inside the container. Change the `-p` mapping rather than this |
 | `TZ` | unset (UTC) | Time zone for schedules, maintenance windows and log timestamps, e.g. `Europe/London` |
+| `GWATCH_DB_DRIVER`, `GWATCH_DB_HOST`, `GWATCH_DB_PORT`, `GWATCH_DB_USER`, `GWATCH_DB_PASSWORD`, `GWATCH_DB_NAME`, `GWATCH_DB_SCHEMA`, `GWATCH_DB_SSLMODE`, `GWATCH_DB_DSN` | unset (SQLite in `/data`) | Keep the data on a PostgreSQL or MySQL/MariaDB server instead of the SQLite file — see [`DATABASE.md`](DATABASE.md). The `/data` volume is still needed for `gwatch.key`, logs and backups |
