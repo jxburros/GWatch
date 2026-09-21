@@ -9,7 +9,7 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
-## Unreleased
+## 0.3.0
 
 The 2026-09-21 sprint: everything labelled `sprint-plan` in the tracker.
 
@@ -75,7 +75,6 @@ The 2026-09-21 sprint: everything labelled `sprint-plan` in the tracker.
   sqlite_ncruces` or `-tags sqlite_cgo` swap in `ncruces/go-sqlite3` or
   `mattn/go-sqlite3` for people building from source. CI runs the store under
   all three, and Settings and `/api/health` say which one a build uses.
-
 - **An accessibility pass across the interface** (#38). Dialogs name
   themselves by their heading, make the page behind them inert and hand focus
   back where it came from; menus, wallboard tabs and the dashboard grid work
@@ -85,6 +84,15 @@ The 2026-09-21 sprint: everything labelled `sprint-plan` in the tracker.
   survives forced-colours mode; and the skip link, which the hash router had
   quietly broken, works again. Playwright runs axe over every route in both
   themes in CI so it stays that way.
+- **A user guide** (`docs/USER-GUIDE.md`). The repository documented the API,
+  installation and operations but never the interface itself. Twenty sections
+  covering every screen and setting in order: the first half-hour, the layout,
+  nodes and checks, a reference for all ten check types and their options,
+  discovery, bulk edit, dashboards, charts, incidents and audit, alerts and the
+  four ways they get narrowed, notification rules, automation, hardware and the
+  agent, wallboards, all seventeen settings tabs, accounts and remote access,
+  backups, the keyboard contract, the corners that are easy to never find, and
+  troubleshooting. Linked from the README and from the in-app Help page.
 
 ### Changed
 
@@ -92,6 +100,14 @@ The 2026-09-21 sprint: everything labelled `sprint-plan` in the tracker.
   code written for a finger — a touch handler on charts — is gone, along with
   the comments that described narrow layouts as phone layouts. Narrow windows
   and tablets still read fine; GWatch is built for a desk.
+- **The documentation was audited against the code.** `docs/API.md` gained
+  reference material it never had — the Node and Check objects, every check
+  type's configuration fields, a table of all 31 event types, and the
+  `settings.general`/`alerts`/`retention` fields with their defaults — and its
+  stream, version and dashboard entries were corrected. `docs/RELEASING.md`
+  had the wrong CI job count and a repository layout missing ten packages.
+  `ROADMAP.md` still listed SNMP as a non-goal after it shipped in 0.2.2.
+  `docs/DATABASE.md` gained `GWATCH_DB_PATH`.
 
 ## 0.2.2
 

@@ -205,8 +205,8 @@ Docker Desktop, most ARM servers):
 
 | Tag | Meaning |
 |---|---|
-| `0.2.2` | Exactly that release. Pin this if you want upgrades to be a decision |
-| `0.2` | The newest patch release of that minor version |
+| `0.3.0` | Exactly that release. Pin this if you want upgrades to be a decision |
+| `0.3` | The newest patch release of that minor version |
 | `latest` | The newest release |
 
 `docker run --rm ghcr.io/jxburros/gwatch:latest version` prints the version the

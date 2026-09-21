@@ -17,7 +17,7 @@ became, and what still needs a human:
 |---|---|---|
 | 1.1 endpoint tokens | `internal/api/automation.go`, Settings › Automation banner | — |
 | 1.2 script placeholders | `internal/actions` (`expandScriptCode`, `buildGitArgs`, `allowUntrustedInput`) | `cmd` scripts get a sanitized literal, not a reference (cmd re-parses `%VAR%`); documented |
-| 1.3 signed updates | `internal/update/sign.go`, `cmd/gwatch-sign`, `docs/RELEASING.md` | **Generate the release key, paste the public key into `internal/update/release_keys.txt`, add the `GWATCH_SIGNING_KEY` secret.** Until then self-update reports releases but refuses to install them (fail closed) |
+| 1.3 signed updates | `internal/update/sign.go`, `cmd/gwatch-sign`, `docs/RELEASING.md` | Done. The key is pinned in `internal/update/release_keys.txt` and the `GWATCH_SIGNING_KEY` secret is set — CI refuses a release if either is missing, and v0.2.0 onwards published through it |
 | 1.4 secrets at rest | `internal/secrets`, `gwatch.key` next to `gwatch.db` | — |
 | 2.1 admin/viewer accounts | `internal/auth`, `internal/api/policy.go`, Settings › Users & access, audit `actor` | — |
 | 2.2 API keys, `/api/v1`, custom checks | `internal/api/auth.go`, `internal/checks/custom.go` | — |

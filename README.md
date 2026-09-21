@@ -16,31 +16,27 @@ by itself. (An optional, separate MCP companion can let an assistant *read* your
 monitoring if you set one up — see [`mcp/README.md`](mcp/README.md).) The product
 brief that defines the scope lives in [`local-network-monitoring-product-brief.md`](local-network-monitoring-product-brief.md).
 
-> **GWatch is in beta (0.2.2).** It works and it looks after your data, but the
+> **GWatch is in beta (0.3.0).** It works and it looks after your data, but the
 > interface and the JSON API can still change between releases, and bugs are likelier
 > now than they will be at 1.0 — which is reserved for the first public, stable
 > release. [`CHANGELOG.md`](CHANGELOG.md) lists what is in this version and the gaps it
 > ships with. Please [report anything that looks wrong](https://github.com/jxburros/GWatch/issues).
 
-## What's new
+## What's new in 0.3.0
 
-**0.2.2 (current release).** Since 0.2.1: SNMP checks for routers, switches and access
-points; subnet discovery; bulk edit across nodes and checks; nodes can belong to more
-than one group; status indicators in the header; compact lists by default with a
-"Breathing room" mode; a "Ping only" template; ping's own ICMP sender with a method
-setting and standard deviation reporting; the default port moved to 7230; hardware check
-thresholds shown per metric; brighter dark-theme text with WCAG contrast everywhere; a
-shorter README with the detail moved into `docs/`; several security fixes (rate-limited
-endpoint tokens, enforced `Content-Type`, security headers on every response, enforced
-database schema versioning); and CI now runs on Linux and macOS as well as Windows.
-
-**Unreleased** (the `Unreleased` section of the changelog). Hardware metrics stand on their own — every reading has
-its own value, status, threshold, chart, incident and trigger variable; notification
-rules across nodes ("tell me when two of my three DNS servers are down"); JSON checks can
-record and chart the value they read; a **Settings › AI & MCP** page with a downloadable
-agent skill; the database can live on your own PostgreSQL or MySQL/MariaDB server; an
-official Docker image; a build-time choice of SQLite driver; and an accessibility pass
-across the whole interface. Full detail for both in [`CHANGELOG.md`](CHANGELOG.md).
+Since 0.2.2: **hardware metrics stand on their own** — every reading a machine
+takes has its own value, status, threshold, chart, incident and trigger
+variable, with thresholds set per family or per instance; **notification rules
+across nodes** ("tell me when two of my three DNS servers are down"); **JSON
+checks can record and chart the value they read**, turning any API into a time
+series; a **Settings › AI & MCP** page with a downloadable agent skill; the
+database can live on **your own PostgreSQL or MySQL/MariaDB server**, with
+`gwatch migrate-db` to move an existing install across; an official **Docker
+image** for `linux/amd64` and `linux/arm64`; a build-time choice of SQLite
+driver; an **accessibility pass** across the whole interface, with axe running
+over every route in both themes in CI; and a **user guide**
+([`docs/USER-GUIDE.md`](docs/USER-GUIDE.md)) covering every screen and setting.
+Full detail in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## What it does
 
