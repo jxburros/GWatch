@@ -717,7 +717,7 @@ export async function mount(root, ctx) {
         const cls = avail == null ? '' : avail >= 99.9 ? 'text-up' : avail >= 95 ? 'text-degraded' : 'text-down';
         rows.push(h('div', { class: 'uptime-row' },
           h('div', { class: 'uptime-name truncate' }, h('a', { href: `#/nodes/${findCheck(hs.checkId)?.node.id ?? ''}`, style: { color: 'inherit' } }, hs.nodeName || ''), h('div', { class: 'sub' }, hs.checkName)),
-          uptimeBar(hs.points, { bucketSeconds: hs.bucketSeconds, from: hs.from, to: hs.to }),
+          uptimeBar(hs.points, { bucketSeconds: hs.bucketSeconds, from: hs.from, to: hs.to, label: `${hs.nodeName || ''} › ${hs.checkName}` }),
           h('div', { class: `uptime-pct ${cls}` }, pct(avail, 2))));
       }
       rows.push(uptimeLegend());

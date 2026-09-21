@@ -350,7 +350,7 @@ export async function mount(root, ctx) {
     for (const hs of list) {
       const avail = hs.summary?.availability;
       const cls = avail == null ? '' : avail >= 99.9 ? 'text-up' : avail >= 95 ? 'text-degraded' : 'text-down';
-      out.push(h('div', { class: 'uptime-row' }, h('div', { class: 'uptime-name' }, hs.checkName, h('div', { class: 'sub' }, `${hs.summary?.count ?? 0} samples · ${hs.summary?.failures ?? 0} failures`)), uptimeBar(hs.points, { bucketSeconds: hs.bucketSeconds, from: hs.from, to: hs.to }), h('div', { class: `uptime-pct ${cls}` }, pct(avail, 2))));
+      out.push(h('div', { class: 'uptime-row' }, h('div', { class: 'uptime-name' }, hs.checkName, h('div', { class: 'sub' }, `${hs.summary?.count ?? 0} samples · ${hs.summary?.failures ?? 0} failures`)), uptimeBar(hs.points, { bucketSeconds: hs.bucketSeconds, from: hs.from, to: hs.to, label: hs.checkName }), h('div', { class: `uptime-pct ${cls}` }, pct(avail, 2))));
     }
     out.push(uptimeLegend());
     return out;
