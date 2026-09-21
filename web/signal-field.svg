@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 900" fill="none">
+  <!-- Decorative topology field. It is consumed as a CSS mask, so the app's
+       accent colour remains the source of truth in every theme. -->
+  <g stroke="white" stroke-width="1">
+    <path opacity=".18" d="M72 720h194l84-84h176l92-92h170l112-112h176l102-102h230"/>
+    <path opacity=".12" d="M214 118h206l74 74h210l86 86h186l80 80h312"/>
+    <path opacity=".1" d="M0 472h164l76-76h238l60 60h210l96-96h208l82 82h306"/>
+    <path opacity=".08" d="M372 900V768l90-90V488l86-86V212l86-86V0"/>
+    <path opacity=".08" d="M1026 900V730l-72-72V520l94-94V252l88-88V0"/>
+  </g>
+  <g fill="white">
+    <circle cx="72" cy="720" r="3" opacity=".42"/>
+    <circle cx="266" cy="720" r="4" opacity=".22"/>
+    <circle cx="350" cy="636" r="2.5" opacity=".55"/>
+    <circle cx="526" cy="636" r="4" opacity=".2"/>
+    <circle cx="618" cy="544" r="3" opacity=".48"/>
+    <circle cx="788" cy="544" r="2.5" opacity=".28"/>
+    <circle cx="900" cy="432" r="4.5" opacity=".5"/>
+    <circle cx="1076" cy="432" r="2.5" opacity=".3"/>
+    <circle cx="1178" cy="330" r="4" opacity=".46"/>
+    <circle cx="1368" cy="330" r="2.5" opacity=".24"/>
+    <circle cx="214" cy="118" r="3" opacity=".2"/>
+    <circle cx="420" cy="118" r="4" opacity=".44"/>
+    <circle cx="494" cy="192" r="2.5" opacity=".3"/>
+    <circle cx="704" cy="192" r="4" opacity=".18"/>
+    <circle cx="790" cy="278" r="3" opacity=".5"/>
+    <circle cx="976" cy="278" r="2.5" opacity=".25"/>
+    <circle cx="1056" cy="358" r="4" opacity=".42"/>
+    <circle cx="164" cy="472" r="4" opacity=".18"/>
+    <circle cx="240" cy="396" r="2.5" opacity=".48"/>
+    <circle cx="478" cy="396" r="3.5" opacity=".22"/>
+    <circle cx="538" cy="456" r="2.5" opacity=".42"/>
+    <circle cx="748" cy="456" r="4" opacity=".18"/>
+    <circle cx="844" cy="360" r="2.5" opacity=".5"/>
+    <circle cx="1052" cy="360" r="3.5" opacity=".24"/>
+    <circle cx="1134" cy="442" r="2.5" opacity=".4"/>
+    <circle cx="372" cy="768" r="3" opacity=".32"/>
+    <circle cx="462" cy="678" r="4" opacity=".18"/>
+    <circle cx="462" cy="488" r="2.5" opacity=".48"/>
+    <circle cx="548" cy="402" r="4" opacity=".22"/>
+    <circle cx="548" cy="212" r="2.5" opacity=".44"/>
+    <circle cx="1026" cy="730" r="3" opacity=".38"/>
+    <circle cx="954" cy="658" r="4" opacity=".18"/>
+    <circle cx="954" cy="520" r="2.5" opacity=".5"/>
+    <circle cx="1048" cy="426" r="4" opacity=".22"/>
+    <circle cx="1048" cy="252" r="2.5" opacity=".42"/>
+  </g>
+</svg>
