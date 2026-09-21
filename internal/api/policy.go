@@ -170,6 +170,12 @@ var policies = []routePolicy{
 	{"GET", "/api/settings", levelAdmin, keyDeny},
 	{"PUT", "/api/settings", levelAdmin, keyDeny},
 	{"POST", "/api/settings/test-email", levelAdmin, keyDeny},
+	// Which database GWatch keeps its data in (database.json). Reading it
+	// names a server; writing it moves the data. An integration key has no
+	// business with either.
+	{"GET", "/api/database", levelAdmin, keyDeny},
+	{"PUT", "/api/database", levelAdmin, keyDeny},
+	{"POST", "/api/database/test", levelAdmin, keyDeny},
 	{"POST", "/api/retention/run", levelAdmin, keyDeny},
 	{"GET", "/api/backups", levelAdmin, keyDeny},
 	// The agent skill is set-up material for the administrator configuring an

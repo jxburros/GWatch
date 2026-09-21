@@ -1,6 +1,6 @@
 // Settings: general, appearance, network access, alerts, automation
 // (endpoints + all triggers), hardware, AI & MCP, retention, maintenance,
-// backups, updates, monitor health. Logs moved to the Audit tab.
+// backups, database, updates, monitor health. Logs moved to the Audit tab.
 
 import { api, qs } from '../api.js';
 import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, openModal, emptyState, skeleton, banner, eventRow, busy, applyTheme, applyAccent, ACCENT_PRESETS, hexToRgb, applyDensity, currentDensity } from '../components.js';
@@ -17,7 +17,7 @@ const TABS = [
   { id: 'network', label: 'Network access' }, { id: 'alerts', label: 'Alerts' },
   { id: 'automation', label: 'Automation' }, { id: 'hardware', label: 'Hardware' },
   { id: 'mcp', label: 'AI & MCP' }, { id: 'retention', label: 'Retention' }, { id: 'maintenance', label: 'Maintenance' },
-  { id: 'backups', label: 'Backups' }, { id: 'updates', label: 'Updates' }, { id: 'health', label: 'Monitor health', viewer: true },
+  { id: 'backups', label: 'Backups' }, { id: 'database', label: 'Database' }, { id: 'updates', label: 'Updates' }, { id: 'health', label: 'Monitor health', viewer: true },
   { id: 'about', label: 'About', viewer: true },
 ];
 
@@ -36,6 +36,8 @@ const GWATCH_COPYRIGHT = 'Copyright (c) 2026 JX Holdings. Original developers: J
 const DEPENDENCIES = [
   { name: 'kardianos/service', use: 'runs GWatch as a background service on Windows, macOS and Linux', license: 'zlib' },
   { name: 'modernc.org/sqlite', use: 'the embedded database that stores history, events and settings', license: 'BSD-3-Clause' },
+  { name: 'jackc/pgx', use: 'talks to a PostgreSQL server when Settings › Database points at one', license: 'MIT' },
+  { name: 'go-sql-driver/mysql', use: 'talks to a MySQL or MariaDB server when Settings › Database points at one', license: 'MPL-2.0' },
   { name: 'golang.org/x/crypto', use: 'password hashing for accounts and the access password', license: 'BSD-3-Clause' },
 ];
 
@@ -74,7 +76,7 @@ export async function mount(root, ctx) {
     replace(panel, skeleton({ lines: 5 }));
     state.panelRefresh = null;
     try {
-      const fn = { general: tabGeneral, appearance: tabAppearance, indicators: tabIndicators, users: tabUsers, network: tabNetwork, alerts: tabAlerts, automation: tabAutomation, hardware: tabHardware, mcp: tabMcp, retention: tabRetention, maintenance: tabMaintenance, backups: tabBackups, updates: tabUpdates, health: tabHealth, about: tabAbout }[state.tab];
+      const fn = { general: tabGeneral, appearance: tabAppearance, indicators: tabIndicators, users: tabUsers, network: tabNetwork, alerts: tabAlerts, automation: tabAutomation, hardware: tabHardware, mcp: tabMcp, retention: tabRetention, maintenance: tabMaintenance, backups: tabBackups, database: tabDatabase, updates: tabUpdates, health: tabHealth, about: tabAbout }[state.tab];
       const el = await fn();
       if (state.destroyed) return;
       replace(panel, isAdmin ? el : h('div', { class: 'stack' }, readOnlyNotice(), el));
@@ -782,7 +784,7 @@ export async function mount(root, ctx) {
     const row = (k, v) => { if (v) dl.append(h('dt', null, k), h('dd', { class: 'mono' }, v)); };
     row('Data directory', hl.dataDir);
     row('Database', hl.databasePath);
-    row('SQLite driver', hl.databaseDriver);
+    row('Database driver', hl.databaseDriver);
     row('Key file', hl.keyPath);
     row('Backups folder', hl.backupDir);
     return h('div', { style: { marginTop: '10px' } }, dl,
@@ -1095,6 +1097,102 @@ export async function mount(root, ctx) {
           numField(u, 'checkIntervalHours', 'Check every', { unitLabel: 'hours', min: 1, help: 'Between 1 and 720 hours (30 days). The default is once a day.' }),
           field({ label: 'GitHub repository', input: repo, help: 'Release assets are expected to be named gwatch-<os>-<arch>[.exe], which is what the release job publishes.' })),
         h('hr', { class: 'divider' }), saveBar()));
+  }
+
+
+  /* ---------- Database ---------- */
+  // Which database GWatch keeps its data in. Unlike every other tab this does
+  // not edit the settings document: the connection has to be known before the
+  // database is open, so it lives in database.json in the data directory and
+  // only takes effect at the next start. See docs/DATABASE.md.
+  const DB_DRIVERS = [
+    { value: 'sqlite', label: 'SQLite file in the data directory (default)' },
+    { value: 'postgres', label: 'PostgreSQL server' },
+    { value: 'mysql', label: 'MySQL or MariaDB server' },
+  ];
+  const DB_TLS = [
+    { value: 'prefer', label: 'Prefer (encrypt when the server offers it)' },
+    { value: 'require', label: 'Require (encrypt, do not verify the certificate)' },
+    { value: 'verify-ca', label: 'Verify CA' },
+    { value: 'verify-full', label: 'Verify CA and host name' },
+    { value: 'disable', label: 'Disable' },
+  ];
+  async function tabDatabase() {
+    const status = await api.get('/api/database');
+    const cfg = { ...status.saved };
+    if (!cfg.driver) cfg.driver = 'sqlite';
+    if (!cfg.sslMode) cfg.sslMode = 'prefer';
+    const wrap = h('div', { class: 'stack' });
+    const active = status.active || {};
+    const activeCard = h('section', { class: 'card' }, h('h2', null, 'Database in use'),
+      h('p', { class: 'lead' }, 'Where this copy of GWatch is reading and writing right now.'),
+      h('div', { class: 'health-cards', style: { marginTop: '10px' } },
+        hcard({ sqlite: 'SQLite', postgres: 'PostgreSQL', mysql: 'MySQL / MariaDB' }[active.driver] || active.driver || '—', 'Backend', active.label || ''),
+        hcard(h('span', { class: 'mono', style: { fontSize: '13px' } }, active.description || '—'), 'Location'),
+        hcard(String(active.schemaVersion ?? '—'), 'Schema version'),
+        hcard(bytes(active.sizeBytes || 0), 'Size')));
+
+    const pending = h('div', { role: 'status' });
+    const renderPending = (st) => {
+      clear(pending);
+      if (st.restartRequired) pending.append(banner('warn', h('span', null, h('b', null, 'GWatch will use this database after the service is restarted. '), `Saved: ${describe(st.saved)}. Until then it keeps using ${st.active?.description || 'the current database'}.`)));
+    };
+    const describe = (c) => c.driver === 'sqlite' || !c.driver ? 'the SQLite file in the data directory' : `${c.driver === 'postgres' ? 'PostgreSQL' : 'MySQL/MariaDB'} at ${c.host || '(connection string)'}${c.port ? ':' + c.port : ''}/${c.database || ''}${c.schema ? ` (schema ${c.schema})` : ''}`;
+    renderPending(status);
+
+    const driver = selectInput({ options: DB_DRIVERS, value: cfg.driver, onchange: () => { cfg.driver = driver.value; if (cfg.driver === 'postgres' && (!cfg.port || cfg.port === 3306)) { cfg.port = 5432; port.value = '5432'; } if (cfg.driver === 'mysql' && (!cfg.port || cfg.port === 5432)) { cfg.port = 3306; port.value = '3306'; } syncServerFields(); } });
+    const host = textInput({ value: cfg.host || '', placeholder: 'db.example.lan', autocomplete: 'off', oninput: () => { cfg.host = host.value.trim(); } });
+    const port = numberInput({ value: cfg.port || (cfg.driver === 'mysql' ? 3306 : 5432), min: 1, max: 65535, oninput: () => { cfg.port = Number(port.value) || 0; } });
+    const user = textInput({ value: cfg.user || '', placeholder: 'gwatch', autocomplete: 'off', oninput: () => { cfg.user = user.value.trim(); } });
+    const password = h('input', { type: 'password', value: cfg.password || '', autocomplete: 'new-password', placeholder: cfg.password ? '' : 'Database password', oninput: () => { cfg.password = password.value; } });
+    const database = textInput({ value: cfg.database || '', placeholder: 'gwatch', autocomplete: 'off', oninput: () => { cfg.database = database.value.trim(); } });
+    const schema = textInput({ value: cfg.schema || '', placeholder: 'public', autocomplete: 'off', oninput: () => { cfg.schema = schema.value.trim(); } });
+    const tls = selectInput({ options: DB_TLS, value: cfg.sslMode, onchange: () => { cfg.sslMode = tls.value; } });
+    const schemaField = field({ label: 'Schema (PostgreSQL)', input: schema, help: 'Leave empty for the user\u2019s default search path, normally "public".' });
+    const serverGrid = h('div', { class: 'form-grid' },
+      field({ label: 'Host', input: host }), field({ label: 'Port', input: port }),
+      field({ label: 'User', input: user }), field({ label: 'Password', input: password, help: 'Stored encrypted with this computer\u2019s gwatch.key, like the SMTP password.' }),
+      field({ label: 'Database', input: database }), schemaField,
+      h('div', { class: 'span-2' }, field({ label: 'TLS', input: tls, help: 'For MySQL, "require" encrypts without verifying and the two verify options both check the server certificate.' })));
+    const sqliteNote = h('p', { class: 'note' }, 'The embedded SQLite file needs no configuration and is right for almost every install. Choose a server only if you already run one and want GWatch\u2019s history kept there.');
+    const syncServerFields = () => { const server = cfg.driver !== 'sqlite'; serverGrid.hidden = !server; sqliteNote.hidden = server; schemaField.hidden = cfg.driver !== 'postgres'; };
+    syncServerFields();
+
+    const result = h('div', { role: 'status' });
+    const payload = () => ({ driver: cfg.driver, host: cfg.host || '', port: Number(cfg.port) || 0, user: cfg.user || '', password: cfg.password || '', database: cfg.database || '', schema: cfg.driver === 'postgres' ? (cfg.schema || '') : '', sslMode: cfg.sslMode || 'prefer' });
+    const testBtn = h('button', { class: 'btn', type: 'button', onclick: async () => {
+      const done = busy(testBtn, 'Connecting\u2026');
+      try { const r = await api.post('/api/database/test', payload()); replace(result, banner('up', r.message || `Connected (${r.serverVersion}).`)); }
+      catch (e) { replace(result, banner('down', e.message)); }
+      done();
+    } }, icon('database'), 'Test connection');
+    const saveBtn = h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
+      if (cfg.driver !== 'sqlite') {
+        const ok = await confirmDialog({ title: 'Switch database?', message: `GWatch will start using ${describe(payload())} the next time it is started. Existing data stays in the current database and is not copied; run "gwatch migrate-db" first if it should come along (docs/DATABASE.md).`, confirmLabel: 'Save' });
+        if (!ok) return;
+      }
+      const done = busy(saveBtn, 'Saving\u2026');
+      try {
+        const st = await api.put('/api/database', payload());
+        cfg.password = st.saved?.password || '';
+        password.value = cfg.password;
+        renderPending(st);
+        replace(result, banner(st.restartRequired ? 'warn' : 'up', st.restartRequired ? 'Saved. GWatch will use this database after the service is restarted.' : 'Saved. This is the database already in use.'));
+        toast('Database settings saved', { kind: 'success' });
+      } catch (e) { replace(result, banner('down', e.message)); }
+      done();
+    } }, icon('save'), 'Save');
+    const formCard = h('section', { class: 'card' }, h('h2', null, 'Database for the next start'),
+      h('p', { class: 'lead' }, 'Point GWatch at your own PostgreSQL or MySQL/MariaDB server, or go back to the SQLite file. Saving writes database.json in the data directory; nothing changes until GWatch is restarted.'),
+      pending,
+      h('div', { class: 'form-grid', style: { marginBottom: '12px' } }, h('div', { class: 'span-2' }, field({ label: 'Database', input: driver }))),
+      sqliteNote, serverGrid,
+      h('div', { class: 'form-actions', style: { marginTop: '12px' } }, testBtn, saveBtn), result);
+    const howCard = h('section', { class: 'card' }, h('h2', null, 'Moving existing data'),
+      h('p', null, 'Saving here changes where GWatch looks, not what is there. To take the nodes, history and accounts in the SQLite file along, stop the service and run ', h('code', null, 'gwatch migrate-db'), ' once: it copies everything into the database saved here and leaves the SQLite file in place as a fallback. Backups and restores work the same on every backend.'),
+      h('p', { class: 'note' }, 'Settings › Database and ', h('code', null, 'docs/DATABASE.md'), ' describe creating the database and a least-privilege user on the server, the ', h('code', null, '--db-*'), ' flags and ', h('code', null, 'GWATCH_DB_*'), ' variables that override this file, and what a server backend does not do (the pre-upgrade file copy).'));
+    wrap.append(activeCard, formCard, howCard);
+    return wrap;
   }
 
   /* ---------- Health ---------- */

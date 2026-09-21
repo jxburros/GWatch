@@ -51,7 +51,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *Server) {
 		"README.md": &fstest.MapFile{Data: []byte("# The GWatch agent skill\n")},
 		"VERSION":   &fstest.MapFile{Data: []byte("2.3.4\n")},
 	}
-	srv := &Server{Engine: eng, Store: st, Log: log, Web: web, Skill: skill, BackupDir: filepath.Join(dir, "backups"), Version: "test", Updater: &Updater{Client: &update.Client{}, Version: "test", Log: log}}
+	srv := &Server{Engine: eng, Store: st, Log: log, Web: web, Skill: skill, BackupDir: filepath.Join(dir, "backups"), DataDir: dir, Version: "test", Updater: &Updater{Client: &update.Client{}, Version: "test", Log: log}}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return ts, srv
