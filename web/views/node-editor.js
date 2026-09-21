@@ -19,7 +19,7 @@ function defaultCheck(type, settings) {
     case 'tcp': base.config = { port: 443 }; base.name = 'TCP port'; break;
     case 'dns': base.config = { recordType: 'A' }; break;
     case 'keyword': base.config = { method: 'GET', keyword: '', followRedirects: true }; break;
-    case 'json': base.config = { method: 'GET', jsonPath: '', jsonExpected: '' }; break;
+    case 'json': base.config = { method: 'GET', jsonPath: '', jsonExpected: '', jsonRecord: false, jsonMetric: '', jsonUnit: '' }; break;
     case 'custom': base.config = { command: '', workDir: '', env: {} }; base.name = 'Custom script'; break;
     case 'system': base.config = { ...SYSTEM_DEFAULTS, hostSource: 'local' }; base.name = 'Hardware health'; break;
     // A new SNMP check starts where every device is the same: v2c on 161 with
@@ -46,6 +46,14 @@ function cleanCheck(c) {
   for (const k of ['latencyWarnMs', 'packetLossWarnPct']) if (cfg[k] != null) cfg[k] = Number(cfg[k]);
   if (cfg.snmpPort != null) cfg.snmpPort = Number(cfg.snmpPort);
   if (cfg.snmpOids) cfg.snmpOids = cfg.snmpOids.map(cleanOidRow).filter((o) => o.oid || o.name);
+  // A json check that is not recording keeps none of the recording fields,
+  // and a threshold that is unset has to be absent rather than zero, for the
+  // same reason as an OID's (see cleanOidRow).
+  if (!cfg.jsonRecord) for (const k of ['jsonRecord', 'jsonMetric', 'jsonUnit', ...JSON_THRESHOLD_KEYS]) delete cfg[k];
+  for (const k of JSON_THRESHOLD_KEYS) {
+    if (cfg[k] === '' || cfg[k] == null || isNaN(Number(cfg[k]))) delete cfg[k];
+    else cfg[k] = Number(cfg[k]);
+  }
   out.config = cfg;
   if (out.alerts) {
     const a = {};
@@ -116,6 +124,26 @@ function oidRow(preset, index) {
 }
 
 const SNMP_THRESHOLD_KEYS = ['warnAbove', 'critAbove', 'warnBelow', 'critBelow'];
+
+// The same four thresholds, as a json check names them on its config, each
+// with the wording the SNMP table uses for its column heading.
+const JSON_THRESHOLD_FIELDS = [['jsonWarnAbove', 'Warn >'], ['jsonCritAbove', 'Crit >'], ['jsonWarnBelow', 'Warn <'], ['jsonCritBelow', 'Crit <']];
+const JSON_THRESHOLD_KEYS = JSON_THRESHOLD_FIELDS.map(([k]) => k);
+
+// jsonRecordErrors mirrors internal/checks.validateJSONRecord: a recording
+// json check needs a path, a short name and thresholds that escalate in the
+// right order. Like snmpErrors, this is a courtesy; the server is the rule.
+function jsonRecordErrors(cfg) {
+  const e = {};
+  if (!cfg.jsonRecord) return e;
+  if (!(cfg.jsonPath || '').trim()) e.jsonPath = 'Recording a value needs a JSON path to read it from.';
+  if ((cfg.jsonMetric || '').trim().length > 64) e.jsonMetric = 'Keep the metric name to 64 characters or fewer.';
+  const num = (k) => (cfg[k] === '' || cfg[k] == null || isNaN(Number(cfg[k])) ? null : Number(cfg[k]));
+  const [wa, ca, wb, cb] = JSON_THRESHOLD_KEYS.map(num);
+  if (wa != null && ca != null && wa >= ca) e.jsonCritAbove = 'The critical "above" threshold must be above the warning one.';
+  if (wb != null && cb != null && wb <= cb) e.jsonCritBelow = 'The critical "below" threshold must be below the warning one.';
+  return e;
+}
 
 // snmpErrors mirrors internal/checks.validateSNMPCheck so that the editor can
 // say what is wrong beside the field rather than after a round trip. The
@@ -374,6 +402,33 @@ export async function mount(root, ctx) {
       ));
   }
 
+  // jsonRecordFields is the recording half of a json check (#55): a switch
+  // that reveals the metric name, its unit and the same four thresholds an
+  // SNMP reading has. The value is charted on the node page under that name,
+  // so the fields say what the chart will say.
+  function jsonRecordFields(c, err) {
+    const cfg = c.config;
+    const details = h('div', { class: 'stack-sm', style: { paddingTop: '8px' } });
+    details.hidden = !cfg.jsonRecord;
+    const record = checkbox({ label: 'Record this value', checked: !!cfg.jsonRecord, onChange: (v) => { cfg.jsonRecord = v; details.hidden = !v; } });
+    const name = textInput({ value: cfg.jsonMetric || '', placeholder: 'value', maxlength: 64, oninput: () => { cfg.jsonMetric = name.value; } });
+    const unit = textInput({ value: cfg.jsonUnit || '', placeholder: 'e.g. °C, %, ms', style: { minWidth: '64px' }, oninput: () => { cfg.jsonUnit = unit.value; } });
+    const thresholds = JSON_THRESHOLD_FIELDS.map(([k, label]) => {
+      const input = numberInput({ value: cfg[k] ?? '', step: 'any', placeholder: 'off', 'aria-label': `${label} threshold`, oninput: () => { cfg[k] = input.value; } });
+      return field({ label, input, error: err[k] });
+    });
+    details.append(
+      h('div', { class: 'form-grid' },
+        field({ label: 'Metric name', input: name, error: err.jsonMetric, help: 'Names the value in charts and in /api/history?metric=. Leave blank for "value".' }),
+        field({ label: 'Unit', input: unit, help: 'Shown beside the value. Optional.' })),
+      h('div', { class: 'form-grid-4' }, ...thresholds),
+      h('p', { class: 'note' }, 'Thresholds are strict: crossing a ', h('b', null, 'Warn'), ' value marks the check degraded, crossing a ', h('b', null, 'Crit'), ' value marks it down. Leave one blank to turn it off. A value that is text rather than a number is kept in the last result and never thresholded.'));
+    return h('div', { class: 'stack-sm' },
+      h('div', { style: { paddingTop: '6px' } }, record),
+      h('div', { class: 'help' }, 'Keeps the number the path points at on every run, so it can be charted over time and given thresholds — a temperature, a queue length, a count of blocked queries.'),
+      details);
+  }
+
   function typeFields(c, err) {
     const cfg = c.config;
     switch (c.type) {
@@ -401,7 +456,7 @@ export async function mount(root, ctx) {
       case 'json': {
         const path = textInput({ value: cfg.jsonPath || '', placeholder: 'e.g. status or data.items[0].name', oninput: () => { cfg.jsonPath = path.value; } });
         const exp = textInput({ value: cfg.jsonExpected || '', placeholder: 'Leave blank to only require the path to exist', oninput: () => { cfg.jsonExpected = exp.value; } });
-        return h('div', { class: 'stack' }, h('div', { class: 'form-grid' }, field({ label: 'JSON path', input: path, error: err.jsonPath, help: 'Dotted path into the response. Arrays use [index].' }), field({ label: 'Expected value', input: exp })), httpCommon(c, err), h('div', { class: 'form-grid-3' }, ...warnFields(c)));
+        return h('div', { class: 'stack' }, h('div', { class: 'form-grid' }, field({ label: 'JSON path', input: path, error: err.jsonPath, help: 'Dotted path into the response. Arrays use [index].' }), field({ label: 'Expected value', input: exp })), jsonRecordFields(c, err), httpCommon(c, err), h('div', { class: 'form-grid-3' }, ...warnFields(c)));
       }
       case 'cert': {
         const port = numberInput({ value: cfg.port || 443, min: 1, max: 65535, oninput: () => { cfg.port = Number(port.value); } });
@@ -864,6 +919,7 @@ export async function mount(root, ctx) {
       if (c.type === 'cert' && c.config.port && (c.config.port < 1 || c.config.port > 65535)) e.port = 'Port must be 1–65535.';
       if (c.type === 'keyword' && !(c.config.keyword || '').trim()) e.keyword = 'Enter the text to look for.';
       if (c.type === 'json' && !(c.config.jsonPath || '').trim()) e.jsonPath = 'Enter a JSON path.';
+      if (c.type === 'json') Object.assign(e, jsonRecordErrors(c.config));
       if (c.type === 'custom' && !(c.config.command || '').trim()) e.command = 'Enter a command to run.';
       if (c.type === 'system') {
         if (c.config.hostSource === 'agent' && !c.config.agentId) e.agentId = 'Choose which registered machine this check reads.';

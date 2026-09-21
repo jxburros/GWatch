@@ -135,3 +135,42 @@ test('adding an snmp check starts it on v2c with an uptime reading', async (t) =
   assert.equal(rows[0].querySelector('input').value, '1.3.6.1.2.1.1.3.0');
   assert.ok([...card.querySelectorAll('select')].some((s) => s.value === '2c'), 'and on version 2c');
 });
+
+// #55: a json check can record the value it reads. The editor shows the
+// recording fields only once the switch is on, filled from the check.
+test('node editor shows a json check\'s recording fields behind its switch', async (t) => {
+  const node = window.__gwatchMock.nodes.find((n) => n.checks.some((c) => c.type === 'json' && c.config.jsonRecord));
+  const check = node.checks.find((c) => c.type === 'json' && c.config.jsonRecord);
+  const { root } = await mountView(nodeEditorView, { params: { id: String(node.id) } }, t);
+
+  const card = [...root.querySelectorAll('.editor-check')].find((c) => c.getAttribute('aria-label') === `${check.name} check`);
+  assert.ok(card, 'the recording json check has a card of its own');
+  const record = [...card.querySelectorAll('label.checkbox')].find((l) => l.textContent.includes('Record this value'));
+  assert.ok(record, 'the card offers to record the value');
+  assert.equal(record.input.checked, true, 'and the switch reflects the stored setting');
+
+  const inputs = [...card.querySelectorAll('input')];
+  assert.ok(inputs.some((i) => i.value === check.config.jsonMetric), 'the metric name is filled in');
+  assert.ok(inputs.some((i) => i.value === check.config.jsonUnit), 'the unit is filled in');
+  // The same four thresholds an SNMP reading has, worded the same way.
+  for (const label of ['Warn >', 'Crit >', 'Warn <', 'Crit <']) {
+    assert.ok(card.querySelector(`input[aria-label="${label} threshold"]`), `${label} is offered`);
+  }
+  assert.equal(card.querySelector('input[aria-label="Warn > threshold"]').value, String(check.config.jsonWarnAbove));
+
+  // Switching recording off hides the fields it governs.
+  record.input.checked = false;
+  record.input.dispatchEvent(new window.Event('change'));
+  assert.equal(card.querySelector('input[aria-label="Warn > threshold"]').closest('[hidden]') != null, true, 'the recording fields are hidden once the switch is off');
+});
+
+test('a json check that does not record keeps its recording fields folded away', async (t) => {
+  const node = window.__gwatchMock.nodes.find((n) => n.checks.some((c) => c.type === 'json' && !c.config.jsonRecord));
+  const check = node.checks.find((c) => c.type === 'json' && !c.config.jsonRecord);
+  const { root } = await mountView(nodeEditorView, { params: { id: String(node.id) } }, t);
+  const card = [...root.querySelectorAll('.editor-check')].find((c) => c.getAttribute('aria-label') === `${check.name} check`);
+  const record = [...card.querySelectorAll('label.checkbox')].find((l) => l.textContent.includes('Record this value'));
+  assert.ok(record, 'the switch is offered on every json check');
+  assert.equal(record.input.checked, false);
+  assert.ok(card.querySelector('input[aria-label="Warn > threshold"]').closest('[hidden]'), 'its fields stay hidden until it is switched on');
+});
