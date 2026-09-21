@@ -133,3 +133,27 @@ test('isBeta is true only for a 0.x version, not a dev or CI build', () => {
   assert.equal(fmt.isBeta('dev'), false);
   assert.equal(fmt.isBeta('ci-abc1234'), false);
 });
+
+test('compareVersions orders releases, and refuses to guess', () => {
+  assert.equal(fmt.compareVersions('0.5.0', '0.4.0'), 1);
+  assert.equal(fmt.compareVersions('0.4.0', '0.5.0'), -1);
+  assert.equal(fmt.compareVersions('0.4.0', '0.4.0'), 0);
+  assert.equal(fmt.compareVersions('v1.2.3', '1.2.3'), 0);
+  assert.equal(fmt.compareVersions('1.10.0', '1.9.0'), 1, 'parts are numbers, not text');
+  assert.equal(fmt.compareVersions('1.2', '1.2.0'), 0, 'missing parts are zero');
+  assert.equal(fmt.compareVersions('1.2.0', '1.2.0-rc1'), 1, 'a release beats its own candidate');
+  // Anything that is not a version compares equal, so nothing is ever marked
+  // out of date on the strength of a string nobody can read.
+  assert.equal(fmt.compareVersions('dev', '1.0.0'), 0);
+  assert.equal(fmt.compareVersions('', '1.0.0'), 0);
+  assert.equal(fmt.compareVersions(null, undefined), 0);
+});
+
+test('agentIsBehind only marks a machine when both versions are known', () => {
+  assert.equal(fmt.agentIsBehind('0.4.0', '0.5.0'), true);
+  assert.equal(fmt.agentIsBehind('0.5.0', '0.5.0'), false);
+  assert.equal(fmt.agentIsBehind('0.6.0', '0.5.0'), false, 'a newer agent is not behind');
+  assert.equal(fmt.agentIsBehind('', '0.5.0'), false);
+  assert.equal(fmt.agentIsBehind('0.4.0', ''), false, 'no release to compare with marks nothing');
+  assert.equal(fmt.agentIsBehind('dev', '0.5.0'), false, 'a development build is not out of date');
+});

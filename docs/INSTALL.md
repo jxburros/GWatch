@@ -74,10 +74,16 @@ things out as you go. Tips are off until you turn them on.
 
 ## Installing the agent on other machines
 
-`gwatch-setup-<version>.exe` installs the monitor. The same release also carries
-`gwatch-agent-setup-<version>.exe`, which installs the small reporting agent on a machine
-you want GWatch to watch — a file server, a spare laptop, the desktop in the other room.
-Run it **on that machine**, not on the one running GWatch.
+`gwatch-setup-<version>.exe` installs the monitor. The reporting agent is a separate
+download, from its own release: look for the newest release tagged `agent-v…` on the
+[releases page](https://github.com/jxburros/GWatch/releases) and take
+`gwatch-agent-setup-<version>.exe` from it. It installs the small reporting agent on a
+machine you want GWatch to watch — a file server, a spare laptop, the desktop in the
+other room. Run it **on that machine**, not on the one running GWatch.
+
+The agent has its own version and its own releases because it keeps itself up to date:
+you install it once on a machine and it takes later agent releases by itself, so its
+version does not follow GWatch's. See [`HARDWARE.md`](HARDWARE.md#keeping-agents-up-to-date).
 
 Before you start, get a pairing code:
 

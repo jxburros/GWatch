@@ -75,13 +75,15 @@ const (
 )
 
 type config struct {
-	server   string
-	token    string
-	code     string
-	interval time.Duration
-	listen   string
-	insecure bool
-	name     string
+	server     string
+	token      string
+	code       string
+	interval   time.Duration
+	listen     string
+	insecure   bool
+	name       string
+	repo       string
+	autoUpdate bool
 }
 
 func usage() {
@@ -107,6 +109,11 @@ Usage:
         install and start the background service (run as Administrator on
         Windows). With --code the machine is paired first.
   gwatch-agent uninstall | start | stop | restart | status
+  gwatch-agent update [--check]
+        install the newest signed agent release (--check only reports one).
+        A running agent does this by itself; see below.
+  gwatch-agent rollback
+        put back the version the last update replaced
   gwatch-agent version
 
 Get a pairing code or a token from GWatch, under Hardware. A code is short
@@ -119,9 +126,18 @@ A token obtained with a pairing code is saved to
 readable only by the account that paired the machine. run, once and serve use
 it when --token is not given.
 
+Keeping itself up to date: a running agent checks for a new agent release
+every few hours, installs it if the download is signed by a release key this
+build trusts, and restarts into it. The machines an agent runs on are rarely
+machines anyone logs into, which is the argument for doing this by default;
+--auto-update=false, or GWATCH_AGENT_AUTO_UPDATE=off, turns it off and leaves
+gwatch-agent update to be run by hand. GWatch is not involved either way: it
+is never asked what version to run and cannot make this machine install
+anything.
+
 Environment: GWATCH_SERVER, GWATCH_AGENT_TOKEN, GWATCH_AGENT_CODE,
-GWATCH_AGENT_INTERVAL, GWATCH_AGENT_LISTEN, GWATCH_AGENT_TOKEN_FILE override
-the defaults.
+GWATCH_AGENT_INTERVAL, GWATCH_AGENT_LISTEN, GWATCH_AGENT_TOKEN_FILE,
+GWATCH_AGENT_AUTO_UPDATE, GWATCH_AGENT_REPO override the defaults.
 `, version, defaultListen, tokenFile())
 }
 
@@ -143,6 +159,10 @@ func main() {
 	fs.StringVar(&cfg.listen, "listen", envOr("GWATCH_AGENT_LISTEN", defaultListen), "serve mode: address to listen on")
 	fs.BoolVar(&cfg.insecure, "insecure", false, "accept an untrusted TLS certificate from the server (use only with a self-signed certificate you recognise)")
 	fs.StringVar(&cfg.name, "name", "", "override the hostname reported to GWatch")
+	fs.StringVar(&cfg.repo, "repo", envOr("GWATCH_AGENT_REPO", defaultRepo), "GitHub repository the agent takes its own updates from")
+	fs.BoolVar(&cfg.autoUpdate, "auto-update", envBool("GWATCH_AGENT_AUTO_UPDATE", true), "keep this agent up to date from signed agent releases")
+	var updateCheckOnly bool
+	fs.BoolVar(&updateCheckOnly, "check", false, "update: report whether a newer agent exists without installing it")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -183,6 +203,16 @@ func main() {
 			fatal(err)
 		}
 		return
+	case "update":
+		if err := runUpdate(cfg, updateCheckOnly); err != nil {
+			fatal(err)
+		}
+		return
+	case "rollback":
+		if err := runRollback(); err != nil {
+			fatal(err)
+		}
+		return
 	}
 
 	// install --code does the pairing first, so that everything after this
@@ -198,13 +228,7 @@ func main() {
 	}
 
 	prg := &program{cfg: cfg, mode: cmd}
-	svc, err := service.New(prg, &service.Config{
-		Name:        serviceName,
-		DisplayName: serviceDisplay,
-		Description: serviceDesc,
-		Arguments:   cfg.serviceArgs(cmd),
-		Option:      service.KeyValue{"StartType": "automatic", "OnFailure": "restart", "OnFailureDelayDuration": "5s"},
-	})
+	svc, err := newService(prg, cfg, cmd)
 	if err != nil {
 		fatal(err)
 	}
@@ -293,7 +317,35 @@ func (c config) serviceArgs(cmd string) []string {
 	if c.name != "" {
 		args = append(args, "--name", c.name)
 	}
+	// The service runs with no arguments a person typed, so anything turned
+	// off here has to be turned off on its command line too, or the installed
+	// service would quietly go back to the default.
+	if !c.autoUpdate {
+		args = append(args, "--auto-update=false")
+	}
+	if r := strings.TrimSpace(c.repo); r != "" && r != defaultRepo {
+		args = append(args, "--repo", r)
+	}
 	return args
+}
+
+// newService describes the background service to the platform's service
+// manager. It is here rather than inline so that the commands which only need
+// to ask after the service — update, for one — describe it the same way.
+func newService(prg *program, cfg config, cmd string) (service.Service, error) {
+	return service.New(prg, &service.Config{
+		Name:        serviceName,
+		DisplayName: serviceDisplay,
+		Description: serviceDesc,
+		Arguments:   cfg.serviceArgs(cmd),
+		Option:      service.KeyValue{"StartType": "automatic", "OnFailure": "restart", "OnFailureDelayDuration": "5s"},
+	})
+}
+
+// agentService is newService for a caller that has no program to run: asking
+// whether the service exists, and nothing else.
+func agentService(cfg config, cmd string) (service.Service, error) {
+	return newService(&program{cfg: cfg, mode: cmd}, cfg, cmd)
 }
 
 // baseURL is the server as given, tidied up: a bare host is assumed to be
@@ -362,11 +414,32 @@ func (p *program) run(ctx context.Context) {
 		}
 	}()
 
+	// Keeping itself current is only the reporting agent's job. serve mode is
+	// driven by GWatch asking for readings, and an agent that restarted itself
+	// mid-request would be a worse neighbour than an old one.
 	if p.mode == "serve" {
 		p.serve(ctx)
 		return
 	}
+	if p.cfg.autoUpdate {
+		go autoUpdate(ctx, p.cfg, p.restartForUpdate)
+	}
 	p.report(ctx)
+}
+
+// restartForUpdate ends this process so that the service manager starts the
+// version that has just been installed in its place.
+//
+// Exiting is the whole mechanism, and it is deliberately the whole mechanism:
+// the alternative is for a service to restart itself, which means a service
+// asking its own service manager to stop it while it is running, and that is
+// fragile on every platform in a different way. Reporting is stopped first, so
+// nothing is half-sent, and the exit status is non-zero because a Windows
+// service that exits cleanly is left stopped (see exitUpdated).
+func (p *program) restartForUpdate() {
+	_ = p.Stop(nil)
+	log.Printf("restarting into the newly installed agent")
+	os.Exit(exitUpdated)
 }
 
 // report sends a reading every interval, backing off when the server cannot
@@ -379,7 +452,11 @@ func (p *program) report(ctx context.Context) {
 	backoff := time.Duration(0)
 	failures := 0
 	for {
-		wait := p.cfg.interval
+		// A little spread on each wait: twenty machines set up by the same
+		// script would otherwise report on the same second of every minute
+		// for as long as they run, turning a fleet into a spike the server
+		// sees and the network feels.
+		wait := jittered(p.cfg.interval, p.cfg.interval/10)
 		metrics, err := collect(ctx, p.cfg, collector)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -730,6 +807,31 @@ func readStoredToken() (string, error) {
 // port on this machine, so the token is checked in constant time and nothing
 // but GET /metrics exists to be reached.
 func (p *program) serve(ctx context.Context) {
+	srv := &http.Server{
+		Addr:              p.cfg.listen,
+		Handler:           p.metricsHandler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       20 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	go func() {
+		<-ctx.Done()
+		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdown)
+	}()
+
+	log.Printf("gwatch-agent %s serving readings on http://%s/metrics", version, p.cfg.listen)
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Printf("cannot listen on %s: %v", p.cfg.listen, err)
+	}
+}
+
+// metricsHandler is everything serve mode exposes: one route, behind the
+// token. It is separate from serve so that what is reachable can be tested
+// without opening a port.
+func (p *program) metricsHandler() http.Handler {
 	collector := newCollector(p.cfg)
 	want := []byte(p.cfg.token)
 
@@ -750,26 +852,7 @@ func (p *program) serve(ctx context.Context) {
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(metrics)
 	})
-
-	srv := &http.Server{
-		Addr:              p.cfg.listen,
-		Handler:           mux,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       20 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-	go func() {
-		<-ctx.Done()
-		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdown)
-	}()
-
-	log.Printf("gwatch-agent %s serving readings on http://%s/metrics", version, p.cfg.listen)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Printf("cannot listen on %s: %v", p.cfg.listen, err)
-	}
+	return mux
 }
 
 // ---- helpers ----
@@ -785,6 +868,19 @@ func newClient(cfg config) *http.Client {
 func envOr(key, def string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		return v
+	}
+	return def
+}
+
+// envBool reads an on/off environment variable. Anything unrecognised leaves
+// the default alone: a misspelt value must never quietly turn off something
+// like automatic updates.
+func envBool(key string, def bool) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
 	}
 	return def
 }

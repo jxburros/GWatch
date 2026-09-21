@@ -199,6 +199,7 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "PUT /api/agents/{id}", s.handleUpdateAgent)
 	s.route(mux, "DELETE /api/agents/{id}", s.handleRevokeAgent)
 
+	s.route(mux, "GET /api/agents/latest", s.handleAgentLatest)
 	s.route(mux, "GET /api/agents/pairings", s.handleListPairings)
 	s.route(mux, "POST /api/agents/pairings", s.handleCreatePairing)
 	s.route(mux, "DELETE /api/agents/pairings/{id}", s.handleRevokePairing)

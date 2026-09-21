@@ -599,7 +599,28 @@ type Updater struct {
 	mu        sync.Mutex
 	status    model.UpdateStatus
 	lastCheck time.Time
+
+	// The newest hardware agent release, cached. GWatch looks this up so it
+	// can tell you which machines are running an old agent; it does not act
+	// on it, and cannot — an agent updates itself and is never told to by
+	// GWatch (docs/HARDWARE.md#keeping-agents-up-to-date).
+	agentMu      sync.Mutex
+	agentLatest  model.AgentRelease
+	agentFetched time.Time
 }
+
+// agentCacheFor is how long the newest-agent-release answer is reused. Agent
+// releases are rare, and this is only used to decide whether to draw a badge,
+// so asking GitHub more often than this would be noise for no gain.
+//
+// agentRetryFor is the same thing after a failed lookup: short enough that a
+// blip clears by itself, long enough that a page someone keeps refreshing —
+// or a Hardware tab left open — does not turn into a stream of requests to
+// GitHub while it is down.
+const (
+	agentCacheFor = 6 * time.Hour
+	agentRetryFor = 10 * time.Minute
+)
 
 // prefs returns the update settings, falling back to the defaults when no
 // accessor is wired (tests, and any build that constructs an Updater bare).
@@ -654,6 +675,67 @@ func (u *Updater) Check(ctx context.Context, repo string) (model.UpdateInfo, err
 	u.lastCheck = time.Now()
 	u.mu.Unlock()
 	return info, err
+}
+
+// AgentLatest reports the newest release of the hardware agent, cached.
+//
+// This is read-only interest: it exists so the interface can mark machines
+// whose agent is behind. Agents take their own updates, verified against keys
+// pinned into the agent binary, and nothing here can make one install
+// anything — deliberately, since a GWatch that had been got into must not
+// become a way onto every machine that reports to it.
+func (u *Updater) AgentLatest(ctx context.Context) model.AgentRelease {
+	u.agentMu.Lock()
+	if !u.agentFetched.IsZero() {
+		ttl := agentCacheFor
+		if u.agentLatest.Version == "" {
+			ttl = agentRetryFor
+		}
+		if time.Since(u.agentFetched) < ttl {
+			cached := u.agentLatest
+			u.agentMu.Unlock()
+			return cached
+		}
+	}
+	u.agentMu.Unlock()
+
+	repo := model.DefaultSettings().General.UpdateRepo
+	if u.Repo != nil {
+		if r := strings.TrimSpace(u.Repo()); r != "" {
+			repo = r
+		}
+	}
+	out := model.AgentRelease{CheckedAt: time.Now()}
+	// The agent's releases are its own: its tags, its assets. Asking as the
+	// agent rather than as GWatch is what stops a GWatch release being read as
+	// an agent one, and the two version independently.
+	client := u.Client
+	if client == nil {
+		client = &update.Client{}
+	}
+	rels, err := client.ForAgent().Releases(ctx, repo, "")
+	if err != nil {
+		out.Error = err.Error()
+	} else {
+		for _, r := range rels {
+			if r.Prerelease {
+				continue
+			}
+			out.Version, out.URL = r.Version, r.URL
+			break
+		}
+	}
+
+	u.agentMu.Lock()
+	// A failed lookup must not evict a good answer: a machine is not "up to
+	// date" because GitHub was unreachable for a minute.
+	if out.Version != "" || u.agentLatest.Version == "" {
+		u.agentLatest, u.agentFetched = out, time.Now()
+	} else {
+		out = u.agentLatest
+	}
+	u.agentMu.Unlock()
+	return out
 }
 
 // Releases lists what this build could move to, newest first. Pre-releases are

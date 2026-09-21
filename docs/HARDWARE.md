@@ -249,6 +249,55 @@ one is a whole snapshot rather than a single number. Change it under
 **Settings › Retention**. Deleting a registered machine deletes its readings
 with it; revoking only stops the token.
 
+## Keeping agents up to date
+
+A machine running the agent is usually a machine nobody logs into. So the agent
+keeps itself current: every few hours it looks at the agent releases, and if
+there is a newer one it installs it and restarts into it. **You install an agent
+by hand once.**
+
+It is deliberately the agent, and not GWatch, that decides this:
+
+- The agent checks GitHub directly and verifies the download against signing
+  keys built into the agent itself. Nothing unsigned, or signed by anyone else,
+  is installed — there is no setting that relaxes that.
+- **GWatch is not involved.** It is never asked what version a machine should
+  run, is never given a way to push anything, and cannot make an agent install
+  anything. A GWatch that someone else got into must not become a way onto every
+  machine that reports to it, which is the same reason the agent only ever talks
+  outwards.
+- What GWatch does with the version each agent reports is *show* it to you, so
+  you can see which machines are behind.
+
+Before an agent replaces itself it makes the download prove twice over that it
+works on that machine — that it runs and is the version it claims, and that it
+can take a real reading the server accepts. Only then is anything swapped, and
+the version it replaces is kept next to it:
+
+```
+gwatch-agent update           # take the newest release now
+gwatch-agent update --check   # say whether there is one, install nothing
+gwatch-agent rollback         # put back the version the last update replaced
+```
+
+`rollback` needs no network and no download: the previous executable is on the
+machine. It is the repair for an agent that installed cleanly and then behaved
+badly — and worth knowing before you need it, because by then the machine may
+not be reporting.
+
+To turn automatic updates off, install with `--auto-update=false` (or set
+`GWATCH_AGENT_AUTO_UPDATE=off`) and run `gwatch-agent update` yourself. An agent
+that cannot reach GitHub carries on reporting exactly as before; a failed update
+check is not an error on the machine being watched.
+
+Agent releases are tagged `agent-v…` and are separate from GWatch's own — see
+[`RELEASING.md`](RELEASING.md#releasing-the-agent). An agent is never offered a
+GWatch build, or the other way round.
+
+Why it is built this way, including the option deliberately not taken —
+GWatch pushing updates to agents — is in
+[`AGENT-DECISIONS.md`](AGENT-DECISIONS.md).
+
 ## Building the agent
 
 The agent is built from this repository for every platform it supports:
@@ -258,8 +307,9 @@ make agent-all      # dist/gwatch-agent-<os>-<arch>
 make agent          # just this platform
 ```
 
-It imports only the collector and the shared data types — no database, no web
-interface, no GWatch credentials.
+Its version comes from `cmd/gwatch-agent/VERSION`, not the project's `VERSION`
+file. It imports only the collector, the shared data types and the release
+verifier — no database, no web interface, no GWatch credentials.
 
 ## Troubleshooting
 

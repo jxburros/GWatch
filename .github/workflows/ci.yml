@@ -11,11 +11,15 @@ name: CI
 on:
   push:
     branches: ['**']
-    # v* triggers the core release job below. mcp/v* is the MCP companion's
-    # own tag scheme (nested-module tags, so `go install .../mcp/...@latest`
-    # resolves — see docs/RELEASING.md#releasing-the-mcp-companion) and
-    # triggers only the mcp-tag guard job, not a second release.
-    tags: ['v*', 'mcp/v*']
+    # v* triggers the core release job below. agent-v* is the hardware
+    # agent's own tag scheme and triggers the agent-release job: the agent
+    # versions and releases on its own so that a fix for it does not need a
+    # GWatch release, and so that agents can update themselves from releases
+    # that carry nothing else (docs/RELEASING.md#releasing-the-agent).
+    # mcp/v* is the MCP companion's own tag scheme (nested-module tags, so
+    # `go install .../mcp/...@latest` resolves) and triggers only the mcp-tag
+    # guard job, not a second release.
+    tags: ['v*', 'agent-v*', 'mcp/v*']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -484,23 +488,11 @@ jobs:
           done
           ls -lh ../dist
 
-      # The hardware agent runs on the machines being watched rather than on
-      # the one running GWatch, so it is built for more platforms than the
-      # server is — linux/arm covers the Raspberry Pi class of machine people
-      # actually put agents on. Like the MCP companion it lands inside the
-      # dist/gwatch-* glob so it is signed and checksummed, and stays invisible
-      # to the in-app updater, which matches the exact names
-      # gwatch-<goos>-<goarch>[.exe] and not gwatch-agent-linux-amd64.
-      - name: Cross-compile the hardware agent
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64 linux/arm darwin/arm64 darwin/amd64; do
-            goos="${target%/*}"; goarch="${target#*/}"
-            out="dist/gwatch-agent-${goos}-${goarch}"; [ "$goos" = "windows" ] && out="$out.exe"
-            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags "-s -w -X main.version=${version}" -o "$out" ./cmd/gwatch-agent
-            sha256sum "$out" | sed 's#dist/##' > "$out.sha256"
-          done
-          ls -lh dist
+      # The hardware agent is NOT built here. It versions and releases on its
+      # own (agent-v*, the agent-release job below), because a machine running
+      # an agent is rarely one anyone logs into: the agent updates itself from
+      # its own releases, and tying it to this tag would mean a GWatch release
+      # every time the agent needed a fix. See docs/RELEASING.md#releasing-the-agent.
 
       # Sign every binary, then verify the signatures with the keys pinned into
       # this checkout — exactly what the updater does on the user's machine.
@@ -525,20 +517,128 @@ jobs:
         run: |
           $version = $env:GITHUB_REF_NAME -replace '^v', ''
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-          foreach ($pair in @(
-              @{ Script = "scripts\installer\gwatch.iss";       Exe = "dist\gwatch-windows-amd64.exe" },
-              @{ Script = "scripts\installer\gwatch-agent.iss"; Exe = "dist\gwatch-agent-windows-amd64.exe" })) {
-            $exe = Join-Path $PWD $pair.Exe
-            & $iscc "/DAppVersion=$version" "/DExePath=$exe" $pair.Script
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-          Copy-Item scripts\installer\Output\*setup-*.exe dist\
+          $exe = Join-Path $PWD "dist\gwatch-windows-amd64.exe"
+          & $iscc "/DAppVersion=$version" "/DExePath=$exe" "scripts\installer\gwatch.iss"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item scripts\installer\Output\gwatch-setup-*.exe dist\
           Get-ChildItem dist
 
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
           generate_release_notes: true
+
+  # The hardware agent's own release, cut by tagging agent-v<version>.
+  #
+  # It is separate from the core release for one reason: the agent runs on
+  # machines nobody logs into, so it updates itself, and a thing that updates
+  # itself needs releases it can be pointed at that carry nothing else. An
+  # agent asks for agent-v* tags and gwatch-agent-<goos>-<goarch> assets, and a
+  # GWatch installation asks for v* and gwatch-<goos>-<goarch>; neither can be
+  # handed the other's build (internal/update, TestReleaseFamiliesStayApart).
+  #
+  # Assets are signed by the same key and verified the same way as the core
+  # release — the agent will not install anything it cannot verify against the
+  # keys pinned into it, so an unsigned agent release is an agent release
+  # nobody can take.
+  agent-release:
+    name: Release the agent
+    if: startsWith(github.ref, 'refs/tags/agent-v')
+    needs: [ci, linux, macos]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          check-latest: true
+          cache: true
+
+      # An agent whose --version disagrees with the release it came from is an
+      # agent that will either re-install the same version forever or refuse a
+      # real one, so the two must agree before anything is built.
+      - name: Tag matches cmd/gwatch-agent/VERSION
+        run: |
+          tag="${GITHUB_REF_NAME#agent-v}"
+          file="$(tr -d ' \t\r\n' < cmd/gwatch-agent/VERSION)"
+          if [ "$tag" != "$file" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match cmd/gwatch-agent/VERSION (${file}). Update the file, commit, and re-tag."
+            exit 1
+          fi
+          echo "releasing agent ${file}"
+
+      - name: Signing key
+        env:
+          GWATCH_SIGNING_KEY: ${{ secrets.GWATCH_SIGNING_KEY }}
+        run: |
+          if [ -z "$GWATCH_SIGNING_KEY" ]; then
+            echo "::error::set the GWATCH_SIGNING_KEY secret (base64 ed25519 seed) — agent releases must be signed or no agent will install them, see docs/RELEASING.md"
+            exit 1
+          fi
+          pub="$(go run ./cmd/gwatch-sign pubkey)"
+          echo "signing with $pub"
+          if ! grep -v '^[[:space:]]*#' internal/update/release_keys.txt | grep -qF "$pub"; then
+            echo "::error::the GWATCH_SIGNING_KEY secret's public key ($pub) is not listed in internal/update/release_keys.txt, so released agents would reject their own updates. Add the line and tag again."
+            exit 1
+          fi
+
+      # More platforms than the server is built for: linux/arm covers the
+      # Raspberry Pi class of machine people actually put agents on.
+      - name: Cross-compile the agent
+        run: |
+          version="${GITHUB_REF_NAME#agent-v}"
+          mkdir -p dist
+          for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64 linux/arm darwin/arm64 darwin/amd64; do
+            goos="${target%/*}"; goarch="${target#*/}"
+            out="dist/gwatch-agent-${goos}-${goarch}"; [ "$goos" = "windows" ] && out="$out.exe"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags "-s -w -X main.version=${version}" -o "$out" ./cmd/gwatch-agent
+            sha256sum "$out" | sed 's#dist/##' > "$out.sha256"
+          done
+          ls -lh dist
+
+      # Signed and then verified with the keys pinned into this checkout —
+      # exactly what an agent out on a machine somewhere will do before it
+      # installs any of this.
+      - name: Sign release assets
+        env:
+          GWATCH_SIGNING_KEY: ${{ secrets.GWATCH_SIGNING_KEY }}
+        run: |
+          go run ./cmd/gwatch-sign sign dist/gwatch-agent-*
+          go run ./cmd/gwatch-sign verify dist/gwatch-agent-*
+          ls -lh dist
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+        shell: pwsh
+      - name: Build the agent installer
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^agent-v', ''
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          $exe = Join-Path $PWD "dist\gwatch-agent-windows-amd64.exe"
+          & $iscc "/DAppVersion=$version" "/DExePath=$exe" "scripts\installer\gwatch-agent.iss"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item scripts\installer\Output\gwatch-agent-setup-*.exe dist\
+          Get-ChildItem dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/gwatch-agent-*
+          generate_release_notes: true
+          name: Agent ${{ github.ref_name }}
+          body: |
+            The GWatch hardware agent, released on its own (see docs/RELEASING.md).
+
+            Agents already installed and left on automatic updates will take
+            this by themselves within a few hours. To install it now on a
+            machine, run `gwatch-agent update` there.
 
   # The same v* tag also publishes the container image to GitHub's registry
   # (docs/DOCKER.md, docs/RELEASING.md#the-container-image). Separate from
