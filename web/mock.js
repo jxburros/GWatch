@@ -81,6 +81,9 @@
     mkCheck(pihole.id, 'ping', 'Ping', { config: { pingCount: 4, latencyWarnMs: 30 }, base: 0.8, noise: 0.5, interval: 30 }),
     mkCheck(pihole.id, 'dns', 'Resolves via Pi-hole', { config: { target: 'www.example.org', dnsServer: '192.168.1.2', recordType: 'A' }, base: 3.2, noise: 0.5 }),
     mkCheck(pihole.id, 'http', 'Admin UI', { config: { target: 'http://192.168.1.2/admin/', expectedStatus: '200-399', certCheck: false }, base: 28, noise: 0.4, interval: 300 }),
+    // A json check that records the number it reads (#55), so the node page
+    // charts it the way it charts an SNMP reading.
+    mkCheck(pihole.id, 'json', 'Blocked today', { config: { target: 'http://192.168.1.2/admin/api.php?summaryRaw', jsonPath: 'ads_percentage_today', jsonRecord: true, jsonMetric: 'Blocked', jsonUnit: '%', jsonWarnAbove: 60 }, base: 31, noise: 0.4, interval: 300 }),
   ];
   const backupSrv = mkNode({ name: 'Backup server', host: '192.168.1.30', group: 'Servers', tags: ['storage'], template: 'home-server', notes: 'Weekly patching on Sunday nights.' });
   backupSrv.checks = [
@@ -164,6 +167,24 @@
     return v;
   }
 
+  // jsonReading is the number a recording json check reads at time t: a slow
+  // daily wave around a third, which is what a Pi-hole's blocked percentage
+  // tends to look like. Deterministic in t so a chart's points and the last
+  // result agree.
+  function jsonReading(check, t) {
+    return +(33 + 9 * Math.sin((t / DAY) * Math.PI * 2 + check.id)).toFixed(1);
+  }
+
+  // checkMetricUnits mirrors model.Check.MetricUnits: every named metric a
+  // check measures, with its unit — its OIDs for SNMP, its recorded value
+  // for a json check that records one.
+  function checkMetricUnits(c) {
+    const units = {};
+    if (c.type === 'snmp') for (const o of c.config?.snmpOids || []) if (o.name) units[o.name] = o.unit || '';
+    if (c.type === 'json' && c.config?.jsonRecord) units[(c.config.jsonMetric || '').trim() || 'value'] = c.config.jsonUnit || '';
+    return units;
+  }
+
   function makeResult(check, node, t, r, { failed, latency, statusOverride } = {}) {
     const p = CHECK_PROFILES[check.id];
     const success = !failed;
@@ -192,6 +213,15 @@
           const dns = +(latency * 0.08).toFixed(1), connect = +(latency * 0.12).toFixed(1), tls = target.startsWith('https') ? +(latency * 0.25).toFixed(1) : 0, ttfb = +(latency * 0.85).toFixed(1);
           res.details = { statusCode: 200, finalUrl: target.startsWith('http') ? target : `https://${target}/`, redirects: check.id === site.checks[0].id ? 1 : 0, dnsMs: dns, connectMs: connect, tlsMs: tls, firstByteMs: ttfb, totalMs: +latency.toFixed(1), contentLength: 18422 + Math.floor(r() * 2000) };
           if (check.type === 'keyword') { res.details.keywordFound = true; res.message = res.message || `Keyword found · 200 in ${latency.toFixed(0)} ms`; }
+          else if (check.type === 'json' && check.config.jsonRecord) {
+            // A recording check keeps the number under its metric name, the
+            // way the service writes Result.metrics.
+            const name = (check.config.jsonMetric || '').trim() || 'value';
+            const v = jsonReading(check, t);
+            res.details.jsonValue = String(v); res.details.jsonMatched = true;
+            res.metrics = { [name]: v };
+            res.message = res.message || `json "${check.config.jsonPath}" = ${v}; recorded ${name} = ${v}${check.config.jsonUnit ? ' ' + check.config.jsonUnit : ''}`;
+          }
           else if (check.type === 'json') { res.details.jsonValue = check.config.jsonExpected || 'ok'; res.details.jsonMatched = true; res.message = res.message || `${check.config.jsonPath} = ${check.config.jsonExpected || 'present'} · ${latency.toFixed(0)} ms`; }
           else res.message = res.message || `OK 200 in ${latency.toFixed(0)} ms`;
           if (check.config.contentWatch === 'redirect') { res.details.contentValue = res.details.finalUrl; res.details.contentChanged = false; }
@@ -454,22 +484,25 @@
   })();
 
   /* ---------- History ---------- */
-  // metricHistory serves one of an SNMP check's OIDs, the way the server does:
-  // raw points only, with the metric's value repeated in avgMs so the chart
-  // helpers can plot it without knowing it is not a latency.
+  // metricHistory serves one of a check's named metrics — an SNMP check's
+  // OID, a json check's recorded value — the way the server does: raw points
+  // only, with the metric's value repeated in avgMs so the chart helpers can
+  // plot it without knowing it is not a latency.
   function metricHistory(checkId, range, metric) {
     const base = history(checkId, range);
     const { c } = findCheck(checkId);
+    const units = checkMetricUnits(c);
+    if (!(metric in units)) throw Object.assign(new Error(`check ${checkId} does not measure "${metric}"`), { status: 400 });
     const o = (c.config?.snmpOids || []).find((x) => x.name === metric);
-    if (!o) throw Object.assign(new Error(`check ${checkId} does not measure "${metric}"`), { status: 400 });
     const r = rng(c.id * 977 + metric.length);
     const points = base.points.map((p) => {
       if (p.avgMs == null) return { ...p, avgMs: null, minMs: null, maxMs: null, value: null };
-      const reading = snmpReading(o, +new Date(p.ts), r);
-      const v = reading.value != null ? reading.value : reading.rate;
+      let v;
+      if (o) { const reading = snmpReading(o, +new Date(p.ts), r); v = reading.value != null ? reading.value : reading.rate; }
+      else v = jsonReading(c, +new Date(p.ts));
       return { ...p, value: v ?? null, avgMs: v ?? null, minMs: v ?? null, maxMs: v ?? null, jitterMs: null, lossPct: null };
     });
-    return { ...base, source: 'raw', bucketSeconds: 0, metric, metricUnit: o.unit || '', points };
+    return { ...base, source: 'raw', bucketSeconds: 0, metric, metricUnit: units[metric], points };
   }
 
   function history(checkId, range) {

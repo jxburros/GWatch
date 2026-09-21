@@ -188,7 +188,8 @@ func ParseRange(name string) (RangeSpec, error) {
 }
 
 // HistoryMetric builds a chart series for one of a check's named metrics —
-// an SNMP check's OIDs — rather than for its latency.
+// an SNMP check's OIDs, a json check's recorded value — rather than for its
+// latency.
 //
 // Such a series is always read from raw results. The rollup tables have a
 // column per built-in metric (latency, jitter, loss) and no room for one a
@@ -208,12 +209,7 @@ func (s *Store) HistoryMetric(ctx context.Context, check model.Check, nodeName s
 		Points:    []model.HistoryPoint{},
 		Metric:    metric,
 	}
-	for _, o := range check.Config.SNMPOIDs {
-		if o.Name == metric {
-			series.MetricUnit = o.Unit
-			break
-		}
-	}
+	series.MetricUnit = check.MetricUnits()[metric]
 	results, err := s.ResultsBetween(ctx, check.ID, series.From, now)
 	if err != nil {
 		return series, err

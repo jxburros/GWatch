@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptrace"
@@ -296,6 +297,10 @@ func runHTTPCheck(ctx context.Context, check model.Check, target string, opts Op
 		path := strings.TrimSpace(cfg.JSONPath)
 		var msg string
 		ok := false
+		// critical is a recorded value's threshold breach. It is kept apart
+		// from ok, which says whether the value matched JSONExpected, so the
+		// inspector's "matches" verdict still means what it says.
+		var critical string
 		if !parseJSON() {
 			msg = "response is not valid JSON"
 		} else {
@@ -321,12 +326,32 @@ func runHTTPCheck(ctx context.Context, check model.Check, target string, opts Op
 					msg = fmt.Sprintf("json %q = %s (expected %s)", label, quoteIfNeeded(res.Details.JSONValue), quoteIfNeeded(cfg.JSONExpected))
 				}
 			}
+			// Recording: a number is kept as a metric so it can be charted
+			// and thresholded; a string is already kept in Details.JSONValue
+			// and there is nothing to compare it against.
+			if exists && cfg.JSONRecord {
+				if n, isNum := jsonNumber(val); isNum {
+					name := cfg.JSONMetricName()
+					if res.Metrics == nil {
+						res.Metrics = map[string]float64{}
+					}
+					res.Metrics[name] = n
+					msg += fmt.Sprintf("; recorded %s = %s", name, fmtSNMPValue(n, strings.TrimSpace(cfg.JSONUnit)))
+					if crit, warn := judgeJSON(cfg, name, n); crit != "" {
+						critical = crit
+						msg += "; " + crit
+					} else if warn != "" {
+						res.Warnings = append(res.Warnings, warn)
+					}
+				}
+			}
 		}
 		res.Details.JSONMatched = bptr(ok)
+		passed := ok && critical == ""
 		if res.Success {
-			res.Success = ok
+			res.Success = passed
 			res.Message = msg
-			if !ok {
+			if !passed {
 				res.Error = msg
 			}
 		} else {
@@ -559,6 +584,48 @@ func jsonValueString(v any) string {
 		}
 		return string(b)
 	}
+}
+
+// jsonNumber is the value as a number, when it is one. JSON numbers arrive as
+// json.Number because the decoder was told to keep them exact; a string that
+// holds a number ("42.5", which is how many devices report a reading) counts
+// too, since the point of recording is the figure and not the quoting. Bools,
+// nulls, objects and arrays are not numbers.
+func jsonNumber(v any) (float64, bool) {
+	switch t := v.(type) {
+	case json.Number:
+		n, err := t.Float64()
+		return n, err == nil
+	case float64:
+		return t, true
+	case string:
+		s := strings.TrimSpace(t)
+		if s == "" {
+			return 0, false
+		}
+		n, err := strconv.ParseFloat(s, 64)
+		return n, err == nil && !math.IsNaN(n) && !math.IsInf(n, 0)
+	}
+	return 0, false
+}
+
+// judgeJSON compares a recorded value against the check's thresholds and
+// returns the critical and the warning wording, either of which may be
+// empty. The comparisons are strict, exactly as judgeSNMP's are.
+func judgeJSON(cfg model.CheckConfig, name string, v float64) (critical, warning string) {
+	unit := strings.TrimSpace(cfg.JSONUnit)
+	label := fmt.Sprintf("%s is %s", name, fmtSNMPValue(v, unit))
+	switch {
+	case cfg.JSONCritAbove != nil && v > *cfg.JSONCritAbove:
+		return fmt.Sprintf("%s, above the critical threshold of %s", label, fmtSNMPValue(*cfg.JSONCritAbove, unit)), ""
+	case cfg.JSONCritBelow != nil && v < *cfg.JSONCritBelow:
+		return fmt.Sprintf("%s, below the critical threshold of %s", label, fmtSNMPValue(*cfg.JSONCritBelow, unit)), ""
+	case cfg.JSONWarnAbove != nil && v > *cfg.JSONWarnAbove:
+		return "", fmt.Sprintf("%s, above the warning threshold of %s", label, fmtSNMPValue(*cfg.JSONWarnAbove, unit))
+	case cfg.JSONWarnBelow != nil && v < *cfg.JSONWarnBelow:
+		return "", fmt.Sprintf("%s, below the warning threshold of %s", label, fmtSNMPValue(*cfg.JSONWarnBelow, unit))
+	}
+	return "", ""
 }
 
 // jsonValueEquals compares the rendered value with the expectation as strings,

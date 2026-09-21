@@ -1327,15 +1327,12 @@ func (s *Server) historyFor(ctx context.Context, checkID int64, rangeName, metri
 }
 
 // checkHasMetric reports whether a check is configured to measure a named
-// metric. Asking is what keeps /api/history from turning into a way to probe
-// for arbitrary names in stored results.
+// metric — an SNMP check's OIDs, or the value a json check records. Asking is
+// what keeps /api/history from turning into a way to probe for arbitrary
+// names in stored results.
 func checkHasMetric(c model.Check, metric string) bool {
-	for _, o := range c.Config.SNMPOIDs {
-		if o.Name == metric {
-			return true
-		}
-	}
-	return false
+	_, ok := c.MetricUnits()[metric]
+	return ok
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {

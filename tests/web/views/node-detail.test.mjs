@@ -8,7 +8,7 @@ import '../../../web/mock.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as nodeDetailView from '../../../web/views/node-detail.js';
-import { mountView, settle } from '../view-harness.mjs';
+import { mountView, settle, waitFor } from '../view-harness.mjs';
 
 test('node detail view renders the node\'s header and its checks', async (t) => {
   const gateway = window.__gwatchMock.nodes.find((n) => n.name === 'Gateway');
@@ -62,6 +62,24 @@ test('node detail shows an snmp check\'s readings once the result is inspected',
   }
   // The text reading is shown as it arrived and carries no verdict.
   assert.ok(text.includes('Reported as text'), 'a non-numeric reading says so');
+
+  await settle();
+});
+
+// #55: a json check that records its value is charted on the node page under
+// its metric name, with a CSV link, exactly as an SNMP reading is.
+test('node detail charts a json check\'s recorded value', async (t) => {
+  const node = window.__gwatchMock.nodes.find((n) => n.checks.some((c) => c.type === 'json' && c.config.jsonRecord));
+  const check = node.checks.find((c) => c.type === 'json' && c.config.jsonRecord);
+  const { root } = await mountView(nodeDetailView, { params: { id: String(node.id) } }, t);
+
+  const history = root.querySelector('section[aria-label="History"]');
+  const section = await waitFor(() => [...history.querySelectorAll('.section-title')].find((el) => el.textContent === `${check.name} — recorded value`)?.parentElement);
+  assert.ok(section.textContent.includes(`${check.config.jsonMetric} (${check.config.jsonUnit})`), 'the metric is named with its unit');
+  assert.ok(section.querySelector('canvas'), 'and drawn as a chart');
+  const csv = section.querySelector('a[download]');
+  assert.ok(csv, 'with a CSV link');
+  assert.ok(csv.getAttribute('href').includes(`metric=${encodeURIComponent(check.config.jsonMetric)}`), 'that asks for the metric by name');
 
   await settle();
 });

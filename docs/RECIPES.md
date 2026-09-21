@@ -326,6 +326,45 @@ credential fails fast instead of hanging).
 You can equally use a *trigger* instead of an endpoint here — e.g. run
 `git pull` in a docs repo whenever a specific node (your CI runner) recovers.
 
+## 8. Record a number from a JSON API (Pi-hole, a router, a sensor)
+
+Not an automation recipe, but it pairs with one: a **JSON value** check can keep
+the number it reads on every run, chart it on the node page and alert on it,
+the same way an SNMP reading is handled. Anything that answers with JSON works —
+a Pi-hole's summary, a router's status API, a Zigbee bridge's sensor endpoint.
+
+Add a JSON value check to the Pi-hole node:
+- **URL**: `http://192.168.1.2/admin/api.php?summaryRaw&auth=<api token>`
+- **JSON path**: `ads_percentage_today`
+- **Expected value**: leave blank — the check is up as long as the path exists.
+- **Record this value**: on.
+  - **Metric name**: `Blocked` (this is the chart's title and the name
+    `/api/history?metric=` takes).
+  - **Unit**: `%`
+  - **Warn >**: `60` — an unusually high block rate usually means a device is
+    misbehaving. Leave the other thresholds blank.
+
+Every run now stores `"metrics": { "Blocked": 31.4 }` on its result, the node
+page draws a *Blocked today — recorded value* chart with a CSV link, and a run
+above 60 % marks the check degraded with "Blocked is 63.2 %, above the warning
+threshold of 60 %". Crossing a **Crit** threshold marks it down, which is what
+a trigger on the node's `down` condition (recipes 1–5) responds to.
+
+A value the API sends as a quoted string (`"temperature": "21.5"`) is read as a
+number too. A value that is text (`"status": "enabled"`) is not charted; it is
+kept as the last result's JSON value, which the inspector shows. Over the API
+the same check is:
+
+```json
+{ "type": "json", "name": "Blocked today", "intervalSeconds": 300,
+  "config": { "target": "http://192.168.1.2/admin/api.php?summaryRaw&auth=…",
+              "jsonPath": "ads_percentage_today", "jsonRecord": true,
+              "jsonMetric": "Blocked", "jsonUnit": "%", "jsonWarnAbove": 60 } }
+```
+
+See `docs/API.md` → **Named metrics** for the fields, and for the one limit:
+a recorded value is charted only as far back as raw results are retained.
+
 ## Testing a recipe
 
 Before saving, or any time after, use **Test this action** in the trigger or

@@ -473,10 +473,30 @@ checks; tags +critical on 5 nodes").
 ### Named metrics
 
 A check may measure things beyond the latency every check reports. Those go into
-`Result.metrics`, a JSON object of name → number stored alongside the result; an SNMP
-check writes one entry per OID that produced a number, keyed by the OID's `name` and
-holding the value (gauge) or rate (counter) **after** `scale`. Every other check type
-leaves it absent.
+`Result.metrics`, a JSON object of name → number stored alongside the result. Two check
+types write it:
+
+- An **SNMP** check writes one entry per OID that produced a number, keyed by the OID's
+  `name` and holding the value (gauge) or rate (counter) **after** `scale`.
+- A **json** check with `jsonRecord: true` writes one entry, keyed by `jsonMetric`
+  (default `"value"`), holding the number the `jsonPath` pointed at. A JSON number and
+  a string holding one (`"42.5"`) both count; anything else — text, a boolean, an
+  object — is not a metric and is kept only as text in `Result.details.jsonValue`,
+  which is how a string is recorded. The recording sits beside `jsonExpected`, which
+  keeps its meaning: with both set the check is down on a mismatch *and* the value is
+  still stored. Its config fields:
+
+  | field | meaning |
+  | --- | --- |
+  | `jsonRecord` | `true` to keep the value on every run (requires `jsonPath`) |
+  | `jsonMetric` | the metric's name in results, charts and `metric=`; at most 64 characters, default `value` |
+  | `jsonUnit` | shown beside the value, e.g. `°C`, `%`, `ms`; optional |
+  | `jsonWarnAbove`, `jsonCritAbove`, `jsonWarnBelow`, `jsonCritBelow` | optional thresholds, compared **strictly** like an OID's: crossing a `warn` marks the check degraded, crossing a `crit` marks it down. Validation requires `jsonWarnAbove < jsonCritAbove` and `jsonWarnBelow > jsonCritBelow`. Text is never thresholded. |
+
+  The result's message names the recording (`json "temp" = 42.5; recorded value = 42.5
+  °C`) and, when a threshold is crossed, says which one.
+
+Every other check type leaves `metrics` absent.
 
 - `GET /api/history?checkId=ID&range=…&metric=<name>` → `HistorySeries` for that metric.
   The series carries `metric` and `metricUnit`, each point carries `value`, and `avgMs`,
@@ -489,8 +509,8 @@ leaves it absent.
   check invented, so `metric=` reaches back only as far as raw history is retained — 30
   days by default, whatever Settings › Retention says otherwise. Ranges beyond that
   return the part of the window raw results still cover. Availability, latency and the
-  uptime bars for an SNMP check are rolled up normally; only the per-OID readings are
-  limited this way.
+  uptime bars for an SNMP or json check are rolled up normally; only the named readings
+  are limited this way.
 
 ## Hardware health
 

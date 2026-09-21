@@ -273,6 +273,22 @@ type CheckConfig struct {
 	ContentWatch    string            `json:"contentWatch,omitempty"`  // "" | "hash" | "header" | "redirect" | "keyword" | "json"
 	ContentHeader   string            `json:"contentHeader,omitempty"` // header name when ContentWatch == "header"
 
+	// JSONRecord makes a json check keep the value it reads, run after run,
+	// rather than only judging it. A value that is a number (or a string
+	// holding one, like "42.5") is stored in Result.Metrics under JSONMetric
+	// and charted like an SNMP reading; anything else is kept as text in
+	// Result.details.jsonValue, which is where a string is recorded. The
+	// thresholds are optional and compared strictly, the same way as an
+	// SNMPOID's: a warning makes the check degraded, a critical makes it
+	// down. JSONExpected keeps its meaning alongside all of this.
+	JSONRecord    bool     `json:"jsonRecord,omitempty"`
+	JSONMetric    string   `json:"jsonMetric,omitempty"` // metric name, default "value"
+	JSONUnit      string   `json:"jsonUnit,omitempty"`   // shown beside the value, e.g. "°C", "%", "ms"
+	JSONWarnAbove *float64 `json:"jsonWarnAbove,omitempty"`
+	JSONCritAbove *float64 `json:"jsonCritAbove,omitempty"`
+	JSONWarnBelow *float64 `json:"jsonWarnBelow,omitempty"`
+	JSONCritBelow *float64 `json:"jsonCritBelow,omitempty"`
+
 	// TCP / cert
 	Port int `json:"port,omitempty"` // tcp: required; cert: default 443
 
@@ -329,6 +345,40 @@ type CheckConfig struct {
 	SNMPPrivProto string    `json:"snmpPrivProto,omitempty"` // "" (noPriv) | DES | AES | AES192 | AES256 | AES192C | AES256C
 	SNMPPrivPass  string    `json:"snmpPrivPass,omitempty"`
 	SNMPOIDs      []SNMPOID `json:"snmpOids,omitempty"`
+}
+
+// DefaultJSONMetric is the metric name a recording json check uses when the
+// configuration does not choose one.
+const DefaultJSONMetric = "value"
+
+// JSONMetricName is the name a json check records its value under: the
+// configured name, or DefaultJSONMetric when none was given.
+func (c CheckConfig) JSONMetricName() string {
+	if name := strings.TrimSpace(c.JSONMetric); name != "" {
+		return name
+	}
+	return DefaultJSONMetric
+}
+
+// MetricUnits maps every named metric this check is configured to measure to
+// its unit ("" when it has none). It is the one list of a check's metrics, so
+// the API's "does this check measure that?" gate and the history series' unit
+// lookup cannot disagree about which checks record what.
+func (c Check) MetricUnits() map[string]string {
+	units := map[string]string{}
+	switch c.Type {
+	case CheckSNMP:
+		for _, o := range c.Config.SNMPOIDs {
+			if o.Name != "" {
+				units[o.Name] = o.Unit
+			}
+		}
+	case CheckJSON:
+		if c.Config.JSONRecord {
+			units[c.Config.JSONMetricName()] = strings.TrimSpace(c.Config.JSONUnit)
+		}
+	}
+	return units
 }
 
 // SNMPOID is one reading an SNMP check takes, with the thresholds that decide
@@ -436,8 +486,9 @@ type Result struct {
 	// Metrics carries the extra numbers a check measured beyond the latency
 	// every check reports, keyed by a name the check's configuration chose —
 	// for an SNMP check, one entry per OID holding its value or rate after
-	// Scale. They are stored with the result and charted by asking
-	// /api/history for metric=<name>.
+	// Scale; for a json check with JSONRecord, the number the path pointed
+	// at. They are stored with the result and charted by asking /api/history
+	// for metric=<name>.
 	Metrics map[string]float64 `json:"metrics,omitempty"`
 }
 
