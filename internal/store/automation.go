@@ -50,6 +50,29 @@ CREATE TABLE IF NOT EXISTS endpoints (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+-- Notification rules (#31): conditions across nodes and checks, joined by
+-- all / any / at_least, with a list of actions. join_kind because JOIN is a
+-- keyword everywhere.
+CREATE TABLE IF NOT EXISTS rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  join_kind TEXT NOT NULL DEFAULT 'all',
+  at_least INTEGER NOT NULL DEFAULT 1,
+  conditions TEXT NOT NULL DEFAULT '[]',
+  actions TEXT NOT NULL DEFAULT '[]',
+  cooldown_minutes INTEGER NOT NULL DEFAULT 0,
+  notify_cleared INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS rule_state (
+  rule_id INTEGER PRIMARY KEY REFERENCES rules(id) ON DELETE CASCADE,
+  met INTEGER NOT NULL DEFAULT 0,
+  since TEXT,
+  last_fired_at TEXT
+);
 `
 
 // ---- triggers ----
@@ -272,6 +295,144 @@ func (s *Store) DeleteEndpoint(ctx context.Context, id int64) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// ---- rules ----
+
+const ruleCols = `id, name, enabled, join_kind, at_least, conditions, actions, cooldown_minutes, notify_cleared, created_at, updated_at`
+
+func scanRule(sc interface{ Scan(...any) error }) (model.Rule, error) {
+	var r model.Rule
+	var enabled, notifyCleared int
+	var conds, acts, created, updated string
+	if err := sc.Scan(&r.ID, &r.Name, &enabled, &r.Join, &r.AtLeast, &conds, &acts, &r.CooldownMinutes, &notifyCleared, &created, &updated); err != nil {
+		return r, err
+	}
+	r.Enabled = enabled == 1
+	r.NotifyCleared = notifyCleared == 1
+	_ = json.Unmarshal([]byte(conds), &r.Conditions)
+	if r.Conditions == nil {
+		r.Conditions = []model.RuleCondition{}
+	}
+	_ = json.Unmarshal([]byte(acts), &r.Actions)
+	if r.Actions == nil {
+		r.Actions = []model.Action{}
+	}
+	r.CreatedAt, r.UpdatedAt = mustTime(created), mustTime(updated)
+	return r, nil
+}
+
+// ListRules returns every notification rule, by name.
+func (s *Store) ListRules(ctx context.Context) ([]model.Rule, error) {
+	rows, err := s.query(ctx, "SELECT "+ruleCols+" FROM rules ORDER BY "+s.d.ci("name")+", id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.Rule{}
+	for rows.Next() {
+		r, err := scanRule(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// GetRule returns one rule.
+func (s *Store) GetRule(ctx context.Context, id int64) (model.Rule, error) {
+	row := s.queryRow(ctx, "SELECT "+ruleCols+" FROM rules WHERE id = ?", id)
+	r, err := scanRule(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return r, ErrNotFound
+	}
+	return r, err
+}
+
+// SaveRule inserts (ID == 0) or updates a rule. Its state (RuleState) is a
+// separate row and is left alone.
+func (s *Store) SaveRule(ctx context.Context, r model.Rule) (model.Rule, error) {
+	now := time.Now()
+	if r.Conditions == nil {
+		r.Conditions = []model.RuleCondition{}
+	}
+	if r.Actions == nil {
+		r.Actions = []model.Action{}
+	}
+	if r.Join == "" {
+		r.Join = model.RuleJoinAll
+	}
+	r.UpdatedAt = now
+	if r.ID == 0 {
+		r.CreatedAt = now
+		newID, err := s.insertID(ctx, `INSERT INTO rules(name, enabled, join_kind, at_least, conditions, actions, cooldown_minutes, notify_cleared, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			r.Name, boolInt(r.Enabled), r.Join, r.AtLeast, jsonString(r.Conditions), jsonString(r.Actions), r.CooldownMinutes, boolInt(r.NotifyCleared), fmtTime(now), fmtTime(now))
+		if err != nil {
+			return r, err
+		}
+		r.ID = newID
+		return r, nil
+	}
+	res, err := s.exec(ctx, `UPDATE rules SET name=?, enabled=?, join_kind=?, at_least=?, conditions=?, actions=?, cooldown_minutes=?, notify_cleared=?, updated_at=? WHERE id=?`,
+		r.Name, boolInt(r.Enabled), r.Join, r.AtLeast, jsonString(r.Conditions), jsonString(r.Actions), r.CooldownMinutes, boolInt(r.NotifyCleared), fmtTime(now), r.ID)
+	if err != nil {
+		return r, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return r, ErrNotFound
+	}
+	return s.GetRule(ctx, r.ID)
+}
+
+// DeleteRule removes a rule and its state.
+func (s *Store) DeleteRule(ctx context.Context, id int64) error {
+	return s.writeTx(ctx, func(tx *wtx) error {
+		// The state row first: not every backend cascades here.
+		if _, err := tx.exec(ctx, "DELETE FROM rule_state WHERE rule_id = ?", id); err != nil {
+			return err
+		}
+		res, err := tx.exec(ctx, "DELETE FROM rules WHERE id = ?", id)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
+}
+
+var ruleStateCols = []string{"rule_id", "met", "since", "last_fired_at"}
+
+// RuleStates returns the stored state of every rule that has one, by rule id.
+func (s *Store) RuleStates(ctx context.Context) (map[int64]model.RuleState, error) {
+	rows, err := s.query(ctx, "SELECT rule_id, met, since, last_fired_at FROM rule_state")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]model.RuleState{}
+	for rows.Next() {
+		var st model.RuleState
+		var met int
+		var since, fired sql.NullString
+		if err := rows.Scan(&st.RuleID, &met, &since, &fired); err != nil {
+			return nil, err
+		}
+		st.Met = met == 1
+		st.Since = parseTime(since)
+		st.LastFiredAt = parseTime(fired)
+		out[st.RuleID] = st
+	}
+	return out, rows.Err()
+}
+
+// PutRuleState upserts the state of a rule.
+func (s *Store) PutRuleState(ctx context.Context, st model.RuleState) error {
+	_, err := s.exec(ctx, insertValues("rule_state", ruleStateCols)+" "+s.d.upsertClause([]string{"rule_id"}, ruleStateCols),
+		st.RuleID, boolInt(st.Met), fmtTimePtr(st.Since), fmtTimePtr(st.LastFiredAt))
+	return err
 }
 
 // ---- saved charts ----

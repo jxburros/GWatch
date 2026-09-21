@@ -957,6 +957,7 @@ func (s *Server) eventFilterFromQuery(r *http.Request, def int) store.EventFilte
 		model.EventDown:             model.EventRecovered,
 		model.EventAlertSent:        model.EventAlertFailed,
 		model.EventServiceStarted:   model.EventServiceStopped,
+		model.EventRuleFired:        model.EventRuleCleared,
 	}
 	for _, t := range r.URL.Query()["type"] {
 		for _, part := range strings.Split(t, ",") {

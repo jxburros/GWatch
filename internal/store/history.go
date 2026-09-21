@@ -466,7 +466,7 @@ func (s *Store) InsertEventsBatch(ctx context.Context, events []model.Event) err
 // ClearAll wipes every table (used before a restore).
 func (s *Store) ClearAll(ctx context.Context, includeHistory bool) error {
 	return s.writeTx(ctx, func(tx *wtx) error {
-		tables := []string{"triggers", "endpoints", "maintenance_windows", "dashboards", "check_state", "checks", "nodes", "settings"}
+		tables := []string{"rule_state", "rules", "triggers", "endpoints", "maintenance_windows", "dashboards", "check_state", "checks", "nodes", "settings"}
 		if includeHistory {
 			tables = append([]string{"results", "rollups", "events"}, tables...)
 		}

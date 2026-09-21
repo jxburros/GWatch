@@ -60,6 +60,10 @@ func (e *Engine) trackMaintenance(now time.Time) {
 	}
 	if len(began)+len(ended) > 0 {
 		e.broadcast(Update{Kind: "maintenance"})
+		// Checks under a window stop counting towards the notification
+		// rules while it lasts, so a window opening or closing can change
+		// where a rule stands.
+		e.evaluateRules(context.Background(), nil)
 	}
 }
 

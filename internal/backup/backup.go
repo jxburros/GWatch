@@ -62,6 +62,7 @@ type Config struct {
 	Maintenance []model.MaintenanceWindow `json:"maintenance"`
 	Triggers    []model.Trigger           `json:"triggers,omitempty"`
 	Endpoints   []model.Endpoint          `json:"endpoints,omitempty"`
+	Rules       []model.Rule              `json:"rules,omitempty"` // notification rules (#31); absent from archives written before them
 	Charts      []model.SavedChart        `json:"charts,omitempty"`
 	Wallboards  []model.Wallboard         `json:"wallboards,omitempty"`
 	Users       []store.UserRecord        `json:"users,omitempty"`
@@ -112,6 +113,9 @@ func ExportConfig(ctx context.Context, st *store.Store) (Config, error) {
 		return cfg, err
 	}
 	if cfg.Endpoints, err = st.ListEndpoints(ctx); err != nil {
+		return cfg, err
+	}
+	if cfg.Rules, err = st.ListRules(ctx); err != nil {
 		return cfg, err
 	}
 	if cfg.Charts, err = st.ListSavedCharts(ctx); err != nil {
@@ -507,6 +511,15 @@ func restoreConfig(ctx context.Context, st *store.Store, cfg Config, sum *Summar
 	for _, e := range cfg.Endpoints {
 		e.ID = 0
 		if _, err := st.SaveEndpoint(ctx, e); err != nil {
+			return err
+		}
+	}
+	// Rules name nodes and checks by id, and those keep their ids above.
+	// A rule starts over as not-met: its state is about the moment, not
+	// the configuration.
+	for _, r := range cfg.Rules {
+		r.ID = 0
+		if _, err := st.SaveRule(ctx, r); err != nil {
 			return err
 		}
 	}

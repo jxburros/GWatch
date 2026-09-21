@@ -306,6 +306,11 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 		e.sendMail(m)
 	}
 	e.fireTriggers(triggerContext{check: c, node: n, result: stored, state: snapshot, prev: prev, events: events})
+	// A status change may bring a notification rule's conditions together
+	// or apart; only the rules that look at this check need another look.
+	if prev != snapshot.Status {
+		e.evaluateRules(ctx, ptrInt64(c.ID))
+	}
 	return stored, nil
 }
 
@@ -676,5 +681,8 @@ func (e *Engine) Silence(ctx context.Context, checkID int64, d time.Duration) (m
 	}
 	e.recordEvent(evt)
 	e.broadcast(Update{Kind: "state", CheckID: c.ID, NodeID: n.ID})
+	// A silenced check stops counting towards the notification rules that
+	// look at it, and counts again once the silence is lifted.
+	e.evaluateRules(ctx, ptrInt64(c.ID))
 	return snapshot, nil
 }

@@ -174,6 +174,12 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "DELETE /api/triggers/{id}", s.handleDeleteTrigger)
 	s.route(mux, "POST /api/triggers/{id}/run", s.handleRunTrigger)
 	s.route(mux, "POST /api/actions/test", s.handleTestAction)
+	s.route(mux, "GET /api/rules", s.handleListRules)
+	s.route(mux, "POST /api/rules", s.handleSaveRule)
+	s.route(mux, "GET /api/rules/{id}", s.handleGetRule)
+	s.route(mux, "PUT /api/rules/{id}", s.handleSaveRule)
+	s.route(mux, "DELETE /api/rules/{id}", s.handleDeleteRule)
+	s.route(mux, "POST /api/rules/{id}/test", s.handleTestRule)
 	s.route(mux, "GET /api/automation/meta", s.handleAutomationMeta)
 
 	s.route(mux, "GET /api/endpoints", s.handleListEndpoints)

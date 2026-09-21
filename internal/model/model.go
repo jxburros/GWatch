@@ -7,6 +7,7 @@ package model
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -660,6 +661,8 @@ const (
 	EventUpdate             EventType = "update"          // application update checked / applied
 	EventAuth               EventType = "auth"            // sign-in, sign-out, account or API-key change
 	EventDiscovery          EventType = "discovery"       // a subnet was swept, or nodes were added from a sweep
+	EventRuleFired          EventType = "rule_fired"      // a notification rule's conditions came together
+	EventRuleCleared        EventType = "rule_cleared"    // a notification rule's conditions came apart again
 )
 
 // Event is one entry in the incident/event timeline.
@@ -1393,6 +1396,124 @@ type Trigger struct {
 	RunCount        int        `json:"runCount"`
 	CreatedAt       time.Time  `json:"createdAt"`
 	UpdatedAt       time.Time  `json:"updatedAt"`
+}
+
+// ---- rules: notifications that combine conditions across nodes and checks ----
+
+// The join of a rule: how many of its conditions have to hold at once.
+const (
+	RuleJoinAll     = "all"      // every condition
+	RuleJoinAny     = "any"      // at least one
+	RuleJoinAtLeast = "at_least" // at least AtLeast of them
+)
+
+// RuleConditionStatus is the only Kind a RuleCondition has today: a check
+// (or any check of a node) is at a status. The field exists so a later
+// kind — a metric above a number, a hold timer — can sit beside it without
+// reshaping stored rules.
+const RuleConditionStatus = "status"
+
+// RuleCondition is one thing a rule looks at. Exactly one of NodeID and
+// CheckID is set: a check condition holds when that check is at Status, a
+// node condition when any of the node's enabled checks is. Status is "down"
+// or "degraded", and "degraded" means degraded or worse, so a check that
+// has gone from degraded to down still satisfies it.
+type RuleCondition struct {
+	Kind    string `json:"kind"`
+	NodeID  *int64 `json:"nodeId,omitempty"`
+	CheckID *int64 `json:"checkId,omitempty"`
+	Status  Status `json:"status"`
+}
+
+// Holds reports whether a check at status satisfies the condition.
+func (c RuleCondition) Holds(status Status) bool {
+	switch c.Status {
+	case StatusDown:
+		return status == StatusDown
+	case StatusDegraded:
+		return status == StatusDown || status == StatusDegraded
+	}
+	return false
+}
+
+// Rule is a notification that looks at several checks at once — "two of my
+// three DNS servers are down", "the gateway and the switch are both
+// unreachable" — where a trigger looks at one node. It sits beside the
+// per-node alerts and triggers and does not change them. When its
+// conditions come together (Join says how many) it runs its Actions once,
+// records a rule_fired event, and stays "met" until they come apart, when
+// it records rule_cleared and, with NotifyCleared, runs the Actions again
+// with event=rule_cleared. CooldownMinutes is the shortest time between two
+// runs of the actions; the state and the events are kept regardless.
+type Rule struct {
+	ID              int64           `json:"id"`
+	Name            string          `json:"name"`
+	Enabled         bool            `json:"enabled"`
+	Join            string          `json:"join"`    // all | any | at_least
+	AtLeast         int             `json:"atLeast"` // for at_least: how many conditions
+	Conditions      []RuleCondition `json:"conditions"`
+	Actions         []Action        `json:"actions"`
+	CooldownMinutes int             `json:"cooldownMinutes"`
+	NotifyCleared   bool            `json:"notifyCleared"`
+	CreatedAt       time.Time       `json:"createdAt"`
+	UpdatedAt       time.Time       `json:"updatedAt"`
+}
+
+// Validate checks the parts of a rule that need no lookup: its name, join,
+// count, and the shape of each condition and action. Whether the nodes and
+// checks it names exist is for the caller, who has the store.
+func (r Rule) Validate() error {
+	if strings.TrimSpace(r.Name) == "" {
+		return errors.New("a name is required")
+	}
+	if len(r.Conditions) == 0 {
+		return errors.New("add at least one condition")
+	}
+	switch r.Join {
+	case RuleJoinAll, RuleJoinAny:
+	case RuleJoinAtLeast:
+		if r.AtLeast < 1 || r.AtLeast > len(r.Conditions) {
+			return fmt.Errorf("\"at least\" needs a count between 1 and %d (the number of conditions)", len(r.Conditions))
+		}
+	default:
+		return fmt.Errorf("unknown join %q (use all, any or at_least)", r.Join)
+	}
+	for i, c := range r.Conditions {
+		if c.Kind != RuleConditionStatus {
+			return fmt.Errorf("condition %d: unknown kind %q (only \"status\" exists today)", i+1, c.Kind)
+		}
+		if (c.NodeID == nil) == (c.CheckID == nil) {
+			return fmt.Errorf("condition %d: pick a node or one of its checks", i+1)
+		}
+		if c.Status != StatusDown && c.Status != StatusDegraded {
+			return fmt.Errorf("condition %d: the status must be down or degraded", i+1)
+		}
+	}
+	if len(r.Actions) == 0 {
+		return errors.New("add at least one action")
+	}
+	return nil
+}
+
+// Needed reports how many conditions have to hold for the rule to be met.
+func (r Rule) Needed() int {
+	switch r.Join {
+	case RuleJoinAny:
+		return 1
+	case RuleJoinAtLeast:
+		return r.AtLeast
+	}
+	return len(r.Conditions)
+}
+
+// RuleState is where a rule stands: whether it is met, since when, and
+// when its actions last ran. It is stored so a restart neither fires a
+// rule again nor forgets that it is waiting to clear.
+type RuleState struct {
+	RuleID      int64      `json:"ruleId"`
+	Met         bool       `json:"met"`
+	Since       *time.Time `json:"since"`
+	LastFiredAt *time.Time `json:"lastFiredAt"`
 }
 
 // Endpoint is a user-defined HTTP endpoint served at /hook/{slug} that runs

@@ -51,6 +51,12 @@ func seedFull(t *testing.T, ctx context.Context, st *store.Store) (users, keys, 
 	if _, err := st.SaveEndpoint(ctx, model.Endpoint{Name: "Hook", Slug: "hook", Enabled: true, Method: "POST", Action: model.Action{Type: model.ActionScript, Command: "true"}}); err != nil {
 		t.Fatal(err)
 	}
+	gwCheck := gw.Checks[0].ID
+	if _, err := st.SaveRule(ctx, model.Rule{Name: "Gateway and NAS down", Enabled: true, Join: model.RuleJoinAll,
+		Conditions: []model.RuleCondition{{Kind: model.RuleConditionStatus, CheckID: &gwCheck, Status: model.StatusDown}, {Kind: model.RuleConditionStatus, NodeID: &nas.ID, Status: model.StatusDegraded}},
+		Actions:    []model.Action{{Type: model.ActionHTTP, URL: "https://example.com/hook"}}}); err != nil {
+		t.Fatal(err)
+	}
 	b, err := st.SaveWallboard(ctx, model.Wallboard{Name: "Lobby", Panels: []model.WallPanel{{Type: "status_list"}}})
 	if err != nil {
 		t.Fatal(err)
@@ -155,6 +161,13 @@ func TestCopyMovesEverything(t *testing.T) {
 	s2, _ := dst.LoadSettings(ctx)
 	if s2.Alerts.SMTP.Password != "smtp-secret" || len(s2.Alerts.Recipients) != 1 {
 		t.Fatalf("settings: %+v", s2.Alerts)
+	}
+	// A rule's conditions still point at the right check and node, since
+	// those kept their ids.
+	rules, _ := dst.ListRules(ctx)
+	if len(rules) != 1 || len(rules[0].Conditions) != 2 || rules[0].Conditions[0].CheckID == nil || *rules[0].Conditions[0].CheckID != srcNodes[0].Checks[0].ID ||
+		rules[0].Conditions[1].NodeID == nil || *rules[0].Conditions[1].NodeID != srcNodes[1].ID || len(rules[0].Actions) != 1 {
+		t.Fatalf("rules did not arrive intact: %+v", rules)
 	}
 	// And the target keeps working afterwards: a new node gets an id after
 	// the copied ones rather than colliding with them.
