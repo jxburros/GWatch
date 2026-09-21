@@ -227,6 +227,24 @@ jobs:
       - name: Race tests
         run: go test -race -count=1 ./internal/engine/... ./internal/api/... ./internal/store/... ./internal/hostmon/...
 
+      # The SQLite driver is picked by build tag (internal/store/driver.go).
+      # Everything above ran on the default, modernc.org/sqlite; these two
+      # steps compile the whole tree with each alternative and re-run the
+      # packages that open a database, so a change to the store keeps working
+      # under all three. The cgo one needs a C compiler, which ubuntu-latest
+      # has; it is a from-source option only and never a release build.
+      - name: Store under ncruces/go-sqlite3
+        run: |
+          go vet -tags sqlite_ncruces ./...
+          go test -tags sqlite_ncruces -count=1 ./internal/store/... ./internal/api/... ./internal/engine/... ./internal/backup/...
+
+      - name: Store under mattn/go-sqlite3 (cgo)
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          go vet -tags sqlite_cgo ./...
+          go test -tags sqlite_cgo -count=1 ./internal/store/... ./internal/api/... ./internal/engine/... ./internal/backup/...
+
       # The MCP companion is its own module (see the Windows job's comment on
       # the same step) and gets the same treatment here.
       - name: MCP companion — gofmt, go vet, go build, go test

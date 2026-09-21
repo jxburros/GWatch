@@ -1210,6 +1210,7 @@ type Health struct {
 	LastGap          *GapInfo        `json:"lastGap"`
 	DatabasePath     string          `json:"databasePath"`
 	DatabaseBytes    int64           `json:"databaseBytes"`
+	DatabaseDriver   string          `json:"databaseDriver"` // which SQLite driver this build was compiled with
 	DataDir          string          `json:"dataDir"`
 	KeyPath          string          `json:"keyPath"`
 	BackupDir        string          `json:"backupDir"`

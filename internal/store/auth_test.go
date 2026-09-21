@@ -211,7 +211,7 @@ func TestAPIKeys(t *testing.T) {
 // checks that opening it adds the columns migrate() is responsible for.
 func TestMigrateAddsColumns(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "old.db")
-	db, err := sql.Open("sqlite", "file:"+path)
+	db, err := sql.Open(driverName, dataSourceName(path, true))
 	if err != nil {
 		t.Fatal(err)
 	}
