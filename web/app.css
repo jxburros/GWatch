@@ -763,6 +763,11 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .table td.mono, .table th.mono { font-family: var(--mono); font-size: 0.78125rem; font-variant-numeric: tabular-nums; }
 .table td.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .table-wrap { overflow: auto; }
+/* The button that opens a result row's detail: set like the cell text it
+   stands in, so the table reads as a table and only the focus ring says
+   "button". */
+.row-toggle { background: none; border: 0; padding: 0; margin: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.row-toggle:hover { color: var(--text); }
 .list { display: flex; flex-direction: column; }
 .list-item { display: flex; align-items: center; gap: 0.75rem; padding: var(--row-pad-y) 0; font-size: var(--list-font); border-bottom: 1px solid var(--line); }
 .list-item:last-child { border-bottom: 0; }

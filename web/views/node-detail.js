@@ -1,7 +1,7 @@
 // Node detail: header, per-check cards with result inspector, charts, events.
 
 import { api, getHistoryMulti, getHistoryMetric, qs } from '../api.js';
-import { h, icon, clear, replace, statusPill, statusGlyph, importanceBadge, tagList, banner, toast, confirmDialog, showMenu, menuButton, emptyState, skeleton, eventRow, rangeChips, checkTypeLabel } from '../components.js';
+import { h, icon, clear, replace, uid, statusPill, statusGlyph, importanceBadge, tagList, banner, toast, confirmDialog, showMenu, menuButton, emptyState, skeleton, eventRow, rangeChips, checkTypeLabel } from '../components.js';
 import { LineChart, toSeries, uptimeBar, uptimeLegend, SERIES_COLORS } from '../charts.js';
 import { relTime, ms as fmtMs, pct, dateTime, interval, plural, timeShort, nodeGroups } from '../fmt.js';
 import { resultInspector } from './inspector.js';
@@ -208,19 +208,28 @@ export async function mount(root, ctx) {
     const table = h('table', { class: 'table' }, h('thead', null, h('tr', null, h('th', null, 'Time'), h('th', null, 'Result'), h('th', null, 'Message'), h('th', { class: 'num' }, c.type === 'ping' ? 'Avg RTT' : 'Time'), c.type === 'ping' ? h('th', { class: 'num' }, 'Loss') : h('th', { class: 'num' }, 'Code'))));
     const tb = h('tbody');
     for (const r of rows) {
-      const tr = h('tr', { style: { cursor: 'pointer' }, tabindex: 0, title: 'Show details' },
-        h('td', { class: 'mono nowrap' }, timeShort(r.ts, { seconds: true }), h('span', { class: 'dim' }, ` · ${relTime(r.ts)}`)),
+      // The whole row is a click target for a pointer, but the keyboard and a
+      // screen reader get a real button in the first cell — a focusable <tr>
+      // has no name, no role and no expanded state to announce.
+      const detailId = uid('result-detail');
+      const toggle = h('button', { class: 'row-toggle', type: 'button', 'aria-expanded': 'false', 'aria-controls': detailId, 'aria-label': `Details of the result at ${timeShort(r.ts, { seconds: true })}` },
+        timeShort(r.ts, { seconds: true }), h('span', { class: 'dim' }, ` · ${relTime(r.ts)}`));
+      const tr = h('tr', { class: 'result-row', style: { cursor: 'pointer' } },
+        h('td', { class: 'mono nowrap' }, toggle),
         h('td', null, statusGlyph(r.status || (r.success ? 'up' : 'down'))),
         h('td', { class: 'muted' }, r.message || r.error || ''),
         h('td', { class: 'num' }, fmtMs(r.latencyMs)),
         c.type === 'ping' ? h('td', { class: 'num' }, pct(r.lossPct)) : h('td', { class: 'num' }, r.details?.statusCode ? String(r.details.statusCode) : '—'));
       const open = () => {
         const next = tr.nextElementSibling;
-        if (next && next.classList.contains('detail-row')) { next.remove(); return; }
-        tr.after(h('tr', { class: 'detail-row' }, h('td', { colspan: 5, style: { padding: '0 0 12px' } }, resultInspector(r, c, { compact: true }))));
+        if (next && next.classList.contains('detail-row')) { next.remove(); toggle.setAttribute('aria-expanded', 'false'); return; }
+        tr.after(h('tr', { class: 'detail-row', id: detailId }, h('td', { colspan: 5, style: { padding: '0 0 12px' } }, resultInspector(r, c, { compact: true }))));
+        toggle.setAttribute('aria-expanded', 'true');
       };
+      // A click on the button bubbles to the row; stopping it there keeps
+      // one click from toggling twice.
+      toggle.addEventListener('click', (e) => { e.stopPropagation(); open(); });
       tr.addEventListener('click', open);
-      tr.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
       tb.append(tr);
     }
     table.append(tb);

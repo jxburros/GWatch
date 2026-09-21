@@ -105,6 +105,11 @@ export async function mount(root, ctx) {
   const widgetEls = new Map();
 
   const grid = h('div', { class: 'dash-grid' });
+  // What the keyboard did to a widget, read out as it happens; and the one
+  // hint every grip is described by.
+  const moveLive = h('div', { class: 'sr-only', 'aria-live': 'polite' });
+  const gripHint = h('p', { class: 'sr-only', id: uid('grip-hint') }, 'Arrow keys move the widget one cell; Shift with an arrow key resizes it.');
+  root.append(moveLive, gripHint);
   // The dashboard chips are links to addresses (#/dashboard/2), so they are
   // navigation with a current page rather than tabs — which also lets the
   // "New" button sit beside them without pretending to be one.
@@ -313,7 +318,7 @@ export async function mount(root, ctx) {
     const cfg = widgetConfig(w);
     const card = h('section', { class: 'card widget', 'aria-label': w.title || meta.label });
     applyGeometry(card, l);
-    const dragHandle = h('button', { class: 'widget-drag admin-only', type: 'button', 'aria-label': `Move ${w.title || meta.label}`, title: 'Drag to move' }, icon('grip'));
+    const dragHandle = h('button', { class: 'widget-drag admin-only', type: 'button', 'aria-label': `Move or resize ${w.title || meta.label}`, title: 'Drag to move · arrow keys move, Shift+arrow resizes', 'aria-describedby': gripHint.id, onkeydown: (e) => keyboardArrange(e, w) }, icon('grip'));
     const head = h('div', { class: 'widget-head' }, h('h2', { class: 'card-title' }, dragHandle, h('span', { class: 'truncate', title: w.title || meta.label }, w.title || meta.label)));
     const actions = h('div', { class: 'widget-edit-bar' });
     if (CHART_LIKE.has(w.type)) {
@@ -347,6 +352,45 @@ export async function mount(root, ctx) {
   }
 
   /* ---------- Drag & resize ---------- */
+  // The keyboard's version of the two pointer gestures below: an arrow key
+  // moves the widget one cell, Shift+arrow grows or shrinks it, and the grid
+  // is redrawn and saved after each step as it is after a drag.
+  let arrangeSave = 0;
+  function keyboardArrange(e, w) {
+    const dx = { ArrowLeft: -1, ArrowRight: 1 }[e.key] || 0;
+    const dy = { ArrowUp: -1, ArrowDown: 1 }[e.key] || 0;
+    if (!dx && !dy) return;
+    e.preventDefault();
+    const l = layoutOf(w); if (!l) return;
+    const before = { ...l };
+    if (e.shiftKey) {
+      l.w = Math.min(COLS - l.x, Math.max(1, l.w + dx));
+      l.h = Math.min(6, Math.max(1, l.h + dy));
+    } else {
+      l.x = Math.min(COLS - l.w, Math.max(0, l.x + dx));
+      l.y = Math.max(0, l.y + dy);
+    }
+    const title = w.title || widgetMeta(w.type).label;
+    if (l.x === before.x && l.y === before.y && l.w === before.w && l.h === before.h) {
+      moveLive.textContent = `${title} is already at the edge.`;
+      return;
+    }
+    if (e.shiftKey) {
+      const wd = widgetsList().find((x) => x.id === w.id); if (wd) { wd.width = l.w; wd.height = l.h; }
+      disposeChart(w.id);
+    }
+    resolve(state.layout, l);
+    renderWidgets();
+    // The grid was rebuilt, so put focus back on this widget's grip.
+    widgetEls.get(w.id)?.querySelector('.widget-drag')?.focus();
+    moveLive.textContent = e.shiftKey
+      ? `${title} is now ${l.w} ${l.w === 1 ? 'column' : 'columns'} by ${l.h} ${l.h === 1 ? 'row' : 'rows'}.`
+      : `${title} moved to column ${l.x + 1}, row ${l.y + 1}.`;
+    // Several presses in a row are one change to save.
+    clearTimeout(arrangeSave);
+    arrangeSave = setTimeout(() => { persist().catch(() => {}); }, 600);
+  }
+
   function cellSize() {
     const rect = grid.getBoundingClientRect();
     const cs = getComputedStyle(grid);
@@ -750,6 +794,7 @@ export async function mount(root, ctx) {
     },
     destroy() {
       state.destroyed = true;
+      clearTimeout(arrangeSave);
       state.chartViews.forEach((v) => v.destroy());
       state.chartViews.clear();
     },
