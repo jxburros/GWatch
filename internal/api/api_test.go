@@ -49,7 +49,13 @@ func newTestServer(t *testing.T) (*httptest.Server, *Server) {
 		"app.js":     &fstest.MapFile{Data: []byte("//js")},
 		"wall.html":  &fstest.MapFile{Data: []byte("<html>wall</html>")},
 	}
-	srv := &Server{Engine: eng, Store: st, Log: log, Web: web, BackupDir: filepath.Join(dir, "backups"), Version: "test", Updater: &Updater{Client: &update.Client{}, Version: "test", Log: log}}
+	// A stand-in for skill/ at the repository root; mcp_test.go reads it back.
+	skill := fstest.MapFS{
+		"SKILL.md":  &fstest.MapFile{Data: []byte("---\nname: gwatch\nversion: 2.3.4\n---\n# Working with GWatch\n")},
+		"README.md": &fstest.MapFile{Data: []byte("# The GWatch agent skill\n")},
+		"VERSION":   &fstest.MapFile{Data: []byte("2.3.4\n")},
+	}
+	srv := &Server{Engine: eng, Store: st, Log: log, Web: web, Skill: skill, BackupDir: filepath.Join(dir, "backups"), Version: "test", Updater: &Updater{Client: &update.Client{}, Version: "test", Log: log}}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return ts, srv

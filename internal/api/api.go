@@ -30,10 +30,13 @@ import (
 
 // Server holds the dependencies of the HTTP handlers.
 type Server struct {
-	Engine    *engine.Engine
-	Store     *store.Store
-	Log       *logging.Logger
-	Web       fs.FS
+	Engine *engine.Engine
+	Store  *store.Store
+	Log    *logging.Logger
+	Web    fs.FS
+	// Skill holds the agent skill (skill/ in the repository) that Settings ›
+	// AI & MCP offers for download; see mcp.go. Optional.
+	Skill     fs.FS
 	BackupDir string
 	Version   string
 	// Updater performs GitHub release checks and self-updates (optional).
@@ -205,6 +208,9 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /api/update/apply", s.handleUpdateApply)
 
 	s.route(mux, "GET /api/logs", s.handleLogs)
+
+	s.route(mux, "GET /api/mcp/status", s.handleMCPStatus)
+	s.route(mux, "GET /api/mcp/skill", s.handleMCPSkill)
 
 	s.route(mux, "GET /api/me", s.handleMe)
 	s.route(mux, "GET /api/auth/setup", s.handleAuthSetup)

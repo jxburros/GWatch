@@ -24,7 +24,7 @@ became, and what still needs a human:
 | 2.3 Slack / Teams / ntfy / Pushover | `internal/actions/notify.go` | — |
 | 2.4 scheduled backups, restore path | `internal/engine/backupjob.go`, `docs/RESTORE.md` | — |
 | 2.5 read-only remote access | viewer role + read-only keys, `docs/REMOTE-ACCESS.md` | Decision: bring your own VPN/reverse proxy; GWatch never becomes internet-facing |
-| 3.1 / 3.2 MCP server | separate module `mcp/` (`gwatch-mcp`), read-only by default | Decide the `mcp/vX.Y.Z` tag scheme before advertising `go install` |
+| 3.1 / 3.2 MCP server | separate module `mcp/` (`gwatch-mcp`), read-only by default; Settings › AI & MCP, `skill/` | Resolved: the tag scheme is `mcp/vX.Y.Z` (`docs/RELEASING.md`), and the in-app set-up page plus the versioned agent skill (#56) cover the "how do I set it up" gap |
 | 3.3 trigger recipes | `docs/RECIPES.md` | — |
 | 4.1 Windows installer | `scripts/installer/gwatch.iss`, `docs/INSTALL.md` | Not yet compiled on a Windows machine; run the CI job once and test install/upgrade/uninstall by hand |
 
