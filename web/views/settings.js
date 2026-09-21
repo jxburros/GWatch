@@ -1,11 +1,12 @@
 // Settings: general, appearance, network access, alerts, automation
-// (endpoints + all triggers), hardware, AI & MCP, retention, maintenance,
+// (endpoints + all triggers), rules, hardware, AI & MCP, retention, maintenance,
 // backups, database, updates, monitor health. Logs moved to the Audit tab.
 
 import { api, qs } from '../api.js';
 import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, openModal, emptyState, skeleton, banner, eventRow, busy, applyTheme, applyAccent, ACCENT_PRESETS, hexToRgb, applyDensity, currentDensity } from '../components.js';
 import { relTime, dateTime, bytes, num, duration, retentionSpan, toLocalInput, fromLocalInput, weekdayShort, timeShort, plural, isBeta } from '../fmt.js';
 import { openEndpointEditor, endpointRow, triggerRow, openTriggerEditor } from './automation.js';
+import { rulesPanel } from './rules.js';
 import { tipsEnabled, setTipsEnabled, resetTips, seenCount, resetOnboarding, TIPS } from '../tips.js';
 
 // `viewer: true` marks the sections an account without the admin role may
@@ -15,7 +16,7 @@ const TABS = [
   { id: 'general', label: 'General' }, { id: 'appearance', label: 'Appearance', viewer: true },
   { id: 'indicators', label: 'Indicators' }, { id: 'users', label: 'Users & access' },
   { id: 'network', label: 'Network access' }, { id: 'alerts', label: 'Alerts' },
-  { id: 'automation', label: 'Automation' }, { id: 'hardware', label: 'Hardware' },
+  { id: 'automation', label: 'Automation' }, { id: 'rules', label: 'Rules' }, { id: 'hardware', label: 'Hardware' },
   { id: 'mcp', label: 'AI & MCP' }, { id: 'retention', label: 'Retention' }, { id: 'maintenance', label: 'Maintenance' },
   { id: 'backups', label: 'Backups' }, { id: 'database', label: 'Database' }, { id: 'updates', label: 'Updates' }, { id: 'health', label: 'Monitor health', viewer: true },
   { id: 'about', label: 'About', viewer: true },
@@ -76,7 +77,7 @@ export async function mount(root, ctx) {
     replace(panel, skeleton({ lines: 5 }));
     state.panelRefresh = null;
     try {
-      const fn = { general: tabGeneral, appearance: tabAppearance, indicators: tabIndicators, users: tabUsers, network: tabNetwork, alerts: tabAlerts, automation: tabAutomation, hardware: tabHardware, mcp: tabMcp, retention: tabRetention, maintenance: tabMaintenance, backups: tabBackups, database: tabDatabase, updates: tabUpdates, health: tabHealth, about: tabAbout }[state.tab];
+      const fn = { general: tabGeneral, appearance: tabAppearance, indicators: tabIndicators, users: tabUsers, network: tabNetwork, alerts: tabAlerts, automation: tabAutomation, rules: tabRules, hardware: tabHardware, mcp: tabMcp, retention: tabRetention, maintenance: tabMaintenance, backups: tabBackups, database: tabDatabase, updates: tabUpdates, health: tabHealth, about: tabAbout }[state.tab];
       const el = await fn();
       if (state.destroyed) return;
       replace(panel, isAdmin ? el : h('div', { class: 'stack' }, readOnlyNotice(), el));
@@ -513,6 +514,13 @@ export async function mount(root, ctx) {
     await load();
     state.panelRefresh = load;
     return wrap;
+  }
+
+  /* ---------- Rules ---------- */
+  // Notification rules across nodes and checks (#31); the tab itself lives
+  // in views/rules.js beside its editor and rows.
+  async function tabRules() {
+    return rulesPanel({ isDestroyed: () => state.destroyed, onRefresh: (fn) => { state.panelRefresh = fn; } });
   }
 
   /* ---------- Retention ---------- */

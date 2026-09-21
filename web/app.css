@@ -1245,6 +1245,13 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .action-badge.a-git { background: rgba(240, 80, 50, 0.14); color: var(--a-git); }
 .action-badge.a-script { background: rgba(62, 200, 184, 0.14); color: var(--a-script); }
 .action-badge.a-run_node { background: var(--up-soft); color: var(--up); }
+/* Notification rules (Settings › Rules): a condition is three selects and a
+   remove button in one line; each action of the list sits in its own box. */
+.rule-cond-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.4fr) minmax(0, 1fr) auto; gap: 0.5rem; align-items: center; }
+.rule-action { border: 1px solid var(--line); background: var(--elev); padding: 0.625rem 0.75rem; }
+.rule-action-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.5rem; }
+.rule-state { display: inline-flex; flex-wrap: wrap; gap: 0 0.25rem; }
+@media (max-width: 56.25rem) { .rule-cond-row { grid-template-columns: minmax(0, 1fr) auto; } }
 .cond-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .cond-chips label { display: inline-flex; align-items: center; gap: 5px; padding: 3px 0.5rem; border: 1px solid var(--line-strong); background: var(--elev); font-size: 0.75rem; cursor: pointer; font-family: var(--mono); }
 .cond-chips label:has(input:checked) { background: var(--accent-soft); border-color: var(--accent); }

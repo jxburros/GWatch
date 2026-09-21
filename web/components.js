@@ -727,6 +727,8 @@ export const EVENT_META = {
   retention: { label: 'Retention', icon: 'database', cls: 'ev-neutral' },
   note: { label: 'Note', icon: 'note', cls: 'ev-info' },
   trigger_fired: { label: 'Trigger', icon: 'zap', cls: 'ev-info' },
+  rule_fired: { label: 'Rule fired', icon: 'sliders', cls: 'ev-down' },
+  rule_cleared: { label: 'Rule cleared', icon: 'sliders', cls: 'ev-up' },
   endpoint_called: { label: 'Endpoint', icon: 'webhook', cls: 'ev-info' },
   update: { label: 'Update', icon: 'rocket', cls: 'ev-info' },
   auth: { label: 'Sign-in & accounts', icon: 'user', cls: 'ev-info' },

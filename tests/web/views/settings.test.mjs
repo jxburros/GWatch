@@ -13,7 +13,7 @@ test('settings view (admin) lists every tab and opens on General', async (t) => 
   const tabLinks = [...root.querySelectorAll('.settings-nav a')];
   const tabLabels = tabLinks.map((a) => a.textContent);
   assert.deepEqual(tabLabels, [
-    'General', 'Appearance', 'Indicators', 'Users & access', 'Network access', 'Alerts', 'Automation',
+    'General', 'Appearance', 'Indicators', 'Users & access', 'Network access', 'Alerts', 'Automation', 'Rules',
     'Hardware', 'AI & MCP', 'Retention', 'Maintenance', 'Backups', 'Database', 'Updates', 'Monitor health', 'About',
   ]);
   assert.ok(tabLinks.find((a) => a.textContent === 'General').classList.contains('active'));

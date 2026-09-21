@@ -438,6 +438,8 @@
   ev(23 * MIN, 'down', { node: gateway, check: gateway.checks[2], title: 'Admin page is down', detail: 'Connection refused' });
   ev(22 * MIN, 'down', { node: gateway, check: gateway.checks[1], title: 'DNS resolves example.com is down', detail: 'DNS lookup timed out after 5 s' });
   ev(21 * MIN + 30e3, 'alert_sent', { node: gateway, check: gateway.checks[0], title: 'Alert email sent', detail: 'To jeff@example.com, sam@example.com' });
+  ev(3 * DAY + 2 * HOUR + 5 * MIN, 'rule_cleared', { title: 'Rule cleared: Two of three DNS servers down', detail: 'Only 1 of 3 conditions still met (2 needed) — Gateway › DNS resolves example.com is down.' });
+  ev(21 * MIN, 'rule_fired', { title: 'Rule fired: Gateway and Plex both down', detail: '2 of 2 conditions met — Gateway › Ping is down, Plex › Ping is down. Ran pushover.' });
   ev(21 * MIN, 'down', { node: plex, check: plex.checks[0], title: 'Ping is down', detail: 'No reply (4 of 4 packets lost)' });
   ev(21 * MIN, 'affected_by_parent', { node: plex, check: plex.checks[0], title: 'Plex unavailable because Gateway is down', detail: 'Failures on Plex are attributed to the Gateway outage' });
   ev(21 * MIN, 'alert_suppressed', { node: plex, check: plex.checks[0], title: 'Alert suppressed', detail: 'suppressed — Gateway is down', meta: { reason: 'Gateway is down' } });
@@ -1086,6 +1088,31 @@
   on('POST', /^\/api\/triggers$/, (m, body) => { const t = { ...body, id: triggers.length ? Math.max(...triggers.map((x) => x.id)) + 1 : 1, lastRunAt: null, lastStatus: '', lastOutput: '', runCount: 0, createdAt: iso(Date.now()), updatedAt: iso(Date.now()) }; triggers.push(t); addEvent('config_changed', { title: `Trigger saved: ${t.name}` }); return clone(t); });
   on('PUT', /^\/api\/triggers\/(\d+)$/, (m, body) => { const t = triggers.find((x) => x.id === Number(m[1])); if (!t) throw err(404, 'not found'); Object.assign(t, body, { id: t.id, updatedAt: iso(Date.now()) }); return clone(t); });
   on('DELETE', /^\/api\/triggers\/(\d+)$/, (m) => { const i = triggers.findIndex((x) => x.id === Number(m[1])); if (i < 0) throw err(404, 'not found'); triggers.splice(i, 1); return { ok: true }; });
+  // Notification rules (#31): two samples, one met by the Gateway outage.
+  const rules = [
+    { id: 1, name: 'Gateway and Plex both down', enabled: true, join: 'all', atLeast: 0,
+      conditions: [{ kind: 'status', nodeId: gateway.id, status: 'down' }, { kind: 'status', nodeId: plex.id, status: 'down' }],
+      actions: [{ type: 'pushover', token: 'a1b2c3', userKey: 'u1234', title: 'GWatch {{instance}}', message: '', priority: '1', timeoutSeconds: 30 }],
+      cooldownMinutes: 30, notifyCleared: true, createdAt: ago(12 * DAY), updatedAt: ago(2 * DAY),
+      state: { ruleId: 1, met: true, since: ago(21 * MIN), lastFiredAt: ago(21 * MIN) } },
+    { id: 2, name: 'Two of three DNS servers down', enabled: true, join: 'at_least', atLeast: 2,
+      conditions: [{ kind: 'status', checkId: gateway.checks[1].id, status: 'down' }, { kind: 'status', checkId: pihole.checks[1].id, status: 'down' }, { kind: 'status', nodeId: nas.id, status: 'degraded' }],
+      actions: [{ type: 'ntfy', server: '', topic: 'home-dns', title: '', message: '', priority: 'high', timeoutSeconds: 30 }, { type: 'http', method: 'POST', url: 'https://hooks.example.org/dns', body: '{"text":"{{message}}"}', timeoutSeconds: 30 }],
+      cooldownMinutes: 0, notifyCleared: false, createdAt: ago(5 * DAY), updatedAt: ago(5 * DAY),
+      state: { ruleId: 2, met: false, since: ago(3 * DAY), lastFiredAt: ago(3 * DAY + 2 * HOUR) } },
+  ];
+  const checkRule = (body) => {
+    if (!String(body.name || '').trim()) throw err(400, 'a name is required');
+    if (!(body.conditions || []).length) throw err(400, 'add at least one condition');
+    if (body.join === 'at_least' && (body.atLeast < 1 || body.atLeast > body.conditions.length)) throw err(400, `"at least" needs a count between 1 and ${body.conditions.length} (the number of conditions)`);
+    if (!(body.actions || []).length) throw err(400, 'add at least one action');
+  };
+  on('GET', /^\/api\/rules$/, () => clone(rules));
+  on('GET', /^\/api\/rules\/(\d+)$/, (m) => { const r = rules.find((x) => x.id === Number(m[1])); if (!r) throw err(404, 'not found'); return clone(r); });
+  on('POST', /^\/api\/rules$/, (m, body) => { checkRule(body); const r = { ...body, id: rules.length ? Math.max(...rules.map((x) => x.id)) + 1 : 1, createdAt: iso(Date.now()), updatedAt: iso(Date.now()) }; r.state = { ruleId: r.id, met: false, since: null, lastFiredAt: null }; rules.push(r); addEvent('config_changed', { title: `Rule saved: ${r.name}` }); return clone(r); });
+  on('PUT', /^\/api\/rules\/(\d+)$/, (m, body) => { const r = rules.find((x) => x.id === Number(m[1])); if (!r) throw err(404, 'not found'); checkRule(body); Object.assign(r, body, { id: r.id, state: r.state, updatedAt: iso(Date.now()) }); addEvent('config_changed', { title: `Rule saved: ${r.name}` }); return clone(r); });
+  on('DELETE', /^\/api\/rules\/(\d+)$/, (m) => { const i = rules.findIndex((x) => x.id === Number(m[1])); if (i < 0) throw err(404, 'not found'); const [r] = rules.splice(i, 1); addEvent('config_changed', { title: `Rule deleted: ${r.name}` }); return { ok: true }; });
+  on('POST', /^\/api\/rules\/(\d+)\/test$/, (m) => { const r = rules.find((x) => x.id === Number(m[1])); if (!r) throw err(404, 'not found'); return r.actions.map((a) => ({ ok: true, output: `${a.type}: sent (mock)`, startedAt: iso(Date.now()), durationMs: 42 })); });
   on('POST', /^\/api\/triggers\/(\d+)\/run$/, (m) => { const t = triggers.find((x) => x.id === Number(m[1])); if (!t) throw err(404, 'not found'); t.lastRunAt = iso(Date.now()); t.lastStatus = 'ok'; t.runCount++; t.lastOutput = 'mock run'; addEvent('trigger_fired', { nodeId: t.nodeId, nodeName: findNode(t.nodeId)?.name, title: `Trigger ran: ${t.name}`, detail: `${t.action.type} action on manual — mock run` }); return { ok: true, output: 'mock run', startedAt: t.lastRunAt, durationMs: 42 }; });
   on('POST', /^\/api\/actions\/test$/, (m, body) => ({ ok: true, output: `mock: would run a ${body?.action?.type} action`, startedAt: iso(Date.now()), durationMs: 12, statusCode: body?.action?.type === 'http' ? 200 : 0 }));
   on('GET', /^\/api\/endpoints$/, () => clone(endpoints));
