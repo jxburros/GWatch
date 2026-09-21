@@ -1,0 +1,46 @@
+# GWatch with Docker Compose — see docs/DOCKER.md.
+#
+#   docker compose up -d
+#   open http://<this machine>:7230 and create the administrator account
+#
+# Upgrade by pulling a newer image tag and running `docker compose up -d`
+# again; the in-app updater can tell you a release exists but cannot replace
+# a binary inside a read-only image.
+
+services:
+  gwatch:
+    image: ghcr.io/jxburros/gwatch:latest
+    # To build from this checkout instead of pulling the published image,
+    # comment out `image:` above and uncomment the two lines below.
+    # build:
+    #   context: .
+    container_name: gwatch
+    restart: unless-stopped
+    ports:
+      - "7230:7230"
+    volumes:
+      # gwatch.db, gwatch.key, logs/ and backups/ all live here. Back it up as
+      # a unit: the database cannot be read without the key next to it.
+      - gwatch-data:/data
+    # Lets GWatch open a raw ICMP socket for ping checks as a non-root user.
+    # Without it, set Settings › General › Ping to "system" (the image ships
+    # the ping command) or pass the sysctl instead — see docs/DOCKER.md.
+    cap_add:
+      - NET_RAW
+    # environment:
+    #   TZ: Europe/London
+    #
+    # Host networking. Trade-off, so it is off by default:
+    #   + Device discovery sees your real LAN. Under the default bridge
+    #     network the container sits on its own private subnet and a scan
+    #     finds only Docker's, so discovery is only useful with host (or
+    #     macvlan) networking.
+    #   - Anything on this machine that talks to 127.0.0.1:7230 now arrives
+    #     from loopback, and GWatch treats a loopback client as an
+    #     administrator with no credential. Turn on Settings › Users ›
+    #     "Require sign-in on this computer too" if you enable this.
+    #   With host networking `ports:` above is ignored; remove it.
+    # network_mode: host
+
+volumes:
+  gwatch-data:

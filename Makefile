@@ -4,13 +4,19 @@
 VERSION ?= $(shell tr -d ' \t\r\n' < VERSION)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build windows rsrc agent agent-all test test-race cover fmt fmt-check vet tidy-check web-check web-test ci run keygen sign verify-release mcp-build mcp-test mcp-fmt
+.PHONY: build windows docker rsrc agent agent-all test test-race cover fmt fmt-check vet tidy-check web-check web-test ci run keygen sign verify-release mcp-build mcp-test mcp-fmt
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/gwatch .
 
 windows:
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/gwatch.exe .
+
+# The container image, built from the Dockerfile for this machine's platform
+# and tagged with the VERSION file (CI publishes the multi-arch one to
+# ghcr.io/jxburros/gwatch on a release tag — see docs/DOCKER.md).
+docker:
+	docker build --build-arg VERSION=$(VERSION) -t gwatch:$(VERSION) -t gwatch:latest .
 
 # The two Windows setup programs are built by Inno Setup, which only runs on
 # Windows, so there is no make target for them — see scripts/build-installer.ps1

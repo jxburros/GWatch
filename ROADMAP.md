@@ -189,6 +189,17 @@ promise.
 - **Done when**: a non-technical user can install, configure network access, and reach
   the web UI without touching PowerShell or the CLI.
 
+### 4.2 Container image
+- Done: a multi-arch image (`ghcr.io/jxburros/gwatch`, `linux/amd64` and `linux/arm64`)
+  published by the release workflow, with a Compose file and `docs/DOCKER.md` covering
+  what a container changes — the first account has to be created from inside it, ping
+  needs `NET_RAW` or the system ping method, discovery sees Docker's network unless
+  host/macvlan networking is used, and upgrades are a pull rather than the in-app
+  updater.
+- Still open: a first-run flow that doesn't need `docker exec` (a `gwatch user add`
+  command, or a setup screen when no account exists), and an official Home Assistant
+  add-on / Unraid template once the image has had some use.
+
 ---
 
 ## Open decisions (don't resolve casually)

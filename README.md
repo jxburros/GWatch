@@ -64,6 +64,12 @@ a port and whether to allow other devices on your network, then installs and sta
 `GWatch` service. Full walkthrough (including the PowerShell-only path, upgrading and
 uninstalling): [`docs/INSTALL.md`](docs/INSTALL.md).
 
+**Docker** — `docker run -d --name gwatch -p 7230:7230 -v gwatch-data:/data --cap-add NET_RAW ghcr.io/jxburros/gwatch:latest`,
+then open `http://<the docker host>:7230` and create the first administrator account.
+Multi-arch (`linux/amd64`, `linux/arm64`), a `docker-compose.yml` in the repository root,
+and what changes inside a container (ping, discovery, hardware readings, upgrades):
+[`docs/DOCKER.md`](docs/DOCKER.md).
+
 **Linux/macOS** — run it straight from source (Go 1.26+):
 
 ```bash
@@ -79,6 +85,7 @@ Then open <http://127.0.0.1:7230> — monitoring runs only while this process ru
 |---|---|
 | [`docs/API.md`](docs/API.md) | The JSON API: authentication and roles, every endpoint, custom checks, platform notes |
 | [`docs/INSTALL.md`](docs/INSTALL.md) | The Windows installer walkthrough, the PowerShell scripts, upgrading, uninstalling |
+| [`docs/DOCKER.md`](docs/DOCKER.md) | Running GWatch in a container: the first account, the `/data` volume, ping and discovery inside Docker, upgrading by pulling |
 | [`docs/HARDWARE.md`](docs/HARDWARE.md) | Hardware health, the agent, its trust model, and what each platform can measure |
 | [`docs/SNMP.md`](docs/SNMP.md) | SNMP checks: enabling SNMP on a router or switch, choosing OIDs, interface traffic in bits per second |
 | [`docs/RECIPES.md`](docs/RECIPES.md) | Ready-made trigger/endpoint recipes: Home Assistant, Slack/Discord, ntfy/Pushover, Docker, git |

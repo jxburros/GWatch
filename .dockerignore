@@ -1,0 +1,28 @@
+# What the Docker build context leaves out. The image needs the Go sources,
+# go.mod/go.sum, VERSION, LICENSE and every directory that main.go embeds
+# (web/ today, plus anything added later) — so this list names what to drop
+# rather than what to keep, and a new embedded directory needs no change here.
+.git
+.github
+.claude
+dist/
+data/
+node_modules/
+tests/
+docs/
+scripts/
+*.syso
+*.db
+*.db-wal
+*.db-shm
+*.gwbackup
+*.log
+gwatch.key
+release.key
+coverage.out
+coverage.txt
+package.json
+package-lock.json
+Dockerfile
+docker-compose.yml
+.dockerignore

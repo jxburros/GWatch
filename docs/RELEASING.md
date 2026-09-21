@@ -32,13 +32,15 @@ request as three jobs:
 | `ci` ("Lint, build, test (Windows)") | `windows-latest` | gofmt, vet, `go mod tidy`/`verify`, build + full test suite, the mcp/ module, web-asset `node --check`, PowerShell script parsing, and compiles both Inno Setup installers |
 | `linux` ("Test (Linux)") | `ubuntu-latest` | gofmt, vet, build, full test suite (root and mcp/), a `-race` pass over `internal/engine`, `internal/api`, `internal/store` and `internal/hostmon`, and `govulncheck` for both modules |
 | `macos` ("Test (macOS)") | `macos-latest` | vet + test only — deliberately lean, but this is what actually compiles and exercises `internal/sysmetrics/collect_darwin.go` |
+| `docker` ("Container image") | `ubuntu-latest` | builds the `Dockerfile` for `linux/amd64`, checks `gwatch version` inside it, then starts the container and waits for `/api/health` to answer 200 |
 
 Windows is the only one that builds an installer or touches PowerShell, since that is the
 only platform GWatch installs itself onto as a service; Linux and macOS exist to catch a
 platform-specific regression (a build tag, a syscall, a platform-tagged file the Windows
-job never compiles) before it reaches a tag push. `release` needs all three.
+job never compiles) before it reaches a tag push. `release` needs the first three.
 
-Pushing a tag such as `v0.1.0` additionally runs the `release` job (below), and pushing
+Pushing a tag such as `v0.1.0` additionally runs the `release` job (below) and the
+`docker-publish` job (["The container image"](#the-container-image)), and pushing
 `mcp/v0.1.0` runs `mcp-tag`, a guard job — see
 ["Releasing the MCP companion"](#releasing-the-mcp-companion).
 
@@ -64,6 +66,7 @@ Pushing a tag such as `v0.1.0` additionally runs the `release` job (below), and 
 | `scripts/installer/` | The two Inno Setup scripts, their shared branding and the wizard artwork |
 | `cmd/gwatch-rsrc/` | Builds the `.syso` resource objects that put the GWatch icon inside the Windows executables (`make rsrc`) |
 | `mcp/` | The MCP companion, a separate Go module — see [`mcp/README.md`](../mcp/README.md) |
+| `Dockerfile`, `.dockerignore`, `docker-compose.yml` | The container image (`make docker`) and a ready-to-run Compose file — see [`DOCKER.md`](DOCKER.md) |
 
 ## One-time setup
 
@@ -211,6 +214,24 @@ to build them locally. Three things to keep in mind:
 The wizard artwork under `scripts/installer/assets/` is committed, not generated at
 release time, so a release needs no image tooling on the runner. If the mark ever
 changes, `web/logo.svg` and those assets have to be updated together.
+
+## The container image
+
+The same `v*` tag also runs `docker-publish`, which builds the `Dockerfile` for
+`linux/amd64` and `linux/arm64` and pushes the result to GitHub's registry as
+`ghcr.io/jxburros/gwatch`, tagged `X.Y.Z`, `X.Y` and `latest`. It runs beside `release`
+rather than inside it — a separate runner (Linux, with buildx and QEMU), a separate
+permission (`packages: write`, granted to that job only) and the same tag-matches-VERSION
+guard, so a mismatch stops both. Nothing else needs setting up: it authenticates with
+the workflow's own `GITHUB_TOKEN`, and the first push creates the package. After that
+first push, make the package public in the repository's Packages settings, or a
+`docker pull` without a login fails.
+
+The image is not in the signed self-update chain either. The binary inside it carries
+the version from the tag like every other artefact, but the in-app updater cannot
+replace an executable in a read-only image directory and says so; container users
+upgrade by pulling ([`DOCKER.md`](DOCKER.md#upgrading)). The image's own integrity
+comes from the registry's digest, not from a `.sig`.
 
 ## Releasing the MCP companion
 

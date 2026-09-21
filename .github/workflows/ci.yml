@@ -271,6 +271,52 @@ jobs:
           go vet ./...
           go test -count=1 ./...
 
+  # The container image (docs/DOCKER.md). Build-only on every push and PR,
+  # for this runner's platform, then two checks that catch what a successful
+  # build alone cannot: that the binary in the image runs and carries the
+  # version it was given, and that a fresh container with an empty /data
+  # actually comes up and answers /api/health — which exercises the non-root
+  # user, the volume's ownership, the GWATCH_* defaults and the HEALTHCHECK's
+  # assumptions. Publishing is docker-publish, further down.
+  docker:
+    name: Container image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          docker build --build-arg VERSION="ci-${GITHUB_SHA::7}" -t gwatch:ci .
+          docker image inspect gwatch:ci --format 'size {{.Size}} bytes, user {{.Config.User}}, labels {{json .Config.Labels}}'
+      - name: gwatch version
+        run: |
+          out="$(docker run --rm gwatch:ci version)"
+          echo "$out"
+          case "$out" in
+            "gwatch ci-${GITHUB_SHA::7} ("*) ;;
+            *) echo "::error::expected 'gwatch ci-${GITHUB_SHA::7} (...)', got '$out'"; exit 1 ;;
+          esac
+      # /data as a tmpfs owned by the image's user, so this is the same first
+      # start a real volume gets — nothing on the runner's disk to clean up.
+      - name: Starts and answers /api/health
+        run: |
+          docker run -d --name gwatch-smoke -p 127.0.0.1:7230:7230 \
+            --tmpfs /data:rw,uid=7230,gid=7230 gwatch:ci
+          code=0
+          for i in $(seq 1 30); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:7230/api/health || true)"
+            [ "$code" = "200" ] && break
+            sleep 1
+          done
+          echo "--- container log ---"; docker logs gwatch-smoke; echo "---------------------"
+          if [ "$code" != "200" ]; then
+            echo "::error::/api/health answered '$code' after 30s"
+            docker rm -f gwatch-smoke
+            exit 1
+          fi
+          curl -s http://127.0.0.1:7230/api/health; echo
+          docker stop gwatch-smoke
+          docker rm gwatch-smoke
+
   # Tagging v1.2.3 publishes a GitHub release with the binaries the in-app
   # updater (Settings › Updates) looks for: gwatch-<os>-<arch>[.exe] plus a
   # .sha256 checksum and an ed25519 .sig signature next to each. The updater
@@ -415,6 +461,65 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+
+  # The same v* tag also publishes the container image to GitHub's registry
+  # (docs/DOCKER.md, docs/RELEASING.md#the-container-image). Separate from
+  # `release` because it needs a Linux runner with buildx and QEMU for the
+  # arm64 half, and because `packages: write` should belong to the one job
+  # that pushes to the registry. It repeats the tag-matches-VERSION guard so
+  # an image can never carry a version its tag disagrees with.
+  docker-publish:
+    name: Publish container image
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [ci, linux, macos, docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # Lower-case on purpose: the repository is jxburros/GWatch, and registry
+      # names must be lower-case, so github.repository cannot be used as-is.
+      IMAGE: ghcr.io/jxburros/gwatch
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches VERSION
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          file="$(tr -d ' \t\r\n' < VERSION)"
+          if [ "$tag" != "$file" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match the VERSION file (${file}). Update VERSION, commit, and re-tag."
+            exit 1
+          fi
+          echo "publishing ${IMAGE}:${file}"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # v1.2.3 becomes the tags 1.2.3, 1.2 and latest. metadata-action strips
+      # the leading v itself; the OCI labels it adds sit beside the ones the
+      # Dockerfile sets.
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   # A `mcp/v1.2.3` tag exists only so `go install .../mcp/cmd/gwatch-mcp@latest`
   # resolves — Go's nested-module resolution needs a tag prefixed with the

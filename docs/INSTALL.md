@@ -8,7 +8,8 @@
 This is a plain-language walkthrough for installing GWatch with the setup program — no
 PowerShell or command line needed. If you're comfortable with PowerShell, or need to
 automate the install, see [Advanced: the PowerShell scripts](#advanced-the-powershell-scripts)
-below instead.
+below instead. Not on Windows? On a Linux server, a NAS or a Raspberry Pi the
+container image is the easy path — see [`DOCKER.md`](DOCKER.md).
 
 ## 1. Download the setup program
 
