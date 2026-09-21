@@ -110,7 +110,7 @@ func (s *Store) CreateAgent(ctx context.Context, name string, nodeID *int64, pre
 	if tokenHash == "" {
 		return model.Agent{}, errors.New("a token is required")
 	}
-	res, err := s.Exec(ctx, `INSERT INTO agents(name, node_id, token_hash, prefix, enabled, created_by, created_at)
+	id, err := s.insertID(ctx, `INSERT INTO agents(name, node_id, token_hash, prefix, enabled, created_by, created_at)
 		VALUES (?,?,?,?,1,?,?)`, name, nodeID, tokenHash, prefix, createdBy, fmtTime(time.Now()))
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -118,13 +118,12 @@ func (s *Store) CreateAgent(ctx context.Context, name string, nodeID *int64, pre
 		}
 		return model.Agent{}, err
 	}
-	id, _ := res.LastInsertId()
 	return s.GetAgent(ctx, id)
 }
 
 // GetAgent returns one registered machine.
 func (s *Store) GetAgent(ctx context.Context, id int64) (model.Agent, error) {
-	row := s.reader.QueryRowContext(ctx, `SELECT `+agentCols+` FROM agents WHERE id = ?`, id)
+	row := s.queryRow(ctx, `SELECT `+agentCols+` FROM agents WHERE id = ?`, id)
 	a, err := scanAgent(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Agent{}, ErrNotFound
@@ -134,7 +133,7 @@ func (s *Store) GetAgent(ctx context.Context, id int64) (model.Agent, error) {
 
 // ListAgents returns every registered machine, newest first.
 func (s *Store) ListAgents(ctx context.Context) ([]model.Agent, error) {
-	rows, err := s.reader.QueryContext(ctx, `SELECT `+agentCols+` FROM agents ORDER BY id DESC`)
+	rows, err := s.query(ctx, `SELECT `+agentCols+` FROM agents ORDER BY id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +153,7 @@ func (s *Store) ListAgents(ctx context.Context) ([]model.Agent, error) {
 // reported as not found, so a stolen token stops working the moment it is
 // revoked rather than at the next restart.
 func (s *Store) AgentByTokenHash(ctx context.Context, tokenHash string) (model.Agent, error) {
-	row := s.reader.QueryRowContext(ctx,
+	row := s.queryRow(ctx,
 		`SELECT `+agentCols+` FROM agents WHERE token_hash = ? AND revoked_at IS NULL AND enabled = 1`, tokenHash)
 	a, err := scanAgent(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -171,7 +170,7 @@ func (s *Store) UpdateAgent(ctx context.Context, id int64, name string, nodeID *
 	if name == "" {
 		return model.Agent{}, errors.New("a name is required")
 	}
-	res, err := s.Exec(ctx, `UPDATE agents SET name = ?, node_id = ?, enabled = ? WHERE id = ?`,
+	res, err := s.exec(ctx, `UPDATE agents SET name = ?, node_id = ?, enabled = ? WHERE id = ?`,
 		name, nodeID, enabled, id)
 	if err != nil {
 		return model.Agent{}, err
@@ -185,7 +184,7 @@ func (s *Store) UpdateAgent(ctx context.Context, id int64, name string, nodeID *
 // RevokeAgent stops accepting readings from a machine. The row is kept so the
 // audit trail still explains where past readings came from.
 func (s *Store) RevokeAgent(ctx context.Context, id int64) error {
-	res, err := s.Exec(ctx, `UPDATE agents SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`,
+	res, err := s.exec(ctx, `UPDATE agents SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`,
 		fmtTime(time.Now()), id)
 	if err != nil {
 		return err
@@ -203,11 +202,11 @@ func (s *Store) RevokeAgent(ctx context.Context, id int64) error {
 // DeleteAgent removes a machine and every reading it ever sent.
 func (s *Store) DeleteAgent(ctx context.Context, id int64) error {
 	key := model.AgentHostKey(id)
-	return s.WriteTx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM host_samples WHERE host_key = ?`, key); err != nil {
+	return s.writeTx(ctx, func(tx *wtx) error {
+		if _, err := tx.exec(ctx, `DELETE FROM host_samples WHERE host_key = ?`, key); err != nil {
 			return err
 		}
-		res, err := tx.ExecContext(ctx, `DELETE FROM agents WHERE id = ?`, id)
+		res, err := tx.exec(ctx, `DELETE FROM agents WHERE id = ?`, id)
 		if err != nil {
 			return err
 		}
@@ -222,7 +221,7 @@ func (s *Store) DeleteAgent(ctx context.Context, id int64) error {
 // is. The identity columns come from the agent's own reading, so they describe
 // the machine holding the token rather than anything GWatch went and looked up.
 func (s *Store) TouchAgent(ctx context.Context, id int64, addr, version, hostname, os, arch string) error {
-	_, err := s.Exec(ctx, `UPDATE agents SET last_seen_at = ?, last_addr = ?, last_version = ?,
+	_, err := s.exec(ctx, `UPDATE agents SET last_seen_at = ?, last_addr = ?, last_version = ?,
 		hostname = ?, os = ?, arch = ? WHERE id = ?`,
 		fmtTime(time.Now()), addr, version, hostname, os, arch, id)
 	return err
@@ -233,7 +232,7 @@ func (s *Store) TouchAgent(ctx context.Context, id int64, addr, version, hostnam
 // TouchAgent it deliberately leaves last_seen_at alone: being enrolled is not
 // the same as having reported in, and the Hardware page draws that distinction.
 func (s *Store) SetAgentIdentity(ctx context.Context, id int64, hostname, os, arch string) error {
-	_, err := s.Exec(ctx, `UPDATE agents SET hostname = ?, os = ?, arch = ? WHERE id = ?`,
+	_, err := s.exec(ctx, `UPDATE agents SET hostname = ?, os = ?, arch = ? WHERE id = ?`,
 		hostname, os, arch, id)
 	return err
 }
@@ -293,7 +292,7 @@ func (s *Store) CreatePairingCode(ctx context.Context, name string, nodeID *int6
 	if codeHash == "" {
 		return model.PairingCode{}, errors.New("a code is required")
 	}
-	res, err := s.Exec(ctx, `INSERT INTO agent_pairings(name, node_id, code_hash, created_by, created_at, expires_at)
+	id, err := s.insertID(ctx, `INSERT INTO agent_pairings(name, node_id, code_hash, created_by, created_at, expires_at)
 		VALUES (?,?,?,?,?,?)`, name, nodeID, codeHash, createdBy, fmtTime(time.Now()), fmtTime(expiresAt))
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -301,13 +300,12 @@ func (s *Store) CreatePairingCode(ctx context.Context, name string, nodeID *int6
 		}
 		return model.PairingCode{}, err
 	}
-	id, _ := res.LastInsertId()
 	return s.GetPairingCode(ctx, id)
 }
 
 // GetPairingCode returns one invitation.
 func (s *Store) GetPairingCode(ctx context.Context, id int64) (model.PairingCode, error) {
-	row := s.reader.QueryRowContext(ctx, `SELECT `+pairingCols+` FROM agent_pairings WHERE id = ?`, id)
+	row := s.queryRow(ctx, `SELECT `+pairingCols+` FROM agent_pairings WHERE id = ?`, id)
 	p, err := scanPairing(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.PairingCode{}, ErrNotFound
@@ -323,7 +321,7 @@ func (s *Store) ListPairingCodes(ctx context.Context, limit int) ([]model.Pairin
 	if limit <= 0 || limit > 500 {
 		limit = 50
 	}
-	rows, err := s.reader.QueryContext(ctx,
+	rows, err := s.query(ctx,
 		`SELECT `+pairingCols+` FROM agent_pairings ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -363,8 +361,8 @@ func (s *Store) ListPairingCodes(ctx context.Context, limit int) ([]model.Pairin
 func (s *Store) RedeemPairingCode(ctx context.Context, codeHash string, now time.Time, addr string) (model.PairingCode, string, error) {
 	var out model.PairingCode
 	var stored string
-	err := s.WriteTx(ctx, func(tx *sql.Tx) error {
-		row := tx.QueryRowContext(ctx, `SELECT `+pairingCols+`, code_hash FROM agent_pairings WHERE code_hash = ?`, codeHash)
+	err := s.writeTx(ctx, func(tx *wtx) error {
+		row := tx.queryRow(ctx, `SELECT `+pairingCols+`, code_hash FROM agent_pairings WHERE code_hash = ?`, codeHash)
 		p, hash, err := scanPairingWithHash(row)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
@@ -379,7 +377,7 @@ func (s *Store) RedeemPairingCode(ctx context.Context, codeHash string, now time
 		// The guard on redeemed_at is belt and braces: the transaction above
 		// already serialises the race, and this makes the statement itself
 		// refuse to claim a code twice however it is reached.
-		res, err := tx.ExecContext(ctx,
+		res, err := tx.exec(ctx,
 			`UPDATE agent_pairings SET redeemed_at = ?, redeemed_addr = ? WHERE id = ? AND redeemed_at IS NULL`,
 			fmtTime(now), addr, p.ID)
 		if err != nil {
@@ -404,7 +402,7 @@ func (s *Store) RedeemPairingCode(ctx context.Context, codeHash string, now time
 // a separate step because the agent does not exist until the code has been
 // claimed, and claiming it is what must not be allowed to happen twice.
 func (s *Store) AttachPairingAgent(ctx context.Context, id, agentID int64) error {
-	_, err := s.Exec(ctx, `UPDATE agent_pairings SET agent_id = ? WHERE id = ?`, agentID, id)
+	_, err := s.exec(ctx, `UPDATE agent_pairings SET agent_id = ? WHERE id = ?`, agentID, id)
 	return err
 }
 
@@ -412,7 +410,7 @@ func (s *Store) AttachPairingAgent(ctx context.Context, id, agentID int64) error
 // was already redeemed, cancelled or expired is left exactly as it is, so
 // cancelling cannot rewrite the record of an enrolment that already happened.
 func (s *Store) RevokePairingCode(ctx context.Context, id int64) error {
-	res, err := s.Exec(ctx,
+	res, err := s.exec(ctx,
 		`UPDATE agent_pairings SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL AND redeemed_at IS NULL`,
 		fmtTime(time.Now()), id)
 	if err != nil {
@@ -443,7 +441,7 @@ func (s *Store) SaveHostSample(ctx context.Context, sample model.HostSample) err
 	if err != nil {
 		return fmt.Errorf("encode metrics: %w", err)
 	}
-	_, err = s.Exec(ctx, `INSERT INTO host_samples
+	_, err = s.exec(ctx, `INSERT INTO host_samples
 		(host_key, ts, cpu_pct, mem_pct, swap_pct, disk_pct, load_per_core, net_rx_bps, net_tx_bps, disk_read_bps, disk_write_bps, metrics)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(host_key, ts) DO UPDATE SET
@@ -461,7 +459,7 @@ func (s *Store) SaveHostSample(ctx context.Context, sample model.HostSample) err
 
 // LatestHostSample returns the newest reading for a machine.
 func (s *Store) LatestHostSample(ctx context.Context, key string) (model.HostSample, error) {
-	row := s.reader.QueryRowContext(ctx, `SELECT `+hostSampleCols+`
+	row := s.queryRow(ctx, `SELECT `+hostSampleCols+`
 		FROM host_samples WHERE host_key = ? ORDER BY ts DESC LIMIT 1`, key)
 	sample, err := scanHostSample(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -474,7 +472,7 @@ func (s *Store) LatestHostSample(ctx context.Context, key string) (model.HostSam
 // keyed by host key. It is one query rather than one per machine so the
 // hardware list stays a single round trip however many agents there are.
 func (s *Store) LatestHostSamples(ctx context.Context) (map[string]model.HostSample, error) {
-	rows, err := s.reader.QueryContext(ctx, `SELECT `+hostSampleCols+` FROM host_samples
+	rows, err := s.query(ctx, `SELECT `+hostSampleCols+` FROM host_samples
 		WHERE (host_key, ts) IN (SELECT host_key, MAX(ts) FROM host_samples GROUP BY host_key)`)
 	if err != nil {
 		return nil, err
@@ -498,7 +496,7 @@ func (s *Store) HostSamples(ctx context.Context, key string, from, to time.Time,
 	if limit <= 0 || limit > 20000 {
 		limit = 20000
 	}
-	rows, err := s.reader.QueryContext(ctx, `SELECT host_key, ts, cpu_pct, mem_pct, swap_pct, disk_pct,
+	rows, err := s.query(ctx, `SELECT host_key, ts, cpu_pct, mem_pct, swap_pct, disk_pct,
 		load_per_core, net_rx_bps, net_tx_bps, disk_read_bps, disk_write_bps
 		FROM host_samples WHERE host_key = ? AND ts >= ? AND ts <= ? ORDER BY ts LIMIT ?`,
 		key, from.UnixMilli(), to.UnixMilli(), limit)
@@ -526,7 +524,7 @@ func (s *Store) HostSamples(ctx context.Context, key string, from, to time.Time,
 // includes keys whose agent has since been deleted, which is how the retention
 // sweep finds readings to clear out.
 func (s *Store) HostKeys(ctx context.Context) ([]string, error) {
-	rows, err := s.reader.QueryContext(ctx, `SELECT DISTINCT host_key FROM host_samples ORDER BY host_key`)
+	rows, err := s.query(ctx, `SELECT DISTINCT host_key FROM host_samples ORDER BY host_key`)
 	if err != nil {
 		return nil, err
 	}
@@ -545,7 +543,7 @@ func (s *Store) HostKeys(ctx context.Context) ([]string, error) {
 // PruneHostSamples deletes readings older than cutoff and reports how many
 // rows went.
 func (s *Store) PruneHostSamples(ctx context.Context, cutoff time.Time) (int64, error) {
-	res, err := s.Exec(ctx, `DELETE FROM host_samples WHERE ts < ?`, cutoff.UnixMilli())
+	res, err := s.exec(ctx, `DELETE FROM host_samples WHERE ts < ?`, cutoff.UnixMilli())
 	if err != nil {
 		return 0, err
 	}
@@ -555,7 +553,7 @@ func (s *Store) PruneHostSamples(ctx context.Context, cutoff time.Time) (int64, 
 
 // DeleteHostSamples removes every reading for one machine.
 func (s *Store) DeleteHostSamples(ctx context.Context, key string) error {
-	_, err := s.Exec(ctx, `DELETE FROM host_samples WHERE host_key = ?`, key)
+	_, err := s.exec(ctx, `DELETE FROM host_samples WHERE host_key = ?`, key)
 	return err
 }
 

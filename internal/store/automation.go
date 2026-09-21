@@ -87,7 +87,7 @@ func (s *Store) ListTriggers(ctx context.Context, nodeID *int64) ([]model.Trigge
 		args = append(args, *nodeID)
 	}
 	q += " ORDER BY node_id, id"
-	rows, err := s.reader.QueryContext(ctx, q, args...)
+	rows, err := s.query(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +105,7 @@ func (s *Store) ListTriggers(ctx context.Context, nodeID *int64) ([]model.Trigge
 
 // GetTrigger returns one trigger.
 func (s *Store) GetTrigger(ctx context.Context, id int64) (model.Trigger, error) {
-	row := s.reader.QueryRowContext(ctx, "SELECT "+triggerCols+" FROM triggers WHERE id = ?", id)
+	row := s.queryRow(ctx, "SELECT "+triggerCols+" FROM triggers WHERE id = ?", id)
 	t, err := scanTrigger(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return t, ErrNotFound
@@ -123,15 +123,15 @@ func (s *Store) SaveTrigger(ctx context.Context, t model.Trigger) (model.Trigger
 	t.UpdatedAt = now
 	if t.ID == 0 {
 		t.CreatedAt = now
-		res, err := s.Exec(ctx, `INSERT INTO triggers(node_id, name, description, enabled, conditions, check_id, latency_over_ms, metric, metric_over, action, cooldown_minutes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		newID, err := s.insertID(ctx, `INSERT INTO triggers(node_id, name, description, enabled, conditions, check_id, latency_over_ms, metric, metric_over, action, cooldown_minutes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			t.NodeID, t.Name, t.Description, boolInt(t.Enabled), jsonString(t.On), nullInt64(t.CheckID), t.LatencyOverMS, t.Metric, t.MetricOver, jsonString(t.Action), t.CooldownMinutes, fmtTime(now), fmtTime(now))
 		if err != nil {
 			return t, err
 		}
-		t.ID, _ = res.LastInsertId()
+		t.ID = newID
 		return t, nil
 	}
-	res, err := s.Exec(ctx, `UPDATE triggers SET node_id=?, name=?, description=?, enabled=?, conditions=?, check_id=?, latency_over_ms=?, metric=?, metric_over=?, action=?, cooldown_minutes=?, updated_at=? WHERE id=?`,
+	res, err := s.exec(ctx, `UPDATE triggers SET node_id=?, name=?, description=?, enabled=?, conditions=?, check_id=?, latency_over_ms=?, metric=?, metric_over=?, action=?, cooldown_minutes=?, updated_at=? WHERE id=?`,
 		t.NodeID, t.Name, t.Description, boolInt(t.Enabled), jsonString(t.On), nullInt64(t.CheckID), t.LatencyOverMS, t.Metric, t.MetricOver, jsonString(t.Action), t.CooldownMinutes, fmtTime(now), t.ID)
 	if err != nil {
 		return t, err
@@ -148,13 +148,13 @@ func (s *Store) RecordTriggerRun(ctx context.Context, id int64, at time.Time, ok
 	if ok {
 		status = "ok"
 	}
-	_, err := s.Exec(ctx, `UPDATE triggers SET last_run_at=?, last_status=?, last_output=?, run_count=run_count+1 WHERE id=?`, fmtTime(at), status, clip(output, 4000), id)
+	_, err := s.exec(ctx, `UPDATE triggers SET last_run_at=?, last_status=?, last_output=?, run_count=run_count+1 WHERE id=?`, fmtTime(at), status, clip(output, 4000), id)
 	return err
 }
 
 // DeleteTrigger removes a trigger.
 func (s *Store) DeleteTrigger(ctx context.Context, id int64) error {
-	res, err := s.Exec(ctx, "DELETE FROM triggers WHERE id = ?", id)
+	res, err := s.exec(ctx, "DELETE FROM triggers WHERE id = ?", id)
 	if err != nil {
 		return err
 	}
@@ -186,7 +186,7 @@ func scanEndpoint(sc interface{ Scan(...any) error }) (model.Endpoint, error) {
 
 // ListEndpoints returns every custom endpoint.
 func (s *Store) ListEndpoints(ctx context.Context) ([]model.Endpoint, error) {
-	rows, err := s.reader.QueryContext(ctx, "SELECT "+endpointCols+" FROM endpoints ORDER BY name COLLATE NOCASE, id")
+	rows, err := s.query(ctx, "SELECT "+endpointCols+" FROM endpoints ORDER BY name COLLATE NOCASE, id")
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +204,7 @@ func (s *Store) ListEndpoints(ctx context.Context) ([]model.Endpoint, error) {
 
 // GetEndpoint returns one endpoint by id.
 func (s *Store) GetEndpoint(ctx context.Context, id int64) (model.Endpoint, error) {
-	row := s.reader.QueryRowContext(ctx, "SELECT "+endpointCols+" FROM endpoints WHERE id = ?", id)
+	row := s.queryRow(ctx, "SELECT "+endpointCols+" FROM endpoints WHERE id = ?", id)
 	e, err := scanEndpoint(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return e, ErrNotFound
@@ -214,7 +214,7 @@ func (s *Store) GetEndpoint(ctx context.Context, id int64) (model.Endpoint, erro
 
 // GetEndpointBySlug returns one endpoint by its URL slug.
 func (s *Store) GetEndpointBySlug(ctx context.Context, slug string) (model.Endpoint, error) {
-	row := s.reader.QueryRowContext(ctx, "SELECT "+endpointCols+" FROM endpoints WHERE slug = ?", slug)
+	row := s.queryRow(ctx, "SELECT "+endpointCols+" FROM endpoints WHERE slug = ?", slug)
 	e, err := scanEndpoint(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return e, ErrNotFound
@@ -228,7 +228,7 @@ func (s *Store) SaveEndpoint(ctx context.Context, e model.Endpoint) (model.Endpo
 	e.UpdatedAt = now
 	if e.ID == 0 {
 		e.CreatedAt = now
-		res, err := s.Exec(ctx, `INSERT INTO endpoints(name, slug, description, enabled, method, token, allow_no_token, action, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		newID, err := s.insertID(ctx, `INSERT INTO endpoints(name, slug, description, enabled, method, token, allow_no_token, action, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 			e.Name, e.Slug, e.Description, boolInt(e.Enabled), e.Method, e.Token, boolInt(e.AllowNoToken), jsonString(e.Action), fmtTime(now), fmtTime(now))
 		if err != nil {
 			if strings.Contains(err.Error(), "UNIQUE") {
@@ -236,10 +236,10 @@ func (s *Store) SaveEndpoint(ctx context.Context, e model.Endpoint) (model.Endpo
 			}
 			return e, err
 		}
-		e.ID, _ = res.LastInsertId()
+		e.ID = newID
 		return e, nil
 	}
-	res, err := s.Exec(ctx, `UPDATE endpoints SET name=?, slug=?, description=?, enabled=?, method=?, token=?, allow_no_token=?, action=?, updated_at=? WHERE id=?`,
+	res, err := s.exec(ctx, `UPDATE endpoints SET name=?, slug=?, description=?, enabled=?, method=?, token=?, allow_no_token=?, action=?, updated_at=? WHERE id=?`,
 		e.Name, e.Slug, e.Description, boolInt(e.Enabled), e.Method, e.Token, boolInt(e.AllowNoToken), jsonString(e.Action), fmtTime(now), e.ID)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
@@ -259,13 +259,13 @@ func (s *Store) RecordEndpointCall(ctx context.Context, id int64, at time.Time, 
 	if ok {
 		status = "ok"
 	}
-	_, err := s.Exec(ctx, `UPDATE endpoints SET last_called_at=?, last_status=?, last_output=?, call_count=call_count+1 WHERE id=?`, fmtTime(at), status, clip(output, 4000), id)
+	_, err := s.exec(ctx, `UPDATE endpoints SET last_called_at=?, last_status=?, last_output=?, call_count=call_count+1 WHERE id=?`, fmtTime(at), status, clip(output, 4000), id)
 	return err
 }
 
 // DeleteEndpoint removes an endpoint.
 func (s *Store) DeleteEndpoint(ctx context.Context, id int64) error {
-	res, err := s.Exec(ctx, "DELETE FROM endpoints WHERE id = ?", id)
+	res, err := s.exec(ctx, "DELETE FROM endpoints WHERE id = ?", id)
 	if err != nil {
 		return err
 	}

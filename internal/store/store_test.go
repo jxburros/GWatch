@@ -225,7 +225,7 @@ func TestEventsSettingsDashboardsMaintenance(t *testing.T) {
 func rawSettingsRow(t *testing.T, s *Store) string {
 	t.Helper()
 	var raw string
-	if err := s.Reader().QueryRow("SELECT value FROM settings WHERE key = 'settings'").Scan(&raw); err != nil {
+	if err := s.queryRow(context.Background(), "SELECT value FROM settings WHERE key = 'settings'").Scan(&raw); err != nil {
 		t.Fatalf("read raw settings: %v", err)
 	}
 	return raw
@@ -415,7 +415,7 @@ func TestOldDatabaseMigratesAndBacksUp(t *testing.T) {
 
 	// The data migration's observable effect: check 1 now has a state row.
 	var status string
-	if err := s.Reader().QueryRowContext(ctx, "SELECT status FROM check_state WHERE check_id = 1").Scan(&status); err != nil {
+	if err := s.queryRow(ctx, "SELECT status FROM check_state WHERE check_id = 1").Scan(&status); err != nil {
 		t.Fatalf("backfilled check_state row missing: %v", err)
 	}
 	if status != "unknown" {
@@ -484,7 +484,7 @@ func TestNodeGroupsRoundTripAndCount(t *testing.T) {
 		t.Fatalf("groups did not survive the round trip: %+v", got)
 	}
 	var groupName string
-	if err := s.Reader().QueryRowContext(ctx, "SELECT group_name FROM nodes WHERE id = ?", n.ID).Scan(&groupName); err != nil {
+	if err := s.queryRow(ctx, "SELECT group_name FROM nodes WHERE id = ?", n.ID).Scan(&groupName); err != nil {
 		t.Fatalf("read group_name: %v", err)
 	}
 	if groupName != "Servers" {
@@ -560,7 +560,7 @@ func TestOpenRefusesNewerSchemaVersion(t *testing.T) {
 	}
 	ctx := context.Background()
 	future := currentSchemaVersion + 1
-	if _, err := s.Exec(ctx, "UPDATE schema_version SET version = ?", future); err != nil {
+	if _, err := s.exec(ctx, "UPDATE schema_version SET version = ?", future); err != nil {
 		t.Fatalf("bump version: %v", err)
 	}
 	if err := s.Checkpoint(ctx); err != nil {
@@ -660,7 +660,7 @@ func TestResultSpreadFieldsRoundTrip(t *testing.T) {
 func rawCheckConfig(t *testing.T, s *Store, checkID int64) string {
 	t.Helper()
 	var raw string
-	if err := s.Reader().QueryRow("SELECT config FROM checks WHERE id = ?", checkID).Scan(&raw); err != nil {
+	if err := s.queryRow(context.Background(), "SELECT config FROM checks WHERE id = ?", checkID).Scan(&raw); err != nil {
 		t.Fatalf("read raw check config: %v", err)
 	}
 	return raw
@@ -732,7 +732,7 @@ func TestPlaintextCheckSecretsMigratedOnOpen(t *testing.T) {
 	id := n.Checks[0].ID
 	// Write the row the way a build from before check secrets were sealed
 	// would have written it.
-	if _, err := s.Exec(ctx, "UPDATE checks SET config = ? WHERE id = ?", `{"metricsToken":"legacy-token"}`, id); err != nil {
+	if _, err := s.exec(ctx, "UPDATE checks SET config = ? WHERE id = ?", `{"metricsToken":"legacy-token"}`, id); err != nil {
 		t.Fatalf("plant plaintext: %v", err)
 	}
 	s.Close()

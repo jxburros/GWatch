@@ -150,31 +150,6 @@ func (s *Store) Vacuum(ctx context.Context) error {
 	return err
 }
 
-// WriteTx runs fn inside a serialised write transaction.
-func (s *Store) WriteTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
-	s.wmu.Lock()
-	defer s.wmu.Unlock()
-	tx, err := s.writer.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	if err := fn(tx); err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	return tx.Commit()
-}
-
-// Exec runs a single write statement.
-func (s *Store) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	s.wmu.Lock()
-	defer s.wmu.Unlock()
-	return s.writer.ExecContext(ctx, query, args...)
-}
-
-// Reader exposes the read pool for ad-hoc queries.
-func (s *Store) Reader() *sql.DB { return s.reader }
-
 const schema = `
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
 
@@ -414,7 +389,7 @@ const currentSchemaVersion = 3
 type migration struct {
 	version int
 	name    string
-	run     func(ctx context.Context, tx *sql.Tx) error
+	run     func(ctx context.Context, tx *wtx) error
 }
 
 // migrations must stay sorted by version, ascending, with no gaps from 2 up
@@ -440,8 +415,8 @@ var migrations = []migration{
 // joins on it misbehave. This also serves as the migration mechanism's proof
 // of life: it is real, it is idempotent, and it is safe to run on any
 // database whether or not the gap it closes actually applies.
-func migrateBackfillCheckState(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.ExecContext(ctx, `
+func migrateBackfillCheckState(ctx context.Context, tx *wtx) error {
+	_, err := tx.exec(ctx, `
 		INSERT INTO check_state(check_id, status)
 		SELECT id, 'unknown' FROM checks
 		WHERE id NOT IN (SELECT check_id FROM check_state)`)
@@ -453,8 +428,8 @@ func migrateBackfillCheckState(ctx context.Context, tx *sql.Tx) error {
 // empty list; the group they were actually in is still in group_name, so each
 // one becomes a one-group node. Rows that already have a list are left alone,
 // which is what makes the step safe to run twice.
-func migrateBackfillNodeGroups(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.ExecContext(ctx, `
+func migrateBackfillNodeGroups(ctx context.Context, tx *wtx) error {
+	_, err := tx.exec(ctx, `
 		UPDATE nodes
 		SET "groups" = json_array(group_name)
 		WHERE trim(coalesce(group_name, '')) != ''
@@ -506,18 +481,18 @@ func (s *Store) migrate() error {
 		s.lastMigration = &MigrationReport{FromVersion: stored, ToVersion: currentSchemaVersion, BackupPath: backupPath}
 	}
 
-	if err := s.WriteTx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, schema); err != nil {
+	if err := s.writeTx(ctx, func(tx *wtx) error {
+		if _, err := tx.exec(ctx, schema); err != nil {
 			return fmt.Errorf("apply schema: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx, automationSchema); err != nil {
+		if _, err := tx.exec(ctx, automationSchema); err != nil {
 			return fmt.Errorf("apply automation schema: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx, hostSchema); err != nil {
+		if _, err := tx.exec(ctx, hostSchema); err != nil {
 			return fmt.Errorf("apply hardware schema: %w", err)
 		}
 		if fresh {
-			_, err := tx.ExecContext(ctx, "INSERT INTO schema_version(version) VALUES (?)", currentSchemaVersion)
+			_, err := tx.exec(ctx, "INSERT INTO schema_version(version) VALUES (?)", currentSchemaVersion)
 			return err
 		}
 		return nil
@@ -541,7 +516,7 @@ func (s *Store) migrate() error {
 // row yet, which migrate() treats as fresh.
 func (s *Store) storedSchemaVersion(ctx context.Context) (int, error) {
 	var haveTable int
-	if err := s.reader.QueryRowContext(ctx,
+	if err := s.queryRow(ctx,
 		"SELECT count(*) FROM sqlite_master WHERE type='table' AND name='schema_version'").Scan(&haveTable); err != nil {
 		return 0, fmt.Errorf("check schema_version table: %w", err)
 	}
@@ -549,7 +524,7 @@ func (s *Store) storedSchemaVersion(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	var version int
-	err := s.reader.QueryRowContext(ctx, "SELECT version FROM schema_version LIMIT 1").Scan(&version)
+	err := s.queryRow(ctx, "SELECT version FROM schema_version LIMIT 1").Scan(&version)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
@@ -568,11 +543,11 @@ func (s *Store) runMigrations(ctx context.Context, stored int) error {
 		if m.version <= stored {
 			continue
 		}
-		if err := s.WriteTx(ctx, func(tx *sql.Tx) error {
+		if err := s.writeTx(ctx, func(tx *wtx) error {
 			if err := m.run(ctx, tx); err != nil {
 				return fmt.Errorf("migration %d (%s): %w", m.version, m.name, err)
 			}
-			if _, err := tx.ExecContext(ctx, "UPDATE schema_version SET version = ?", m.version); err != nil {
+			if _, err := tx.exec(ctx, "UPDATE schema_version SET version = ?", m.version); err != nil {
 				return fmt.Errorf("record schema version %d: %w", m.version, err)
 			}
 			return nil
@@ -662,7 +637,7 @@ func (s *Store) addMissingColumns(ctx context.Context) error {
 		}
 		// "duplicate column" is SQLite's own message, so all three drivers
 		// (see driver.go) report it with that text.
-		if _, err := s.Exec(ctx, c.ddl); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		if _, err := s.exec(ctx, c.ddl); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("add %s.%s: %w", c.table, c.column, err)
 		}
 		have[c.column] = true
@@ -674,7 +649,7 @@ func (s *Store) tableColumns(ctx context.Context, table string) (map[string]bool
 	// PRAGMA takes no bound parameters; table names here are compile-time
 	// constants from addedColumns, never user input. table_info is answered
 	// by SQLite itself, so its shape is the same under every driver.
-	rows, err := s.reader.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	rows, err := s.query(ctx, "PRAGMA table_info("+table+")")
 	if err != nil {
 		return nil, err
 	}
