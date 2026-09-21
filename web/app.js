@@ -40,6 +40,16 @@ let navToken = 0;
 /* Rail icons */
 document.querySelectorAll('[data-icon]').forEach((el) => { el.append(icon(el.dataset.icon)); });
 
+/* Skip link */
+// Its href is #view, and to the hash router that reads as a page called
+// "view", which would send a keyboard user back to the dashboard instead of
+// past the sidebar. So it moves focus itself and leaves the hash alone.
+document.querySelector('.skip-link')?.addEventListener('click', (e) => {
+  e.preventDefault();
+  viewRoot.focus({ preventScroll: true });
+  viewRoot.scrollIntoView({ block: 'start' });
+});
+
 /* ---------- Rail pinning ---------- */
 function setRailPinned(pinned, persist = true) {
   document.documentElement.classList.toggle('rail-pinned', pinned);

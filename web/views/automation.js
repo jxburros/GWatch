@@ -124,7 +124,22 @@ export function actionEditor(action = {}, { nodes = [], defaultInterpreter = 'sh
   const cmd = textInput({ value: a.command || '', class: 'mono', placeholder: 'e.g. perl {{file}}  (the script path is appended when {{file}} is absent)', oninput: () => { a.command = cmd.value; } });
   const cmdField = field({ label: 'Command line', input: cmd }); cmdField.hidden = (a.interpreter || defaultInterpreter) !== 'custom';
   const code = textarea({ class: 'code', value: a.code || '', rows: 8, placeholder: '# your code here\necho "$GWATCH_NODE_NAME is {{status}}"', spellcheck: 'false', oninput: () => { a.code = code.value; } });
-  code.addEventListener('keydown', (e) => { if (e.key === 'Tab') { e.preventDefault(); const s = code.selectionStart; code.setRangeText('  ', s, code.selectionEnd, 'end'); a.code = code.value; } });
+  // Tab indents rather than leaving the box, so the box needs a way out:
+  // Shift+Tab always leaves, and Escape arms the next Tab to leave too. The
+  // Help page's Keyboard topic documents both. The first Escape is kept from
+  // the dialog around the editor (which would otherwise close on it); a
+  // second Escape, with Tab already armed, reaches the dialog as usual.
+  let tabLeaves = false;
+  code.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { if (!tabLeaves) { tabLeaves = true; e.preventDefault(); e.stopPropagation(); } return; }
+    if (e.key === 'Tab') {
+      if (e.shiftKey || tabLeaves) { tabLeaves = false; return; }
+      e.preventDefault(); const s = code.selectionStart; code.setRangeText('  ', s, code.selectionEnd, 'end'); a.code = code.value;
+      return;
+    }
+    tabLeaves = false;
+  });
+  code.addEventListener('blur', () => { tabLeaves = false; });
   const workDir = textInput({ value: a.workDir || '', class: 'mono', placeholder: 'Optional working directory', oninput: () => { a.workDir = workDir.value; } });
   const untrusted = checkbox({ label: 'This script may run untrusted input (I understand {{body}}, {{message}} and {{query.*}} can contain anything the sender chooses)', checked: !!a.allowUntrustedInput, onChange: (v) => { a.allowUntrustedInput = v; } });
   const untrustedField = h('div', { class: 'stack-sm' }, untrusted, h('p', { class: 'note' }, 'With a custom interpreter GWatch cannot know how to quote a value, so placeholders in the code are refused unless you tick this. Using the GWATCH_* environment variables instead is safer and needs no acknowledgement.'));
@@ -173,7 +188,7 @@ export function actionEditor(action = {}, { nodes = [], defaultInterpreter = 'sh
         typeArea.append(h('div', { class: 'form-grid' }, field({ label: 'Repository directory', input: repo, cls: 'span-2', help: 'The command runs in this directory on the computer running GWatch.' }), field({ label: 'Git arguments', input: gitArgs, cls: 'span-2', help: 'Everything after "git". Placeholders are expanded, e.g. commit -am "{{node.name}} {{status}}".' })));
         break;
       case 'script':
-        typeArea.append(h('div', { class: 'form-grid' }, field({ label: 'Interpreter', input: interp }), field({ label: 'Working directory', input: workDir }), h('div', { class: 'span-2' }, cmdField), field({ label: 'Code', input: code, cls: 'span-2' }), h('div', { class: 'span-2' }, untrustedField)));
+        typeArea.append(h('div', { class: 'form-grid' }, field({ label: 'Interpreter', input: interp }), field({ label: 'Working directory', input: workDir }), h('div', { class: 'span-2' }, cmdField), field({ label: 'Code', input: code, cls: 'span-2', help: 'Tab indents by two spaces; press Esc then Tab, or Shift+Tab, to leave the box.' }), h('div', { class: 'span-2' }, untrustedField)));
         break;
       case 'run_node':
         typeArea.append(field({ label: 'Node', input: nodeSel }));

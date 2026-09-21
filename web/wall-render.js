@@ -306,7 +306,7 @@ function trends(body, doc, cfg, state) {
           ? `avg ${fmtMs(hs.summary.avgMs)} · ${hs.summary.availability?.toFixed?.(2) ?? '—'}%`
           : `${hs.summary?.availability?.toFixed?.(2) ?? '—'}% available`)),
       host));
-    const chart = new LineChart(host, { unit: isLoss ? '%' : 'ms', legend: false, height: 150, minTickPx: 90, ariaLabel: `${hs.checkName} trend` });
+    const chart = new LineChart(host, { unit: isLoss ? '%' : 'ms', legend: false, height: 150, minTickPx: 90, ariaLabel: `${hs.checkName} trend`, table: false });
     state.charts.push(chart);
     chart.setData({ series: [toSeries(hs, isLoss ? 'loss' : 'avg', seriesColor(0))], from: hs.from, to: hs.to, bucketSeconds: hs.bucketSeconds || 0 });
   }

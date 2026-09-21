@@ -18,7 +18,7 @@ test('dashboard view renders the default dashboard\'s widgets', async (t) => {
   const widgets = root.querySelectorAll('.widget');
   assert.equal(widgets.length, mockDashboard.widgets.length);
 
-  const tabNames = [...root.querySelectorAll('.dash-tabs [role="tab"]')].map((el) => el.textContent);
+  const tabNames = [...root.querySelectorAll('.dash-tabs a')].map((el) => el.textContent);
   assert.deepEqual(tabNames, window.__gwatchMock.dashboards.map((d) => d.name));
 
   await settle(); // chart widgets fetch their history asynchronously after first paint
