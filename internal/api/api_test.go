@@ -21,18 +21,14 @@ import (
 	"github.com/jxburros/GWatch/internal/logging"
 	"github.com/jxburros/GWatch/internal/mailer"
 	"github.com/jxburros/GWatch/internal/model"
-	"github.com/jxburros/GWatch/internal/store"
+	"github.com/jxburros/GWatch/internal/store/storetest"
 	"github.com/jxburros/GWatch/internal/update"
 )
 
 func newTestServer(t *testing.T) (*httptest.Server, *Server) {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t)
 	log, _ := logging.New("", nil)
 	run := func(ctx context.Context, c model.Check, o checks.Options) model.Result {
 		lat := 5.0

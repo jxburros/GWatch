@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/jxburros/GWatch/internal/mailer"
 	"github.com/jxburros/GWatch/internal/model"
 	"github.com/jxburros/GWatch/internal/store"
+	"github.com/jxburros/GWatch/internal/store/storetest"
 )
 
 type fakeNet struct {
@@ -67,11 +67,7 @@ func (m *mailbox) subjects() []string {
 
 func setup(t *testing.T) (*Engine, *store.Store, *fakeNet, *mailbox) {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t)
 	log, _ := logging.New("", nil)
 	settings := model.DefaultSettings()
 	settings.Alerts.Enabled = true
