@@ -447,6 +447,26 @@ const maxPairBody = 4 << 10
 // person fishing for one get the same sentence.
 const pairingRejected = "that pairing code is not valid; ask for a fresh one in GWatch under Hardware"
 
+// handleAgentLatest reports the newest published agent release, so the
+// interface can mark machines whose agent is behind.
+//
+// Nothing follows from the answer on the server's side. Agents keep themselves
+// up to date from signed releases they fetch and verify themselves; GWatch has
+// no way to update one and is deliberately never given one, so this is a label
+// on a screen and nothing more (docs/HARDWARE.md#keeping-agents-up-to-date).
+func (s *Server) handleAgentLatest(w http.ResponseWriter, r *http.Request) {
+	if s.Updater == nil {
+		// A build without the updater still runs agents; it just cannot say
+		// what the newest one is, which the interface treats as "do not mark
+		// anything" rather than as an error on the page.
+		writeJSON(w, http.StatusOK, model.AgentRelease{})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	writeJSON(w, http.StatusOK, s.Updater.AgentLatest(ctx))
+}
+
 func (s *Server) handleListPairings(w http.ResponseWriter, r *http.Request) {
 	codes, err := s.Store.ListPairingCodes(r.Context(), 0)
 	if err != nil {

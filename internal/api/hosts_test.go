@@ -13,6 +13,7 @@ import (
 
 	"github.com/jxburros/GWatch/internal/auth"
 	"github.com/jxburros/GWatch/internal/model"
+	"github.com/jxburros/GWatch/internal/update"
 )
 
 // postReading submits a hardware reading the way an agent does, with the token
@@ -538,4 +539,71 @@ func findNodeNamed(t *testing.T, nodes []model.Node, name string) model.Node {
 	}
 	t.Fatalf("no node named %q in %+v", name, nodes)
 	return model.Node{}
+}
+
+// TestAgentLatestReportsOnlyAgentReleases: GWatch looks up the newest agent
+// release so it can mark machines that are behind. The repository it looks in
+// is its own, which carries GWatch's releases too, and reading one of those as
+// an agent release would mark every machine on the site out of date on the day
+// GWatch itself was released.
+//
+// GWatch does nothing with the answer beyond showing it: agents take their own
+// updates and are never told to by the server.
+func TestAgentLatestReportsOnlyAgentReleases(t *testing.T) {
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[
+			{"tag_name":"v9.9.9","html_url":"https://example.com/server","assets":[]},
+			{"tag_name":"agent-v0.6.0","html_url":"https://example.com/agent","assets":[]},
+			{"tag_name":"agent-v0.5.0","html_url":"https://example.com/old","assets":[]}]`))
+	}))
+	defer gh.Close()
+
+	ts, srv := newTestServer(t)
+	srv.Updater.Client = &update.Client{APIBase: gh.URL, HTTP: gh.Client()}
+
+	var out model.AgentRelease
+	if code := call(t, ts, "GET", "/api/agents/latest", nil, &out); code != 200 {
+		t.Fatalf("GET /api/agents/latest = %d", code)
+	}
+	if out.Version != "0.6.0" {
+		t.Fatalf("latest agent = %q, want 0.6.0 (9.9.9 is GWatch's own release)", out.Version)
+	}
+	if out.URL != "https://example.com/agent" {
+		t.Errorf("release URL = %q", out.URL)
+	}
+	if out.CheckedAt.IsZero() {
+		t.Error("the answer should say when it was looked up")
+	}
+
+	// The answer is cached: a page with several machines on it must not ask
+	// GitHub once per machine.
+	gh.Close()
+	var again model.AgentRelease
+	if code := call(t, ts, "GET", "/api/agents/latest", nil, &again); code != 200 || again.Version != "0.6.0" {
+		t.Fatalf("second call = %d %+v; the answer should be cached", code, again)
+	}
+}
+
+// TestAgentLatestSurvivesAnUnreachableGitHub: a machine is not up to date
+// because the lookup failed. The endpoint answers, says what went wrong, and
+// marks nothing.
+func TestAgentLatestSurvivesAnUnreachableGitHub(t *testing.T) {
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	gh.Close() // nothing is listening
+
+	ts, srv := newTestServer(t)
+	srv.Updater.Client = &update.Client{APIBase: gh.URL, HTTP: &http.Client{Timeout: time.Second}}
+
+	var out model.AgentRelease
+	if code := call(t, ts, "GET", "/api/agents/latest", nil, &out); code != 200 {
+		t.Fatalf("GET /api/agents/latest = %d, want 200 with an explanation", code)
+	}
+	if out.Version != "" {
+		t.Errorf("an unreachable GitHub reported version %q", out.Version)
+	}
+	if out.Error == "" {
+		t.Error("the failure should be said out loud, not swallowed")
+	}
 }

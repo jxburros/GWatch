@@ -438,25 +438,100 @@ func TestPickAssetIgnoresCompanionBinaries(t *testing.T) {
 		{Name: "gwatch-linux-amd64.sha256"},
 		{Name: "gwatch-mcp-windows-amd64.exe"},
 		{Name: "gwatch-windows-amd64.exe"},
+		{Name: "gwatch-agent-linux-amd64"},
+		{Name: "gwatch-agent-windows-amd64.exe"},
 		{Name: "gwatch-setup-1.2.3.exe"},
 	}
 	for _, tc := range []struct {
-		goos, goarch, want string
+		prefix, goos, goarch, want string
 	}{
-		{"linux", "amd64", "gwatch-linux-amd64"},
-		{"windows", "amd64", "gwatch-windows-amd64.exe"},
+		{"gwatch", "linux", "amd64", "gwatch-linux-amd64"},
+		{"gwatch", "windows", "amd64", "gwatch-windows-amd64.exe"},
+		// The agent asks by its own prefix and gets its own binary, from the
+		// same list that carries the server's.
+		{AgentAssetPrefix, "linux", "amd64", "gwatch-agent-linux-amd64"},
+		{AgentAssetPrefix, "windows", "amd64", "gwatch-agent-windows-amd64.exe"},
 	} {
-		got := pickAsset(assets, tc.goos, tc.goarch)
+		got := pickAsset(assets, tc.prefix, tc.goos, tc.goarch)
 		if got == nil {
-			t.Fatalf("%s/%s: no asset picked", tc.goos, tc.goarch)
+			t.Fatalf("%s %s/%s: no asset picked", tc.prefix, tc.goos, tc.goarch)
 		}
 		if got.Name != tc.want {
-			t.Errorf("%s/%s: picked %q, want %q", tc.goos, tc.goarch, got.Name, tc.want)
+			t.Errorf("%s %s/%s: picked %q, want %q", tc.prefix, tc.goos, tc.goarch, got.Name, tc.want)
 		}
 	}
 	// A release with only the companion for this platform has nothing the
 	// updater may install, rather than the wrong binary.
-	if got := pickAsset([]ghAsset{{Name: "gwatch-mcp-darwin-arm64"}}, "darwin", "arm64"); got != nil {
+	if got := pickAsset([]ghAsset{{Name: "gwatch-mcp-darwin-arm64"}}, "gwatch", "darwin", "arm64"); got != nil {
 		t.Errorf("picked %q for darwin/arm64 from a companion-only release", got.Name)
+	}
+	// And an agent-only release has nothing for the server, which is what
+	// stops a server installation installing an agent over itself.
+	if got := pickAsset([]ghAsset{{Name: "gwatch-agent-linux-amd64"}}, "gwatch", "linux", "amd64"); got != nil {
+		t.Errorf("picked %q for the server from an agent-only release", got.Name)
+	}
+}
+
+// TestReleaseFamiliesStayApart is the guarantee the separate agent release
+// rests on (docs/RELEASING.md): GWatch and the hardware agent publish into the
+// same repository, tagged v1.2.3 and agent-v1.2.3, and neither may ever be
+// offered the other's build. A server that installed an agent over itself, or
+// an agent that installed a server, would be unrecoverable on a remote
+// machine, so this is checked from both directions.
+func TestReleaseFamiliesStayApart(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/acme/gwatch/releases", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[
+			{"tag_name":"agent-v0.9.0","html_url":"https://example.com/agent","assets":[
+				{"name":"gwatch-agent-linux-amd64","size":4,"browser_download_url":"https://example.com/dl/a"}]},
+			{"tag_name":"v0.3.0","html_url":"https://example.com/server","assets":[
+				{"name":"gwatch-linux-amd64","size":4,"browser_download_url":"https://example.com/dl/s"}]},
+			{"tag_name":"mcp/v0.1.0","html_url":"https://example.com/mcp","assets":[
+				{"name":"gwatch-mcp-linux-amd64","size":4,"browser_download_url":"https://example.com/dl/m"}]}]`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	server := &Client{APIBase: srv.URL, HTTP: srv.Client(), GOOS: "linux", GOARCH: "amd64"}
+	agent := server.ForAgent()
+
+	// The agent's tag sorts above the server's by number (0.9.0 > 0.3.0), so a
+	// server build that did not filter by family would take it as an update.
+	si, err := server.Check(context.Background(), "acme/gwatch", "0.2.0", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if si.LatestVersion != "0.3.0" || si.AssetName != "gwatch-linux-amd64" {
+		t.Fatalf("a server build was offered %q (%s); want the 0.3.0 server release", si.LatestVersion, si.AssetName)
+	}
+
+	ai, err := agent.Check(context.Background(), "acme/gwatch", "0.4.0", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ai.LatestVersion != "0.9.0" || ai.AssetName != "gwatch-agent-linux-amd64" {
+		t.Fatalf("an agent build was offered %q (%s); want the 0.9.0 agent release", ai.LatestVersion, ai.AssetName)
+	}
+
+	// An agent newer than every agent release is up to date, even though the
+	// repository holds tags that look newer still.
+	if up, _ := agent.Check(context.Background(), "acme/gwatch", "1.0.0", false); up.UpdateAvailable {
+		t.Fatalf("agent 1.0.0 should be up to date, was offered %q", up.LatestVersion)
+	}
+
+	// Each family's catalogue holds only its own releases.
+	rels, err := agent.Releases(context.Background(), "acme/gwatch", "0.4.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rels) != 1 || rels[0].Tag != "agent-v0.9.0" {
+		t.Fatalf("agent catalogue = %+v; want only agent-v0.9.0", rels)
+	}
+	srels, err := server.Releases(context.Background(), "acme/gwatch", "0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(srels) != 1 || srels[0].Tag != "v0.3.0" {
+		t.Fatalf("server catalogue = %+v; want only v0.3.0", srels)
 	}
 }

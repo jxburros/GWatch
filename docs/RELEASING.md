@@ -213,10 +213,14 @@ so in the release notes.
 The `release` job also compiles both Inno Setup scripts and publishes the results
 alongside the raw binaries:
 
-| Script | Built from | Published as |
-|---|---|---|
-| `scripts/installer/gwatch.iss` | `dist/gwatch-windows-amd64.exe` | `gwatch-setup-<version>.exe` |
-| `scripts/installer/gwatch-agent.iss` | `dist/gwatch-agent-windows-amd64.exe` | `gwatch-agent-setup-<version>.exe` |
+| Script | Built by | From | Published as |
+|---|---|---|---|
+| `scripts/installer/gwatch.iss` | `release` (`v*`) | `dist/gwatch-windows-amd64.exe` | `gwatch-setup-<version>.exe` |
+| `scripts/installer/gwatch-agent.iss` | `agent-release` (`agent-v*`) | `dist/gwatch-agent-windows-amd64.exe` | `gwatch-agent-setup-<version>.exe` |
+
+The two are built by different jobs because the agent releases on its own
+([below](#releasing-the-agent)); every push and pull request still compiles
+both, in the `ci` job, so neither script can rot unnoticed.
 
 Both are compiled with `iscc /DAppVersion=<tag> /DExePath=<exe>` — see
 [`scripts/installer/README.md`](../scripts/installer/README.md) for what they do and how
@@ -239,6 +243,77 @@ to build them locally. Three things to keep in mind:
 The wizard artwork under `scripts/installer/assets/` is committed, not generated at
 release time, so a release needs no image tooling on the runner. If the mark ever
 changes, `web/logo.svg` and those assets have to be updated together.
+
+## Releasing the agent
+
+`gwatch-agent` ([`docs/HARDWARE.md`](HARDWARE.md)) has its own version, in
+[`cmd/gwatch-agent/VERSION`](../cmd/gwatch-agent/VERSION), and its own tag
+scheme, `agent-v<version>`. It is part of the root module — unlike the MCP
+companion, there is no `go install` story to satisfy — so the separate tag
+exists for a different reason: **the agent updates itself**, and a thing that
+updates itself needs a release train it can be pointed at.
+
+The agent runs on machines nobody logs into. If its version were the server's,
+every agent fix would need a GWatch release, and every GWatch release would
+restart every agent. Separating them means the agent can be fixed on its own
+schedule, and a GWatch release stops being an event on fifty other machines.
+
+To cut an agent release:
+
+```sh
+# 1. Bump the version and commit
+echo 0.5.0 > cmd/gwatch-agent/VERSION
+git commit -am "Release gwatch-agent 0.5.0"
+git push
+
+# 2. Tag it, on the same commit
+git tag agent-v0.5.0
+git push origin agent-v0.5.0
+```
+
+Pushing an `agent-v*` tag runs the `agent-release` job in
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml). It fails if the tag
+does not match `cmd/gwatch-agent/VERSION`, fails if the signing key is missing
+or is not one the shipped agents trust, then cross-compiles seven targets
+(the six the server is built for, plus `linux/arm` for the Raspberry Pi class
+of machine), signs and checksums each one, builds the Windows agent installer,
+and publishes a GitHub release of its own.
+
+### The two release trains must never cross
+
+A GWatch installation and an agent read the *same* repository's releases and
+must never be offered each other's build — an agent that installed a GWatch
+server over itself would take out both the machine's monitoring and the way to
+repair it. Two things keep them apart, and both are tested
+(`TestReleaseFamiliesStayApart`, `TestCheckUpdateOnlySeesAgentReleases`):
+
+| | Tags | Assets |
+|---|---|---|
+| GWatch | `v1.2.3` | `gwatch-<os>-<arch>[.exe]` |
+| Agent | `agent-v1.2.3` | `gwatch-agent-<os>-<arch>[.exe]` |
+
+`internal/update.Client` carries a `TagPrefix` and an `AssetPrefix`; releases
+whose tag is not this family's are skipped entirely, and asset names are
+matched exactly, so `gwatch-agent-linux-amd64` can never satisfy a request for
+`gwatch-linux-amd64`. Keep that true when adding anything else to a release.
+
+### What reaches machines, and when
+
+Agents left on automatic updates (the default) check every few hours, with the
+check spread over a window so a fleet installed by one script does not ask, or
+restart, in lockstep. An agent installs a release only if the download verifies
+against a signing key pinned into the agent binary itself; **GWatch is never
+asked and cannot tell an agent to install anything**. That is deliberate: a
+compromised GWatch must not become a way to run code on every machine that
+reports to it.
+
+Before replacing itself, an agent makes the download prove it runs on that
+machine and that it can take a reading the server accepts. The binary it
+replaces is kept beside it as `.old`, so `gwatch-agent rollback` is a repair
+that needs no network. There is no automatic rollback *after* a restart — that
+would need a watchdog the agent deliberately does not have — so an agent
+release is the one release worth being slow about. Tag it, let it reach your
+own machines, and look at them before you expect anyone else to take it.
 
 ## The container image
 

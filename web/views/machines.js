@@ -12,7 +12,7 @@ import {
   openModal, confirmDialog, field, textInput, selectInput, toast,
 } from '../components.js';
 import { LineChart, SERIES_COLORS } from '../charts.js';
-import { bytes, pct, duration, dateTime, num } from '../fmt.js';
+import { bytes, pct, duration, dateTime, num, agentIsBehind } from '../fmt.js';
 
 // Shading for a usage bar. These are display thresholds only — what actually
 // raises an alert is the hardware check's own configuration, which the person
@@ -210,8 +210,41 @@ function usageMeter(label, value, { detail = '', level: given = null } = {}) {
 // `metricStatus`, when given, returns the per-metric verdicts of the hardware
 // check that reads this machine ({ 'disk:/srv': 'degraded', ... }); the
 // meters are then shaded by those rather than by the display cut-offs above.
+// The newest agent release, asked for once per page load and shared by every
+// machine panel on it. It is only ever used to draw a label: an agent updates
+// itself from signed releases it verifies on its own, and GWatch has no way to
+// update one — see docs/HARDWARE.md#keeping-agents-up-to-date.
+//
+// Anything that goes wrong here — no updater in this build, a viewer who may
+// not ask, GitHub unreachable — resolves to null, and a null marks nothing.
+// Being unable to find out what is newest is not evidence that a machine is
+// behind.
+let latestAgentPromise = null;
+function latestAgentRelease() {
+  latestAgentPromise ||= api.get('/api/agents/latest')
+    .then((r) => (r?.version ? { version: r.version, url: r.url || '' } : null))
+    .catch(() => null);
+  return latestAgentPromise;
+}
+
+// agentVersionRow renders the running version, with a quiet note when a newer
+// agent exists. It is deliberately not an alarm: an agent one release behind
+// is still doing its job, and on automatic updates it will catch up by itself
+// within a few hours.
+function agentVersionRow(running, latest, releaseURL) {
+  if (!agentIsBehind(running, latest)) return running;
+  return h('span', null,
+    running, ' ',
+    h('a', {
+      class: 'pill pill-warn',
+      href: releaseURL || 'https://github.com/jxburros/GWatch/releases',
+      target: '_blank', rel: 'noreferrer noopener',
+      title: `This machine runs gwatch-agent ${running}; ${latest} has been released. An agent left on automatic updates takes it by itself.`,
+    }, icon('download'), `${latest} available`));
+}
+
 export function hardwarePanel(key, { title = 'Hardware', metricStatus = null } = {}) {
-  const state = { host: null, range: '24h', charts: [], destroyed: false };
+  const state = { host: null, range: '24h', charts: [], destroyed: false, latestAgent: null, agentReleaseURL: null };
 
   const headEl = h('div', null, skeleton({ lines: 3 }));
   const snapEl = h('div', { class: 'stack' });
@@ -225,6 +258,14 @@ export function hardwarePanel(key, { title = 'Hardware', metricStatus = null } =
       state.host = await api.get(`/api/hosts/${encodeURIComponent(key)}`);
       if (state.destroyed) return;
       renderHead();
+      // Drawn again once the newest release is known, rather than holding the
+      // whole panel up for a question that only decides a label.
+      latestAgentRelease().then((rel) => {
+        if (state.destroyed || !rel || state.latestAgent === rel.version) return;
+        state.latestAgent = rel.version;
+        state.agentReleaseURL = rel.url;
+        renderHead();
+      });
       renderSnapshot();
     } catch (e) {
       replace(headEl, emptyState({ icon: 'alert', title: 'Could not load this machine', text: e.message, compact: true }));
@@ -241,7 +282,7 @@ export function hardwarePanel(key, { title = 'Hardware', metricStatus = null } =
       m ? ['System', [m.platform, m.arch, m.hostname].filter(Boolean).join(' · ') || '—'] : null,
       m?.bootTime ? ['Started', `${dateTime(m.bootTime)} (up ${duration(m.uptimeSeconds)})`] : null,
       m?.cpu?.model ? ['Processor', `${m.cpu.model} — ${num(m.cpu.cores)} cores`] : null,
-      host.agent?.lastVersion ? ['Agent version', host.agent.lastVersion] : null,
+      host.agent?.lastVersion ? ['Agent version', agentVersionRow(host.agent.lastVersion, state.latestAgent, state.agentReleaseURL)] : null,
       host.agent?.lastAddr ? ['Reported from', host.agent.lastAddr] : null,
     ].filter(Boolean);
 

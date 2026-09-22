@@ -1232,6 +1232,9 @@
     return { key, range: u.searchParams.get('range') || '24h', from: iso(NOW - span), to: iso(NOW), samples };
   });
   on('GET', /^\/api\/agents$/, () => clone(agents));
+  // Newer than the 0.5.0 the demo machine reports, so the "an older agent is
+  // running" marks are visible in mock mode.
+  on('GET', /^\/api\/agents\/latest$/, () => ({ version: '0.6.0', url: 'https://github.com/jxburros/GWatch/releases', checkedAt: iso(NOW - 3600e3) }));
   on('POST', /^\/api\/agents$/, (m, body) => {
     if (!body?.name) throw err(400, 'give the machine a name so you can recognise it later');
     const a = { id: Math.max(0, ...agents.map((x) => x.id)) + 1, name: body.name, nodeId: body.nodeId ?? null, prefix: 'gwa_mockmock', enabled: true, createdBy: 'local', createdAt: iso(Date.now()), revokedAt: null, lastSeenAt: null, lastAddr: '', lastVersion: '', hostname: '', os: '', arch: '' };

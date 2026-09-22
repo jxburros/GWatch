@@ -1585,6 +1585,17 @@ type Release struct {
 	Running     bool       `json:"running"` // this is the running version
 }
 
+// AgentRelease is the newest published release of the hardware agent, as
+// GWatch reports it to the interface so that machines running an older agent
+// can be marked. GWatch only looks: agents update themselves, and are never
+// told to by the server (docs/HARDWARE.md#keeping-agents-up-to-date).
+type AgentRelease struct {
+	Version   string    `json:"version"`
+	URL       string    `json:"url"`
+	CheckedAt time.Time `json:"checkedAt"`
+	Error     string    `json:"error,omitempty"`
+}
+
 // UpdateStatus is the state of the self-updater.
 type UpdateStatus struct {
 	Last         *UpdateInfo `json:"last"`

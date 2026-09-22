@@ -241,3 +241,40 @@ export function metricValue(v, unit) {
   if (unit === 'B/s') return `${bytes(v)}/s`;
   return Number(v).toFixed(2);
 }
+
+/**
+ * Compares two version strings the way the release machinery does: numerically
+ * part by part, with a suffix (-rc1) sorting before the release it precedes.
+ * Returns -1, 0 or 1, and 0 whenever either side is not a version — an unknown
+ * version must never read as "behind", or every agent that has not reported
+ * one yet would be marked out of date.
+ */
+export function compareVersions(a, b) {
+  const parse = (v) => {
+    const s = String(v ?? '').trim().replace(/^v/, '');
+    const m = s.match(/^(\d+(?:\.\d+)*)(.*)$/);
+    if (!m) return null;
+    return { nums: m[1].split('.').map(Number), suffix: m[2] };
+  };
+  const x = parse(a); const y = parse(b);
+  if (!x || !y) return 0;
+  const len = Math.max(x.nums.length, y.nums.length);
+  for (let i = 0; i < len; i++) {
+    const d = (x.nums[i] || 0) - (y.nums[i] || 0);
+    if (d) return d > 0 ? 1 : -1;
+  }
+  // 1.2.0 is newer than 1.2.0-rc1; two suffixes compare as text.
+  if (x.suffix === y.suffix) return 0;
+  if (!x.suffix) return 1;
+  if (!y.suffix) return -1;
+  return x.suffix < y.suffix ? -1 : 1;
+}
+
+/**
+ * Whether a machine's agent is behind the newest release. Anything unknown —
+ * no reported version, no release to compare with — is not behind.
+ */
+export function agentIsBehind(running, latest) {
+  if (!running || !latest) return false;
+  return compareVersions(running, latest) < 0;
+}

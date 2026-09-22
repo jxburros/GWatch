@@ -24,12 +24,74 @@ import (
 )
 
 // Client talks to the GitHub API.
+//
+// One repository publishes more than one thing: GWatch itself, and the
+// hardware agent, which versions and releases on its own (docs/RELEASING.md).
+// AssetPrefix and TagPrefix are what keep the two apart, so an agent asking
+// what it should move to is never offered a server build, and the other way
+// round. Left empty they describe GWatch, which is what every existing caller
+// means.
 type Client struct {
 	// APIBase is https://api.github.com by default (tests point it at a fake).
 	APIBase string
 	HTTP    *http.Client
 	GOOS    string
 	GOARCH  string
+	// AssetPrefix is the first part of the asset names this client installs:
+	// "gwatch" (the default) matches gwatch-<goos>-<goarch>[.exe],
+	// "gwatch-agent" matches gwatch-agent-<goos>-<goarch>[.exe].
+	AssetPrefix string
+	// TagPrefix is what a release tag must start with to belong to this
+	// family, and what is stripped to get the version. Empty means the
+	// project's own tags — v1.2.3, or a bare 1.2.3 — and excludes every tag
+	// carrying a family prefix of its own, such as agent-v1.2.3.
+	TagPrefix string
+}
+
+// AgentAssetPrefix and AgentTagPrefix describe the hardware agent's releases.
+// They are here rather than in the agent so that GWatch can ask what the
+// newest agent is — to tell you which machines are behind — without owning a
+// copy of the naming.
+const (
+	AgentAssetPrefix = "gwatch-agent"
+	AgentTagPrefix   = "agent-v"
+)
+
+// ForAgent returns a copy of this client that speaks about the agent's
+// releases instead of GWatch's.
+func (c *Client) ForAgent() *Client {
+	cp := *c
+	cp.AssetPrefix, cp.TagPrefix = AgentAssetPrefix, AgentTagPrefix
+	return &cp
+}
+
+func (c *Client) assetPrefix() string {
+	if c.AssetPrefix != "" {
+		return c.AssetPrefix
+	}
+	return "gwatch"
+}
+
+// releaseVersion reports the version a tag carries, and whether the tag
+// belongs to this client's family at all.
+//
+// With a TagPrefix the test is simply whether the tag starts with it. Without
+// one the tag is GWatch's own, which means it is a version possibly preceded
+// by "v" — and, importantly, that a tag belonging to some other family
+// (agent-v0.4.0, mcp/v0.1.0) is not ours, however new it is.
+func (c *Client) releaseVersion(tag string) (string, bool) {
+	tag = strings.TrimSpace(tag)
+	if c.TagPrefix != "" {
+		if !strings.HasPrefix(tag, c.TagPrefix) {
+			return "", false
+		}
+		tag = strings.TrimPrefix(tag, c.TagPrefix)
+	}
+	v := strings.TrimPrefix(tag, "v")
+	if v == "" || v[0] < '0' || v[0] > '9' {
+		return "", false
+	}
+	return v, true
 }
 
 func (c *Client) base() string {
@@ -131,8 +193,12 @@ func (c *Client) Releases(ctx context.Context, repo, current string) ([]model.Re
 		if rel.Draft {
 			continue
 		}
+		version, ok := c.releaseVersion(rel.TagName)
+		if !ok {
+			continue
+		}
 		r := model.Release{
-			Version:    strings.TrimPrefix(rel.TagName, "v"),
+			Version:    version,
 			Tag:        rel.TagName,
 			Name:       rel.Name,
 			Prerelease: rel.Prerelease,
@@ -143,7 +209,7 @@ func (c *Client) Releases(ctx context.Context, repo, current string) ([]model.Re
 			t := rel.PublishedAt
 			r.PublishedAt = &t
 		}
-		if a := pickAsset(rel.Assets, c.goos(), c.goarch()); a != nil {
+		if a := pickAsset(rel.Assets, c.assetPrefix(), c.goos(), c.goarch()); a != nil {
 			r.AssetName, r.AssetURL, r.AssetSize, r.Installable = a.Name, a.BrowserDownloadURL, a.Size, true
 		}
 		cmp := CompareVersions(r.Version, current)
@@ -297,13 +363,17 @@ func splitVersion(v string) ([]int, string) {
 }
 
 // pickAsset finds the release asset built for this platform. Assets are
-// expected to be named gwatch-<goos>-<goarch>[.exe] (what CI publishes),
+// expected to be named <prefix>-<goos>-<goarch>[.exe] (what CI publishes),
 // but a few common variants are accepted.
-func pickAsset(assets []ghAsset, goos, goarch string) *ghAsset {
+//
+// The match is exact, which is what keeps the families apart in a release
+// that carries several: asked for "gwatch", it will not take
+// gwatch-agent-linux-amd64 or gwatch-mcp-linux-amd64.
+func pickAsset(assets []ghAsset, prefix, goos, goarch string) *ghAsset {
 	want := []string{
-		fmt.Sprintf("gwatch-%s-%s", goos, goarch),
-		fmt.Sprintf("gwatch_%s_%s", goos, goarch),
-		fmt.Sprintf("gwatch-%s_%s", goos, goarch),
+		fmt.Sprintf("%s-%s-%s", prefix, goos, goarch),
+		fmt.Sprintf("%s_%s_%s", prefix, goos, goarch),
+		fmt.Sprintf("%s-%s_%s", prefix, goos, goarch),
 	}
 	for _, a := range assets {
 		name := strings.ToLower(a.Name)
@@ -320,7 +390,7 @@ func pickAsset(assets []ghAsset, goos, goarch string) *ghAsset {
 	// Windows-only release with a single exe.
 	if goos == "windows" {
 		for _, a := range assets {
-			if strings.EqualFold(a.Name, "gwatch.exe") {
+			if strings.EqualFold(a.Name, prefix+".exe") {
 				aa := a
 				return &aa
 			}

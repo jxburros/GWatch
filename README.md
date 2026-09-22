@@ -108,6 +108,7 @@ Then open <http://127.0.0.1:7230> — monitoring runs only while this process ru
 | [`docs/DATABASE.md`](docs/DATABASE.md) | Keeping the data on your own PostgreSQL or MySQL/MariaDB server instead of the SQLite file: setup, `database.json`, TLS, `gwatch migrate-db` |
 | [`docs/DOCKER.md`](docs/DOCKER.md) | Running GWatch in a container: the first account, the `/data` volume, ping and discovery inside Docker, upgrading by pulling |
 | [`docs/HARDWARE.md`](docs/HARDWARE.md) | Hardware health, the agent, its trust model, and what each platform can measure |
+| [`docs/AGENT-DECISIONS.md`](docs/AGENT-DECISIONS.md) | Why the agent is built the way it is: self-update, what GWatch deliberately cannot do to a machine, and the options not taken |
 | [`docs/SNMP.md`](docs/SNMP.md) | SNMP checks: enabling SNMP on a router or switch, choosing OIDs, interface traffic in bits per second |
 | [`docs/RECIPES.md`](docs/RECIPES.md) | Ready-made trigger/endpoint recipes: Home Assistant, Slack/Discord, ntfy/Pushover, Docker, git |
 | [`docs/REMOTE-ACCESS.md`](docs/REMOTE-ACCESS.md) | Reaching GWatch from outside your network safely — accounts, API keys, Tailscale, a TLS proxy |

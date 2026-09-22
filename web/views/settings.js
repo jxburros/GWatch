@@ -4,7 +4,7 @@
 
 import { api, qs } from '../api.js';
 import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, openModal, emptyState, skeleton, banner, eventRow, busy, applyTheme, applyAccent, ACCENT_PRESETS, hexToRgb, applyDensity, currentDensity } from '../components.js';
-import { relTime, dateTime, bytes, num, duration, retentionSpan, toLocalInput, fromLocalInput, weekdayShort, timeShort, plural, isBeta } from '../fmt.js';
+import { relTime, dateTime, bytes, num, duration, retentionSpan, toLocalInput, fromLocalInput, weekdayShort, timeShort, plural, isBeta, agentIsBehind } from '../fmt.js';
 import { openEndpointEditor, endpointRow, triggerRow, openTriggerEditor } from './automation.js';
 import { rulesPanel } from './rules.js';
 import { tipsEnabled, setTipsEnabled, resetTips, seenCount, resetOnboarding, TIPS } from '../tips.js';
@@ -528,17 +528,39 @@ export async function mount(root, ctx) {
   async function tabHardware() {
     const wrap = h('section', { class: 'card' });
     let nodes = [];
+    // The newest agent release, so machines running an older one can be
+    // marked. GWatch cannot update an agent and is never given a way to: an
+    // agent takes its own updates from releases it verifies against keys built
+    // into it (docs/HARDWARE.md#keeping-agents-up-to-date). This is a label.
+    // Not knowing what is newest marks nothing.
+    let latestAgent = null;
+    let agentReleaseURL = null;
 
     async function reload() {
-      const [agents, nodeList] = await Promise.all([
+      const [agents, nodeList, latest] = await Promise.all([
         api.get('/api/agents'),
         api.get('/api/nodes').catch(() => []),
+        api.get('/api/agents/latest').catch(() => null),
       ]);
       nodes = nodeList || [];
+      latestAgent = latest?.version || null;
+      agentReleaseURL = latest?.url || null;
+      const behind = agents.filter((a) => !a.revokedAt && agentIsBehind(a.lastVersion, latestAgent));
       replace(wrap,
         h('div', { class: 'card-head' }, h('h2', null, 'Machines'),
           h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => registerAgent(reload) }, icon('plus'), 'Register a machine')),
         h('p', { class: 'lead' }, 'GWatch reads this computer by itself. To see another machine\u2019s hardware, register it here and install gwatch-agent on it — the agent only sends readings out, so registering a machine gives GWatch no way into it. Each machine gets a node of its own, and its readings are shown there.'),
+        // Worth saying once, above the table, rather than only as a mark per
+        // row: the question people have is "is my fleet current", and the
+        // answer is a count.
+        behind.length
+          ? banner('info', h('div', null,
+              h('strong', null, `${plural(behind.length, 'machine')} running an older agent`),
+              h('div', { class: 'note' },
+                `gwatch-agent ${latestAgent} has been released. Agents left on automatic updates take it by themselves within a few hours — there is nothing to do here. `,
+                h('a', { href: agentReleaseURL || 'https://github.com/jxburros/GWatch/releases', target: '_blank', rel: 'noreferrer noopener' }, 'Release notes'),
+                '.')))
+          : null,
         agents.length
           ? h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
               h('thead', null, h('tr', null, h('th', null, 'Name'), h('th', null, 'Token'), h('th', null, 'Reporting'), h('th', null, 'Last seen'), h('th', null, 'Node'), h('th', null, ''))),
@@ -554,7 +576,12 @@ export async function mount(root, ctx) {
           a.hostname ? h('div', { class: 'muted', style: { fontSize: '12px' } }, `${a.hostname}${a.os ? ` · ${a.os}/${a.arch}` : ''}`) : null),
         h('td', { class: 'mono' }, `${a.prefix}\u2026`),
         h('td', null, h('span', { class: revoked ? 'muted' : '' }, state_),
-          a.lastVersion ? h('div', { class: 'muted', style: { fontSize: '12px' } }, `agent ${a.lastVersion}`) : null),
+          a.lastVersion
+            ? h('div', { class: 'muted', style: { fontSize: '12px' } }, `agent ${a.lastVersion}`,
+                agentIsBehind(a.lastVersion, latestAgent)
+                  ? h('span', { class: 'pill pill-warn', style: { marginLeft: '6px' }, title: `${latestAgent} has been released` }, `${latestAgent} available`)
+                  : null)
+            : null),
         h('td', null, a.lastSeenAt ? relTime(a.lastSeenAt) : h('span', { class: 'muted' }, 'never')),
         h('td', null, nodes.find((n) => n.id === a.nodeId)?.name || h('span', { class: 'muted' }, '—')),
         h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },

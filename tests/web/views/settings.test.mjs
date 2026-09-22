@@ -124,3 +124,18 @@ test('settings Database tab shows the active backend and saves a server for the 
   assert.match(panel.textContent, /GWatch will use this database after the service is restarted/);
   assert.match(panel.textContent, /PostgreSQL at db\.lan:5432\/gwatch/);
 });
+
+// #52: the Hardware tab marks machines running an agent older than the newest
+// release. It is only ever a label — GWatch cannot update an agent, and the
+// wording has to say so, or the mark reads as a job someone has to do.
+test('settings Hardware marks machines running an older agent', async (t) => {
+  const { root } = await mountView(settingsView, { params: { tab: 'hardware' } }, t);
+  const panel = root.querySelector('.settings-panel');
+  await waitFor(() => panel.textContent.includes('0.6.0'));
+
+  // web/mock.js: one machine reporting agent 0.5.0, newest release 0.6.0.
+  assert.match(panel.textContent, /agent 0\.5\.0/, 'the running version is shown');
+  assert.match(panel.textContent, /0\.6\.0 available/, 'the newer release is marked on the row');
+  assert.match(panel.textContent, /1 machine running an older agent/, 'and counted above the table');
+  assert.match(panel.textContent, /take it by themselves/, 'the note must say nothing needs doing here');
+});

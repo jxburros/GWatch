@@ -9,6 +9,49 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## Unreleased
+
+### Added
+
+- **The agent keeps itself up to date** (#52). `gwatch-agent` now has its own
+  version ([`cmd/gwatch-agent/VERSION`](cmd/gwatch-agent/VERSION)), its own
+  release tags (`agent-v…`) and its own GitHub release, and a running agent
+  installs newer ones by itself. You install an agent by hand once. The
+  machines agents run on are rarely machines anyone logs into, which is the
+  argument both for the self-update and for the split: an agent fix no longer
+  needs a GWatch release, and a GWatch release no longer restarts every agent.
+
+  It is the agent, not GWatch, that decides this. The agent reads the release
+  feed itself and verifies every download against signing keys built into the
+  agent binary; **GWatch is never asked what version a machine should run and
+  has no way to make an agent install anything**, because a GWatch that
+  someone had got into must not become a way onto every machine reporting to
+  it. Before replacing itself an agent makes the download prove it runs on
+  that machine *and* that it can send a reading the server accepts; the binary
+  it replaces is kept beside it, so `gwatch-agent rollback` is a repair that
+  needs no network. New commands: `gwatch-agent update [--check]` and
+  `gwatch-agent rollback`; `--auto-update=false` (or
+  `GWATCH_AGENT_AUTO_UPDATE=off`) turns the automatic half off.
+  See [`docs/HARDWARE.md`](docs/HARDWARE.md#keeping-agents-up-to-date) and
+  [`docs/RELEASING.md`](docs/RELEASING.md#releasing-the-agent).
+- **GWatch shows which machines are behind.** Settings › Hardware counts the
+  machines running an older agent than the newest release and marks them in
+  the table, and a machine's hardware panel marks its own. It is a label and
+  nothing more — there is no button, because there is deliberately no
+  mechanism. `GET /api/agents/latest` reports the newest agent release
+  (cached; admin only).
+
+### Changed
+
+- Agent releases are no longer part of a GWatch release. `gwatch-agent-*`
+  binaries and `gwatch-agent-setup-<version>.exe` now come from the agent's
+  own `agent-v…` release rather than from `v…`. An agent and a GWatch
+  installation can never be offered each other's build: the two are separated
+  by tag prefix and by exact asset name, and that separation is tested.
+- Agents spread their reporting over the interval rather than all reporting on
+  the same second, and spread their update checks over a window. A fleet set
+  up by one script no longer acts in lockstep.
+
 ## 0.3.0
 
 The 2026-09-21 sprint: everything labelled `sprint-plan` in the tracker.

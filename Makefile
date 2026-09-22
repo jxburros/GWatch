@@ -47,7 +47,15 @@ rsrc:
 # it is built for every platform someone might want to install it on. It is a
 # separate binary on purpose: it carries no database, no web interface and no
 # credential for GWatch beyond its own submit-only token.
-AGENT_LDFLAGS := -s -w -X main.version=$(VERSION)
+#
+# It versions on its own too, from cmd/gwatch-agent/VERSION rather than the
+# project's VERSION file, and is released by tagging agent-v<version> (see
+# docs/RELEASING.md). A machine running an agent is usually not a machine
+# anyone logs into, so the agent updates itself from those releases; tying its
+# version to the server's would mean a server release every time the agent
+# needed a fix.
+AGENT_VERSION ?= $(shell tr -d ' \t\r\n' < cmd/gwatch-agent/VERSION)
+AGENT_LDFLAGS := -s -w -X main.version=$(AGENT_VERSION)
 
 agent:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(AGENT_LDFLAGS)" -o dist/gwatch-agent ./cmd/gwatch-agent
