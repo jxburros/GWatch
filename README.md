@@ -1,4 +1,4 @@
-<img src="web/logo.svg" alt="" width="84" align="right">
+<img src="web/readme-logo.png" alt="" width="84" align="right">
 
 # GWatch
 
