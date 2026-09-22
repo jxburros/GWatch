@@ -98,6 +98,27 @@ go run . run --data-dir ./data
 Then open <http://127.0.0.1:7230> — monitoring runs only while this process runs. See
 `gwatch --help` (or `--listen`/`GWATCH_LISTEN` to change the address) for the rest of the flags.
 
+## The GWatch Agent
+
+<img src="web/agent-logo.png" alt="" width="84" align="right">
+
+`gwatch-agent` is the small, dependency-free companion that reports hardware
+health — processor, memory, swap, load, disks, inodes, network and disk
+throughput — from another machine back to your GWatch server. Pair a machine
+from **Nodes › Pair a machine**, then run the install command it gives you:
+
+```
+gwatch-agent install --server https://gwatch.lan:7230 --token gwa_…
+```
+
+It installs itself as a background service and starts reporting within a
+minute, on Windows, Linux or macOS. It can also run the other way round —
+`gwatch-agent serve` exposes a metrics endpoint for GWatch to poll — for the
+machines that can't reach out on their own. See
+[`docs/HARDWARE.md`](docs/HARDWARE.md) for the full setup and
+[`docs/AGENT-DECISIONS.md`](docs/AGENT-DECISIONS.md) for what the agent
+deliberately does and does not do on a machine.
+
 ## Read more
 
 | Document | What it covers |
