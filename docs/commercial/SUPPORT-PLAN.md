@@ -12,18 +12,24 @@ meanings given in that Agreement.
 
 ## Plans at a glance
 
-| | **Standard** | **Priority** |
-| --- | --- | --- |
-| Coverage hours | Business hours | Business hours |
-| Channels | Email, private issue tracker | Email, private issue tracker, scheduled video calls |
-| Authorized Contacts | 2 | 5 |
-| Included support hours per year | 24 | 80 |
-| Severity 1 first response | 1 business day | 4 business hours |
-| Named support engineer | — | Yes |
-| Quarterly check-in call | — | Yes |
-| Advance notice of breaking changes | Release notes | Release notes plus direct notice before release |
-| Upgrade assistance | How-to guidance | Guided upgrade session for each minor Release |
-| Annual fee | See Order Form | See Order Form |
+| | **Standard** | **Priority** | **Group** |
+| --- | --- | --- | --- |
+| For | One company | One company that needs faster response | A parent company and its portfolio companies |
+| Covered Companies included | 1 | 1 | Per Order Form (e.g. up to 5), more at a per-company fee |
+| Coverage hours | Business hours | Business hours | Business hours |
+| Channels | Email, private issue tracker | Email, private issue tracker, scheduled video calls | Email, private issue tracker, scheduled video calls |
+| Authorized Contacts | 2 | 5 | 5, plus 2 per additional Covered Company |
+| Included support hours per year | 24 | 80 | 80, plus 16 per additional Covered Company, shared across the group |
+| Response targets | Standard | Priority | Priority, for every Covered Company |
+| Named support engineer | — | Yes | Yes |
+| Check-in call | — | Quarterly | Quarterly, with group IT; per-company calls on request |
+| Advance notice of breaking changes | Release notes | Release notes plus direct notice before release | Same as Priority |
+| Upgrade assistance | How-to guidance | Guided upgrade session for each minor Release | Guided upgrade session for each minor Release, per deployment |
+| Annual fee | See Order Form | See Order Form | See Order Form |
+
+The Group plan suits a holding company whose portfolio companies each run
+their own network. It works whether a group IT function runs GWatch
+centrally or each company runs its own deployment.
 
 **Business hours** are 9:00–17:00 US Central Time, Monday to Friday, excluding
 US federal holidays. Requests received outside business hours are treated as
@@ -82,7 +88,9 @@ private tracker at `[URL]`. Include:
    credentials removed**.
 
 A request from someone who isn't an Authorized Contact will be routed to one
-before work starts.
+before work starts. On the Group plan, say which Covered Company the request
+is for; included hours are tracked per company as well as in total, so the
+group can allocate costs internally.
 
 ## Included support hours
 
@@ -166,8 +174,13 @@ Priced in the Order Form:
 - **Onboarding package:** a fixed-scope engagement to install GWatch, set up
   accounts, alerting and backups, import or discover the first devices, and
   run a walkthrough session. Delivered within `[30]` days of the Effective
-  Date.
+  Date. On the Group plan it's priced per company, with a lower rate for
+  each company after the first. The first one sets the template (node
+  templates, groups, alert rules) the rest reuse.
+- **Additional Covered Companies:** on the Group plan, a per-company annual
+  fee for companies beyond those included, prorated when a company is added
+  mid-year (for example after an acquisition).
 - **Additional support hours:** billed hourly beyond the included hours.
-- **Attribution Relief:** see Section 2.4 of the Agreement.
+- **Attribution Relief:** see Section 2.5 of the Agreement.
 - **Professional Services:** custom development, integrations and on-site
   work, at the Order Form rate under an SOW.

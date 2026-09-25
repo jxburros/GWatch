@@ -5,6 +5,12 @@
 > goes to a customer. Notes in quote blocks like this one are drafting notes
 > for JX Holdings; delete them from the copy you send. Have counsel licensed in
 > Minnesota review the final version before anyone signs it.
+>
+> Holding companies often have a procurement team and their own vendor
+> agreement ("their paper"). If they send theirs, use this draft as your
+> checklist of positions (liability cap, no broad IP indemnity, response
+> targets rather than fix times, fallback to the Community License) and mark
+> up their document to match.
 
 This GWatch Commercial License and Support Agreement (the "**Agreement**") is
 entered into as of `[Effective Date]` (the "**Effective Date**") between:
@@ -43,38 +49,69 @@ of the Community License without taking any of its rights away.
   Holdings creates for Customer under a Statement of Work.
 - **"Fees"** means the amounts set out in the Order Form or a Statement of Work.
 - **"Affiliate"** means an entity that controls, is controlled by, or is under
-  common control with a party, for as long as that control lasts.
+  common control with a party, for as long as that control lasts. "Control"
+  means direct or indirect ownership of more than 50% of the voting interests,
+  or the power to direct the entity's management and policies.
+- **"Covered Company"** means Customer and each Affiliate of Customer that is
+  listed in the Order Form or added under Section 2.3. Customer may also
+  designate a company in which it holds a non-controlling interest as a Covered
+  Company, with JX Holdings' written consent (email is enough).
 
 ## 2. License
 
 **2.1 Grant.** Subject to this Agreement and payment of the Fees, JX Holdings
-grants Customer and its Affiliates, for the Term, a worldwide, non-exclusive,
+grants the Covered Companies, for the Term, a worldwide, non-exclusive,
 non-transferable (except under Section 14.2) license to use, reproduce, modify
-and deploy the Software:
+and deploy the Software for the internal business purposes of the Covered
+Companies.
 
-- (a) for their own internal business purposes; and
-- (b) to monitor networks and systems they operate for their own clients as
-  part of Customer's services, where the Software is not itself the product
-  being sold.
+**2.2 Shared services.** A Covered Company may operate the Software centrally
+for other Covered Companies. For example, a group IT function may run one
+deployment that monitors several portfolio companies, or deploy separate
+instances for each of them. Doing so, and allocating its cost among Covered
+Companies through intercompany charges, is internal use. It is not resale or
+a hosted service under Section 2.6 or Section 2 of the Community License.
+Customer may also let its and the Covered Companies' contractors and service
+providers use the Software solely on their behalf.
 
-**2.2 Contractors.** Customer may let its contractors and service providers use
-the Software solely on Customer's behalf. Customer is responsible for their
-compliance with this Agreement.
+**2.3 Changes to the group.**
 
-**2.3 Relationship to the Community License.** For Customer, this Agreement
+- (a) *Acquisitions.* Customer may add a newly acquired Affiliate as a
+  Covered Company by notice to JX Holdings. It is covered from the date of
+  notice. If the number of Covered Companies then exceeds the number included
+  in the Order Form, the additional-company fee in the Order Form applies,
+  prorated for the rest of the current Term year.
+- (b) *Divestitures.* When an entity stops being an Affiliate of Customer, it
+  stops being a Covered Company `[90]` days later. During that transition
+  period it keeps its license and support. Afterwards it may keep using the
+  Software under the Community License, or sign its own agreement with JX
+  Holdings. Fees already paid are not reduced, but the entity no longer
+  counts toward the Covered Company total at renewal.
+- (c) *Responsibility.* Customer is responsible for every Covered Company's
+  compliance with this Agreement, and is the only party entitled to enforce
+  it against JX Holdings. Covered Companies are not third-party
+  beneficiaries.
+
+> Drafting note: this is set up as one agreement signed by the parent that
+> covers the whole group. If the customer would rather have each portfolio
+> company sign its own order form under this agreement, that works too: add a
+> clause that an Affiliate may sign an Order Form referencing this Agreement
+> and is then bound as "Customer" for that Order Form only.
+
+**2.4 Relationship to the Community License.** For Customer, this Agreement
 adds to the Community License and does not replace it. Where the two conflict,
 this Agreement controls for as long as it is in effect. When this Agreement
 ends for any reason, Customer's use of the Software continues under the
 Community License. Customer never loses the right to keep running GWatch
 because this Agreement ended.
 
-**2.4 Attribution.** Sections 3 and 4 of the Community License (attribution and
+**2.5 Attribution.** Sections 3 and 4 of the Community License (attribution and
 non-official notice) and `TRADEMARKS.md` continue to apply unless the Order
 Form includes the **Attribution Relief** add-on. If it does, for the Term:
 
 - (a) Customer may remove or hide the GWatch logo, name and non-official
-  notice from the user interface of deployments that Customer and its
-  Affiliates run and that are used only by their personnel and clients; and
+  notice from the user interface of deployments that the Covered Companies
+  run and that are used only by their own personnel; and
 - (b) the copyright notice in the `LICENSE` file, and the `LICENSE` and
   `TRADEMARKS.md` files themselves, must still be kept with any copy of the
   source.
@@ -83,7 +120,7 @@ Attribution Relief grants no right to use the GWatch name or logo as
 Customer's own brand, and no right to say or imply that JX Holdings endorses
 Customer.
 
-**2.5 Resale and hosting.** This Agreement does not permit Customer to sell,
+**2.6 Resale and hosting.** This Agreement does not permit Customer to sell,
 sublicense or distribute the Software to third parties, or to offer it to them
 as a hosted or managed service where the Software itself is what they pay for,
 except as allowed by the Community License. Any resale, OEM or hosted-service
@@ -93,7 +130,7 @@ rights must be expressly granted in an Order Form that names them.
 > create a competitor to GWatch itself. Don't include them just because
 > they're asked for.
 
-**2.6 Reserved rights.** JX Holdings keeps all rights not expressly granted.
+**2.7 Reserved rights.** JX Holdings keeps all rights not expressly granted.
 The Software is licensed, not sold. Nothing in this Agreement restricts JX
 Holdings from licensing, supporting or developing the Software for anyone
 else, including Customer's competitors.
@@ -194,8 +231,8 @@ receiver or trustee appointed.
 **7.4 Effect of termination.** When this Agreement ends:
 
 - (a) support, Professional Services and any Attribution Relief end;
-- (b) Customer's use of the Software continues under the Community License
-  (Section 2.3). Customer has `[60]` days to restore attribution in any
+- (b) each Covered Company's use of the Software continues under the
+  Community License (Section 2.4). Customer has `[60]` days to restore attribution in any
   deployment that used Attribution Relief;
 - (c) Customer pays all Fees accrued up to termination; and
 - (d) if Customer terminates for JX Holdings' uncured material breach,
@@ -219,7 +256,8 @@ Software's public source code is not Confidential Information.
 
 **8.2 Obligations.** The Recipient will use Confidential Information only to
 perform or exercise its rights under this Agreement. It will disclose it only
-to its personnel and advisers who need to know it and are bound by comparable
+to its personnel, its Affiliates' personnel (and, for Customer, the Covered
+Companies' personnel) and its advisers, who need to know it and are bound by comparable
 obligations, and will protect it with at least reasonable care. The Recipient
 may disclose Confidential Information when required by law, after giving
 prompt notice where lawful.
@@ -407,15 +445,19 @@ Agreement as Schedule A in the version dated `[date]`.
 | JX Holdings notice address | `[name, email, postal address]` |
 | Effective Date | `[ ]` |
 | Initial term | `[12 months]` |
-| Support Plan tier | `[Standard / Priority]` |
-| Authorized Contacts | `[names and emails, up to the tier's limit]` |
-| Included support hours | `[per Schedule A for the tier]` |
-| Support Plan fee | `$[ ]` per year, invoiced annually in advance |
-| Onboarding package | `[Yes / No]` — `$[ ]` one-time |
-| Attribution Relief (Section 2.4) | `[Yes / No]` — `$[ ]` per year |
+| Support Plan tier | `[Standard / Priority / Group]` |
+| Covered Companies | `[legal names of Customer and each portfolio company covered]` |
+| Covered Companies included in the fee | `[ ]` |
+| Additional Covered Company fee | `$[ ]` per company per year, prorated when added mid-year |
+| Deployment model | `[One central deployment run by [group IT] / a deployment per company / mixed]` |
+| Authorized Contacts | `[names, emails and the company each works for, up to the tier's limit]` |
+| Included support hours | `[per Schedule A for the tier]`, shared across all Covered Companies |
+| Support Plan fee | `$[ ]` per year, invoiced annually in advance to Customer |
+| Onboarding package | `[Yes / No]` — `$[ ]` for the first company, `$[ ]` for each additional one |
+| Attribution Relief (Section 2.5) | `[Yes / No]` — `$[ ]` per year |
 | Additional support hours | `$[ ]` per hour, in 15-minute increments |
 | Professional Services rate | `$[ ]` per hour / `$[ ]` per day |
-| Resale / OEM / hosting rights (Section 2.5) | `[None]` |
+| Resale / OEM / hosting rights (Section 2.6) | `[None]` |
 | Renewal increase cap (Section 6.5) | `[ ]%` |
 | Payment terms | Net `[30]` |
 | Special terms | `[e.g., founding-customer rate held for renewal terms through [date]]` |
