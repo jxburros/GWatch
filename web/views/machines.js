@@ -202,7 +202,12 @@ function cpuDetail(m) {
   if (m.cpu?.usagePct != null) {
     return m.cpu.cores ? `${m.cpu.cores} cores` : '';
   }
-  if (m.cpu?.loadPerCore != null) return `load ${m.cpu.load1?.toFixed(2)} across ${m.cpu.cores} cores`;
+  if (m.cpu?.loadPerCore != null) {
+    // Either figure can be missing on its own; say what there is rather than
+    // "load undefined across null cores" (#72).
+    const load = m.cpu.load1 != null ? `load ${m.cpu.load1.toFixed(2)}` : `${m.cpu.loadPerCore.toFixed(2)} per core`;
+    return m.cpu.cores ? `${load} across ${m.cpu.cores} cores` : load;
+  }
   return 'not reported';
 }
 

@@ -574,7 +574,10 @@ export function selectInput({ options, value, ...attrs } = {}) {
     const opt = typeof o === 'object' ? o : { value: o, label: o };
     sel.append(h('option', { value: opt.value, disabled: !!opt.disabled }, opt.label ?? opt.value));
   }
-  if (value !== undefined) sel.value = String(value);
+  // An empty value (a nullable id, a setting never set) selects the empty
+  // option where there is one, rather than being written in as "null" — a
+  // value no option has, which leaves the select showing nothing at all (#72).
+  if (value !== undefined) sel.value = value == null ? '' : String(value);
   return sel;
 }
 
@@ -596,7 +599,9 @@ export function toggle({ label, checked = false, onChange, id, disabled, ariaLab
 
 /** Chip / tag input. `.value` returns an array of strings. */
 export function chipInput({ values = [], placeholder = 'Add…', suggestions = [], onChange, validate, id } = {}) {
-  let items = [...values];
+  // The API sends an empty list as null (a Go nil slice), so null is empty.
+  let items = [...(values || [])];
+  suggestions = suggestions || [];
   const listId = suggestions.length ? uid('dl') : null;
   const input = h('input', { type: 'text', placeholder, id: id || uid('chip'), list: listId, autocomplete: 'off' });
   const wrap = h('div', { class: 'chip-input', onclick: (e) => { if (e.target === wrap) input.focus(); } });
