@@ -1347,6 +1347,20 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
   padding: 0.625rem 0.75rem; background: var(--elev); border: 1px solid var(--accent-line); color: var(--text);
 }
 .agent-setup { font-family: var(--mono); font-size: 0.75rem; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+/* The agent's mark (agentLogo() in components.js). It is navy on transparent,
+   so on the dark theme's graphite it would all but vanish: it always sits on a
+   white tile of its own — the same white in both themes, square like the rest
+   of the interface — with the theme's hairline round it. On the light theme
+   the tile melts into the card and only the hairline shows. */
+.agent-logo {
+  display: block; flex: none; width: 3rem; height: 3rem; padding: 0.1875rem;
+  background: #ffffff; border: 1px solid var(--line); object-fit: contain;
+}
+/* The mark beside the paragraph that introduces the agent. */
+.agent-intro { display: flex; align-items: flex-start; gap: 0.875rem; }
+.agent-intro > p { flex: 1; min-width: 0; margin: 0; }
+.settings-panel .card .agent-intro { margin-bottom: 1.125rem; }
+.settings-panel .card .agent-intro .lead { margin-bottom: 0; }
 
 /* Settings › AI & MCP: numbered set-up steps and copyable code blocks. */
 .mcp-steps { margin: 0.5rem 0 0; padding-left: 1.5rem; display: flex; flex-direction: column; gap: 0.875rem; }
@@ -1632,6 +1646,9 @@ body.wallboard-mode .view { padding: 0; }
 .ob-step { display: grid; grid-template-columns: 2.75rem minmax(0, 1fr); gap: 1.125rem; align-items: start; }
 .ob-icon { display: flex; align-items: center; justify-content: center; width: 2.75rem; height: 2.75rem; border: 1px solid var(--line-strong); background: var(--elev); color: var(--accent-hover); }
 .ob-icon .icon { font-size: 1.25rem; }
+/* A step that has a mark of its own (the agent's) shows it in the icon's slot,
+   at the icon's size, on the mark's own light tile (.agent-logo). */
+.agent-logo.ob-mark { width: 2.75rem; height: 2.75rem; padding: 0.125rem; border-color: var(--line-strong); }
 .ob-copy { display: flex; flex-direction: column; gap: 0.625rem; min-width: 0; }
 .ob-copy h2 { font-size: 1.25rem; letter-spacing: -0.02em; }
 .ob-copy .lead { color: var(--muted); font-size: 0.875rem; }

@@ -35,13 +35,17 @@ build-cgo:
 # (one command, both installers) or scripts/installer/README.md.
 
 # Regenerates the .syso resource objects that give gwatch.exe and
-# gwatch-agent.exe their icon. The outputs are committed, so this only needs
-# running when scripts/installer/assets/gwatch.ico changes — but it is
-# deterministic, so running it when nothing changed produces no diff.
+# gwatch-agent.exe their icons — GWatch's mark for the monitor, the agent's own
+# mark (the G in a deerstalker) for the agent. The outputs are committed, so
+# this only needs running when one of the two .ico files in
+# scripts/installer/assets/ changes — but it is deterministic, so running it
+# when nothing changed produces no diff. The agent's .ico is itself generated,
+# by scripts/installer/make-assets.py.
 ICON := scripts/installer/assets/gwatch.ico
+AGENT_ICON := scripts/installer/assets/gwatch-agent.ico
 rsrc:
 	go run ./cmd/gwatch-rsrc -ico $(ICON) -out rsrc
-	go run ./cmd/gwatch-rsrc -ico $(ICON) -out cmd/gwatch-agent/rsrc
+	go run ./cmd/gwatch-rsrc -ico $(AGENT_ICON) -out cmd/gwatch-agent/rsrc
 
 # gwatch-agent runs on the machines being watched rather than on this one, so
 # it is built for every platform someone might want to install it on. It is a

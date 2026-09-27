@@ -54,22 +54,32 @@ Compression=lzma2/max
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
+; Plain "modern" is Inno's light wizard. The installers are light only, so
+; this deliberately names no dark or dynamic variant (newer Inno Setup releases
+; accept one), which would follow or force the system dark mode under style.iss.
 WizardStyle=modern
 OutputDir=Output
 OutputBaseFilename=gwatch-agent-setup-{#AppVersion}
 UninstallDisplayName={#AppName} {#AppVersion}
-; gwatch-agent.exe carries its own icon now (see cmd/gwatch-rsrc and the
-; rsrc_windows_*.syso objects), so Add/Remove Programs and the shortcuts
-; can point straight at the executable.
+; gwatch-agent.exe carries its own icon -- the agent's mark, from
+; assets\gwatch-agent.ico (see cmd/gwatch-rsrc and the rsrc_windows_*.syso
+; objects) -- so Add/Remove Programs and the shortcuts can point straight at
+; the executable.
 UninstallDisplayIcon={app}\gwatch-agent.exe
 SetupLogging=yes
 
 LicenseFile=license.txt
-SetupIconFile=assets\gwatch.ico
-WizardImageFile=assets\wizard-large.bmp,assets\wizard-large-2x.bmp
-; The inner pages' header is graphite now (see style.iss), so the badge that
-; sits on it is the inverted mark rather than the one drawn for white.
-WizardSmallImageFile=assets\wizard-small-dark.bmp,assets\wizard-small-dark-2x.bmp
+; The agent's own mark -- the G in a deerstalker -- rather than GWatch's, so
+; the setup program looks like the thing it installs. The icon is also the
+; uninstaller's, and the one gwatch-agent.exe carries (see UninstallDisplayIcon
+; above). All of it is generated from assets\agent-logo-master.png by
+; make-assets.py; see README.md. Two sizes of each bitmap: Inno picks by the
+; display's DPI rather than upscaling.
+SetupIconFile=assets\gwatch-agent.ico
+WizardImageFile=assets\agent-wizard-large.bmp,assets\agent-wizard-large-2x.bmp
+; The inner pages' header is white (see style.iss) -- the installers are
+; light only -- so the badge that sits on it is the mark drawn on white.
+WizardSmallImageFile=assets\agent-wizard-small.bmp,assets\agent-wizard-small-2x.bmp
 WizardImageStretch=yes
 ; The connect page asks four questions and explains the code underneath them,
 ; which is more than the default wizard size is comfortable with.
@@ -198,7 +208,7 @@ end;
 
 { Every page is skinned as it is shown: some of the wizard's controls do not
   exist until their page is first needed, and a page that arrived unskinned
-  would be a white rectangle in the middle of a dark wizard. }
+  would be a patch of stock Windows grey in the middle of the wizard. }
 procedure CurPageChanged(CurPageID: Integer);
 begin
   ApplyGWatchSkin;

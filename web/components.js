@@ -148,6 +148,15 @@ export function icon(name, cls = '') {
 }
 export function iconInto(el, name) { el.appendChild(icon(name)); return el; }
 
+// The agent's own mark — the G in a deerstalker, web/agent-logo.png — for the
+// places that talk about gwatch-agent. It sits beside text that already says
+// "agent", so it is decorative by default (alt=""); pass alt when it stands on
+// its own. The .agent-logo rule gives it a light tile in every theme: the mark
+// is navy on transparent, which all but vanishes on the dark theme's graphite.
+export function agentLogo({ alt = '', cls = '' } = {}) {
+  return h('img', { class: `agent-logo ${cls}`.trim(), src: 'agent-logo.png', alt, width: '48', height: '48', decoding: 'async' });
+}
+
 /* ---------- Theme / accent ---------- */
 
 const themeListeners = new Set();

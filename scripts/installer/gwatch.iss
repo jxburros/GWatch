@@ -49,6 +49,9 @@ Compression=lzma2/max
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
+; Plain "modern" is Inno's light wizard. The installers are light only, so
+; this deliberately names no dark or dynamic variant (newer Inno Setup releases
+; accept one), which would follow or force the system dark mode under style.iss.
 WizardStyle=modern
 OutputDir=Output
 OutputBaseFilename=gwatch-setup-{#AppVersion}
@@ -67,9 +70,9 @@ LicenseFile=license.txt
 SetupIconFile=assets\gwatch.ico
 ; Two sizes each: Inno picks by the display's DPI rather than upscaling.
 WizardImageFile=assets\wizard-large.bmp,assets\wizard-large-2x.bmp
-; The inner pages' header is graphite now (see style.iss), so the badge that
-; sits on it is the inverted mark rather than the one drawn for white.
-WizardSmallImageFile=assets\wizard-small-dark.bmp,assets\wizard-small-dark-2x.bmp
+; The inner pages' header is white (see style.iss) -- the installers are
+; light only -- so the badge that sits on it is the mark drawn on white.
+WizardSmallImageFile=assets\wizard-small.bmp,assets\wizard-small-2x.bmp
 WizardImageStretch=yes
 ; A little more room than the default: the network page has a paragraph on it
 ; that should not need three lines to say eight words.
@@ -191,7 +194,7 @@ end;
 
 { Every page is skinned as it is shown: some of the wizard's controls do not
   exist until their page is first needed, and a page that arrived unskinned
-  would be a white rectangle in the middle of a dark wizard. }
+  would be a patch of stock Windows grey in the middle of the wizard. }
 procedure CurPageChanged(CurPageID: Integer);
 begin
   ApplyGWatchSkin;

@@ -1,7 +1,7 @@
 # Building the Windows setup programs
 
-Two Inno Setup 6 scripts live here, and they share their branding, their licence
-page and their wizard artwork:
+Two Inno Setup 6 scripts live here. They share their branding, their light-only
+skin and their licence page, and each wears the mark of what it installs:
 
 | Script | Produces | Installs |
 | --- | --- | --- |
@@ -98,59 +98,92 @@ gwatch-agent-setup-0.1.0.exe /VERYSILENT /SERVER=http://gwatch.lan:7230 /CODE=AB
 `brand.iss` holds the publisher, developers and URLs that both scripts share.
 `style.iss` holds the wizard's skin: both scripts include it as the first line
 of their `[Code]` section, and it repaints the wizard in the application's own
-“Signal” palette — graphite field, teal accent rule under the header, the
-monospaced face in the fields that hold machine text. It is written against
+“Signal” palette in its **light** theme — the `:root[data-theme="light"]`
+tokens from `web/app.css`: a pale grey `#f1f2f4` field, white header and
+inputs, near-black `#10151d` text, the teal accent rule under the header, and
+the monospaced face in the fields that hold machine text. It is written against
 Inno's control classes rather than against named fields, and the whole of it
 runs inside `try`, so a future Inno Setup that renames something leaves a plain
 wizard rather than an error box.
 
-`assets\` holds the artwork:
+Both installers are light, and only light: there is no dark variant of the skin
+or the artwork, nothing looks at the system theme, and `WizardStyle` is plain
+`modern` — not one of the dark or dynamic variants newer Inno Setup releases
+accept.
+
+`assets\` holds the artwork. The monitor's installer wears GWatch's mark; the
+agent's installer wears the agent's own — the G in a deerstalker — so each setup
+program looks like the thing it installs:
 
 | File | Used as | Notes |
 | --- | --- | --- |
-| `logo-master.png` | source artwork | 1254×1254 RGBA, transparent background. Everything else here is derived from it. |
-| `gwatch.ico` | `SetupIconFile`, shortcut icon | 16/24/32/48/64/128 as 32-bit BMP entries, 256 as PNG |
-| `wizard-large.bmp`, `wizard-large-2x.bmp` | `WizardImageFile` | 164×314 and 328×628, the welcome and finish panels |
-| `wizard-small.bmp`, `wizard-small-2x.bmp` | source for the dark badge | 55×58 and 110×116, the mark on white |
-| `wizard-small-dark.bmp`, `wizard-small-dark-2x.bmp` | `WizardSmallImageFile` | the same badge inverted for the graphite header |
+| `logo-master.png` | source artwork, GWatch | 1254×1254 RGBA, transparent background |
+| `agent-logo-master.png` | source artwork, the agent | 400×400 RGBA, transparent background. The same file as [`web/agent-logo.png`](../../web/agent-logo.png) |
+| `gwatch.ico` | `gwatch.iss` `SetupIconFile`; `gwatch.exe` | 16/24/32/48/64/128 as 32-bit BMP entries, 256 as PNG |
+| `gwatch-agent.ico` | `gwatch-agent.iss` `SetupIconFile` (and so its uninstaller); `gwatch-agent.exe` | the same layout, from the agent's mark |
+| `wizard-large.bmp`, `wizard-large-2x.bmp` | `gwatch.iss` `WizardImageFile` | 164×314 and 328×628, the welcome and finish panels |
+| `wizard-small.bmp`, `wizard-small-2x.bmp` | `gwatch.iss` `WizardSmallImageFile` | 55×58 and 110×116, the mark on white |
+| `agent-wizard-large.bmp`, `agent-wizard-large-2x.bmp` | `gwatch-agent.iss` `WizardImageFile` | as `wizard-large`, with the agent's mark |
+| `agent-wizard-small.bmp`, `agent-wizard-small-2x.bmp` | `gwatch-agent.iss` `WizardSmallImageFile` | as `wizard-small`, with the agent's mark |
 
-The dark badge is derived from the light one by exchanging its black and white,
-exactly as [`web/logo-dark.svg`](../../web/logo-dark.svg) does for the vector
-mark: a pixel whose chroma leans blue or is neutral — the navy ring, the white
-sclera, and every antialiased blend between them — is remapped along the
-navy-to-white axis onto `#f2f4f6`-to-`#16181d`, and a pixel whose chroma leans
-red is left alone, because the gold iris is the mark's colour rather than its
-contrast. Redo it that way if the light badge ever changes.
+The bitmaps are 24-bit BMPs, two sizes each so Inno can pick by the display's
+DPI rather than upscaling.
 
-The large panel is deliberately the app's own skin — graphite `#0f1114`, the teal
-accent, square corners, a hairline grid, and status dots in the up/warn/down
-colours from `web/app.css`. The small badge is the inverted mark, because Inno draws
-it on the inner pages' header strip, which `style.iss` paints graphite.
+### Regenerating the artwork
 
-The vector form of the same mark is [`web/logo.svg`](../../web/logo.svg), with
+[`make-assets.py`](make-assets.py) draws the large panels for both installers,
+the agent's small badge and `gwatch-agent.ico`:
+
+```sh
+pip install pillow          # once
+python3 scripts/installer/make-assets.py
+make rsrc                   # the agent's icon also lives in its .syso files
+```
+
+It is deterministic for a given Pillow version — running it when nothing changed
+produces no diff. The large panel is deliberately the app's own light skin in
+miniature: the `--bg` field with a hairline grid and a faint teal wash from the
+top left, the logo on a white `--card` with a `--line` border and the light
+theme's soft shadow, the teal accent rule, a sparkline over its baseline, and
+status dots in the light theme's up/warn/down colours (`#107f37`, `#9f5f00`,
+`#d42525`). Each drawing is made at twice the 2x size and scaled down to both
+sizes, so the edges are antialiased alike. The small badge is the mark fitted on
+white, because Inno draws it on the inner pages' header strip, which `style.iss`
+paints white. The icon's 16–128 entries are 32-bit DIBs with the mark fitted to
+the square (a hair of margin from 32 up) and the 256 entry is a PNG, as in
+`gwatch.ico`.
+
+GWatch's own small badge and `gwatch.ico` predate the script and are not
+regenerated by it; if GWatch's mark changes, make them the same way — the mark
+fitted into the middle 88×88 of the 110×116 badge on white.
+
+The vector form of GWatch's mark is [`web/logo.svg`](../../web/logo.svg), with
 [`web/logo-dark.svg`](../../web/logo-dark.svg) for a dark field; the web
-interface and the favicon use whichever the theme calls for. Change one and
-change the others.
+interface and the favicon use whichever the theme calls for. The agent's mark is
+[`web/agent-logo.png`](../../web/agent-logo.png), which the web interface shows
+wherever it talks about the agent. Change one form of a mark and change the
+others.
 
 ### The executables' own icon
 
-`gwatch.ico` is also compiled into `gwatch.exe` and `gwatch-agent.exe`, so they
-carry their icon in Explorer, the task bar and Alt-Tab rather than falling back to
-the generic Windows program icon. A Go binary gets one only if a COFF resource
-object is linked in, which is what the committed `rsrc_windows_amd64.syso` /
-`rsrc_windows_arm64.syso` files in the repository root and in `cmd/gwatch-agent/`
-are. The `_windows_<arch>` suffixes are ordinary Go build constraints, so Linux and
-macOS builds ignore them.
+`gwatch.ico` is compiled into `gwatch.exe` and `gwatch-agent.ico` into
+`gwatch-agent.exe`, so each carries its own icon in Explorer, the task bar and
+Alt-Tab rather than falling back to the generic Windows program icon. A Go binary
+gets one only if a COFF resource object is linked in, which is what the committed
+`rsrc_windows_amd64.syso` / `rsrc_windows_arm64.syso` files in the repository
+root (from `gwatch.ico`) and in `cmd/gwatch-agent/` (from `gwatch-agent.ico`)
+are. The `_windows_<arch>` suffixes are ordinary Go build constraints, so Linux
+and macOS builds ignore them.
 
-They are generated from `gwatch.ico` by [`cmd/gwatch-rsrc`](../../cmd/gwatch-rsrc),
-and regenerated with:
+They are generated by [`cmd/gwatch-rsrc`](../../cmd/gwatch-rsrc), and
+regenerated with:
 
 ```sh
 make rsrc
 ```
 
-That is deterministic — running it when the icon has not changed produces no diff —
-so it only needs running after editing `gwatch.ico`. Version information is
+That is deterministic — running it when the icons have not changed produces no
+diff — so it only needs running after editing either `.ico`. Version information is
 deliberately *not* embedded: the version is a build-time `-ldflags` value, and a
 committed object would pin it to whatever it was when the object was generated.
 

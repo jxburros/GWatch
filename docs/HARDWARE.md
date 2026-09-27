@@ -1,3 +1,5 @@
+<img src="../web/agent-logo.png" alt="" width="72" align="right">
+
 # Hardware health
 
 GWatch watches whether things on your network answer. Hardware health answers
