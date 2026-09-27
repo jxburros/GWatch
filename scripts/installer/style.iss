@@ -2,10 +2,13 @@
 // and gwatch-agent.iss, so both setup programs look like the thing they are
 // installing rather than like a generic Windows wizard.
 //
-// The palette is the application's own "Signal" skin (web/app.css): warm
-// graphite, a teal accent, square corners. Delphi's TColor is $00BBGGRR, so the
-// constants below read backwards compared with the CSS they come from -- the
-// hex comment on each line is the CSS value it matches.
+// The palette is the application's own "Signal" skin (web/app.css) in its
+// LIGHT theme -- the :root[data-theme="light"] tokens: a pale grey field, white
+// panels, near-black text, a teal accent, square corners. The installers are
+// light and only light (issue #66): there is no dark variant to pick and no
+// code here that looks at the system theme. Delphi's TColor is $00BBGGRR, so
+// the constants below read backwards compared with the CSS they come from --
+// the hex comment on each line is the CSS value it matches.
 //
 // This file is Pascal, not an .iss section, so its comments are "//" and not
 // ";" -- a ";" here is a statement separator and the compiler stops on it.
@@ -19,12 +22,12 @@
 // plain still installs, and an installer that raises an error box on its first
 // page does not.
 const
-  clGWatchBg      = $14110F;  { #0f1114 -- the field }
-  clGWatchCard    = $1D1816;  { #16181d -- panels and inputs }
-  clGWatchElev    = $2D2622;  { #22262d -- raised surfaces }
-  clGWatchText    = $F6F4F2;  { #f2f4f6 -- body text }
-  clGWatchMuted   = $ACA39A;  { #9aa3ac -- secondary text }
-  clGWatchAccent  = $C0C943;  { #43c9c0 -- the accent }
+  clGWatchBg      = $F4F2F1;  { #f1f2f4 -- the field (--bg) }
+  clGWatchCard    = $FFFFFF;  { #ffffff -- panels, inputs and the header (--card) }
+  clGWatchElev    = $F9F7F6;  { #f6f7f9 -- raised surfaces (--elev) }
+  clGWatchText    = $1D1510;  { #10151d -- body text (--text) }
+  clGWatchMuted   = $6F6055;  { #55606f -- secondary text (--muted) }
+  clGWatchAccent  = $C0C943;  { #43c9c0 -- the accent, a fill rather than text }
 
 var
   GWatchAccentRule: TPanel;
@@ -80,8 +83,8 @@ begin
   WizardForm.MainPanel.Color := clGWatchCard;
   WizardForm.PageNameLabel.Font.Color := clGWatchText;
   WizardForm.PageDescriptionLabel.Font.Color := clGWatchMuted;
-  { Inno's own separator lines sit on a white assumption, so they go and the
-    accent rule stands in for them. }
+  { Inno's own etched separator would sit directly under the accent rule and
+    double it, so it goes and the accent rule stands in for it. }
   WizardForm.Bevel.Visible := False;
   if GWatchAccentRule = nil then
   begin
@@ -103,9 +106,9 @@ begin
     WizardForm.Color := clGWatchBg;
     SkinTree(WizardForm);
     SkinHeader;
-    { The welcome and finished pages carry the large bitmap, which is already
-      the application's field colour, so their text is set against that rather
-      than against the page. }
+    { The welcome and finished pages carry the large bitmap, which is drawn
+      on the application's light field colour, so their text is set against
+      that rather than against the page. }
     WizardForm.WelcomeLabel1.Font.Color := clGWatchText;
     WizardForm.WelcomeLabel2.Font.Color := clGWatchMuted;
     WizardForm.FinishedHeadingLabel.Font.Color := clGWatchText;

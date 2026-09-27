@@ -3,7 +3,7 @@
 // backups, database, updates, monitor health. Logs moved to the Audit tab.
 
 import { api, qs } from '../api.js';
-import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, openModal, emptyState, skeleton, banner, eventRow, busy, applyTheme, applyAccent, ACCENT_PRESETS, hexToRgb, applyDensity, currentDensity } from '../components.js';
+import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, openModal, emptyState, skeleton, banner, eventRow, busy, applyTheme, applyAccent, ACCENT_PRESETS, hexToRgb, applyDensity, currentDensity, agentLogo } from '../components.js';
 import { relTime, dateTime, bytes, num, duration, retentionSpan, toLocalInput, fromLocalInput, weekdayShort, timeShort, plural, isBeta, agentIsBehind } from '../fmt.js';
 import { openEndpointEditor, endpointRow, triggerRow, openTriggerEditor } from './automation.js';
 import { rulesPanel } from './rules.js';
@@ -549,7 +549,9 @@ export async function mount(root, ctx) {
       replace(wrap,
         h('div', { class: 'card-head' }, h('h2', null, 'Machines'),
           h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => registerAgent(reload) }, icon('plus'), 'Register a machine')),
-        h('p', { class: 'lead' }, 'GWatch reads this computer by itself. To see another machine\u2019s hardware, register it here and install gwatch-agent on it — the agent only sends readings out, so registering a machine gives GWatch no way into it. Each machine gets a node of its own, and its readings are shown there.'),
+        h('div', { class: 'agent-intro' },
+          agentLogo(),
+          h('p', { class: 'lead' }, 'GWatch reads this computer by itself. To see another machine\u2019s hardware, register it here and install gwatch-agent on it — the agent only sends readings out, so registering a machine gives GWatch no way into it. Each machine gets a node of its own, and its readings are shown there.')),
         // Worth saying once, above the table, rather than only as a mark per
         // row: the question people have is "is my fleet current", and the
         // answer is a count.
@@ -634,7 +636,9 @@ export async function mount(root, ctx) {
       title: 'Install the agent on that machine',
       wide: true,
       body: h('div', { class: 'stack' },
-        h('p', { class: 'lead' }, 'Run this on the machine you want to watch. GWatch keeps only a fingerprint of the token, so it cannot be shown again — if you lose it, revoke this machine and register it afresh.'),
+        h('div', { class: 'agent-intro' },
+          agentLogo(),
+          h('p', { class: 'lead' }, 'Run this on the machine you want to watch. GWatch keeps only a fingerprint of the token, so it cannot be shown again — if you lose it, revoke this machine and register it afresh.')),
         h('code', { class: 'agent-setup' }, command),
         h('p', { class: 'note' }, 'The token is good for exactly one thing: submitting that machine\u2019s hardware readings. It cannot read or change anything in GWatch, and GWatch never connects back to the machine.'),
         h('p', { class: 'note' }, 'Without ', h('code', null, 'install'), ' the agent runs in the foreground, which is the quickest way to see that it works. ',

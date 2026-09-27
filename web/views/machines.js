@@ -9,7 +9,7 @@
 import { api, subscribeUpdates } from '../api.js';
 import {
   h, icon, clear, replace, statusPill, emptyState, skeleton, rangeChips, relTimeEl,
-  openModal, confirmDialog, field, textInput, selectInput, toast,
+  openModal, confirmDialog, field, textInput, selectInput, toast, agentLogo,
 } from '../components.js';
 import { LineChart, SERIES_COLORS } from '../charts.js';
 import { bytes, pct, duration, dateTime, num, agentIsBehind } from '../fmt.js';
@@ -39,7 +39,9 @@ export async function pairMachine(reload) {
   const ok = await confirmDialog({
     title: 'Pair a machine',
     body: h('div', { class: 'stack' },
-      h('p', { class: 'lead' }, 'You will get a short code to type into the agent on the other machine. It enrols that one machine and then stops working.'),
+      h('div', { class: 'agent-intro' },
+        agentLogo(),
+        h('p', { class: 'lead' }, 'You will get a short code to type into the agent on the other machine. It enrols that one machine and then stops working.')),
       field({ label: 'Name', input: name, help: 'How this machine appears under Hardware.' }),
       field({ label: 'Node', input: nodeSel, help: 'Optional. Attaching it lets a hardware check on that node watch this machine.' })),
     confirmLabel: 'Get a pairing code',

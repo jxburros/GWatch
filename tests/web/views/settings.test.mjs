@@ -139,3 +139,15 @@ test('settings Hardware marks machines running an older agent', async (t) => {
   assert.match(panel.textContent, /1 machine running an older agent/, 'and counted above the table');
   assert.match(panel.textContent, /take it by themselves/, 'the note must say nothing needs doing here');
 });
+
+// #79: the Hardware tab introduces the agent with the agent's own mark. It sits
+// beside text that already names the agent, so it is decorative.
+test('settings Hardware shows the agent mark beside its introduction', async (t) => {
+  const { root } = await mountView(settingsView, { params: { tab: 'hardware' } }, t);
+  const panel = root.querySelector('.settings-panel');
+  await waitFor(() => panel.querySelector('.agent-intro'));
+  const img = panel.querySelector('.agent-intro img.agent-logo');
+  assert.ok(img, 'the agent mark is shown');
+  assert.equal(img.getAttribute('src'), 'agent-logo.png');
+  assert.equal(img.getAttribute('alt'), '', 'decorative: the text beside it says "agent"');
+});

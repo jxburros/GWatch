@@ -109,9 +109,9 @@ jobs:
       - name: Windows icon resources are up to date
         run: |
           go run ./cmd/gwatch-rsrc -ico scripts/installer/assets/gwatch.ico -out rsrc
-          go run ./cmd/gwatch-rsrc -ico scripts/installer/assets/gwatch.ico -out cmd/gwatch-agent/rsrc
+          go run ./cmd/gwatch-rsrc -ico scripts/installer/assets/gwatch-agent.ico -out cmd/gwatch-agent/rsrc
           if ! git diff --quiet -- '*.syso'; then
-            echo "::error::the committed .syso files do not match scripts/installer/assets/gwatch.ico — run 'make rsrc' and commit the result"
+            echo "::error::the committed .syso files do not match scripts/installer/assets/gwatch.ico and gwatch-agent.ico — run 'make rsrc' and commit the result"
             git diff --stat -- '*.syso'
             exit 1
           fi

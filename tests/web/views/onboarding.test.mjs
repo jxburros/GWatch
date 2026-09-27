@@ -15,3 +15,17 @@ test('onboarding view opens on step one and titles the page', async (t) => {
   assert.equal(root.querySelector('.ob-count').textContent, 'Step 1 of 6');
   assert.equal(root.querySelectorAll('.ob-dot').length, 6);
 });
+
+// #79: the step about other machines is the agent's, so it wears the agent's
+// own mark in place of the step icon; every other step keeps its icon.
+test('onboarding hardware step shows the agent mark', async (t) => {
+  const { root } = await mountView(onboardingView, undefined, t);
+  assert.equal(root.querySelector('.agent-logo'), null, 'step one has no agent mark');
+  for (let n = 0; n < 3; n++) root.querySelector('.ob-foot .btn-primary').click();
+  assert.equal(root.querySelector('h2').textContent, 'Watch the machines themselves');
+  const img = root.querySelector('.ob-step img.agent-logo');
+  assert.ok(img, 'the agent mark stands in for the step icon');
+  assert.equal(img.getAttribute('src'), 'agent-logo.png');
+  assert.equal(img.getAttribute('alt'), '', 'decorative: the heading beside it says what it is');
+  assert.equal(root.querySelector('.ob-step .ob-icon'), null);
+});

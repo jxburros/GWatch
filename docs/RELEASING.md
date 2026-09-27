@@ -81,7 +81,7 @@ Pushing a tag such as `v0.1.0` additionally runs the `release` job (below) and t
 | `internal/api` | JSON API (see [`API.md`](API.md)) and static UI serving |
 | `cmd/gwatch-agent` | The one-directional hardware agent installed on other machines ([`HARDWARE.md`](HARDWARE.md)) |
 | `cmd/gwatch-sign` | Maintainer CLI: generate the release signing key, sign and verify release assets |
-| `cmd/gwatch-rsrc/` | Builds the `.syso` resource objects that put the GWatch icon inside the Windows executables (`make rsrc`) |
+| `cmd/gwatch-rsrc/` | Builds the `.syso` resource objects that put the icons inside the Windows executables — GWatch's mark in `gwatch.exe`, the agent's in `gwatch-agent.exe` (`make rsrc`) |
 | `web/` | The browser interface (vanilla HTML/CSS/JS, no build step, embedded into the binary; open with `?mock=1` for an in-browser demo backend) |
 | `web/fonts/` | Barlow and Kode Mono, latin subsets, self-hosted so the UI still requests nothing from the internet ([SIL OFL 1.1](../web/fonts/OFL.txt)) |
 | `tests/web/` | The jsdom suite for `web/` (`make web-test`). It lives outside `web/` so `//go:embed` never ships it |
@@ -242,7 +242,12 @@ to build them locally. Three things to keep in mind:
 
 The wizard artwork under `scripts/installer/assets/` is committed, not generated at
 release time, so a release needs no image tooling on the runner. If the mark ever
-changes, `web/logo.svg` and those assets have to be updated together.
+changes, `web/logo.svg` and those assets have to be updated together; if the
+agent's mark changes, `web/agent-logo.png` and
+`scripts/installer/assets/agent-logo-master.png` go together, then
+`python3 scripts/installer/make-assets.py` and `make rsrc` (see
+[`scripts/installer/README.md`](../scripts/installer/README.md#branding-assets)).
+Both installers are light-themed only.
 
 ## Releasing the agent
 
