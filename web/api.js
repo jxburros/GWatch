@@ -24,9 +24,10 @@ function setConnection(ok, err) {
 }
 
 // ---- identity ----
-// The shell listens here so that a 401 anywhere in the app can take the whole
-// page to the sign-in screen, and a 403 can explain itself with the server's
-// own wording rather than a generic "forbidden".
+// The shell listens here so that a 401 anywhere in the app (once /api/me has
+// confirmed it, see confirmSignedOut) can take the whole page to the sign-in
+// screen, and a 403 can explain itself with the server's own wording rather
+// than a generic "forbidden".
 const authListeners = new Set();
 export function onAuthChallenge(fn) { authListeners.add(fn); return () => authListeners.delete(fn); }
 function challenge(reason) { for (const fn of authListeners) { try { fn(reason); } catch (e) { console.error(e); } } }
@@ -39,13 +40,87 @@ export function onDenied(fn) { denyListeners.add(fn); return () => denyListeners
 const AUTH_PATHS = ['/api/auth/', '/api/me', '/api/health', '/api/version'];
 const isAuthPath = (path) => AUTH_PATHS.some((p) => path.startsWith(p));
 
-/** The principal behind this browser, as /api/me last reported it. */
+/** The principal behind this browser, as /api/me last reported it. Until the
+ *  first answer arrives this is a placeholder with no standing at all, and
+ *  identityKnown() says so — which is not the same as "a viewer". */
 export let me = { kind: '', isAdmin: false, canWrite: false, signedIn: false };
+let meKnown = false;
+export const identityKnown = () => meKnown;
 
-export async function refreshMe() {
-  try { me = await request('GET', '/api/me'); } catch { /* keep the last answer */ }
-  return me;
+// The fields that decide what this browser may do. A change to any of them
+// is a change of identity; the theme and indicator rules that travel with
+// them in /api/me are not.
+const IDENTITY_FIELDS = ['kind', 'name', 'role', 'userId', 'isAdmin', 'canWrite', 'signedIn'];
+const sameIdentity = (a, b) => IDENTITY_FIELDS.every((k) => (a?.[k] ?? null) === (b?.[k] ?? null));
+
+// The shell listens here to restyle itself (and rebuild the view on screen,
+// which chose what to offer from the identity it was built with) whenever the
+// service reports a different standing from the one last known.
+const identityListeners = new Set();
+export function onIdentity(fn) { identityListeners.add(fn); return () => identityListeners.delete(fn); }
+
+function setMe(next) {
+  const prev = me;
+  me = next;
+  meKnown = true;
+  if (sameIdentity(prev, next)) return;
+  for (const fn of identityListeners) { try { fn(next, prev); } catch (e) { console.error(e); } }
 }
+
+// One /api/me request at a time: a burst of refusals, a reconnect and the
+// shell's periodic check landing together all share the same answer.
+let meInFlight = null;
+function fetchMe() {
+  if (!meInFlight) {
+    meInFlight = request('GET', '/api/me').then((who) => {
+      if (!who || typeof who !== 'object') throw new ApiError('The service sent an unreadable identity.', 0);
+      return who;
+    }).finally(() => { meInFlight = null; });
+  }
+  return meInFlight;
+}
+
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Ask the service who this browser is, retrying `retries` more times (with
+ * a doubling delay) if it cannot answer. A failed answer never changes the
+ * identity: an administrator whose /api/me happened to fail — the service
+ * busy, the network blinking — used to be styled as a viewer until they
+ * reloaded, because the placeholder above was taken as the answer. Now the
+ * last real answer stands, and identityKnown() stays false until there is one.
+ */
+export async function refreshMe({ retries = 0, retryDelay = 500 } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      setMe(await fetchMe());
+      return me;
+    } catch {
+      if (attempt >= retries) return me; // keep the last answer
+      await pause(retryDelay * 2 ** attempt);
+    }
+  }
+}
+
+/**
+ * A request was refused with 401. That alone is not proof the browser is
+ * signed out — a request that raced a sign-in, or one the service could not
+ * judge, can come back 401 while the session is fine — and acting on it takes
+ * the whole page to the sign-in screen. So ask /api/me, and only when it too
+ * says there is no identity is the sign-in screen called for. If it cannot be
+ * asked, nothing is decided on a guess: the next refusal asks again.
+ */
+async function confirmSignedOut(reason) {
+  let who;
+  try { who = await fetchMe(); } catch { return; }
+  setMe(who);
+  if (!who.kind) challenge(reason);
+}
+
+// Coming back from an outage is when the identity is most likely to have
+// changed behind the page's back (a restart, a session ended meanwhile), and
+// when a first answer that failed at start-up can finally be had.
+onConnection((ok) => { if (ok) refreshMe({ retries: 2 }); });
 
 export async function request(method, path, body, opts = {}) {
   const init = { method, headers: {} };
@@ -72,8 +147,14 @@ export async function request(method, path, body, opts = {}) {
   if (!res.ok) {
     const msg = (data && typeof data === 'object' && data.error) ? data.error : (typeof data === 'string' && data.trim() ? data.trim().slice(0, 300) : `Request failed (${res.status})`);
     if (path.startsWith('/api/') && !isAuthPath(path)) {
-      if (res.status === 401) challenge(msg);
-      else if (res.status === 403) for (const fn of denyListeners) { try { fn(msg); } catch (e) { console.error(e); } }
+      if (res.status === 401) confirmSignedOut(msg);
+      else if (res.status === 403) {
+        // Refused for lack of standing: perhaps the page is working from an
+        // identity that is out of date (the account's role was changed), so
+        // ask again — the shell restyles itself if the answer differs.
+        refreshMe();
+        for (const fn of denyListeners) { try { fn(msg); } catch (e) { console.error(e); } }
+      }
     }
     throw new ApiError(msg, res.status, data);
   }

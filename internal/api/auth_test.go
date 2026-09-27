@@ -24,6 +24,7 @@ type creds struct {
 	Remote   string // override the client address (e.g. a LAN client)
 	Origin   string // send an Origin header, as a browser would
 	KeyInHdr bool   // send the key in X-API-Key instead of Authorization
+	Proxied  string // send X-Forwarded-For, as a reverse proxy would
 }
 
 // as performs a request with the given credentials and returns status, body
@@ -61,6 +62,9 @@ func as(t *testing.T, ts *httptest.Server, c creds, method, path string, body an
 	}
 	if c.Origin != "" {
 		req.Header.Set("Origin", c.Origin)
+	}
+	if c.Proxied != "" {
+		req.Header.Set("X-Forwarded-For", c.Proxied)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -755,9 +759,10 @@ func TestLastAdminCannotBeRemoved(t *testing.T) {
 	if code, body, _ := as(t, ts, creds{Cookie: admin}, "PUT", fmt.Sprintf("/api/users/%d", patID), map[string]string{"role": "viewer"}, nil); code != 200 {
 		t.Fatalf("demote with a second admin present: %d %s", code, body)
 	}
-	// Demoting ends the account's sessions, so the old cookie is now useless.
-	if code, _, _ := as(t, ts, creds{Cookie: admin, Remote: "192.168.1.9:1"}, "GET", "/api/users", nil, nil); code != 403 && code != 401 {
-		t.Fatalf("a demoted admin must lose admin access, got %d", code)
+	// The demoted account keeps its session but loses admin access on its
+	// very next request: the role is read from the account every time.
+	if code, _, _ := as(t, ts, creds{Cookie: admin, Remote: "192.168.1.9:1"}, "GET", "/api/users", nil, nil); code != 403 {
+		t.Fatalf("a demoted admin must lose admin access (and stay signed in), got %d", code)
 	}
 	sam := login(t, ts, "sam", "another password")
 	if code, body, _ := as(t, ts, creds{Cookie: sam}, "DELETE", fmt.Sprintf("/api/users/%d", patID), nil, nil); code != 200 {

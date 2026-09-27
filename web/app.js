@@ -1,7 +1,7 @@
 // GWatch web UI entry: hash router, shell (rail / topbar / header
 // indicators), theme + accent handling and live updates.
 
-import { api, onConnection, connection, subscribeUpdates, debounce, refreshMe, signOut, getAuthSetup, onAuthChallenge, onDenied } from './api.js';
+import { api, onConnection, connection, subscribeUpdates, debounce, refreshMe, identityKnown, onIdentity, signOut, getAuthSetup, onAuthChallenge, onDenied } from './api.js';
 import { h, icon, clear, toast, closeMenus, replace, applyTheme, applyAccent, onThemeChange, openModal } from './components.js';
 import { relTime } from './fmt.js';
 import { notifyRoute as tipsRoute, closeTip, onboardingDone } from './tips.js';
@@ -80,15 +80,27 @@ rail.addEventListener('mouseleave', dropRailFocus);
 /* ---------- Theme / accent from settings ---------- */
 /** The theme lives in settings, which only an administrator may read, so it is
  *  served alongside the identity in /api/me and every account gets styled. The
- *  header's indicator rules travel the same road, for the same reason. */
-async function loadAppearance() {
+ *  header's indicator rules travel the same road, for the same reason.
+ *
+ *  When the service cannot say who this is, nothing is applied: not the
+ *  default theme, and above all not the "no standing" placeholder, which used
+ *  to style an administrator whose first /api/me failed as a viewer until they
+ *  reloaded. Instead it asks again shortly, and onIdentity below rebuilds the
+ *  page once the answer arrives. */
+let identityRetry = 0;
+async function loadAppearance({ retries = 0 } = {}) {
+  const me = await refreshMe({ retries });
+  clearTimeout(identityRetry);
+  if (!identityKnown()) {
+    identityRetry = setTimeout(loadAppearance, 10000);
+    return;
+  }
   try {
-    const me = await refreshMe();
     applyTheme(me.theme || 'dark');
     applyAccent(me.accentColor || '#43c9c0');
     applyIdentity(me);
     setIndicatorRules(me.indicators);
-  } catch { /* keep the cached theme */ }
+  } catch (e) { console.error(e); }
 }
 
 /* ---------- Signed-in identity ---------- */
@@ -517,6 +529,31 @@ onAuthChallenge(() => {
 });
 onDenied((message) => toast(message, { kind: 'error', timeout: 8000 }));
 
+/* ---------- Keeping the identity current ---------- */
+// The service can change its mind about who this browser is while the page
+// is open: an administrator changes the account's role, the session ends, or
+// the answer at start-up simply failed. api.js reports every change it sees
+// (a refusal, a reconnect and the checks below all ask), and the page follows
+// it: the shell restyles, and the view on screen — which decided what to
+// offer from ctx.me when it was built — is built again for the new standing.
+onIdentity((next) => {
+  applyIdentity(next);
+  authSetup = null; // whether a sign-in is needed may have changed with it
+  if (current && !current.route.bare) remount();
+});
+
+function remount() {
+  if (current?.instance?.destroy) { try { current.instance.destroy(); } catch (e) { console.error(e); } }
+  current = null;
+  route();
+}
+
+// A tab can stay open for days. Ask again every few minutes, and whenever it
+// comes back into view (a laptop waking up), so a change made elsewhere shows
+// up without waiting for something to be refused.
+setInterval(() => loadAppearance(), 5 * 60e3);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') loadAppearance(); });
+
 /* ---------- Hardware, which is now part of Nodes ---------- */
 // Machines used to have a section of their own. They are nodes now, so a link
 // to #/hardware/<key> is followed to the node that machine belongs to. A host
@@ -561,7 +598,9 @@ function firstRunRedirect() {
 
 // Who is looking has to be known before the first view is built: views read
 // ctx.me to decide what they may offer, and the theme travels with it.
-loadAppearance().finally(() => {
+// A failed first answer is tried again a couple of times before the first view
+// is built without one.
+loadAppearance({ retries: 2 }).finally(() => {
   if (!firstRunRedirect()) route();
   // Opening GWatch is one of the moments it looks for a new version.
   refreshUpdates({ open: true });

@@ -86,8 +86,12 @@ type authError struct {
 func (e *authError) Error() string { return e.msg }
 
 // resolvePrincipal works out who is calling, in a fixed order of precedence:
-// API key, session cookie, legacy access password, trusted local client.
-func (s *Server) resolvePrincipal(r *http.Request) (auth.Principal, *authError) {
+// API key, session cookie, legacy access password, trusted local client. The
+// first credential a request presents decides: a session that is not
+// recognised falls through to the ones below it, but one that could not be
+// checked at all ends the resolution with a 503 (see lookupFailed). w is only
+// written to when a session's cookie is renewed.
+func (s *Server) resolvePrincipal(w http.ResponseWriter, r *http.Request) (auth.Principal, *authError) {
 	ctx := r.Context()
 	ip := s.clientIP(r)
 	general := s.Engine.Settings().General
@@ -98,6 +102,11 @@ func (s *Server) resolvePrincipal(r *http.Request) (auth.Principal, *authError) 
 			return auth.Anonymous, &authError{http.StatusTooManyRequests, "too many failed attempts; try again shortly", wait}
 		}
 		k, err := s.Store.LookupAPIKey(ctx, auth.HashToken(raw))
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			// The database did not answer. That is no verdict on the key, so
+			// it is neither audited as a rejection nor answered with a 401.
+			return auth.Anonymous, s.lookupFailed(ctx, "look up api key", err)
+		}
 		if err != nil {
 			s.auditAuthFailure(ctx, "API key rejected", "An unknown or revoked API key was presented.", ip)
 			return auth.Anonymous, &authError{http.StatusUnauthorized, "invalid API key", 0}
@@ -121,9 +130,27 @@ func (s *Server) resolvePrincipal(r *http.Request) (auth.Principal, *authError) 
 
 	// 2. Session cookie.
 	if c, err := r.Cookie(auth.SessionCookie); err == nil && c.Value != "" {
-		u, err := s.Store.GetSession(ctx, auth.HashToken(c.Value), auth.SessionLifetime)
-		if err == nil {
+		sess, err := s.Store.GetSession(ctx, auth.HashToken(c.Value), auth.SessionLifetime)
+		switch {
+		case err == nil:
+			if sess.Renewed {
+				// The session's expiry just slid forward; the cookie has to
+				// follow it, or the browser drops the cookie on the date it
+				// was first given however busy the session has been since.
+				http.SetCookie(w, s.sessionCookie(r, c.Value, sess.ExpiresAt))
+			}
+			u := sess.User
+			// The role is read from the account on every request, so a role
+			// change applies to the sessions an account already holds at once.
 			return auth.Principal{Kind: auth.KindUser, Name: u.Username, Role: auth.ParseRole(u.Role), UserID: u.ID}, nil
+		case !errors.Is(err, store.ErrNotFound):
+			// The database could not answer — busy, a dropped connection to
+			// a server database. Falling through here would treat a browser
+			// that is signed in as signed out: a 401, which takes the web
+			// interface to the sign-in screen, or — on this computer — the
+			// administrator principal below, whatever the account's role is.
+			// Neither is true, so say what is: try again shortly.
+			return auth.Anonymous, s.lookupFailed(ctx, "look up session", err)
 		}
 		// A stale or forged cookie is not an error by itself; fall through and
 		// let the browser be treated as signed out.
@@ -149,11 +176,15 @@ func (s *Server) resolvePrincipal(r *http.Request) (auth.Principal, *authError) 
 	// every existing single-user install working with no setup at all. Once
 	// accounts exist the owner can turn "require sign-in on this computer" on,
 	// and then even loopback has to sign in.
-	if s.isLoopback(r) {
+	if s.isLocalClient(r) {
 		if !general.RequireLoginLocally {
 			return auth.Principal{Kind: auth.KindLocal, Name: "this computer", Role: auth.RoleAdmin}, nil
 		}
-		if n, err := s.Store.CountUsers(ctx); err == nil && n == 0 {
+		n, err := s.Store.CountUsers(ctx)
+		if err != nil {
+			return auth.Anonymous, s.lookupFailed(ctx, "count users", err)
+		}
+		if n == 0 {
 			// "Require sign-in" with no account to sign in to would be a
 			// lockout, so it does not take effect until an account exists.
 			return auth.Principal{Kind: auth.KindLocal, Name: "this computer", Role: auth.RoleAdmin}, nil
@@ -161,6 +192,42 @@ func (s *Server) resolvePrincipal(r *http.Request) (auth.Principal, *authError) 
 	}
 
 	return auth.Anonymous, nil
+}
+
+// lookupFailed is the answer when the database could not be asked who a
+// request is. It is a 503 with a short Retry-After — something to try again,
+// never a sign-out.
+func (s *Server) lookupFailed(ctx context.Context, what string, err error) *authError {
+	if ctx.Err() == nil { // a client that went away is not worth a log line
+		s.Log.Errorf("%s: %v", what, err)
+	}
+	return &authError{http.StatusServiceUnavailable, "GWatch could not check who you are just now; try again in a moment", 2 * time.Second}
+}
+
+// forwardingHeaders are the headers a reverse proxy adds to say it is passing
+// a request on for someone else. A browser never sends any of them itself.
+var forwardingHeaders = []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-Ip"}
+
+// isLocalClient reports whether a request comes from someone at this computer,
+// which is what earns the no-sign-in administrator principal. A loopback peer
+// is not enough on its own: a reverse proxy running alongside GWatch — the
+// setup REMOTE-ACCESS.md describes, and what `tailscale serve` does — connects
+// from 127.0.0.1 on behalf of whoever reached the proxy. Without this check
+// every such visitor was an administrator with no sign-in at all, and a
+// signed-in viewer became one the moment their session was not recognised.
+// A proxied request says so in the headers it adds, and is then judged like
+// any other remote client. Only this shortcut looks at those headers; the
+// address the rate limits and the audit log use is still the socket peer.
+func (s *Server) isLocalClient(r *http.Request) bool {
+	if !s.isLoopback(r) {
+		return false
+	}
+	for _, h := range forwardingHeaders {
+		if r.Header.Get(h) != "" {
+			return false
+		}
+	}
+	return true
 }
 
 // ---- middleware ----
@@ -183,7 +250,13 @@ func (s *Server) accessControl(next http.Handler) http.Handler {
 			w.Header().Set("X-GWatch-API-Version", strconv.Itoa(APIVersion))
 		}
 
-		p, aerr := s.resolvePrincipal(r)
+		p, aerr := s.resolvePrincipal(w, r)
+		if aerr != nil && aerr.status == http.StatusServiceUnavailable && !isAPI {
+			// The shell and its assets are what an anonymous browser gets
+			// anyway, so a moment's trouble reading the database is no reason
+			// to fail a page load over; the app's own /api/me asks again.
+			p, aerr = auth.Anonymous, nil
+		}
 		if aerr != nil {
 			if aerr.retry > 0 {
 				w.Header().Set("Retry-After", strconv.Itoa(int(aerr.retry.Seconds()+0.999)))
@@ -421,6 +494,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	username := strings.TrimSpace(body.Username)
 	u, hash, err := s.Store.GetUserByName(ctx, username)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		// The database did not answer: that is not a wrong password, so it
+		// is neither audited nor reported as one.
+		s.fail(w, err)
+		return
+	}
 	if err != nil || auth.VerifyPassword(hash, body.Password) != nil {
 		s.auditAuthFailure(ctx, "Sign-in failed", fmt.Sprintf("Wrong user name or password for %q.", username), ip)
 		// One message for both cases: a different answer for "no such user"
@@ -463,9 +542,19 @@ func (s *Server) sessionCookie(r *http.Request, token string, expires time.Time)
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Expires:  expires,
-		// Secure is only set for HTTPS: GWatch is normally served over plain
-		// HTTP on the LAN, and a Secure cookie would never be sent back.
-		Secure: r.TLS != nil || strings.EqualFold(r.URL.Scheme, "https"),
+		// Secure is only set when GWatch itself is the end of the HTTPS
+		// connection: it is normally served over plain HTTP on the LAN, and a
+		// Secure cookie would never be sent back there. Behind a reverse
+		// proxy that terminates TLS, GWatch sees plain HTTP and the cookie is
+		// not marked Secure, deliberately without trusting X-Forwarded-Proto:
+		// cookies are shared across schemes and ports on one host name, and a
+		// Secure cookie set through https://host would be withheld from
+		// http://host:7230 — which could then never replace it, since a
+		// browser refuses to overwrite a Secure cookie from a plain-HTTP page,
+		// so signing in there would appear to work and then bounce straight
+		// back to the sign-in screen. The login and every renewal go through
+		// here, so the cookie keeps the same attributes for its whole life.
+		Secure: r.TLS != nil,
 	}
 	if token == "" {
 		c.MaxAge = -1
@@ -629,11 +718,13 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 				s.fail(w, err)
 				return
 			}
-			// Demoting or promoting changes what the account may do, so the
-			// sessions it already holds must not keep the old standing.
-			if err := s.Store.DeleteUserSessions(ctx, id); err != nil {
-				s.Log.Errorf("clear sessions: %v", err)
-			}
+			// The sessions the account already holds are left alone. They
+			// never carried a role of their own: every request reads it from
+			// the account (see resolvePrincipal), so a demoted account loses
+			// its standing on its very next request and a promoted one gains
+			// it, and the web interface restyles itself when it next asks who
+			// it is. Ending the sessions as well used to sign the person out
+			// in the middle of whatever they were doing, for no gain.
 			changes = append(changes, "role set to "+string(role))
 		}
 	}

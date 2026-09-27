@@ -957,7 +957,14 @@ Starting the service with `--listen 0.0.0.0:7230` does the same thing.
 **Require sign-in on this computer too** closes the loopback shortcut, so even
 a browser on the GWatch machine has to sign in. It is refused while no
 administrator account exists and ignored until one does, so it cannot lock you
-out of a fresh install.
+out of a fresh install. The shortcut never covers visitors arriving through a
+reverse proxy on the same machine: they sign in like anyone else on the network
+(see [`REMOTE-ACCESS.md`](REMOTE-ACCESS.md)).
+
+A signed-in session lasts 30 days from when it was last used. Changing an
+account's role takes effect straight away in any browser already signed in to
+it — the page redraws itself for the new role — while changing its password
+signs it out everywhere.
 
 > **GWatch never becomes an internet-facing service on its own.** There is no
 > hosted relay and no tunnel helper, and this is a decision rather than a gap.
