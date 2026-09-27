@@ -986,6 +986,24 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .series-colors { display: flex; flex-direction: column; gap: 6px; }
 .series-color { display: grid; grid-template-columns: 1.875rem 1fr; gap: 0.5rem; align-items: center; font-size: 0.78125rem; }
 .series-color input[type="color"] { width: 1.875rem; min-height: 1.625rem; height: 1.625rem; }
+/* The custom chart's metric picker: one disclosure per check, its metrics as
+   checkboxes inside. A fieldset for the group of groups, without the
+   browser's frame round it. */
+.metric-fieldset { border: 0; margin: 0; padding: 0; min-inline-size: 0; }
+.metric-fieldset > legend { padding: 0; margin-bottom: 5px; }
+.metric-picker { display: flex; flex-direction: column; max-height: 20rem; overflow: auto; border: 1px solid var(--line); background: var(--elev); }
+.metric-check { border-bottom: 1px solid var(--line); }
+.metric-check:last-child { border-bottom: 0; }
+.metric-check > summary { display: flex; align-items: center; gap: 6px; padding: 6px 0.5rem; cursor: pointer; list-style: none; font-size: 0.8125rem; min-width: 0; }
+.metric-check > summary::-webkit-details-marker { display: none; }
+.metric-check > summary .icon { flex: none; width: 0.75rem; height: 0.75rem; color: var(--muted); transition: transform 0.15s; }
+.metric-check[open] > summary .icon { transform: rotate(90deg); }
+.metric-check > summary:hover { background: var(--card); }
+.metric-check .metric-count { font-size: 0.71875rem; color: var(--accent-hover); font-family: var(--mono); white-space: nowrap; }
+.metric-options { display: flex; flex-direction: column; gap: 6px; padding: 4px 0.5rem 8px 1.625rem; }
+.metric-options .metric-unit { margin-left: auto; color: var(--dim); font-size: 0.71875rem; font-family: var(--mono); white-space: nowrap; }
+.metric-picked { font-size: 0.75rem; color: var(--muted); }
+.chart-legend .legend-unit { color: var(--dim); font-family: var(--mono); font-size: 0.6875rem; }
 
 /* ---------- Dashboard ---------- */
 .dash-tabs { display: flex; align-items: center; gap: 0; margin-bottom: 1.125rem; flex-wrap: wrap; }
