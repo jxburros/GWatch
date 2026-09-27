@@ -164,34 +164,76 @@ func (s *Store) CreateSession(ctx context.Context, tokenHash string, userID int6
 	return err
 }
 
-// GetSession resolves a session token hash to its account. Expired sessions
-// are deleted and reported as ErrNotFound. Every successful lookup slides the
-// expiry forward by extend and refreshes last_seen_at.
-func (s *Store) GetSession(ctx context.Context, tokenHash string, extend time.Duration) (model.User, error) {
-	row := s.queryRow(ctx, "SELECT user_id, expires_at FROM sessions WHERE token_hash = ?", tokenHash)
+// Session is a live browser session as GetSession found it.
+type Session struct {
+	User model.User
+	// ExpiresAt is when the session runs out if it is not used again. The
+	// browser's cookie should carry the same instant.
+	ExpiresAt time.Time
+	// Renewed reports that this lookup slid ExpiresAt forward, so the cookie
+	// the browser holds now runs out before the session does and has to be
+	// issued again with the new expiry.
+	Renewed bool
+}
+
+// sessionSeenInterval is how stale last_seen_at may get before a lookup
+// refreshes it.
+//
+// A session is looked up on every request that carries one, and every write
+// goes through the single writer (see exec), where it queues behind whatever
+// the scheduler happens to be writing. Writing both timestamps on every API
+// call — which is what this used to do — put a write in front of every page
+// load and every background poll. So each is written only when it has
+// drifted far enough to matter: expires_at once auth.SessionRenewInterval has
+// passed since it was last set (which is also what bounds how often the
+// cookie is re-issued), and last_seen_at at most once a minute, like an API
+// key's last_used_at (see TouchAPIKey).
+const sessionSeenInterval = time.Minute
+
+// GetSession resolves a session token hash to its account. An expired session
+// is deleted and reported as ErrNotFound, and so is one whose account has
+// gone. Any other error is the database failing to answer, which says nothing
+// about whether the session is valid: callers must not treat it as "signed
+// out".
+//
+// A successful lookup slides the expiry to extend from now once the remaining
+// lifetime has dropped by more than auth.SessionRenewInterval, and says so in
+// Session.Renewed.
+func (s *Store) GetSession(ctx context.Context, tokenHash string, extend time.Duration) (Session, error) {
+	row := s.queryRow(ctx, "SELECT user_id, expires_at, last_seen_at FROM sessions WHERE token_hash = ?", tokenHash)
 	var userID int64
-	var expires string
-	if err := row.Scan(&userID, &expires); err != nil {
+	var expires, lastSeen string
+	if err := row.Scan(&userID, &expires, &lastSeen); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return model.User{}, ErrNotFound
+			return Session{}, ErrNotFound
 		}
-		return model.User{}, err
+		return Session{}, err
 	}
-	if exp := mustTime(expires); exp.Before(time.Now()) {
+	now := time.Now()
+	exp := mustTime(expires)
+	if exp.Before(now) {
 		_, _ = s.exec(ctx, "DELETE FROM sessions WHERE token_hash = ?", tokenHash)
-		return model.User{}, ErrNotFound
+		return Session{}, ErrNotFound
 	}
 	u, err := s.GetUser(ctx, userID)
 	if err != nil {
-		return u, err
+		// ErrNotFound (the account was deleted) passes through as it is;
+		// anything else is a failed read, not a verdict on the session.
+		return Session{}, err
 	}
-	now := time.Now()
-	if extend > 0 {
-		_, _ = s.exec(ctx, "UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE token_hash = ?", fmtTime(now), fmtTime(now.Add(extend)), tokenHash)
-	} else {
+	sess := Session{User: u, ExpiresAt: exp}
+	switch {
+	case extend > 0 && exp.Before(now.Add(extend-auth.SessionRenewInterval)):
+		next := now.Add(extend)
+		// A failed write leaves the session exactly as valid as it was, so it
+		// is not the caller's problem: the next request simply tries again.
+		if _, err := s.exec(ctx, "UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE token_hash = ?", fmtTime(now), fmtTime(next), tokenHash); err == nil {
+			sess.ExpiresAt, sess.Renewed = next, true
+		}
+	case mustTime(lastSeen).Before(now.Add(-sessionSeenInterval)):
 		_, _ = s.exec(ctx, "UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?", fmtTime(now), tokenHash)
 	}
-	return u, nil
+	return sess, nil
 }
 
 // DeleteSession removes one session (sign out).
