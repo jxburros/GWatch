@@ -12,7 +12,7 @@ import {
   openModal, confirmDialog, field, textInput, selectInput, toast, agentLogo,
 } from '../components.js';
 import { LineChart, SERIES_COLORS } from '../charts.js';
-import { bytes, pct, duration, dateTime, num, agentIsBehind } from '../fmt.js';
+import { bytes, pct, duration, dateTime, num, agentIsBehind, rate as fmtRate } from '../fmt.js';
 
 // Shading for a usage bar. These are display thresholds only — what actually
 // raises an alert is the hardware check's own configuration, which the person
@@ -236,8 +236,11 @@ function sumRate(rows, key) {
   return total;
 }
 
+// A throughput in the largest decimal unit that fits ("12.3 MB/s"), the way
+// the service writes one in an alert and the charts write one on an axis
+// (#67) — not in the 1024s bytes() counts a size on disk in.
 function rate(bytesPerSec) {
-  return bytesPerSec == null ? '—' : `${bytes(bytesPerSec)}/s`;
+  return fmtRate(bytesPerSec);
 }
 
 function upFor(m) {

@@ -1,7 +1,7 @@
 // Lightweight canvas charts: multi-series time line chart with gaps,
 // failure shading, hover tooltip and PNG export; plus sparkline and uptime bar.
 
-import { ms as fmtMs, pct as fmtPct, timeShort, dateTime } from './fmt.js';
+import { ms as fmtMs, pct as fmtPct, timeShort, dateTime, unitValue, unitAxis } from './fmt.js';
 import { h, uid, cssColors, onThemeChange } from './components.js';
 
 export const SERIES_COLORS = ['#43c9c0', '#e879a6', '#ffc542', '#6ea0ff', '#ff9f6e', '#b18cff', '#3ec8b8', '#35e07f'];
@@ -99,24 +99,54 @@ export function timeTicks(from, to, width, minPx = 76) {
   return { step, ticks: ticks.map((t) => ({ ...t, label: label(t) })) };
 }
 
-function fmtValue(v, unit) {
-  if (v == null || isNaN(v)) return '—';
-  if (unit === '%') return fmtPct(v, 1);
-  if (unit === 'ms') return fmtMs(v);
-  return String(Math.round(v * 100) / 100);
+// Every figure a chart prints goes through fmt.js, so a throughput reads
+// "1.5 MB/s" on the axis, in the tooltip, in the summary and in the table
+// alike (#67) rather than as a ten-digit count of bytes.
+const fmtValue = unitValue;
+/** An axis label; `yt` is that axis's ticks, whose extent and step decide the
+ *  one unit and the decimals every label on the axis is written with. */
+function fmtAxis(v, unit, yt) {
+  return unitAxis(v, unit, yt ? { max: Math.max(Math.abs(yt.max), Math.abs(yt.min)), step: yt.step } : undefined);
 }
-function fmtAxis(v, unit) {
-  if (unit === '%') return `${Math.round(v * 10) / 10}%`;
-  if (unit === 'ms') return v >= 1000 ? `${(v / 1000).toFixed(v >= 10000 ? 0 : 1)} s` : `${Math.round(v * 10) / 10} ms`;
-  return String(v);
+/** How a unit is named in a legend: the unit itself, or "no unit" for a bare
+ *  number such as a load average. */
+export function unitName(unit) { return unit ? unit : 'no unit'; }
+
+/**
+ * Splits series into groups that one chart can show: at most two units each,
+ * one per axis, in the order the units first appear. A chart asked to show a
+ * third unit would have to invent an axis nobody can read, so a caller with
+ * more (a custom chart mixing a latency, a percentage and a throughput) draws
+ * one chart per group instead. Series without a `unit` take `fallbackUnit`.
+ */
+export function groupByUnits(series, fallbackUnit = 'ms', perChart = 2) {
+  const units = [];
+  for (const s of series) { const u = s.unit ?? fallbackUnit; if (!units.includes(u)) units.push(u); }
+  const groups = [];
+  for (let i = 0; i < units.length; i += perChart) {
+    const want = units.slice(i, i + perChart);
+    groups.push({ units: want, series: series.filter((s) => want.includes(s.unit ?? fallbackUnit)) });
+  }
+  return groups.length ? groups : [{ units: [fallbackUnit], series: [] }];
 }
 
 /* ---------- LineChart ---------- */
 
 /**
- * new LineChart(container, { unit: 'ms'|'%', height, yMin, yMax, legend, shadeFailures, area,
+ * new LineChart(container, { unit: 'ms'|'%'|'B/s'|…, height, yMin, yMax, y2Min, y2Max, legend, shadeFailures, area,
  *   style: 'line'|'area'|'step'|'bars'|'scatter', smooth, points, lineWidth, threshold, thresholdLabel, grid })
- * chart.setData({ series: [{ name, color, points: [{ t, v, avail, min, max }] }], from, to, bucketSeconds })
+ * chart.setData({ series: [{ name, color, unit?, points: [{ t, v, avail, min, max }] }], from, to, bucketSeconds })
+ *
+ * Two units on one chart (#73). A series may carry its own `unit`; one
+ * without takes `opts.unit`. The first unit the series name is drawn on the
+ * left axis and the second on a right axis with its own scale, so a latency
+ * in milliseconds and a processor in percent can share a time line without
+ * one flattening the other. yMin, yMax and the threshold line belong to the
+ * left axis; y2Min and y2Max, when given, bound the right one. Two is the
+ * most a chart draws: a third unit's series are scaled against the right
+ * axis's numbers, which is why callers split wider mixes with groupByUnits
+ * first. Every figure — tooltip, keyboard walk, summary, table, legend and
+ * PNG — is written in its own series' unit.
  */
 export class LineChart {
   constructor(container, opts = {}) {
@@ -195,8 +225,17 @@ export class LineChart {
       for (const s of series) for (const p of s.points) { if (p.t < f) f = p.t; if (p.t > t) t = p.t; }
       if (!isFinite(f)) { f = Date.now() - HOUR; t = Date.now(); }
     }
+    // The units in the order the series name them: the first is the left
+    // axis, the second the right. Each series is told which axis it is on.
+    const units = [];
+    for (const s of series) { const u = s.unit ?? this.opts.unit; if (!units.includes(u)) units.push(u); }
+    if (!units.length) units.push(this.opts.unit);
+    this._units = units;
     this.data = {
-      series: series.map((s, i) => ({ ...s, color: s.color || SERIES_COLORS[i % SERIES_COLORS.length], points: (s.points || []).slice().sort((a, b) => a.t - b.t) })),
+      series: series.map((s, i) => {
+        const unit = s.unit ?? this.opts.unit;
+        return { ...s, unit, axis: units.indexOf(unit) > 0 ? 1 : 0, color: s.color || SERIES_COLORS[i % SERIES_COLORS.length], points: (s.points || []).slice().sort((a, b) => a.t - b.t) };
+      }),
       from: f, to: t, bucketSeconds,
     };
     // Every distinct time any series has a point at, in order: the stops the
@@ -214,15 +253,16 @@ export class LineChart {
   _renderSummary() {
     if (!this.summaryEl) return;
     const { series, from, to } = this.data;
-    const unit = this.opts.unit;
     const parts = [];
     for (const s of series) {
+      const unit = s.unit;
       const vals = s.points.filter((p) => p.v != null && isFinite(p.v));
       if (!vals.length) { parts.push(`${s.name}: no data.`); continue; }
       const lo = vals.reduce((a, p) => (p.v < a.v ? p : a));
       const hi = vals.reduce((a, p) => (p.v > a.v ? p : a));
       const last = vals[vals.length - 1];
-      parts.push(`${s.name}: ${vals.length} samples, lowest ${fmtValue(lo.v, unit)} at ${dateTime(lo.t, { seconds: false })}, highest ${fmtValue(hi.v, unit)} at ${dateTime(hi.t, { seconds: false })}, latest ${fmtValue(last.v, unit)}.`);
+      const axis = this._mixed() ? ` (${unitName(unit)}, ${s.axis ? 'right' : 'left'} axis)` : '';
+      parts.push(`${s.name}${axis}: ${vals.length} samples, lowest ${fmtValue(lo.v, unit)} at ${dateTime(lo.t, { seconds: false })}, highest ${fmtValue(hi.v, unit)} at ${dateTime(hi.t, { seconds: false })}, latest ${fmtValue(last.v, unit)}.`);
     }
     const span = from && to ? `From ${dateTime(from, { seconds: false })} to ${dateTime(to, { seconds: false })}. ` : '';
     this.summaryEl.textContent = parts.length ? `${span}${parts.join(' ')} Press the left and right arrow keys to step through the points.` : 'No data for this range yet.';
@@ -233,7 +273,6 @@ export class LineChart {
   _renderTable() {
     if (!this.tableBody) return;
     const { series } = this.data;
-    const unit = this.opts.unit;
     const hasAvail = series.some((s) => s.points.some((p) => p.avail != null));
     const byTime = new Map();
     series.forEach((s, i) => { for (const p of s.points) { if (!byTime.has(p.t)) byTime.set(p.t, new Array(series.length).fill(null)); byTime.get(p.t)[i] = p; } });
@@ -246,19 +285,26 @@ export class LineChart {
         const avail = row.map((p) => p?.avail).filter((a) => a != null);
         return h('tr', null,
           h('th', { scope: 'row', class: 'mono nowrap' }, dateTime(t, { seconds: false })),
-          ...row.map((p) => h('td', { class: 'num' }, p && p.v != null ? fmtValue(p.v, unit) : (p?.avail === 0 ? 'failed' : '—'))),
+          ...row.map((p, i) => h('td', { class: 'num' }, p && p.v != null ? fmtValue(p.v, series[i].unit) : (p?.avail === 0 ? 'failed' : '—'))),
           hasAvail ? h('td', { class: 'num' }, avail.length ? fmtPct(Math.min(...avail)) : '—') : null);
       })),
     );
     this.tableBody.replaceChildren(times.length ? h('div', { class: 'table-wrap' }, table) : h('p', { class: 'note' }, 'No data for this range yet.'));
   }
 
+  /** True when the series are in more than one unit, i.e. there is a right axis. */
+  _mixed() { return (this._units || []).length > 1; }
+
   _renderLegend() {
     if (!this.legend) return;
     this.legend.innerHTML = '';
     if (this.data.series.length <= 1 && !this.opts.alwaysLegend) return;
+    // With two axes the legend is where a reader learns which line is read
+    // against which side, so each entry names its unit and its axis.
+    const mixed = this._mixed();
     for (const s of this.data.series) {
-      this.legend.append(h('span', { class: 'legend-item' }, h('span', { class: 'legend-swatch', style: { background: s.color } }), s.name));
+      this.legend.append(h('span', { class: 'legend-item' }, h('span', { class: 'legend-swatch', style: { background: s.color } }), s.name,
+        mixed ? h('span', { class: 'legend-unit' }, `${unitName(s.unit)} · ${s.axis ? 'right' : 'left'} axis`) : null));
     }
   }
 
@@ -283,27 +329,59 @@ export class LineChart {
     if (this.tableEl) this.tableEl.remove();
   }
 
-  _layout(w, h) {
-    return { left: 52, right: 14, top: 14, bottom: 26, w, h, plotW: w - 52 - 14, plotH: h - 14 - 26 };
+  /** The plot area. The side margins grow to fit the widest tick label, so
+   *  "12.5 MB/s" is not clipped where "40 ms" fitted; a right axis gets a
+   *  margin of its own. */
+  _layout(w, h, labels = [[], null]) {
+    let widest = () => 0;
+    const ctx = this.ctx;
+    if (ctx && typeof ctx.measureText === 'function') {
+      ctx.font = FONT;
+      widest = (list) => Math.max(0, ...list.map((s) => ctx.measureText(s).width || 0));
+    }
+    const left = Math.ceil(Math.max(52, widest(labels[0]) + 14));
+    const right = labels[1] ? Math.ceil(Math.max(52, widest(labels[1]) + 14)) : 14;
+    return { left, right, top: 14, bottom: 26, w, h, plotW: w - left - right, plotH: h - 14 - 26 };
+  }
+
+  /** Ticks for one axis from the series drawn against it. The left axis
+   *  honours yMin, yMax and the threshold; the right one y2Min and y2Max. */
+  _axisTicks(axis) {
+    const unit = (this._units || [this.opts.unit])[axis] ?? this.opts.unit;
+    const lo = axis ? this.opts.y2Min : this.opts.yMin;
+    const hi = axis ? this.opts.y2Max : this.opts.yMax;
+    const threshold = axis ? null : this.opts.threshold;
+    let vmin = Infinity, vmax = -Infinity;
+    for (const s of this.data.series) {
+      if ((s.axis || 0) !== axis) continue;
+      for (const p of s.points) if (p.v != null && isFinite(p.v)) { if (p.v < vmin) vmin = p.v; if (p.v > vmax) vmax = p.v; }
+    }
+    if (threshold != null && isFinite(threshold)) { if (threshold > vmax) vmax = threshold; if (threshold < vmin) vmin = threshold; }
+    if (!isFinite(vmin)) { vmin = 0; vmax = unit === '%' ? 100 : 10; }
+    const yMin = lo != null ? lo : Math.min(0, vmin);
+    let yMax = hi != null ? hi : vmax + (vmax - yMin) * 0.12 || 1;
+    if (unit === '%' && hi == null) yMax = Math.min(100, Math.max(yMax, 1));
+    const yt = niceTicks(yMin, yMax, 5);
+    if (hi != null) yt.max = hi;
+    if (lo != null) yt.min = lo;
+    yt.unit = unit;
+    yt.labels = yt.ticks.map((v) => fmtAxis(v, unit, yt));
+    return yt;
   }
 
   _scales(w, h) {
-    const L = this._layout(w, h);
-    const { from, to, series } = this.data;
-    let vmin = Infinity, vmax = -Infinity;
-    for (const s of series) for (const p of s.points) if (p.v != null && isFinite(p.v)) { if (p.v < vmin) vmin = p.v; if (p.v > vmax) vmax = p.v; }
-    if (this.opts.threshold != null && isFinite(this.opts.threshold)) { if (this.opts.threshold > vmax) vmax = this.opts.threshold; if (this.opts.threshold < vmin) vmin = this.opts.threshold; }
-    if (!isFinite(vmin)) { vmin = 0; vmax = this.opts.unit === '%' ? 100 : 10; }
-    let yMin = this.opts.yMin != null ? this.opts.yMin : Math.min(0, vmin);
-    let yMax = this.opts.yMax != null ? this.opts.yMax : vmax;
-    if (this.opts.yMax == null) yMax = vmax + (vmax - yMin) * 0.12 || 1;
-    if (this.opts.unit === '%' && this.opts.yMax == null) yMax = Math.min(100, Math.max(yMax, 1));
-    const yt = niceTicks(yMin, yMax, 5);
-    if (this.opts.yMax != null) yt.max = this.opts.yMax;
-    if (this.opts.yMin != null) yt.min = this.opts.yMin;
+    const { from, to } = this.data;
+    const yt = this._axisTicks(0);
+    const yt2 = this._mixed() ? this._axisTicks(1) : null;
+    const L = this._layout(w, h, [yt.labels, yt2 ? yt2.labels : null]);
     const x = (t) => L.left + ((t - from) / Math.max(1, to - from)) * L.plotW;
-    const y = (v) => L.top + (1 - (v - yt.min) / Math.max(1e-9, yt.max - yt.min)) * L.plotH;
-    return { L, x, y, yt };
+    const scale = (ticks) => (v) => L.top + (1 - (v - ticks.min) / Math.max(1e-9, ticks.max - ticks.min)) * L.plotH;
+    const y = scale(yt);
+    const y2 = yt2 ? scale(yt2) : y;
+    // The y function and the floor for a series, by the axis it is drawn on.
+    const yOf = (s) => (s && s.axis ? y2 : y);
+    const floorOf = (s) => (s && s.axis && yt2 ? yt2.min : yt.min);
+    return { L, x, y, y2, yt, yt2, yOf, floorOf };
   }
 
   draw(ctx = this.ctx, exportMode = false) {
@@ -334,7 +412,7 @@ export class LineChart {
   }
 
   _render(ctx, w, h, exportMode) {
-    const { L, x, y, yt } = this._scales(w, h);
+    const { L, x, y, y2, yt, yt2, yOf, floorOf } = this._scales(w, h);
     const { from, to, series, bucketSeconds } = this.data;
     if (exportMode) { ctx.fillStyle = CSS.bg; ctx.fillRect(0, 0, w, h); }
 
@@ -363,11 +441,23 @@ export class LineChart {
     // Grid + y labels
     ctx.font = FONT; ctx.textBaseline = 'middle'; ctx.textAlign = 'right';
     ctx.lineWidth = 1;
-    for (const v of yt.ticks) {
-      if (v < yt.min - 1e-9 || v > yt.max + 1e-9) continue;
+    yt.ticks.forEach((v, i) => {
+      if (v < yt.min - 1e-9 || v > yt.max + 1e-9) return;
       const yy = Math.round(y(v)) + 0.5;
       if (this.opts.grid !== false) { ctx.strokeStyle = CSS.line; ctx.beginPath(); ctx.moveTo(L.left, yy); ctx.lineTo(L.left + L.plotW, yy); ctx.stroke(); }
-      ctx.fillStyle = CSS.muted; ctx.fillText(fmtAxis(v, this.opts.unit), L.left - 8, yy);
+      ctx.fillStyle = CSS.muted; ctx.fillText(yt.labels[i], L.left - 8, yy);
+    });
+    // The right axis: its own labels and short tick marks, but no grid lines
+    // of its own — two sets of lines across the plot that never meet would be
+    // noise rather than help.
+    if (yt2) {
+      ctx.textAlign = 'left';
+      yt2.ticks.forEach((v, i) => {
+        if (v < yt2.min - 1e-9 || v > yt2.max + 1e-9) return;
+        const yy = Math.round(y2(v)) + 0.5;
+        ctx.strokeStyle = CSS.lineStrong; ctx.beginPath(); ctx.moveTo(L.left + L.plotW, yy); ctx.lineTo(L.left + L.plotW + 4, yy); ctx.stroke();
+        ctx.fillStyle = CSS.muted; ctx.fillText(yt2.labels[i], L.left + L.plotW + 8, yy);
+      });
     }
 
     // X ticks
@@ -388,6 +478,9 @@ export class LineChart {
       const s = series[si];
       const pts = s.points;
       if (!pts.length) continue;
+      // Everything below is read against the series' own axis.
+      const y = yOf(s);
+      const floor = floorOf(s);
       const gapMs = this._gapThreshold(pts, bucketSeconds);
       // Split into runs of consecutive valid points.
       const runs = [];
@@ -408,7 +501,7 @@ export class LineChart {
           const bw = Math.max(1, (x1 - x0 - 1) / n);
           const bx = x0 + 0.5 + bw * si;
           ctx.fillStyle = hexToRgba(s.color, 0.85);
-          ctx.fillRect(bx, y(p.v), Math.max(1, bw - (n > 1 ? 0.5 : 0)), y(yt.min) - y(p.v));
+          ctx.fillRect(bx, y(p.v), Math.max(1, bw - (n > 1 ? 0.5 : 0)), y(floor) - y(p.v));
         }
         continue;
       }
@@ -436,7 +529,7 @@ export class LineChart {
           if (r.length < 2) continue;
           ctx.beginPath(); tracePath(r);
           const endX = style === 'step' && bucketSeconds > 0 ? x(r[r.length - 1].t + bucketSeconds * 1000) : x(r[r.length - 1].t);
-          ctx.lineTo(endX, y(yt.min)); ctx.lineTo(x(r[0].t), y(yt.min)); ctx.closePath(); ctx.fill();
+          ctx.lineTo(endX, y(floor)); ctx.lineTo(x(r[0].t), y(floor)); ctx.closePath(); ctx.fill();
         }
       }
       if (style !== 'scatter') {
@@ -460,13 +553,14 @@ export class LineChart {
       ctx.strokeStyle = CSS.warn; ctx.lineWidth = 1; ctx.setLineDash([5, 4]);
       ctx.beginPath(); ctx.moveTo(L.left, ty); ctx.lineTo(L.left + L.plotW, ty); ctx.stroke(); ctx.setLineDash([]);
       ctx.font = MONO; ctx.textAlign = 'right'; ctx.textBaseline = 'bottom'; ctx.fillStyle = CSS.warn;
-      ctx.fillText(this.opts.thresholdLabel || fmtAxis(this.opts.threshold, this.opts.unit), L.left + L.plotW - 4, ty - 2);
+      ctx.fillText(this.opts.thresholdLabel || fmtAxis(this.opts.threshold, yt.unit, yt), L.left + L.plotW - 4, ty - 2);
     }
     ctx.restore();
 
     // Axis lines
     ctx.strokeStyle = CSS.lineStrong; ctx.beginPath();
     ctx.moveTo(L.left + 0.5, L.top); ctx.lineTo(L.left + 0.5, L.top + L.plotH + 0.5); ctx.lineTo(L.left + L.plotW, L.top + L.plotH + 0.5); ctx.stroke();
+    if (yt2) { ctx.beginPath(); ctx.moveTo(L.left + L.plotW - 0.5, L.top); ctx.lineTo(L.left + L.plotW - 0.5, L.top + L.plotH + 0.5); ctx.stroke(); }
 
     // Hover
     if (this.hover && !exportMode) {
@@ -474,7 +568,7 @@ export class LineChart {
       ctx.strokeStyle = hexToRgba(CSS.text, 0.35); ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(hx, L.top); ctx.lineTo(hx, L.top + L.plotH); ctx.stroke(); ctx.setLineDash([]);
       for (const hp of this.hover.values) {
         if (hp.v == null) continue;
-        ctx.fillStyle = hp.color; ctx.beginPath(); ctx.arc(x(hp.t), y(hp.v), 3.5, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = hp.color; ctx.beginPath(); ctx.arc(x(hp.t), yOf(hp)(hp.v), 3.5, 0, Math.PI * 2); ctx.fill();
         ctx.strokeStyle = CSS.bg; ctx.lineWidth = 1.5; ctx.stroke();
       }
     }
@@ -545,13 +639,13 @@ export class LineChart {
       const d = Math.abs(p.t - t);
       const px = Math.abs(x(p.t) - mx);
       if (px > 40) continue;
-      values.push({ name: s.name, color: s.color, ...p });
+      values.push({ name: s.name, color: s.color, unit: s.unit, axis: s.axis, ...p });
       if (d < bestD) { bestD = d; bestT = p.t; }
     }
     if (!values.length) { this._onLeave(); return; }
     this.hover = { t: bestT, values };
     this._showTooltip(mx, values, bestT);
-    if (announce) this.liveEl.textContent = `${dateTime(bestT, { seconds: false })}: ${values.map((v) => `${v.name} ${v.v == null ? (v.avail === 0 ? 'failed' : 'no value') : fmtValue(v.v, this.opts.unit)}`).join(', ')}`;
+    if (announce) this.liveEl.textContent = `${dateTime(bestT, { seconds: false })}: ${values.map((v) => `${v.name} ${v.v == null ? (v.avail === 0 ? 'failed' : 'no value') : fmtValue(v.v, v.unit)}`).join(', ')}`;
     this.draw();
   }
 
@@ -562,11 +656,11 @@ export class LineChart {
     for (const v of values) {
       const row = h('div', { class: 'tt-row' },
         h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', minWidth: '0' } }, h('span', { class: 'tt-swatch', style: { background: v.color } }), h('span', { class: 'truncate', style: { maxWidth: '180px' } }, v.name)),
-        h('span', { class: 'tt-val' }, v.v == null ? (v.avail === 0 ? 'failed' : '—') : fmtValue(v.v, this.opts.unit)),
+        h('span', { class: 'tt-val' }, v.v == null ? (v.avail === 0 ? 'failed' : '—') : fmtValue(v.v, v.unit)),
       );
       tip.append(row);
       if (v.avail != null && v.avail < 100) tip.append(h('div', { class: 'tt-row tt-fail' }, h('span', null, 'Availability'), h('span', { class: 'tt-val' }, fmtPct(v.avail))));
-      if (v.min != null && v.max != null && v.v != null && this.opts.unit === 'ms' && (v.min !== v.v || v.max !== v.v)) {
+      if (v.min != null && v.max != null && v.v != null && v.unit === 'ms' && (v.min !== v.v || v.max !== v.v)) {
         tip.append(h('div', { class: 'tt-row', style: { color: 'var(--muted)' } }, h('span', null, 'min / max'), h('span', { class: 'tt-val' }, `${fmtMs(v.min)} / ${fmtMs(v.max)}`)));
       }
     }
@@ -592,10 +686,12 @@ export class LineChart {
     if (this.legend && this.data.series.length > 1) {
       ctx.font = FONT; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
       let lx = 52;
+      const mixed = this._mixed();
       for (const s of this.data.series) {
+        const label = mixed ? `${s.name} (${unitName(s.unit)}, ${s.axis ? 'right' : 'left'} axis)` : s.name;
         ctx.fillStyle = s.color; ctx.fillRect(lx, h + 10, 12, 3);
-        ctx.fillStyle = CSS.muted; ctx.fillText(s.name, lx + 18, h + 12);
-        lx += 18 + ctx.measureText(s.name).width + 18;
+        ctx.fillStyle = CSS.muted; ctx.fillText(label, lx + 18, h + 12);
+        lx += 18 + ctx.measureText(label).width + 18;
       }
     }
     return new Promise((resolve) => {

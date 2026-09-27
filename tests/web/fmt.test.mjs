@@ -157,3 +157,39 @@ test('agentIsBehind only marks a machine when both versions are known', () => {
   assert.equal(fmt.agentIsBehind('0.4.0', ''), false, 'no release to compare with marks nothing');
   assert.equal(fmt.agentIsBehind('dev', '0.5.0'), false, 'a development build is not out of date');
 });
+
+// #67: a throughput is written in the largest decimal unit that fits, the
+// way the service's alerts write one (checks.bytesPerSecond), never as a raw
+// count of bytes.
+test('rate writes a throughput in decimal units, as the service does', () => {
+  assert.equal(fmt.rate(0), '0 B/s');
+  assert.equal(fmt.rate(999), '999 B/s');
+  assert.equal(fmt.rate(1000), '1.0 kB/s');
+  assert.equal(fmt.rate(12_345), '12.3 kB/s');
+  assert.equal(fmt.rate(1_500_000), '1.5 MB/s');
+  assert.equal(fmt.rate(2.5e9), '2.5 GB/s');
+  assert.equal(fmt.rate(125_000_000, 'bit/s'), '125.0 Mbit/s');
+  assert.equal(fmt.rate(null), '—');
+  // An alert-style reading agrees with the chart.
+  assert.equal(fmt.metricValue(1_500_000, 'B/s'), '1.5 MB/s');
+});
+
+test('unitValue writes any reading in its own unit', () => {
+  assert.equal(fmt.unitValue(12.34, 'ms'), '12.3 ms');
+  assert.equal(fmt.unitValue(1500, 'ms'), '1.50 s');
+  assert.equal(fmt.unitValue(42.25, '%'), '42.3%');
+  assert.equal(fmt.unitValue(3_200_000, 'B/s'), '3.2 MB/s');
+  assert.equal(fmt.unitValue(0.534, ''), '0.53', 'a load average is a bare number');
+  assert.equal(fmt.unitValue(21.456, '°C'), '21.5 °C');
+  assert.equal(fmt.unitValue(undefined, 'B/s'), '—');
+});
+
+test('unitAxis writes every tick on an axis in one scaled unit', () => {
+  // Ticks 0 … 2 MB/s in steps of 0.5 MB/s: one unit, one decimal, all the way up.
+  const yt = { max: 2e6, step: 5e5 };
+  assert.deepEqual([0, 5e5, 1e6, 1.5e6, 2e6].map((v) => fmt.unitAxis(v, 'B/s', yt)), ['0.0 MB/s', '0.5 MB/s', '1.0 MB/s', '1.5 MB/s', '2.0 MB/s']);
+  assert.deepEqual([0, 2e5, 4e5].map((v) => fmt.unitAxis(v, 'B/s', { max: 4e5, step: 2e5 })), ['0 kB/s', '200 kB/s', '400 kB/s']);
+  assert.equal(fmt.unitAxis(50, '%'), '50%');
+  assert.equal(fmt.unitAxis(40, 'ms'), '40 ms');
+  assert.equal(fmt.unitAxis(0.5, '', { max: 2, step: 0.5 }), '0.5');
+});
