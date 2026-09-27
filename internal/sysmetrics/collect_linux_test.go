@@ -251,3 +251,98 @@ tmpfs /run tmpfs rw 0 0
 		t.Errorf("root inodes used: got %d", root.InodesUsed)
 	}
 }
+
+// TestHostRootReadsTheHost is the container case (docs/HARDWARE.md#in-a-container):
+// with the host's / mounted at a host root, the filesystems must be the
+// host's — read from its init's mount table and measured through the mount,
+// but reported under the host's own paths — and so must the name and the
+// distribution. The container's own mount table, which the test also
+// provides, must not be read at all: an overlay and a volume are not a
+// machine anybody is watching.
+func TestHostRootReadsTheHost(t *testing.T) {
+	root := t.TempDir()
+	for name, body := range map[string]string{
+		"proc/stat":     "cpu  1 2 3 4 5 6 7 8\n",
+		"proc/1/mounts": "/dev/sda1 / ext4 rw 0 0\n/dev/sdb1 /srv ext4 rw 0 0\noverlay /var/lib/docker/overlay2/x/merged overlay rw 0 0\n",
+		"proc/mounts":   "overlay / overlay rw 0 0\n/dev/sdc1 /container-volume ext4 rw 0 0\n",
+		"etc/hostname":  "the-host\n",
+		"etc/os-release": `NAME="Host"
+PRETTY_NAME="Host OS 12"
+`,
+	} {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var measured []string
+	restore := statfs
+	statfs = func(path string, st *syscall.Statfs_t) error {
+		measured = append(measured, path)
+		*st = syscall.Statfs_t{Bsize: 1024, Blocks: 100, Bfree: 50, Bavail: 50}
+		return nil
+	}
+	t.Cleanup(func() {
+		statfs = restore
+		if err := SetHostRoot(""); err != nil {
+			t.Error(err)
+		}
+	})
+
+	if err := SetHostRoot(root); err != nil {
+		t.Fatalf("SetHostRoot: %v", err)
+	}
+	fs, warnings := readMounts()
+	if len(warnings) > 0 {
+		t.Errorf("warnings: %v", warnings)
+	}
+	var mounts []string
+	for _, f := range fs {
+		mounts = append(mounts, f.Mount)
+	}
+	if len(mounts) != 2 || mounts[0] != "/" || mounts[1] != "/srv" {
+		t.Fatalf("filesystems = %v, want the host's / and /srv", mounts)
+	}
+	if len(measured) != 2 || measured[0] != root || measured[1] != filepath.Join(root, "srv") {
+		t.Errorf("measured %v, want each host mount reached through %s", measured, root)
+	}
+	if got := Hostname(); got != "the-host" {
+		t.Errorf("hostname = %q, want the host's", got)
+	}
+	if platform, _ := linuxPlatform(); platform != "Host OS 12" {
+		t.Errorf("platform = %q, want the host's distribution", platform)
+	}
+	if _, err := readProcStat(); err != nil {
+		t.Errorf("processor times through the host root: %v", err)
+	}
+
+	// And back: an empty root is the machine's own paths again.
+	if err := SetHostRoot(""); err != nil {
+		t.Fatal(err)
+	}
+	if procRoot != "/proc" || mountRoot != "" || mountTable() != "/proc/mounts" {
+		t.Errorf("clearing the host root left procRoot=%s mountRoot=%s", procRoot, mountRoot)
+	}
+}
+
+// TestHostRootMustBeAHost: a host root that is not there, or is relative, is
+// refused rather than half-applied — the alternative is an agent reporting
+// the container under the host's name.
+func TestHostRootMustBeAHost(t *testing.T) {
+	t.Cleanup(func() { SetHostRoot("") })
+	if err := SetHostRoot(t.TempDir()); err == nil {
+		t.Error("an empty directory was accepted as a host root")
+	}
+	if procRoot != "/proc" {
+		t.Errorf("a refused host root still moved procRoot to %s", procRoot)
+	}
+	if err := SetHostRoot("host"); err == nil {
+		t.Error("a relative host root was accepted")
+	}
+	if err := SetHostRoot("/"); err != nil || hostRoot != "" {
+		t.Errorf(`"/" should mean no host root: err=%v hostRoot=%q`, err, hostRoot)
+	}
+}

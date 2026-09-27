@@ -1,0 +1,56 @@
+# The GWatch hardware agent, as installed by the gwatch-agent .deb or .rpm
+# (packaging/nfpm). See docs/HARDWARE.md#linux-packages.
+#
+# `sudo gwatch-agent pair --server URL --code XXXX-XXXX` is the whole setup: it
+# keeps the token and the server in /var/lib/gwatch-agent, where `run` with no
+# arguments finds them, and enables and starts this unit. Until then the agent
+# exits with status 78 ("not configured"), which is not restarted, so an
+# unpaired machine does not fill the journal with the same complaint.
+#
+# The agent only reads: /proc, the mount table, and the space on each mounted
+# filesystem. Everything below takes away what it has no use for. It runs as
+# root because the token file is root's and because measuring a filesystem
+# mounted under a directory only root can enter needs root; the capability
+# bounding set leaves it only the one capability that covers the latter.
+# ProtectSystem=strict makes /usr read-only to it as well, which is a second,
+# independent reason this packaged agent cannot replace its own binary.
+[Unit]
+Description=GWatch hardware agent
+Documentation=https://github.com/jxburros/GWatch/blob/main/docs/HARDWARE.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/gwatch-agent/agent.env
+ExecStart=/usr/bin/gwatch-agent run
+Restart=always
+RestartSec=10s
+RestartPreventExitStatus=78
+StateDirectory=gwatch-agent
+StateDirectoryMode=0700
+UMask=0077
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+# AF_NETLINK is how the interface list and addresses are read.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target
