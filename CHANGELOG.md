@@ -9,6 +9,161 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## 0.4.0
+
+The 2026-09-27 sprint: everything labelled `sprint-plan` in the tracker. The
+hardware agent is released alongside it, on its own train, as
+**gwatch-agent 0.5.0** (see [below](#gwatch-agent-050)).
+
+### Added
+
+- **Chart any metric, not just latency** (#68). The Charts page and dashboard
+  chart widgets have a **Metrics** picker: each node › check lists every metric
+  it can be charted by — latency (average, minimum, maximum), jitter and packet
+  loss for a ping check, response time for the rest, availability for all, and
+  every metric the check measures: a machine's processor, memory, swap, load,
+  each disk and its inodes, each network interface received and sent, disk
+  read, write and busy; an SNMP check's OIDs; a JSON check's recorded value.
+  It filters as you type when there are many checks, counts what is ticked and
+  clears in one go. Leaving it empty still lets GWatch pick the most important
+  checks. Line colours are set per series, and CSV export gives one file per
+  series in that series' own values. Saved charts and widgets from earlier
+  versions open exactly as before; a new chart still records the old fields,
+  so an older GWatch reading it falls back to latency rather than failing.
+- **Several metrics, nodes and units on one chart** (#73). Any mix of series can
+  share a chart: the first unit ticked is read off the left-hand axis and a
+  second unit off a right-hand axis with its own scale. A third unit gets a
+  chart of its own underneath — a note says so — rather than being squashed
+  onto a rescaled axis. The tooltip, the keyboard walk, the screen-reader
+  summary, "View as table", the stat tiles, the legend and the PNG export all
+  give each series in its own unit, and label which axis it is on when units
+  are mixed.
+- **Pairing confirms itself** (#69). The dialog that shows a pairing code now
+  watches it, through a new `GET /api/agents/pairings/{id}`: the moment the
+  machine redeems the code it says the machine has paired, and when its first
+  reading arrives it says the machine is reporting — each with a notification
+  and an **Open its node** button. The agent's Windows installer says whether
+  pairing actually worked on its last page, rather than always announcing that
+  the machine is reporting.
+- **An opt-in tutorial, and Help for everything added lately** (#44). Help has
+  new topics for charts, AI assistants (MCP) and the database and Docker
+  options, and its hardware, incidents, accounts, remote-access,
+  troubleshooting and keyboard topics now cover pairing and its confirmation,
+  per-metric readings, notification rules, recorded JSON values, agent
+  self-update and packages, sessions and proxied sign-in. Every topic opens
+  directly at `#/help?topic=<id>`. The words live in one module
+  (`web/help-content.js`) shared by Help and the new **tutorial**: eleven
+  steps across the real pages, each ringing one control, that start only from
+  **Start the tutorial** in Help, never start or resume by themselves, pause on
+  Esc or when you go elsewhere, and resume from the step you reached. Two new
+  tips cover Settings › Rules and Settings › AI & MCP. `docs/USER-GUIDE.md`
+  has a "Help, the tutorial and tips" section.
+- **The agent has its own logo** (#79) — the "G" in a deerstalker. It is the
+  icon of `gwatch-agent.exe` and of the agent's installer and uninstaller, the
+  artwork of that installer's wizard, and appears in GWatch wherever the agent
+  is introduced: the pairing dialog, Settings › Hardware, the onboarding step
+  about other machines, Help and `docs/HARDWARE.md`. The installer artwork and
+  the icon are generated reproducibly by `scripts/installer/make-assets.py`.
+- **Agent packages** (#77): `.deb` and `.rpm`, a Homebrew formula, a winget
+  package and a container image — see gwatch-agent 0.5.0 below.
+
+### Changed
+
+- **Throughput reads as a rate** (#67): B/s, kB/s, MB/s, GB/s on chart axes,
+  tooltips, tables and stat tiles, the node page's network and disk charts,
+  the machine panel and the result inspector, with nice round axis ticks in the
+  scaled unit. Rates step in 1000s, as alert emails already wrote them (the
+  machine panel and inspector used to step in 1024s); sizes on disk and in
+  memory still step in 1024s. SNMP `bit/s` readings chart as kbit/s, Mbit/s…
+- **Both installers are light-themed only** (#66): a pale page, a white
+  header and fields, dark text and the teal rule under the header, with the
+  wizard artwork redrawn on light. The dark artwork and palette are gone, and
+  the wizard names no dark or system-following style.
+- **Visitors through a reverse proxy on the GWatch machine sign in** (#70). A
+  proxy running alongside GWatch connects from `127.0.0.1`, which used to earn
+  every visitor through it the no-sign-in administrator standing reserved for
+  someone at the machine. A loopback request carrying a forwarding header
+  (`Forwarded`, `X-Forwarded-For`/`-Host`/`-Proto`, `X-Real-IP`) is now treated
+  as the remote client it is. Caddy and `tailscale serve` add one already;
+  nginx needs `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` —
+  see `docs/REMOTE-ACCESS.md`. **If you reach GWatch through such a proxy
+  without an account, create one before upgrading.**
+- Changing an account's role no longer signs it out; the new role applies to
+  its existing sessions on their next request and the page redraws itself for
+  it. Changing a password still signs it out everywhere.
+
+### Fixed
+
+- **Random sign-outs and a stray "viewer" look** (#70):
+  - A database hiccup while checking a session (SQLite busy, a dropped
+    connection to a database server) was treated as "not signed in", and the
+    401 sent the browser to the sign-in screen. It is now a 503 with
+    `Retry-After`; only an unknown or expired session signs a browser out. A
+    database error during sign-in is no longer reported as a wrong password.
+  - The session slid forward in the database with use, but the browser's cookie
+    kept the expiry it got at sign-in, so it vanished 30 days after sign-in
+    however active the session had been. The cookie is now renewed with the
+    session (at most hourly), and the session is written at most once a minute
+    rather than on every request.
+  - A single stray 401 no longer bounces the browser: it asks `/api/me` first.
+    If `/api/me` could not be reached when the page opened, the whole session
+    was styled as a viewer until reload; identity is now retried, re-read after
+    a 403, a reconnect or a return to the tab, never downgraded by a failed
+    fetch, and the page redraws itself when it changes.
+- **The page grew a scrollbar for a few seconds at a time** (#71). The header's
+  decorative sweep slid a box past the right-hand edge for the last fifth of
+  every nine-second cycle; it is now a gradient that moves inside the header.
+  The empty state's turning reticle is clipped too, so it cannot put a
+  scrollbar on a narrow widget. A new browser test steps every running
+  animation through its cycle and fails if the page ever gets wider than the
+  window.
+- **Empty values showed as "null"** (#72). The hardware check's editor printed
+  a bare "null" under its thresholds; a select given no value now shows its
+  empty option; a missing list is an empty one; the machine panel no longer
+  says "load undefined". A new browser test makes the mock answer the way the
+  Go service does — empty lists and optional values as `null` — and reads every
+  page and every node's page and editor for "null", "undefined" or "NaN".
+
+### gwatch-agent 0.5.0
+
+Released separately, by tagging `agent-v0.5.0`; agents on automatic updates
+pick it up by themselves.
+
+- **Packages** (#77). The agent is now also published as a `.deb` and `.rpm`
+  (amd64, arm64, armhf), a Homebrew formula (`jxburros/tap/gwatch-agent`), a
+  winget package (`GWatch.Agent`) and a container image
+  (`ghcr.io/jxburros/gwatch-agent`), each built by its own job on the
+  `agent-v*` tag, with the packages built and exercised on every pull request.
+- **A packaged agent belongs to its package manager.** Packages are built with
+  the package's name baked in: such a build never updates or rolls itself
+  back, `gwatch-agent update` prints the package manager's command instead
+  (`update --check` still reports a newer release), and where the package
+  registers the service itself the agent's own service commands point at
+  `systemctl`, `brew services` or `docker`. Release binaries still update
+  themselves, and no package is ever named like a self-update asset. The
+  reasoning is entry 10 of `docs/AGENT-DECISIONS.md`.
+- `gwatch-agent pair` saves the server address (and `--insecure`, `--name`)
+  beside the token, so `gwatch-agent run` needs no arguments afterwards; with
+  the Linux packages, `sudo gwatch-agent pair --server … --code …` also enables
+  and starts the service.
+- **Watching a Docker host from a container**: `--host-root` /
+  `GWATCH_HOST_ROOT` reads the host's filesystems, name and distribution
+  through the host's root mounted into the container.
+- An agent with no token or server exits with status 78, which the packaged
+  service unit does not restart on, so an unpaired machine does not log the
+  same error forever.
+- `gwatch-agent version` and the User-Agent the agent sends say which package
+  a build came from.
+- The agent's own icon (#79).
+
+### Before the first packaged agent release
+
+The Homebrew tap needs a `jxburros/homebrew-tap` repository and a
+`HOMEBREW_TAP_TOKEN` secret, and the winget submission a `WINGET_TOKEN`
+secret; without them those two jobs skip with a notice and keep the formula
+and manifests as workflow artifacts. The container package has to be made
+public once, after its first push. `docs/RELEASING.md` has the details.
+
 ## 0.3.1
 
 ### Added

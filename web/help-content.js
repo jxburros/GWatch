@@ -75,8 +75,8 @@ export const TOPICS = [
     icon: 'chart',
     q: 'chart graph metric cpu memory disk network bandwidth throughput latency loss jitter availability axis units compare overlay save pin export png csv dashboard widget',
     body: () => [
-      h('p', null, 'The ', h('a', { href: '#/charts' }, 'Charts'), ' page draws any history GWatch keeps. Pick the series you want — latency, jitter, packet loss or availability for any check, and every metric a check measures: a machine\u2019s processor, memory, each disk and each network interface, an SNMP reading, a JSON check\u2019s recorded value — from as many nodes as you like.'),
-      h('p', null, 'Series in different units share one chart: the first unit is read off the left-hand axis and the second off the right, and each line\u2019s legend entry says which unit it is in, so ping time from the router and processor load on the NAS can sit on the same timeline. Throughput is shown as a rate a person reads — KB/s, MB/s, GB/s — rather than a count of bytes.'),
+      h('p', null, 'The ', h('a', { href: '#/charts' }, 'Charts'), ' page draws any history GWatch keeps. Tick the series you want under ', h('b', null, 'Metrics'), ' — latency, jitter, packet loss or availability for any check, and every metric a check measures: a machine\u2019s processor, memory, each disk and each network interface, an SNMP reading, a JSON check\u2019s recorded value — from as many nodes as you like.'),
+      h('p', null, 'Series in different units share one chart: the first unit ticked is read off the left-hand axis and the second off the right, and each line\u2019s legend entry says which unit and axis it is on, so ping time from the router and processor load on the NAS can sit on the same timeline. A third unit gets a chart of its own underneath rather than a squashed scale. Throughput is shown as a rate a person reads — kB/s, MB/s, GB/s — rather than a count of bytes.'),
       h('p', null, 'A chart can be saved under a name, exported as a PNG or as CSV, or pinned to a ', h('a', { href: '#/dashboard' }, 'dashboard'), ' as a widget with exactly the same settings. Dashboards are separate boards of widgets — status tiles, what needs attention, groups, certificates, charts — each laid out on its own grid.'),
       h('p', { class: 'note' }, 'Every chart can be walked with the arrow keys once it has focus, and has its figures under "View as table".'),
     ],
@@ -269,7 +269,7 @@ export const TUTORIAL = [
     anchor: '.charts-side',
     place: 'right',
     title: 'Chart anything, together',
-    body: 'Pick any series GWatch keeps — latency, loss, a disk, a network interface, an SNMP reading — from any nodes. Different units share the chart on a left and a right axis. Save a chart, export it, or pin it to a dashboard.',
+    body: 'Tick any series GWatch keeps — latency, loss, a disk, a network interface, an SNMP reading — from any nodes. Two different units share the chart on a left and a right axis. Save a chart, export it, or pin it to a dashboard.',
   },
   {
     id: 'incidents',

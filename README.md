@@ -16,27 +16,28 @@ by itself. (An optional, separate MCP companion can let an assistant *read* your
 monitoring if you set one up — see [`mcp/README.md`](mcp/README.md).) The product
 brief that defines the scope lives in [`local-network-monitoring-product-brief.md`](local-network-monitoring-product-brief.md).
 
-> **GWatch is in beta (0.3.0).** It works and it looks after your data, but the
+> **GWatch is in beta (0.4.0).** It works and it looks after your data, but the
 > interface and the JSON API can still change between releases, and bugs are likelier
 > now than they will be at 1.0 — which is reserved for the first public, stable
 > release. [`CHANGELOG.md`](CHANGELOG.md) lists what is in this version and the gaps it
 > ships with. Please [report anything that looks wrong](https://github.com/jxburros/GWatch/issues).
 
-## What's new in 0.3.0
+## What's new in 0.4.0
 
-Since 0.2.2: **hardware metrics stand on their own** — every reading a machine
-takes has its own value, status, threshold, chart, incident and trigger
-variable, with thresholds set per family or per instance; **notification rules
-across nodes** ("tell me when two of my three DNS servers are down"); **JSON
-checks can record and chart the value they read**, turning any API into a time
-series; a **Settings › AI & MCP** page with a downloadable agent skill; the
-database can live on **your own PostgreSQL or MySQL/MariaDB server**, with
-`gwatch migrate-db` to move an existing install across; an official **Docker
-image** for `linux/amd64` and `linux/arm64`; a build-time choice of SQLite
-driver; an **accessibility pass** across the whole interface, with axe running
-over every route in both themes in CI; and a **user guide**
-([`docs/USER-GUIDE.md`](docs/USER-GUIDE.md)) covering every screen and setting.
-Full detail in [`CHANGELOG.md`](CHANGELOG.md).
+Since 0.3.1: **chart any metric** — a machine's processor, memory, disks and
+network interfaces, SNMP readings and recorded JSON values as well as latency
+and loss — and **mix units on one chart** with a left and a right axis;
+throughput reads as **kB/s, MB/s, GB/s** instead of raw bytes; **pairing a
+machine confirms itself** the moment the agent pairs and reports; **sessions
+and roles hold steady** — no more sign-outs on a busy database or 30 days after
+signing in, and a role change applies at once; the page no longer grows a
+**scrollbar** for a few seconds at a time, and empty fields no longer say
+**"null"**; both **installers are light-themed**; the agent has **its own logo**;
+and Help covers everything added lately, with an **opt-in guided tutorial**.
+
+The agent is released separately as **gwatch-agent 0.5.0**, now also packaged
+as a `.deb`/`.rpm`, a Homebrew formula, a winget package and a container image
+that can watch a Docker host. Full detail in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## What it does
 
@@ -105,14 +106,18 @@ Then open <http://127.0.0.1:7230> — monitoring runs only while this process ru
 `gwatch-agent` is the small, dependency-free companion that reports hardware
 health — processor, memory, swap, load, disks, inodes, network and disk
 throughput — from another machine back to your GWatch server. Pair a machine
-from **Nodes › Pair a machine**, then run the install command it gives you:
+from **Nodes › Pair a machine**, then type the short code it shows into the
+agent's Windows installer, or run:
 
 ```
-gwatch-agent install --server https://gwatch.lan:7230 --token gwa_…
+gwatch-agent install --server https://gwatch.lan:7230 --code XXXX-XXXX
 ```
 
 It installs itself as a background service and starts reporting within a
-minute, on Windows, Linux or macOS. It can also run the other way round —
+minute, on Windows, Linux or macOS, and the pairing dialog in GWatch says so as
+it happens. It keeps itself up to date from its own signed releases, or is
+installed and updated by `apt`/`dnf` (`.deb`/`.rpm`), Homebrew, winget or as a
+container image instead. It can also run the other way round —
 `gwatch-agent serve` exposes a metrics endpoint for GWatch to poll — for the
 machines that can't reach out on their own. See
 [`docs/HARDWARE.md`](docs/HARDWARE.md) for the full setup and

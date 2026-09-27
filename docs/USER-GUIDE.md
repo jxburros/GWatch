@@ -105,6 +105,22 @@ resets the ones you have already dismissed.
   service at all — a different problem from anything being down, and it has its
   own **Retry**.
 
+### Help, the tutorial and tips
+
+**Help** is the short manual, searchable as you type. Each topic has an
+address of its own — `#/help?topic=hardware`, `#/help?topic=charts` — which
+is how the rest of GWatch and this guide point at one paragraph.
+
+At the top of Help is the **tutorial**: eleven short steps across the pages
+you will use most, each going to its page, ringing one control and saying what
+it is for. It is entirely opt-in. It starts only when you press **Start the
+tutorial**, never starts or comes back by itself, and pauses the moment you
+press **Esc**, close it, or wander off to another page; Help then remembers
+the step you reached and offers **Resume the tutorial** or **Start over**.
+
+The first-run **tour** (six screens) and the **tips** (small hints that point
+at one control, each shown once) are switched on and reset from the same card.
+
 ### The status indicators
 
 Those small coloured circles under the page title are not decoration and they
@@ -508,12 +524,31 @@ out as it changes, so this works with a screen reader.
 ## 8. Charts
 
 **Charts** is where a chart you want to keep gets saved rather than rebuilt.
-Pick checks and a range, then:
+Tick the series you want under **Metrics** and pick a range. Each node › check
+lists every metric it can be charted by: latency (average, minimum, maximum),
+jitter and packet loss for a ping check, response time for the others,
+availability for all of them, and every metric the check measures — a
+machine's processor, memory, swap, load, each disk and its inodes, each network
+interface's received and sent, disk read, write and busy; an SNMP check's OIDs;
+a JSON check's recorded value. Tick as many as you like, from as many nodes as
+you like. Leave everything unticked and GWatch picks the most important checks
+itself, with a **Metric for automatic checks** to choose what to draw of them.
+
+**Mixed units.** Series in different units share a chart: the first unit
+ticked is read off the left-hand axis and the second off the right, and when
+units are mixed each legend entry says which unit and which axis it is on
+("ms · left axis"). A third unit gets a chart of its own underneath rather than
+a squashed scale. **Y axis minimum/maximum** and the **threshold line** belong
+to the left axis. Throughput is written as a rate — B/s, kB/s, MB/s, GB/s, in
+steps of 1000, the same way alert emails write it.
+
+Then:
 
 - **Save**, and **Save as a copy** for a variant.
 - **Rename** and **Delete chart**.
 - **Pin to a dashboard** — the saved chart becomes a *Chart* widget there.
-- **Export chart as PNG** for a report or a message.
+- **Export chart as PNG** for a report or a message, or **Export CSV**, one
+  file per series.
 
 Every chart in GWatch, here and elsewhere, has two things worth knowing about:
 
@@ -768,7 +803,14 @@ gwatch-agent pair --server http://<gwatch>:7230 --code XXXX-XXXX --name "Media s
 ```
 
 That exchanges the code for the machine's own token, saves it, and sends one
-reading to prove it works. Then install it as a service:
+reading to prove it works. **The dialog in GWatch that shows the code is
+watching it**: the moment the code is used it says the machine has paired, and
+when that first reading lands it says the machine is reporting, with a
+notification for each and an **Open its node** button — so you can type the
+code on the other machine and come back to a confirmation rather than going to
+look. The agent's Windows installer says the same on its last page, or says
+plainly that pairing failed and what to run instead. Then install it as a
+service:
 
 ```sh
 gwatch-agent install --server http://<gwatch>:7230 --code XXXX-XXXX --name "Media server"
@@ -1032,6 +1074,7 @@ behaviour that works everywhere:
 | **←** / **→** on the wallboard tabs | Switch between boards |
 | **Arrow keys** on a widget's grip | Move it one cell; with **Shift**, resize it |
 | **Enter** / **Esc** in the tour | Next step, and skip |
+| **Enter** / **Esc** in the tutorial | Next step (focus starts on **Next**), and pause it where it is |
 
 Dialogs name themselves by their heading and make the page behind them inert.
 Form errors are tied to their fields. Every chart offers **"View as table"**.
