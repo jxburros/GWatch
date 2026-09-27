@@ -1,0 +1,86 @@
+# The GWatch agent as a container image, for watching the Docker host it runs
+# on — see docs/HARDWARE.md#in-a-container for how to run it.
+#
+# Built from the repository root (the build context is the Go module):
+#   docker build -f packaging/docker/Dockerfile.agent \
+#     --build-arg VERSION=$(cat cmd/gwatch-agent/VERSION) -t gwatch-agent .
+#
+# Why this is coherent at all: the agent reads the kernel's counters from
+# /proc, and most of /proc (processor, memory, load, uptime, disk I/O) is the
+# host's even inside a container. What a container gets wrong is the mount
+# table (its own overlay and volumes), the network interfaces (its own veth)
+# and the host's name and distribution. So the image is run with the host's /
+# mounted read-only at /host and GWATCH_HOST_ROOT=/host, which makes the
+# agent read the host's mount table and /etc through that mount
+# (internal/sysmetrics.SetHostRoot), and with --network=host, which makes the
+# interfaces the host's. Without the /host mount the agent refuses to start
+# rather than report the container under the host's name.
+#
+# The binary is built with -X main.packagedBy=docker: the image is replaced by
+# pulling a new one, so the agent never replaces itself inside it.
+
+# --platform=$BUILDPLATFORM: compile natively and cross-compile for the target
+# rather than running the Go toolchain under emulation for arm64 and arm/v7.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+
+# The version the binary reports. Left empty, it is read from
+# cmd/gwatch-agent/VERSION, as `make agent` does.
+ARG VERSION=
+ARG TARGETOS
+ARG TARGETARCH
+ARG TARGETVARIANT
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Only what the agent is built from: it imports the collector, the shared
+# types and the release verifier, nothing of the server or its web interface.
+COPY cmd/gwatch-agent cmd/gwatch-agent
+COPY internal internal
+
+RUN set -eu; \
+    version="${VERSION:-$(tr -d ' \t\r\n' < cmd/gwatch-agent/VERSION)}"; \
+    goarm=""; if [ "${TARGETARCH:-}" = arm ]; then goarm="${TARGETVARIANT#v}"; fi; \
+    CGO_ENABLED=0 GOOS="${TARGETOS:-}" GOARCH="${TARGETARCH:-}" GOARM="${goarm}" \
+      go build -trimpath \
+        -ldflags "-s -w -X main.version=${version} -X main.packagedBy=docker" \
+        -o /out/gwatch-agent ./cmd/gwatch-agent
+
+FROM alpine:3.22
+
+ARG VERSION=
+LABEL org.opencontainers.image.title="GWatch Agent" \
+      org.opencontainers.image.description="Reports the Docker host's processor, memory, disk and network health to a GWatch server." \
+      org.opencontainers.image.source="https://github.com/jxburros/GWatch" \
+      org.opencontainers.image.documentation="https://github.com/jxburros/GWatch/blob/main/docs/HARDWARE.md#in-a-container" \
+      org.opencontainers.image.licenses="LicenseRef-GWatch-Community-License-1.0" \
+      org.opencontainers.image.version="${VERSION}"
+
+# ca-certificates: the agent talks HTTPS to GWatch.
+#
+# It runs as an unprivileged user. Everything it reads through /host is
+# world-readable — /proc/1/mounts, /proc/stat, /proc/diskstats, /etc/hostname —
+# and measuring a filesystem needs only permission to reach its mount point,
+# which every ordinary one allows. A filesystem mounted under a directory only
+# root can enter is the exception; it is reported as a warning on the reading,
+# and `--user 0` is the fix if it matters (docs/HARDWARE.md#in-a-container).
+RUN apk add --no-cache ca-certificates \
+    && addgroup -g 7231 -S gwatch-agent \
+    && adduser -u 7231 -S -G gwatch-agent -h /var/lib/gwatch-agent -s /sbin/nologin gwatch-agent \
+    && mkdir -p /var/lib/gwatch-agent \
+    && chown gwatch-agent:gwatch-agent /var/lib/gwatch-agent \
+    && chmod 0700 /var/lib/gwatch-agent
+
+COPY --from=build /out/gwatch-agent /usr/local/bin/gwatch-agent
+COPY LICENSE /usr/share/doc/gwatch-agent/LICENSE
+
+# /var/lib/gwatch-agent holds the token and server that `pair` stores. Mount a
+# named volume there so the pairing outlives the container; a new volume takes
+# this directory's ownership, so the unprivileged user can write to it.
+ENV GWATCH_HOST_ROOT=/host
+VOLUME /var/lib/gwatch-agent
+
+USER gwatch-agent
+ENTRYPOINT ["gwatch-agent"]
+CMD ["run"]

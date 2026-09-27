@@ -202,6 +202,7 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "GET /api/agents/latest", s.handleAgentLatest)
 	s.route(mux, "GET /api/agents/pairings", s.handleListPairings)
 	s.route(mux, "POST /api/agents/pairings", s.handleCreatePairing)
+	s.route(mux, "GET /api/agents/pairings/{id}", s.handleGetPairing)
 	s.route(mux, "DELETE /api/agents/pairings/{id}", s.handleRevokePairing)
 	// Redeeming a pairing code is the one agent route that has to be reachable
 	// with no credential at all: a credential is what it hands out. See

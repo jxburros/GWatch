@@ -2,7 +2,7 @@
 // backend can provide (timings, redirects, certificate, ping packets, DNS…).
 
 import { h, icon, statusPill, checkTypeLabel } from '../components.js';
-import { ms as fmtMs, pct, dateTime, dateShort, relTime, plural, bytes, duration, num, metricValue } from '../fmt.js';
+import { ms as fmtMs, pct, dateTime, dateShort, relTime, plural, bytes, duration, num, metricValue, rate as fmtRate } from '../fmt.js';
 
 function kv(pairs) {
   const dl = h('dl', { class: 'kv' });
@@ -236,7 +236,8 @@ export function resultInspector(result, check, { compact = false } = {}) {
   // what the machine looked like at the moment the check passed or failed.
   if (d.host) {
     const m = d.host;
-    const rate = (v) => (v == null ? null : `${bytes(v)}/s`);
+    // Decimal rate units, as the service's alerts and the charts use (#67).
+    const rate = (v) => (v == null ? null : fmtRate(v));
     const rx = sumRate(m.interfaces, 'rxBytesPerSec');
     const tx = sumRate(m.interfaces, 'txBytesPerSec');
     left.push(h('div', null, h('div', { class: 'section-title' }, 'Machine'), kv([

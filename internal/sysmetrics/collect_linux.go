@@ -5,7 +5,9 @@ package sysmetrics
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -19,6 +21,46 @@ import (
 // procfs files, which is the only way to assert the parsers against known
 // numbers rather than against whatever this machine is doing.
 var procRoot = "/proc"
+
+// sysRoot, osRelease and mountRoot are the other paths a host root moves (see
+// SetHostRoot). mountRoot is empty normally; under a host root it is prefixed
+// to each mount point before it is measured, since the host's mount table
+// names the host's paths and the agent can only reach them through the mount.
+var (
+	sysRoot   = "/sys"
+	osRelease = "/etc/os-release"
+	mountRoot = ""
+)
+
+// useHostRoot moves the collector's paths under dir, or back to the machine's
+// own when dir is empty. The host's /proc/1/mounts is where its mount table
+// is read from: /proc/mounts is a link to the *reader's* mount namespace,
+// which in a container is the container's, whereas pid 1 of the host's procfs
+// is the host's init whatever namespace the reader is in. Neither file needs
+// privilege to read.
+func useHostRoot(dir string) error {
+	if dir == "" {
+		procRoot, sysRoot, osRelease, mountRoot = "/proc", "/sys", "/etc/os-release", ""
+		return nil
+	}
+	proc := filepath.Join(dir, "proc")
+	for _, f := range []string{"stat", "1/mounts"} {
+		if _, err := os.Stat(filepath.Join(proc, f)); err != nil {
+			return fmt.Errorf("%s does not hold the host's /proc (%v)", dir, err)
+		}
+	}
+	procRoot, sysRoot, osRelease, mountRoot = proc, filepath.Join(dir, "sys"), filepath.Join(dir, "etc", "os-release"), dir
+	return nil
+}
+
+// mountTable is the file the mounts are listed in: this process's own, or,
+// under a host root, the host init's.
+func mountTable() string {
+	if mountRoot != "" {
+		return procRoot + "/1/mounts"
+	}
+	return procRoot + "/mounts"
+}
 
 // statfs is syscall.Statfs behind a variable so a test can answer for mount
 // points that do not exist on the machine running the tests.
@@ -228,7 +270,7 @@ var pseudoFS = map[string]bool{
 // readMounts lists real filesystems with their space usage. A device mounted
 // more than once (a bind mount) is reported once, under the first mount point.
 func readMounts() ([]model.HostFilesystem, []string) {
-	f, err := os.Open(procRoot + "/mounts")
+	f, err := os.Open(mountTable())
 	if err != nil {
 		return nil, []string{"filesystems: " + err.Error()}
 	}
@@ -250,8 +292,14 @@ func readMounts() ([]model.HostFilesystem, []string) {
 		if seen[device] {
 			continue
 		}
+		// Measured through the host root when there is one, and reported
+		// under the host's own path, which is the one anybody would recognise.
+		at := mount
+		if mountRoot != "" {
+			at = filepath.Join(mountRoot, mount)
+		}
 		var st syscall.Statfs_t
-		if err := statfs(mount, &st); err != nil {
+		if err := statfs(at, &st); err != nil {
 			if len(warnings) < 3 {
 				warnings = append(warnings, "filesystem "+mount+": "+err.Error())
 			}
@@ -357,7 +405,7 @@ func readNetDev() ([]ifaceCounters, error) {
 // readIfaceSpeed reports the negotiated link speed in Mbit/s, or 0 when the
 // kernel does not know it (virtual interfaces, or a down link).
 func readIfaceSpeed(name string) uint64 {
-	b, err := os.ReadFile("/sys/class/net/" + name + "/speed")
+	b, err := os.ReadFile(sysRoot + "/class/net/" + name + "/speed")
 	if err != nil {
 		return 0
 	}
@@ -459,7 +507,7 @@ func parentDevice(name string, known map[string]bool) string {
 // linuxPlatform reads the distribution name from /etc/os-release and the
 // kernel release from uname.
 func linuxPlatform() (platform, kernel string) {
-	if b, err := os.ReadFile("/etc/os-release"); err == nil {
+	if b, err := os.ReadFile(osRelease); err == nil {
 		for _, line := range strings.Split(string(b), "\n") {
 			if v, ok := strings.CutPrefix(line, "PRETTY_NAME="); ok {
 				platform = strings.Trim(strings.TrimSpace(v), `"`)

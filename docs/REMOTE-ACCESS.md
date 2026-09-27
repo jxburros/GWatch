@@ -75,8 +75,21 @@ Caddy obtains and renews the certificate itself. Turn on `general.remoteAccess` 
 the proxy is on a different machine; when the proxy runs alongside GWatch, leave it off
 and let the proxy reach `127.0.0.1:7230`, so the port is never open on the network.
 
-Over HTTPS the session cookie is issued with `Secure` set, so it is never sent in the
-clear.
+A proxy on the same machine connects to GWatch from `127.0.0.1`, the address that
+normally means "someone at this computer" and grants administrator access with no
+sign-in. GWatch tells the two apart by the forwarding headers a proxy adds
+(`X-Forwarded-For`, `Forwarded`, `X-Real-IP` and the like): a request carrying one is
+treated as the remote client it is, and has to sign in. Caddy and `tailscale serve` add
+`X-Forwarded-For` by default. nginx does not — add
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` to the `location` block,
+or every visitor through it will be treated as sitting at the GWatch machine.
+
+GWatch sees plain HTTP from the proxy, so the session cookie is not marked `Secure`; the
+proxy's HTTPS still keeps it out of sight on the way. That is deliberate: a `Secure`
+cookie set through `https://` would be withheld from the same host name over plain
+HTTP, and could not then be replaced from there, so signing in over the LAN address
+would bounce straight back to the sign-in screen. If the host name is only ever reached
+over HTTPS, nothing is lost.
 
 Three things to do if you go this way:
 

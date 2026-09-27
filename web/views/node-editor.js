@@ -914,7 +914,10 @@ export async function mount(root, ctx) {
       sourceWrap,
       h('div', { class: 'section-title', style: { marginTop: '4px' } }, 'Warning and critical thresholds'),
       h('p', { class: 'note' }, 'One check, one line of history per metric, and each metric has its own verdict: crossing ', h('b', null, 'warning'), ' marks that metric — and so the check — ', h('b', null, 'degraded'), '; crossing ', h('b', null, 'critical'), ' marks it ', h('b', null, 'down'), '. A warning on the disk and a warning on memory are two incidents, not one. Leave a box blank to turn that level off.'),
-      err.metricThresholds ? h('div', { class: 'error', role: 'alert' }, err.metricThresholds) : null,
+      // wrap.append is the DOM's own append, which writes a null argument
+      // out as the text "null" (#72) — so the error is only passed when there
+      // is one, never as a null placeholder the way h() children can be.
+      ...(err.metricThresholds ? [h('div', { class: 'error', role: 'alert' }, err.metricThresholds)] : []),
       thresholdsEl,
     );
     return wrap;

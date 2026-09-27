@@ -222,6 +222,7 @@ var policies = []routePolicy{
 	{"GET", "/api/agents/latest", levelAdmin, keyDeny},
 	{"GET", "/api/agents/pairings", levelAdmin, keyDeny},
 	{"POST", "/api/agents/pairings", levelAdmin, keyDeny},
+	{"GET", "/api/agents/pairings/{id}", levelAdmin, keyDeny},
 	{"DELETE", "/api/agents/pairings/{id}", levelAdmin, keyDeny},
 	// Redeeming a pairing code is public because it cannot be anything else:
 	// the machine typing the code has no credential yet, and getting one is

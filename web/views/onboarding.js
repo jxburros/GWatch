@@ -3,7 +3,7 @@
 // here changes the service — every step points at the page that does, because
 // a wizard that quietly configures things is a wizard nobody trusts.
 
-import { h, icon, replace, banner, toggle } from '../components.js';
+import { h, icon, replace, banner, toggle, agentLogo } from '../components.js';
 import { setOnboardingDone, tipsEnabled, setTipsEnabled } from '../tips.js';
 
 const STEPS = [
@@ -45,6 +45,9 @@ const STEPS = [
   {
     id: 'hardware',
     icon: 'cpu',
+    // This step is about the agent, so it wears the agent's own mark rather
+    // than a generic chip.
+    mark: () => agentLogo({ cls: 'ob-mark' }),
     title: 'Watch the machines themselves',
     lead: 'Optional, and useful the first time a disk quietly fills up.',
     body: () => [
@@ -107,7 +110,7 @@ export async function mount(root, ctx) {
         dots,
         h('div', { class: 'ob-bar' }, h('i', { style: { width: `${((i + 1) / STEPS.length) * 100}%` } }))),
       h('div', { class: `ob-step ${s.important ? 'ob-step-important' : ''}` },
-        h('span', { class: 'ob-icon' }, icon(s.icon)),
+        s.mark ? s.mark() : h('span', { class: 'ob-icon' }, icon(s.icon)),
         h('div', { class: 'ob-copy' },
           h('h2', null, s.title),
           h('p', { class: 'lead' }, s.lead),

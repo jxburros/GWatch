@@ -303,3 +303,12 @@ func darwinInterfaces(ctx context.Context) ([]ifaceCounters, error) {
 	}
 	return result, nil
 }
+
+// useHostRoot has nothing to move here: watching a host from inside a
+// container is a Linux arrangement (see SetHostRoot).
+func useHostRoot(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	return ErrHostRootUnsupported
+}

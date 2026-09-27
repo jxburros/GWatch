@@ -9,10 +9,10 @@
 import { api, subscribeUpdates } from '../api.js';
 import {
   h, icon, clear, replace, statusPill, emptyState, skeleton, rangeChips, relTimeEl,
-  openModal, confirmDialog, field, textInput, selectInput, toast,
+  openModal, confirmDialog, field, textInput, selectInput, toast, agentLogo,
 } from '../components.js';
 import { LineChart, SERIES_COLORS } from '../charts.js';
-import { bytes, pct, duration, dateTime, num, agentIsBehind } from '../fmt.js';
+import { bytes, pct, duration, dateTime, num, agentIsBehind, rate as fmtRate } from '../fmt.js';
 
 // Shading for a usage bar. These are display thresholds only — what actually
 // raises an alert is the hardware check's own configuration, which the person
@@ -39,7 +39,9 @@ export async function pairMachine(reload) {
   const ok = await confirmDialog({
     title: 'Pair a machine',
     body: h('div', { class: 'stack' },
-      h('p', { class: 'lead' }, 'You will get a short code to type into the agent on the other machine. It enrols that one machine and then stops working.'),
+      h('div', { class: 'agent-intro' },
+        agentLogo(),
+        h('p', { class: 'lead' }, 'You will get a short code to type into the agent on the other machine. It enrols that one machine and then stops working.')),
       field({ label: 'Name', input: name, help: 'How this machine appears under Hardware.' }),
       field({ label: 'Node', input: nodeSel, help: 'Optional. Attaching it lets a hardware check on that node watch this machine.' })),
     confirmLabel: 'Get a pairing code',
@@ -53,6 +55,10 @@ export async function pairMachine(reload) {
     showPairingCode(res.code, res.pairing, reload);
   } catch (e) { toast(e.message, { kind: 'error' }); }
 }
+
+/** How often the pairing dialog asks whether its code has been used. An
+ *  object so a test can make it quick. */
+export const pairingWatch = { intervalMs: 3000 };
 
 // The code is shown here and nowhere else — GWatch keeps only a fingerprint of
 // it — so the command to run on the other machine is shown with it, and the
@@ -102,13 +108,66 @@ function showPairingCode(code, pairing, reload) {
   const timer = setInterval(tick, 1000);
   tick();
 
+  // The dialog watches its own code (#69), so whoever typed it on the other
+  // machine finds out here that it worked rather than having to go and look.
+  // It says so twice, because there are two moments worth hearing about: the
+  // code has been swapped for a token (the machine exists), and the machine's
+  // first reading has been accepted (it is actually reporting). Each is
+  // announced through the status line — a live region — and a toast, so a
+  // person who has wandered off to the other machine and comes back to a
+  // closed dialog still sees it.
+  const statusEl = h('div', { role: 'status', 'aria-live': 'polite' });
+  const openNodeBtn = h('a', { class: 'btn btn-primary', href: '#/nodes', hidden: true, onclick: () => modal.close() }, icon('cpu'), 'Open its node');
+  let seen = 'pending';
+  let watching = true;
+  const settle = (state, res) => {
+    if (state === seen) return;
+    seen = state;
+    const agent = res?.agent || {};
+    const who = agent.name || pairing.name;
+    const where = agent.hostname && agent.hostname !== who ? ` (${agent.hostname})` : '';
+    if (state === 'paired' || state === 'reporting') {
+      clearInterval(timer);
+      cancelBtn.hidden = true;
+      codeEl.style.opacity = '0.45';
+      replace(noteEl, 'This code has been used and cannot enrol another machine.');
+      const nodeId = agent.nodeId ?? pairing.nodeId;
+      if (nodeId) { openNodeBtn.href = `#/nodes/${nodeId}`; openNodeBtn.hidden = false; }
+    }
+    if (state === 'paired') {
+      replace(statusEl, h('div', { class: 'banner banner-up' }, icon('check'),
+        h('div', null, h('b', null, `Paired — ${who}${where} is enrolled.`), ' Waiting for its first reading, which normally arrives within a minute.')));
+      toast(`${who} paired with GWatch`, { kind: 'success' });
+    } else if (state === 'reporting') {
+      watching = false;
+      replace(statusEl, h('div', { class: 'banner banner-up' }, icon('check'),
+        h('div', null, h('b', null, `${who}${where} is paired and reporting.`), ' Its first reading has arrived; you can close this.')));
+      toast(`${who} is paired and reporting`, { kind: 'success' });
+    } else if (state === 'cancelled') {
+      watching = false;
+    }
+  };
+  const watch = async () => {
+    if (!watching) return;
+    try {
+      const res = await api.get(`/api/agents/pairings/${pairing.id}`);
+      // Straight from pending to reporting still says "paired" first: the
+      // toast for each is what someone away from the screen comes back to.
+      if (res?.state === 'reporting' && seen === 'pending') settle('paired', res);
+      settle(res?.state, res);
+    } catch { /* keep watching; a blip is not worth a message */ }
+    if (watching && seen !== 'expired') poll = setTimeout(watch, pairingWatch.intervalMs);
+  };
+  let poll = setTimeout(watch, pairingWatch.intervalMs);
+
   const modal = openModal({
     title: 'Type this code on the other machine',
     wide: true,
-    onClose: () => { clearInterval(timer); reload?.(); },
+    onClose: () => { clearInterval(timer); watching = false; clearTimeout(poll); reload?.(); },
     body: h('div', { class: 'stack' },
       codeEl,
       noteEl,
+      statusEl,
       h('p', { class: 'lead' }, 'On the machine you want to watch, install gwatch-agent and run:'),
       h('code', { class: 'agent-setup' }, command),
       h('p', { class: 'note' }, 'The agent swaps the code for its own token, keeps the token on that machine and sends one reading to prove it worked. Use ',
@@ -116,7 +175,7 @@ function showPairingCode(code, pairing, reload) {
       h('p', { class: 'note' }, 'Letters only, in any case, and the dash does not matter. There is no I, L, O or U and no 0 or 1 in a code, so nothing here is the character you think it might be.'),
       h('p', { class: 'note' }, 'What the machine ends up holding can do one thing: submit its own hardware readings. It cannot read or change anything in GWatch, and GWatch never connects back to it.'),
       h('p', { class: 'note' }, 'If this GWatch is reached over HTTPS with a self-signed certificate, add ', h('code', null, '--insecure'), ' — the agent still uses TLS, it just stops checking the certificate.')),
-    footer: [cancelBtn, copy(code, 'Copy code'), h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
+    footer: [cancelBtn, openNodeBtn, copy(code, 'Copy code'), h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
       try { await navigator.clipboard.writeText(command); toast('Command copied', { kind: 'success' }); }
       catch { toast('Could not copy — select the command and copy it by hand.', { kind: 'error' }); }
     } }, icon('copy'), 'Copy command')],
@@ -145,7 +204,12 @@ function cpuDetail(m) {
   if (m.cpu?.usagePct != null) {
     return m.cpu.cores ? `${m.cpu.cores} cores` : '';
   }
-  if (m.cpu?.loadPerCore != null) return `load ${m.cpu.load1?.toFixed(2)} across ${m.cpu.cores} cores`;
+  if (m.cpu?.loadPerCore != null) {
+    // Either figure can be missing on its own; say what there is rather than
+    // "load undefined across null cores" (#72).
+    const load = m.cpu.load1 != null ? `load ${m.cpu.load1.toFixed(2)}` : `${m.cpu.loadPerCore.toFixed(2)} per core`;
+    return m.cpu.cores ? `${load} across ${m.cpu.cores} cores` : load;
+  }
   return 'not reported';
 }
 
@@ -172,8 +236,11 @@ function sumRate(rows, key) {
   return total;
 }
 
+// A throughput in the largest decimal unit that fits ("12.3 MB/s"), the way
+// the service writes one in an alert and the charts write one on an axis
+// (#67) — not in the 1024s bytes() counts a size on disk in.
 function rate(bytesPerSec) {
-  return bytesPerSec == null ? '—' : `${bytes(bytesPerSec)}/s`;
+  return fmtRate(bytesPerSec);
 }
 
 function upFor(m) {

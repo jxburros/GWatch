@@ -5,8 +5,9 @@ and several of them close off options that look obvious from the outside — so
 they are written down, with the reasoning, rather than left to be rediscovered
 or quietly reversed.
 
-Dated 2026-09-21. Each entry says what was decided, what was rejected, and what
-would have to change for the decision to be worth revisiting.
+Dated 2026-09-21; entries 10 and 11 added 2026-09-27. Each entry says what was
+decided, what was rejected, and what would have to change for the decision to
+be worth revisiting.
 
 ---
 
@@ -164,6 +165,126 @@ Certificate pinning was proposed — the pairing dialog knows the server's
 certificate and could print `--pin sha256:…`, which is the same convenience
 without disabling verification permanently on a token-bearing client — and was
 **declined**. Recorded so it is not re-proposed as though it were an oversight.
+
+## 10. A packaged agent belongs to its package manager. It does not update itself.
+
+**Decided** (issue #77). The agent now also ships as a `.deb`, an `.rpm`, a
+Homebrew formula, a winget package and a container image. The binary in each of
+them is built with `-ldflags "-X main.packagedBy=<deb|rpm|homebrew|winget|docker>"`
+(`packaging/build-agent.sh`), and a binary built that way:
+
+- never starts the automatic-update loop, whatever `--auto-update` or
+  `GWATCH_AGENT_AUTO_UPDATE` say, and logs once at start that its package
+  manager keeps it current;
+- answers `gwatch-agent update` with the package manager's own command
+  (`brew upgrade gwatch-agent`, `winget upgrade GWatch.Agent`, the exact `.deb`
+  or `.rpm` to install, `docker pull …`) and exits non-zero, having downloaded
+  nothing;
+- still answers `gwatch-agent update --check`, from the same release feed as
+  every other agent — a packaged agent is not blind to releases, it just does
+  not act on them;
+- refuses `rollback`, and — where the package registers the service itself
+  (`.deb`, `.rpm`, Homebrew, the container) — refuses `install`, `uninstall`,
+  `start`, `stop`, `restart` and `status`, pointing at `systemctl`,
+  `brew services` or `docker` instead of registering a second service beside
+  the package's;
+- says what it is in `gwatch-agent version` (`…; deb package)`) and in the
+  `User-Agent` it sends GWatch (`gwatch-agent/0.5.0 (deb)`).
+
+The refusal is at the top of `applyUpdate`, the one function every install
+path goes through, as well as in the command and the loop, so it holds if
+either of those is ever changed. Any non-empty `packagedBy` counts, including
+one the agent does not recognise: a typo in a packaging job fails towards "the
+package manager owns this". The release binaries (`gwatch-agent-<os>-<arch>`)
+and the ordinary Windows setup program are unchanged and keep updating
+themselves, which is still the right default for a machine nobody logs into
+(entry 1).
+
+**Rejected: keep self-update and treat the package as a bootstrapper.** A
+package manager believes it owns what it installed, and an agent that replaced
+`/usr/bin/gwatch-agent` under apt would make that belief false in ways that
+surface later and elsewhere: `dpkg` records one binary while another runs,
+`debsums` reports the file as modified, the next package upgrade silently
+reverts the agent's own update, and the `.old` the swap leaves is a file no
+package owns. Homebrew's keg is a versioned directory an agent would be
+rewriting from inside; a winget install record would name a version that is
+no longer there; an agent inside an image replaces a file the next
+`docker pull` throws away. The packaged systemd unit also makes `/usr`
+read-only to the agent (`ProtectSystem=strict`), so on the Linux packages a
+self-update could not work even if it were attempted.
+
+**Rejected: turn it off with `--auto-update=false` in the unit file only.**
+It says the same thing, but a flag can be edited, overridden by an environment
+variable, or forgotten in one of five packaging formats; a binary that cannot
+swap itself cannot be talked into it. The unit's `/usr` being read-only is kept
+as a second, independent reason, not as the mechanism.
+
+**Security is unchanged by any of this.** Packaging never loosens what an
+update may be: a packaged binary carries the same pinned keys, installs nothing
+itself, and GWatch still cannot make any agent install anything. The packaging
+CI jobs are deliberately *not* given `GWATCH_SIGNING_KEY` — the packages'
+integrity is the sha256 their package manager pins, not the ed25519 chain — so
+a compromised packaging tool could publish a bad package, which its manager's
+checks and a person can catch, but could not sign an update that every
+self-updating agent would install on its own.
+
+**Consequence accepted: the `.deb` and `.rpm` do not update unattended.** They
+are release assets, not an apt or dnf repository, so nothing tells apt there is
+a newer one; updating means installing the next file, and GWatch's "behind"
+mark (entry 2) is how you notice. For a Linux machine nobody logs into, the
+release binary with `gwatch-agent install` is still the better choice, and
+`docs/HARDWARE.md` says so. Homebrew and winget do have an update channel, but
+it runs when someone runs it (or schedules `brew upgrade` / `winget upgrade
+--all`).
+
+**Revisit if:** a signed apt/dnf repository is set up — then
+`unattended-upgrades` and `dnf-automatic` give the Linux packages unattended
+updates through the package manager, and the gap above closes — or if packaged
+agents are found to fall behind in practice.
+
+## 11. The container image watches the Docker host, through the host's own root.
+
+**Decided** (issue #77). `ghcr.io/jxburros/gwatch-agent` is for watching the
+machine a Docker host *is*, from a container on it. It was worth checking
+whether that is coherent before shipping it, because the collector does not use
+gopsutil (so the `HOST_PROC` convention does not apply) — it reads procfs and
+`statfs` itself, and a container changes some of what those return and not the
+rest:
+
+| What | Source | From inside a container |
+| --- | --- | --- |
+| Processor, load, memory, swap, uptime, disk I/O | `/proc/stat`, `loadavg`, `meminfo`, `uptime`, `diskstats` | the **host's** — not namespaced |
+| Filesystems | `/proc/mounts` + `statfs` | the **container's** overlay and volumes |
+| Network interfaces | `/proc/net/dev` + netlink | the **container's** veth, unless `--network=host` |
+| Distribution, hostname | `/etc/os-release`, `/etc/hostname` | the **image's** Alpine and a random ID |
+
+So the image runs with the host's `/` mounted read-only at `/host` and
+`GWATCH_HOST_ROOT=/host` (also `--host-root`), which moves the collector's
+`/proc`, `/sys` and `/etc` under it and reads the mount table from
+`/host/proc/1/mounts` — the host init's, since `/proc/mounts` is a link to the
+*reader's* mount namespace — measuring each filesystem through `/host` and
+reporting it under the host's own path (`internal/sysmetrics.SetHostRoot`).
+With `--network=host` as well, every figure is the host's; CI checks this by
+running the image on its runner and comparing the name and distribution.
+
+It needs neither `--pid=host` nor `--privileged`: `/proc/1/mounts` of the
+host's procfs is world-readable, whereas `/proc/1/root` would have needed
+`CAP_SYS_PTRACE`. It runs as an unprivileged user, because everything it reads
+is world-readable; a filesystem mounted under a directory only root can enter
+is the one thing it then cannot measure, and it says so in the reading's
+warnings (`--user 0` fixes it).
+
+If `GWATCH_HOST_ROOT` is set and the host is not mounted there, the agent
+refuses to start. Falling back to the container's own view would report a
+machine that does not exist under the name of one that does.
+
+**Rejected: an image for watching the container itself.** That is a different
+product (cAdvisor's), and the readings above show why the agent's model does
+not fit it: half of them would be the host's anyway.
+
+**Revisit if:** someone needs the Docker *containers* on a host watched, rather
+than the host — that is per-container cgroup accounting, a new collector rather
+than a new mount.
 
 ---
 

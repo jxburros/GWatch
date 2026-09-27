@@ -370,6 +370,57 @@ func TestPairingCodeEnrolsOneMachine(t *testing.T) {
 	}
 }
 
+// The pairing dialog watches its own code (#69): it has to see the code
+// waiting, then the machine arriving, then its first reading, so it can say
+// so rather than leave whoever typed the code wondering whether it worked.
+func TestPairingReportsItsProgress(t *testing.T) {
+	ts, _ := newTestServer(t)
+	code, pairing := mintPairing(t, ts, "nas")
+	path := fmt.Sprintf("/api/agents/pairings/%d", pairing.ID)
+
+	type progress struct {
+		State   string            `json:"state"`
+		Pairing model.PairingCode `json:"pairing"`
+		Agent   *model.Agent      `json:"agent"`
+	}
+	var got progress
+	if status := call(t, ts, "GET", path, nil, &got); status != 200 || got.State != "pending" || got.Agent != nil {
+		t.Fatalf("a fresh code should be pending with no machine: %d %+v", status, got)
+	}
+
+	status, body := redeem(t, ts, code)
+	if status != 201 {
+		t.Fatalf("redeem: %d %s", status, body)
+	}
+	var out struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		t.Fatal(err)
+	}
+	got = progress{}
+	call(t, ts, "GET", path, nil, &got)
+	if got.State != "paired" || got.Agent == nil || got.Agent.Name != "nas" {
+		t.Fatalf("a redeemed code should report its machine as paired: %+v", got)
+	}
+	if strings.Contains(fmt.Sprint(got), out.Token) {
+		t.Fatal("the pairing progress leaked the agent's token")
+	}
+
+	if code, body := postReading(t, ts.URL, out.Token, reading("nas.local", 42)); code != 202 {
+		t.Fatalf("reading: %d %s", code, body)
+	}
+	got = progress{}
+	call(t, ts, "GET", path, nil, &got)
+	if got.State != "reporting" {
+		t.Fatalf("after its first reading the machine should be reporting: %+v", got)
+	}
+
+	if status := call(t, ts, "GET", "/api/agents/pairings/4242", nil, nil); status != 404 {
+		t.Errorf("an unknown pairing should be 404, got %d", status)
+	}
+}
+
 // Unknown, malformed, expired, cancelled and already-used codes must be
 // indistinguishable from outside: anything else is an oracle a guesser can
 // use to learn which of its attempts was close.
@@ -471,6 +522,7 @@ func TestPairingAdminRoutesNeedAnAdministrator(t *testing.T) {
 	for _, c := range []struct{ method, path string }{
 		{"GET", "/api/agents/pairings"},
 		{"POST", "/api/agents/pairings"},
+		{"GET", "/api/agents/pairings/1"},
 		{"DELETE", "/api/agents/pairings/1"},
 	} {
 		status, body, _ := as(t, ts, creds{Remote: "192.168.1.50:9999"}, c.method, c.path, nil, nil)

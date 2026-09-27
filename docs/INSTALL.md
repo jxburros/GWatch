@@ -109,6 +109,12 @@ gwatch-agent-setup-0.1.0.exe /VERYSILENT /SERVER=http://gwatch.lan:7230 /CODE=AB
 Each machine needs its own code. See [`HARDWARE.md`](HARDWARE.md) for what the agent
 reports and how to read it.
 
+The agent is also packaged for winget (`winget install GWatch.Agent`), Homebrew, apt/dnf
+(`.deb`/`.rpm` on the agent release) and Docker (for watching a Docker host). A packaged
+agent is kept up to date by its package manager rather than by itself; see
+[`HARDWARE.md`](HARDWARE.md#installing-from-a-package-manager) for each, and for when
+they become available.
+
 ## Where your data lives
 
 GWatch keeps its database, logs and backups in `C:\ProgramData\GWatch` — a separate

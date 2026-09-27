@@ -113,6 +113,7 @@ func TestEmbeddedWebAssets(t *testing.T) {
 		"web/views/audit.js",
 		"web/views/automation.js",
 		"web/logo.svg",
+		"web/agent-logo.png",
 	} {
 		b, err := fs.ReadFile(webFiles, name)
 		if err != nil {

@@ -100,7 +100,7 @@ func TestSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := s.GetSession(ctx, th, auth.SessionLifetime)
-	if err != nil || got.ID != u.ID {
+	if err != nil || got.User.ID != u.ID || got.User.Role != string(auth.RoleAdmin) {
 		t.Fatalf("get session: %+v %v", got, err)
 	}
 	if _, err := s.GetSession(ctx, auth.HashToken("nope"), auth.SessionLifetime); !errors.Is(err, ErrNotFound) {
@@ -148,6 +148,96 @@ func TestSessions(t *testing.T) {
 	}
 	if n, _ := s.CountSessions(ctx); n != 0 {
 		t.Fatalf("sessions should cascade, %d left", n)
+	}
+}
+
+// sessionTimes reads a session's stored expiry and last-seen time back.
+func sessionTimes(t *testing.T, s *Store, tokenHash string) (expires, lastSeen time.Time) {
+	t.Helper()
+	var e, l string
+	if err := s.queryRow(context.Background(), "SELECT expires_at, last_seen_at FROM sessions WHERE token_hash = ?", tokenHash).Scan(&e, &l); err != nil {
+		t.Fatal(err)
+	}
+	return mustTime(e), mustTime(l)
+}
+
+// A session in use slides its expiry forward — but only once a renewal is
+// due, so that an ordinary request is not a database write, and it says when
+// it did so the caller can re-issue the cookie with the same expiry (#70).
+func TestSessionRenewal(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	hash, _ := auth.HashPassword("hunter2hunter2")
+	u, err := s.CreateUser(ctx, "pat", hash, auth.RoleViewer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	near := func(a, b time.Time) bool { d := a.Sub(b); return d > -time.Minute && d < time.Minute }
+
+	// Freshly signed in: nothing to renew, and nothing written.
+	fresh := auth.HashToken("fresh")
+	freshExp := time.Now().Add(auth.SessionLifetime)
+	if err := s.CreateSession(ctx, fresh, u.ID, "", freshExp); err != nil {
+		t.Fatal(err)
+	}
+	_, seenBefore := sessionTimes(t, s, fresh)
+	got, err := s.GetSession(ctx, fresh, auth.SessionLifetime)
+	if err != nil || got.Renewed || !near(got.ExpiresAt, freshExp) {
+		t.Fatalf("fresh session: %+v %v", got, err)
+	}
+	if exp, seen := sessionTimes(t, s, fresh); !near(exp, freshExp) || !seen.Equal(seenBefore) {
+		t.Fatalf("a fresh session should not be written to: expires %v, last seen %v (was %v)", exp, seen, seenBefore)
+	}
+
+	// Used again once the renewal interval has passed: slid forward to a
+	// full lifetime from now, in the row and in what the caller is told.
+	due := auth.HashToken("due")
+	if err := s.CreateSession(ctx, due, u.ID, "", time.Now().Add(auth.SessionLifetime-2*auth.SessionRenewInterval)); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.GetSession(ctx, due, auth.SessionLifetime)
+	want := time.Now().Add(auth.SessionLifetime)
+	if err != nil || !got.Renewed || !near(got.ExpiresAt, want) || got.User.ID != u.ID {
+		t.Fatalf("due session: %+v %v", got, err)
+	}
+	if exp, _ := sessionTimes(t, s, due); !near(exp, want) {
+		t.Fatalf("the stored expiry should have slid to %v, is %v", want, exp)
+	}
+	// …and the very next request finds nothing more to do.
+	if again, err := s.GetSession(ctx, due, auth.SessionLifetime); err != nil || again.Renewed || !again.ExpiresAt.Equal(got.ExpiresAt) {
+		t.Fatalf("second lookup should not renew again: %+v %v", again, err)
+	}
+
+	// last_seen_at is kept roughly current without a write per request.
+	if _, err := s.exec(ctx, "UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?", fmtTime(time.Now().Add(-time.Hour)), fresh); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetSession(ctx, fresh, auth.SessionLifetime); err != nil {
+		t.Fatal(err)
+	}
+	if _, seen := sessionTimes(t, s, fresh); !near(seen, time.Now()) {
+		t.Fatalf("a stale last_seen_at should be refreshed, is %v", seen)
+	}
+}
+
+// A database that cannot answer is not the same as a session that does not
+// exist: only the second may sign a browser out (#70).
+func TestSessionLookupErrorIsNotNotFound(t *testing.T) {
+	cfg := testConfig(t)
+	s, err := OpenDSN(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	_, err = s.GetSession(context.Background(), auth.HashToken("anything"), auth.SessionLifetime)
+	if err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("a failed lookup must be reported as an error of its own, got %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	live := openTest(t)
+	if _, err := live.GetSession(ctx, auth.HashToken("anything"), auth.SessionLifetime); err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("a cancelled lookup must not read as \"no such session\", got %v", err)
 	}
 }
 

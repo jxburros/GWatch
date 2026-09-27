@@ -1,0 +1,78 @@
+# The gwatch-agent .deb and .rpm, built by nfpm (https://nfpm.goreleaser.com).
+#
+# Run from the repository root; packaging/nfpm/package.sh does it for every
+# architecture and both formats, and is what CI and `make agent-packages` use.
+# nfpm expands ${VARS} from the environment before it reads this file:
+#
+#   AGENT_VERSION      the agent's version (cmd/gwatch-agent/VERSION)
+#   NFPM_ARCH          amd64, arm64 or arm7 — nfpm maps these to amd64/arm64/armhf
+#                      for the .deb and x86_64/aarch64/armv7hl for the .rpm
+#
+# The binary is read from dist/nfpm/gwatch-agent (nfpm does not expand
+# variables in a source path), where package.sh copies the packaged binary it
+# has just built with -X main.packagedBy=deb (or rpm) — never the
+# self-updating release binary — before each run.
+#
+# What the package does, and why it is shaped this way, is in
+# docs/HARDWARE.md#linux-packages and docs/AGENT-DECISIONS.md (entry 10). In
+# short: the binary is packaged so that it never replaces itself (apt or dnf
+# owns it), the unit runs `gwatch-agent run` with no arguments, and
+# `sudo gwatch-agent pair --server … --code …` is the whole setup — it keeps
+# the token and the server in /var/lib/gwatch-agent and starts the unit.
+name: gwatch-agent
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${AGENT_VERSION}
+release: 1
+section: admin
+priority: optional
+maintainer: "JX Holdings, LLC <https://github.com/jxburros/GWatch>"
+vendor: "JX Holdings, LLC"
+homepage: https://github.com/jxburros/GWatch
+license: LicenseRef-GWatch-Community-License-1.0
+description: |-
+  Reports this machine's hardware health to a GWatch server.
+  The GWatch agent sends this computer's processor, memory, disk and network
+  readings to a GWatch server you run. It only ever connects outwards: GWatch
+  is given no way into this machine, and the token it holds can do one thing,
+  submit this machine's readings. Installed from this package, it is kept up
+  to date by the package manager and never replaces itself.
+
+contents:
+  - src: dist/nfpm/gwatch-agent
+    dst: /usr/bin/gwatch-agent
+    file_info:
+      mode: 0755
+
+  - src: packaging/nfpm/gwatch-agent.service
+    dst: /usr/lib/systemd/system/gwatch-agent.service
+    file_info:
+      mode: 0644
+
+  # A conffile: an admin's edits survive upgrades, and it is 0600 because the
+  # one setting worth putting here instead of pairing is a token.
+  - src: packaging/nfpm/agent.env
+    dst: /etc/gwatch-agent/agent.env
+    type: config|noreplace
+    file_info:
+      mode: 0600
+
+  # Where pairing keeps the token and the server (the unit's StateDirectory).
+  # Root-only, like the token file inside it.
+  - dst: /var/lib/gwatch-agent
+    type: dir
+    file_info:
+      mode: 0700
+
+  - src: LICENSE
+    dst: /usr/share/doc/gwatch-agent/copyright
+    file_info:
+      mode: 0644
+
+scripts:
+  postinstall: packaging/nfpm/postinstall.sh
+  preremove: packaging/nfpm/preremove.sh
+  postremove: packaging/nfpm/postremove.sh
+
+rpm:
+  group: System Environment/Daemons

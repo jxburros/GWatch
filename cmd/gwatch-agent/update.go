@@ -22,6 +22,11 @@
 // a real reading and get it accepted by the server. Only then does it replace
 // the running executable, and the executable it replaces is kept alongside as
 // .old so `gwatch-agent rollback` can put it back.
+//
+// A packaged build (packaging.go) does none of the replacing: its package
+// manager owns the binary. It still checks, so `update --check` answers the
+// same question on every build, and it answers `update` with the package
+// manager's command instead of a download.
 package main
 
 import (
@@ -116,6 +121,13 @@ func runUpdate(cfg config, checkOnly bool) error {
 		return nil
 	}
 	fmt.Printf("gwatch-agent %s is available (this machine runs %s).\n", info.LatestVersion, version)
+	if p, ok := currentPackaging(); ok {
+		if checkOnly {
+			fmt.Printf("This agent was installed from %s, which keeps it up to date; to update, %s.\n", p.source, p.updateCommand(info.LatestVersion))
+			return nil
+		}
+		return p.refuseUpdate(info.LatestVersion, info.ReleaseURL)
+	}
 	if checkOnly {
 		fmt.Printf("Run `gwatch-agent update` to install it, or see %s\n", info.ReleaseURL)
 		return nil
@@ -139,6 +151,13 @@ func runUpdate(cfg config, checkOnly bool) error {
 // touched, because the machine this happens on is usually one nobody can walk
 // over to.
 func applyUpdate(ctx context.Context, cfg config, info model.UpdateInfo) error {
+	// Every way of installing an update comes through here, so this is where
+	// a packaged build stops — before anything is downloaded, let alone
+	// swapped. The command and the automatic loop each stop earlier too; this
+	// is the check that holds if either of them is ever changed.
+	if p, ok := currentPackaging(); ok {
+		return p.refuseUpdate(info.LatestVersion, info.ReleaseURL)
+	}
 	if info.AssetURL == "" {
 		return fmt.Errorf("release %s has no agent build for %s (%w)", info.LatestVersion, platform(), update.ErrNoAsset)
 	}
@@ -253,6 +272,9 @@ func rollback(exe string) error {
 
 // runRollback is the `rollback` command.
 func runRollback() error {
+	if p, ok := currentPackaging(); ok {
+		return p.refuseRollback()
+	}
 	exe, err := update.Executable()
 	if err != nil {
 		return err

@@ -1,0 +1,40 @@
+# Rendered by packaging/winget/render.sh on every agent-v* tag; see
+# docs/RELEASING.md#the-agent-packages.
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+
+PackageIdentifier: GWatch.Agent
+PackageVersion: "@VERSION@"
+PackageLocale: en-US
+Publisher: JX Holdings, LLC
+PublisherUrl: https://github.com/jxburros
+PublisherSupportUrl: https://github.com/jxburros/GWatch/issues
+Author: Jeffrey Guntly and Garrett Guntly
+PackageName: GWatch Agent
+PackageUrl: https://github.com/jxburros/GWatch
+License: GWatch Community License 1.0
+LicenseUrl: https://github.com/jxburros/GWatch/blob/main/LICENSE
+Copyright: Copyright (c) 2026 JX Holdings.
+ShortDescription: Reports this computer's processor, memory, disk and network health to a GWatch server.
+Description: |-
+  The GWatch Agent is the small program that goes on the machines you want a GWatch server to watch.
+  It reads this computer's processor, memory, disk and network health and sends it to GWatch every minute.
+  It only ever connects outwards: GWatch is given no way into this computer, and the credential the agent holds can do one thing, submit this machine's readings.
+  Installed with winget, it is kept up to date by winget (winget upgrade GWatch.Agent) and never replaces itself.
+Moniker: gwatch-agent
+Tags:
+  - gwatch
+  - hardware
+  - monitoring
+  - agent
+  - homelab
+ReleaseNotesUrl: https://github.com/jxburros/GWatch/releases/tag/agent-v@VERSION@
+InstallationNotes: |-
+  Pair this machine with GWatch to start reporting. Get a code in GWatch under Nodes > Pair a machine, then either install with it:
+    winget install GWatch.Agent --override "/VERYSILENT /SUPPRESSMSGBOXES /SERVER=https://gwatch.lan:7230 /CODE=XXXX-XXXX"
+  or, after a plain install, from an Administrator prompt:
+    "%ProgramFiles%\GWatch Agent\gwatch-agent.exe" install --server https://gwatch.lan:7230 --code XXXX-XXXX
+Documentations:
+  - DocumentLabel: Hardware monitoring guide
+    DocumentUrl: https://github.com/jxburros/GWatch/blob/main/docs/HARDWARE.md
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

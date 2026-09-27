@@ -1,3 +1,5 @@
+<img src="../web/agent-logo.png" alt="" width="72" align="right">
+
 # Hardware health
 
 GWatch watches whether things on your network answer. Hardware health answers
@@ -61,6 +63,128 @@ runs on and posts the reading to GWatch every minute.
 Before installing anything, `gwatch-agent print` shows exactly what would be
 sent, and contacts nothing. `gwatch-agent once --server … --token …` sends a
 single reading and exits, which is the quickest way to prove a token works.
+
+`gwatch-agent pair --server … --code …` on its own (without `install`) keeps
+the token *and* the server address on the machine, so afterwards
+`gwatch-agent run` needs no arguments at all. That is how the packages below
+run it.
+
+### Installing from a package manager
+
+The agent is also packaged for apt/dnf, Homebrew, winget and Docker. A packaged
+agent is the same program with one difference: **the package manager keeps it
+up to date, and the agent never replaces itself** — `gwatch-agent update` tells
+you the package manager's command instead ([why](AGENT-DECISIONS.md#10-a-packaged-agent-belongs-to-its-package-manager-it-does-not-update-itself)).
+That suits machines you already manage with packages. For a machine nobody logs
+into, the plain binary above, which updates itself, is still the better fit.
+
+> **Availability.** The packages are published by release jobs that are newer
+> than the agent releases already out, so they exist from the first `agent-v…`
+> release cut after them. `brew install` also needs the `jxburros/homebrew-tap`
+> repository and `winget install` the listing in winget's catalogue, both set up
+> once by the maintainers ([RELEASING.md](RELEASING.md#the-agent-packages)).
+> Until then the commands below have nothing to install; check the latest agent
+> release for `.deb`, `.rpm` and `gwatch-agent-winget-setup-*` files.
+
+### Linux packages
+
+A `.deb` and an `.rpm` for amd64, arm64 and armhf (32-bit Raspberry Pi OS)
+are attached to each agent release, next to the binaries. They install
+`/usr/bin/gwatch-agent`, a `gwatch-agent` systemd unit, and
+`/etc/gwatch-agent/agent.env`; the unit is enabled but not started, because
+there is nothing to report with yet. Then pair the machine, once:
+
+```
+sudo apt install ./gwatch-agent_<version>-1_amd64.deb      # or: sudo dnf install ./gwatch-agent-<version>-1.x86_64.rpm
+sudo gwatch-agent pair --server https://gwatch.lan:7230 --code XXXX-XXXX
+```
+
+`pair` keeps the token and the server in `/var/lib/gwatch-agent` (root only)
+and starts the service; that is the whole setup. To set a machine up from a
+script with a token instead of a code, put `GWATCH_SERVER` and
+`GWATCH_AGENT_TOKEN` in `/etc/gwatch-agent/agent.env` and
+`sudo systemctl restart gwatch-agent`. Manage it with `systemctl` and
+`journalctl -u gwatch-agent`; the agent's own `install`, `start`, `stop` and
+`status` point there rather than registering a second service.
+
+The service runs as root, heavily sandboxed: it can read the whole machine but
+write only its own `/var/lib/gwatch-agent`, and its only capability is the one
+for reaching mount points only root can enter. An unpaired agent exits with
+status 78, which the unit does not restart.
+
+These are release files, not an apt or dnf repository, so `apt upgrade` does
+not know about new ones: to update, install the next release's package the
+same way. `sudo apt purge gwatch-agent` also deletes the stored token; a plain
+remove keeps it, so reinstalling does not mean pairing again.
+
+### macOS: Homebrew
+
+```
+brew install jxburros/tap/gwatch-agent
+gwatch-agent pair --server https://gwatch.lan:7230 --code XXXX-XXXX
+brew services start gwatch-agent
+```
+
+Pair and start the service as the same user — the token is kept in that
+user's `~/.local/share/gwatch`. `brew upgrade gwatch-agent` updates it. The
+formula works on Homebrew for Linux too.
+
+### Windows: winget
+
+```
+winget install GWatch.Agent --override "/VERYSILENT /SUPPRESSMSGBOXES /SERVER=https://gwatch.lan:7230 /CODE=XXXX-XXXX"
+```
+
+This is the same setup program as the download, run silently with the server
+and code it would otherwise ask for (the switches are listed in
+[`INSTALL.md`](INSTALL.md#installing-the-agent-on-other-machines)). A plain
+`winget install GWatch.Agent` installs the files without pairing; finish from
+an Administrator prompt with
+`"%ProgramFiles%\GWatch Agent\gwatch-agent.exe" install --server … --code …`.
+`winget upgrade GWatch.Agent` updates it and keeps the pairing.
+
+### In a container
+
+`ghcr.io/jxburros/gwatch-agent` watches the **Docker host** it runs on — not
+the container, and not the other containers. It needs the host's root mounted
+read-only at `/host` and the host's network:
+
+```yaml
+services:
+  gwatch-agent:
+    image: ghcr.io/jxburros/gwatch-agent:latest
+    network_mode: host
+    volumes:
+      - /:/host:ro,rslave
+      - gwatch-agent:/var/lib/gwatch-agent
+    environment:
+      GWATCH_SERVER: https://gwatch.lan:7230
+    restart: unless-stopped
+volumes:
+  gwatch-agent:
+```
+
+Pair once, then start it:
+
+```
+docker compose run --rm gwatch-agent pair --code XXXX-XXXX
+docker compose up -d
+```
+
+(or set `GWATCH_AGENT_TOKEN` in `environment` instead of pairing). With `/host`
+mounted, the agent reads the host's mount table, filesystems, name and
+distribution through it; the processor, memory and disk counters are the
+host's anyway, and `network_mode: host` makes the interfaces the host's too.
+Without the mount it refuses to start rather than report the container as
+though it were the host. `rslave` lets filesystems mounted after the container
+started show up; drop it if Docker refuses it on your host. No `--privileged`
+or `--pid=host` is needed.
+
+It runs as an unprivileged user. A filesystem mounted under a directory only
+root can enter cannot be measured that way and shows as a warning on the
+reading; add `user: "0"` if that one matters. It is updated by pulling a newer
+image, never by itself. Why this works, and what it cannot see, is
+[`AGENT-DECISIONS.md`](AGENT-DECISIONS.md#11-the-container-image-watches-the-docker-host-through-the-hosts-own-root).
 
 ### What this does and does not give GWatch
 
@@ -290,6 +414,14 @@ To turn automatic updates off, install with `--auto-update=false` (or set
 that cannot reach GitHub carries on reporting exactly as before; a failed update
 check is not an error on the machine being watched.
 
+An agent installed from a package ([above](#installing-from-a-package-manager))
+is the exception: its package manager owns the binary, so it never updates
+itself, whatever these settings say. `gwatch-agent update --check` still says
+whether a newer release exists; `gwatch-agent update` answers with the package
+manager's command (`brew upgrade gwatch-agent`, `winget upgrade GWatch.Agent`,
+the next `.deb` or `.rpm`, or `docker pull`), and `gwatch-agent version` says
+which package it came from.
+
 Agent releases are tagged `agent-v…` and are separate from GWatch's own — see
 [`RELEASING.md`](RELEASING.md#releasing-the-agent). An agent is never offered a
 GWatch build, or the other way round.
@@ -305,7 +437,13 @@ The agent is built from this repository for every platform it supports:
 ```
 make agent-all      # dist/gwatch-agent-<os>-<arch>
 make agent          # just this platform
+make agent-packages # the .deb and .rpm, into dist/packages
+make agent-image    # the container image, for this platform
 ```
+
+The packaged builds differ from these by one linker flag,
+`-X main.packagedBy=…`, set by `packaging/build-agent.sh`; everything under
+`packaging/` is how each package is put together.
 
 Its version comes from `cmd/gwatch-agent/VERSION`, not the project's `VERSION`
 file. It imports only the collector, the shared data types and the release

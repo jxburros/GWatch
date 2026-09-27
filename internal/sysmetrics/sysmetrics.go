@@ -20,8 +20,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +32,9 @@ import (
 
 // ErrUnsupported is returned by Collect on a platform with no implementation.
 var ErrUnsupported = errors.New("hardware readings are not available on " + runtime.GOOS)
+
+// ErrHostRootUnsupported is returned by SetHostRoot anywhere but Linux.
+var ErrHostRootUnsupported = errors.New("reading a host through a mounted root filesystem is only supported on Linux")
 
 // primeWindow is how long the first Collect waits between its two readings so
 // that rates are present immediately rather than on the second call. It is
@@ -306,9 +311,66 @@ func usedPct(used, total uint64) float64 {
 	return clampPct(float64(used) / float64(total) * 100)
 }
 
+// hostRoot is where the root filesystem of the machine being read is mounted,
+// when that is not "/". It is set only by SetHostRoot, for an agent running in
+// a container that is watching the machine around it.
+var hostRoot string
+
+// SetHostRoot points the collector at a host whose root filesystem is mounted
+// at dir — the agent's container image runs with the host's / mounted
+// read-only at /host (docs/HARDWARE.md#in-a-container). Call it once, before
+// the first Collect.
+//
+// What that changes is exactly what a container would otherwise get wrong.
+// The kernel-wide counters (processor, memory, load, uptime, disk I/O) are the
+// host's whether or not this is called: /proc/stat and friends are not
+// namespaced. The mount table is: a container's own /proc/mounts lists its
+// overlay and its volumes, so the filesystems reported would be a machine
+// that does not exist. With a host root the table is read from the host's
+// init process instead, and each filesystem is measured through dir. The
+// distribution and hostname are read from the host's /etc for the same
+// reason. Network counters come from the network namespace the agent runs in,
+// which is the host's only with --network=host; that is a flag on the
+// container, not something the agent can fix from inside it.
+//
+// dir must be absolute and must actually hold a /proc — an agent that quietly
+// read the container instead would report the wrong machine under the right
+// name. "/" means no host root at all. Linux only: nowhere else runs the agent
+// in a container of this kind.
+func SetHostRoot(dir string) error {
+	dir = strings.TrimSpace(dir)
+	if dir == "" || filepath.Clean(dir) == "/" {
+		hostRoot = ""
+		return useHostRoot("")
+	}
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("host root %q must be an absolute path", dir)
+	}
+	dir = filepath.Clean(dir)
+	if err := useHostRoot(dir); err != nil {
+		return err
+	}
+	hostRoot = dir
+	return nil
+}
+
+// Hostname is the name of the machine being read: the host's, when the
+// collector has been pointed at one with SetHostRoot.
+func Hostname() string { return hostname() }
+
 // hostname reports this machine's name, falling back to "unknown" so a
-// snapshot is never anonymous.
+// snapshot is never anonymous. Under a host root it is the host's
+// /etc/hostname, because a container's own name is a random hex string (or,
+// with --network=host, happens to be the host's — not something to rely on).
 func hostname() string {
+	if hostRoot != "" {
+		if b, err := os.ReadFile(filepath.Join(hostRoot, "etc", "hostname")); err == nil {
+			first, _, _ := strings.Cut(string(b), "\n")
+			if h := strings.TrimSpace(first); h != "" {
+				return h
+			}
+		}
+	}
 	if h, err := os.Hostname(); err == nil && h != "" {
 		return h
 	}

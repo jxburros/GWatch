@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   h, icon, clear, replace, toggle, statusWord, statusPill, tagList, applyTheme, currentTheme,
-  toast, openModal, confirmDialog, eventRow, showMenu, menuButton, closeMenus, field, textInput, chipInput, checkChip,
+  toast, openModal, confirmDialog, eventRow, showMenu, menuButton, closeMenus, field, textInput, selectInput, chipInput, checkChip,
 } from '../../web/components.js';
 
 // #60: an event about one of a check's metrics names it, so a disk filling
@@ -296,4 +296,18 @@ test('status pills are static labels, not live regions; a check chip reads out i
   const chip = checkChip({ name: 'HTTPS' }, { status: 'down', lastMessage: 'connection refused' });
   const hidden = [...chip.querySelectorAll('.sr-only')].map((e) => e.textContent.trim());
   assert.ok(hidden.some((t) => t.includes('connection refused')), 'the last message is in hidden text, not only in title');
+});
+
+// #72: the API sends empty values as null (Go's nil slices and pointers), and
+// none of them may reach the screen as the word "null".
+test('an empty value selects the empty option rather than "null"', () => {
+  const sel = selectInput({ options: [{ value: '', label: 'Not attached' }, { value: '3', label: 'NAS' }], value: null });
+  assert.equal(sel.value, '');
+  assert.equal(sel.selectedOptions[0].textContent, 'Not attached');
+});
+
+test('chipInput treats a null list as empty', () => {
+  const chips = chipInput({ values: null, suggestions: null });
+  assert.deepEqual(chips.value, []);
+  assert.ok(!/null/.test(chips.textContent));
 });

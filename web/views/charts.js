@@ -2,9 +2,9 @@
 // range and appearance, save named charts, export them and pin them to a
 // dashboard as widgets.
 
-import { api, getHistoryMulti, getHistoryAuto, qs } from '../api.js';
+import { api } from '../api.js';
 import { h, icon, clear, replace, toast, confirmDialog, promptDialog, menuButton, emptyState, skeleton, rangeChips, busy, uid } from '../components.js';
-import { chartConfigEditor, renderConfiguredChart, normalizeChartConfig, describeChartConfig, metricMeta } from '../chart-config.js';
+import { chartConfigEditor, renderConfiguredChart, normalizeChartConfig, describeChartConfig, chartMetricSummary, cachedHistoryFetch, chartCsvItems } from '../chart-config.js';
 import { debounce } from '../api.js';
 
 export async function mount(root, ctx) {
@@ -31,11 +31,9 @@ export async function mount(root, ctx) {
   async function persist() {
     try { state.saved = await api.put('/api/charts', state.saved); } catch (e) { toast(e.message, { kind: 'error' }); throw e; }
   }
-  function fetchHistory(ids, range) {
-    const key = `${ids.join(',')}|${range}`;
-    if (!state.cache.has(key)) state.cache.set(key, ids.length ? getHistoryMulti(ids, range) : getHistoryAuto(range));
-    return state.cache.get(key);
-  }
+  // Latency history and each named metric are cached by what was asked for,
+  // so flipping between styles or colours never refetches.
+  const fetchHistory = cachedHistoryFetch(state.cache);
 
   /* ---------- Title / actions ---------- */
   function setTitle() {
@@ -57,10 +55,8 @@ export async function mount(root, ctx) {
     ctx.setTitle(c ? c.name : 'Charts', { actions });
   }
   function exportCsvItems() {
-    const ids = state.cfg.checkIds.length ? state.cfg.checkIds : (state.lastSeries || []).map((s) => s.checkId);
-    return ids.slice(0, 8).map((id) => { const c = findCheck(id); return { label: `Export CSV — ${c ? `${c.node.name} › ${c.check.name}` : `check ${id}`}`, icon: 'download', href: `/api/export/history.csv${qs({ checkId: id, range: state.cfg.range })}`, download: `history-${id}-${state.cfg.range}.csv` }; });
+    return chartCsvItems(state.cfg, { nodes: state.nodes, series: state.lastSeries });
   }
-  function findCheck(id) { for (const n of state.nodes) for (const c of n.checks || []) if (String(c.id) === String(id)) return { node: n, check: c }; return null; }
   const slug = (s) => String(s).toLowerCase().replace(/[^\w]+/g, '-');
 
   /* ---------- Saved charts sidebar ---------- */
@@ -89,10 +85,9 @@ export async function mount(root, ctx) {
     state.view?.destroy();
     clear(main);
     const c = current();
-    const m = metricMeta(state.cfg.metric);
     const host = h('div');
     const card = h('section', { class: 'card chart-card' },
-      h('div', { class: 'card-head' }, h('h2', null, icon('chart'), c ? c.name : 'Untitled chart', h('span', { class: 'tag' }, m.unit === '%' ? m.label.split(' (')[0] : 'ms')),
+      h('div', { class: 'card-head' }, h('h2', null, icon('chart'), c ? c.name : 'Untitled chart', h('span', { class: 'tag' }, chartMetricSummary(state.cfg))),
         h('div', { class: 'card-actions' }, rangeChips(state.cfg.range, (r) => { state.cfg.range = r; state.dirty = true; renderSide(); setTitle(); renderMain(); }))),
       host);
     main.append(card);

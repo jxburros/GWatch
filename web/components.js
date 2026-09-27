@@ -148,6 +148,15 @@ export function icon(name, cls = '') {
 }
 export function iconInto(el, name) { el.appendChild(icon(name)); return el; }
 
+// The agent's own mark — the G in a deerstalker, web/agent-logo.png — for the
+// places that talk about gwatch-agent. It sits beside text that already says
+// "agent", so it is decorative by default (alt=""); pass alt when it stands on
+// its own. The .agent-logo rule gives it a light tile in every theme: the mark
+// is navy on transparent, which all but vanishes on the dark theme's graphite.
+export function agentLogo({ alt = '', cls = '' } = {}) {
+  return h('img', { class: `agent-logo ${cls}`.trim(), src: 'agent-logo.png', alt, width: '48', height: '48', decoding: 'async' });
+}
+
 /* ---------- Theme / accent ---------- */
 
 const themeListeners = new Set();
@@ -574,7 +583,10 @@ export function selectInput({ options, value, ...attrs } = {}) {
     const opt = typeof o === 'object' ? o : { value: o, label: o };
     sel.append(h('option', { value: opt.value, disabled: !!opt.disabled }, opt.label ?? opt.value));
   }
-  if (value !== undefined) sel.value = String(value);
+  // An empty value (a nullable id, a setting never set) selects the empty
+  // option where there is one, rather than being written in as "null" — a
+  // value no option has, which leaves the select showing nothing at all (#72).
+  if (value !== undefined) sel.value = value == null ? '' : String(value);
   return sel;
 }
 
@@ -596,7 +608,9 @@ export function toggle({ label, checked = false, onChange, id, disabled, ariaLab
 
 /** Chip / tag input. `.value` returns an array of strings. */
 export function chipInput({ values = [], placeholder = 'Add…', suggestions = [], onChange, validate, id } = {}) {
-  let items = [...values];
+  // The API sends an empty list as null (a Go nil slice), so null is empty.
+  let items = [...(values || [])];
+  suggestions = suggestions || [];
   const listId = suggestions.length ? uid('dl') : null;
   const input = h('input', { type: 'text', placeholder, id: id || uid('chip'), list: listId, autocomplete: 'off' });
   const wrap = h('div', { class: 'chip-input', onclick: (e) => { if (e.target === wrap) input.focus(); } });

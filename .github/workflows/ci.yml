@@ -109,9 +109,9 @@ jobs:
       - name: Windows icon resources are up to date
         run: |
           go run ./cmd/gwatch-rsrc -ico scripts/installer/assets/gwatch.ico -out rsrc
-          go run ./cmd/gwatch-rsrc -ico scripts/installer/assets/gwatch.ico -out cmd/gwatch-agent/rsrc
+          go run ./cmd/gwatch-rsrc -ico scripts/installer/assets/gwatch-agent.ico -out cmd/gwatch-agent/rsrc
           if ! git diff --quiet -- '*.syso'; then
-            echo "::error::the committed .syso files do not match scripts/installer/assets/gwatch.ico — run 'make rsrc' and commit the result"
+            echo "::error::the committed .syso files do not match scripts/installer/assets/gwatch.ico and gwatch-agent.ico — run 'make rsrc' and commit the result"
             git diff --stat -- '*.syso'
             exit 1
           fi
@@ -199,6 +199,24 @@ jobs:
             scripts/installer/Output/gwatch-setup-*.exe
             scripts/installer/Output/gwatch-agent-setup-*.exe
           if-no-files-found: error
+
+      # The winget package's setup program, built the way agent-winget builds
+      # it on a tag: the same gwatch-agent.iss around a binary made with
+      # -X main.packagedBy=winget, written under its own name by ISCC's /F so
+      # it can never be mistaken for gwatch-agent-setup-<version>.exe. Built
+      # here so that a change to the script, or to /F, fails a pull request
+      # rather than the tag. Not uploaded: nothing tests it beyond compiling.
+      - name: Build the winget variant of the agent installer
+        run: sh packaging/build-agent.sh winget "0.0.0-ci-${GITHUB_SHA::7}" dist/packaged windows/amd64
+      - name: Compile the winget setup program
+        shell: pwsh
+        run: |
+          $version = "0.0.0-ci-" + $env:GITHUB_SHA.Substring(0, 7)
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          $exe = Join-Path $PWD "dist\packaged\winget\windows-amd64\gwatch-agent.exe"
+          & $iscc "/DAppVersion=$version" "/DExePath=$exe" "/Fgwatch-agent-winget-setup-$version" "scripts\installer\gwatch-agent.iss"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path "scripts\installer\Output\gwatch-agent-winget-setup-$version.exe")) { Write-Host "::error::ISCC did not write gwatch-agent-winget-setup-$version.exe"; exit 1 }
 
   # GWatch installs as a service only on Windows, but it builds and runs as a
   # plain console process anywhere, and internal/sysmetrics has a real
@@ -398,6 +416,129 @@ jobs:
           curl -s http://127.0.0.1:7230/api/health; echo
           docker stop gwatch-smoke
           docker rm gwatch-smoke
+
+  # The agent's packages (docs/HARDWARE.md, docs/AGENT-DECISIONS.md entry 10),
+  # built and exercised on every push and PR so that a broken package is found
+  # before a tag rather than by the agent-* publishing jobs below. The .deb is
+  # installed on the runner — a real systemd — and taken through what a machine
+  # would do with it; the formula is syntax-checked; the winget manifests are
+  # validated against winget's own schemas; the container image is built and
+  # made to read this runner through a mounted host root. Everything is built
+  # with the packaged ldflag (packaging/build-agent.sh), never from the
+  # self-updating release binaries.
+  agent-packaging:
+    name: Agent packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          check-latest: true
+          cache: true
+
+      - name: Build the .deb and .rpm
+        run: |
+          version="$(tr -d ' \t\r\n' < cmd/gwatch-agent/VERSION)"
+          echo "AGENT_VERSION=$version" >> "$GITHUB_ENV"
+          sh packaging/nfpm/package.sh "$version" dist/packages amd64 arm64 arm
+
+      - name: Inspect the .deb
+        run: |
+          deb="dist/packages/gwatch-agent_${AGENT_VERSION}-1_amd64.deb"
+          dpkg-deb -I "$deb"
+          dpkg-deb -c "$deb" | tee contents.txt
+          for want in ./usr/bin/gwatch-agent ./usr/lib/systemd/system/gwatch-agent.service ./etc/gwatch-agent/agent.env ./var/lib/gwatch-agent/; do
+            grep -q " $want\$" contents.txt || { echo "::error::$deb does not contain $want"; exit 1; }
+          done
+          grep -q '^-rw------- .* ./etc/gwatch-agent/agent.env$' contents.txt || { echo "::error::agent.env must be 0600: it may hold a token"; exit 1; }
+          dpkg-deb -I "$deb" conffiles | grep -qx /etc/gwatch-agent/agent.env
+
+      # What a machine does with the package, on a real systemd: install
+      # (enabled, not started — nothing to report with yet), refuse to update
+      # or to register a second service, run once configured, and leave
+      # nothing behind on purge. The server is a closed local port, so the
+      # agent's reports fail and it keeps running and retrying, which is the
+      # behaviour under test; pairing needs a GWatch and is covered by the Go
+      # tests (TestPairOnAPackageStartsItsService).
+      - name: Install, configure and purge the .deb
+        run: |
+          set -x
+          sudo apt-get install -y "./dist/packages/gwatch-agent_${AGENT_VERSION}-1_amd64.deb"
+          systemd-analyze verify /usr/lib/systemd/system/gwatch-agent.service
+          test "$(systemctl is-enabled gwatch-agent)" = enabled
+          # (`! cmd` would not fail the step under bash -e, hence the ifs.)
+          if systemctl is-active --quiet gwatch-agent; then echo "::error::an unpaired agent was started"; exit 1; fi
+          gwatch-agent version | grep -q "^gwatch-agent ${AGENT_VERSION} (linux/amd64; deb package)$"
+          # `update` asks GitHub first, so its refusal is left to the Go tests;
+          # rollback refuses without the network.
+          out="$(gwatch-agent rollback 2>&1 || true)"; echo "$out" | grep -q 'sudo apt install'
+          out="$(sudo gwatch-agent install --server http://127.0.0.1:9 --token x 2>&1 || true)"; echo "$out" | grep -q 'gwatch-agent pair'
+          printf 'GWATCH_SERVER=http://127.0.0.1:9\nGWATCH_AGENT_TOKEN=gwa_ci\n' | sudo tee -a /etc/gwatch-agent/agent.env >/dev/null
+          sudo systemctl restart gwatch-agent
+          sleep 5
+          systemctl is-active gwatch-agent
+          sudo journalctl -u gwatch-agent --no-pager | tail -20
+          sudo journalctl -u gwatch-agent --no-pager | grep -q 'automatic updates are off'
+          sudo apt-get purge -y gwatch-agent
+          if systemctl cat gwatch-agent >/dev/null 2>&1; then echo "::error::the unit outlived the package"; exit 1; fi
+          test ! -e /var/lib/gwatch-agent
+          test ! -e /usr/bin/gwatch-agent
+
+      - name: Homebrew formula
+        run: |
+          sh packaging/homebrew/package.sh "$AGENT_VERSION" dist/homebrew
+          ruby -c dist/homebrew/gwatch-agent.rb
+          if grep -n '@[A-Z0-9_]*@' dist/homebrew/gwatch-agent.rb; then echo "::error::unrendered placeholders in the formula"; exit 1; fi
+          tar -xzf "dist/homebrew/gwatch-agent-homebrew-${AGENT_VERSION}-linux-amd64.tar.gz" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/gwatch-agent" version | grep -q 'homebrew package'
+          "$RUNNER_TEMP/gwatch-agent" help 2>&1 | grep -q 'brew upgrade gwatch-agent'
+
+      # The schemas are winget's own, from the winget-cli repository, at the
+      # manifest version the templates declare (1.6.0).
+      - name: winget manifests
+        run: |
+          printf 'stand-in for the setup program' > "$RUNNER_TEMP/setup.exe"
+          sh packaging/winget/render.sh "$AGENT_VERSION" "$RUNNER_TEMP/setup.exe" dist/winget
+          mkdir -p "$RUNNER_TEMP/schemas"
+          for kind in version installer defaultLocale; do
+            curl -fsSL -o "$RUNNER_TEMP/schemas/manifest.$kind.1.6.0.json" \
+              "https://raw.githubusercontent.com/microsoft/winget-cli/master/schemas/JSON/manifests/v1.6.0/manifest.$kind.1.6.0.json"
+          done
+          python3 -m pip install --quiet jsonschema pyyaml
+          python3 packaging/winget/validate.py "$RUNNER_TEMP/schemas" dist/winget
+
+      # The container: its binary is the packaged one, and with the runner's /
+      # mounted as the host root it reports the runner — the runner's name and
+      # distribution, not the image's Alpine and a random container ID.
+      - name: Agent container image
+        run: |
+          docker build -f packaging/docker/Dockerfile.agent --build-arg VERSION="$AGENT_VERSION" -t gwatch-agent:ci .
+          docker run --rm gwatch-agent:ci version | grep -q "^gwatch-agent ${AGENT_VERSION} (linux/amd64; docker package)$"
+          if docker run --rm gwatch-agent:ci print >/dev/null 2>&1; then
+            echo "::error::without the host mounted the image must refuse to report rather than read the container"; exit 1
+          fi
+          docker run --rm --network host -v /:/host:ro gwatch-agent:ci print > reading.json
+          python3 - "$(head -n1 /etc/hostname 2>/dev/null || hostname)" <<'EOF'
+          import json, sys
+          r = json.load(open("reading.json"))
+          host = sys.argv[1]
+          print(r["hostname"], "|", r.get("platform"), "|", [f["mount"] for f in r.get("filesystems", [])])
+          assert r["hostname"] == host, f"hostname {r['hostname']!r}, want the runner's {host!r}"
+          assert "Ubuntu" in (r.get("platform") or ""), f"platform {r.get('platform')!r}, want the runner's Ubuntu"
+          assert any(f["mount"] == "/" for f in r.get("filesystems", [])), "the runner's / is missing"
+          EOF
+
+      # The self-updater matches gwatch-agent-<os>-<arch>[.exe] exactly
+      # (internal/update.pickAsset). Nothing a package job produces may ever
+      # have one of those names, or a release build could take a packaged
+      # binary — or a package — for its own update.
+      - name: No package can pass for a self-update asset
+        run: |
+          if find dist/packages dist/homebrew dist/winget -type f | xargs -n1 basename \
+               | grep -E '^gwatch-agent[-_](linux|darwin|windows)[-_](amd64|arm64|arm)(\.exe)?$'; then
+            echo "::error::a package output is named like a self-update asset"; exit 1
+          fi
 
   # Tagging v1.2.3 publishes a GitHub release with the binaries the in-app
   # updater (Settings › Updates) looks for: gwatch-<os>-<arch>[.exe] plus a
@@ -639,6 +780,272 @@ jobs:
             Agents already installed and left on automatic updates will take
             this by themselves within a few hours. To install it now on a
             machine, run `gwatch-agent update` there.
+
+  # ---- The agent's packages, on the same agent-v* tag ----
+  #
+  # Each of the next four jobs publishes one package of the release that
+  # agent-release has just made (docs/RELEASING.md#the-agent-packages): the
+  # .deb/.rpm, the Homebrew formula, the winget manifests and the container
+  # image. They run after it, so the release exists to attach to and a failed
+  # self-update release publishes no packages either, and after
+  # agent-packaging, the pull-request check that built and exercised the same
+  # packages.
+  #
+  # Two rules hold for all of them:
+  #
+  # - The binary in a package is built again, with -X main.packagedBy=<pkg>
+  #   (packaging/build-agent.sh), rather than reused from agent-release. That
+  #   is the point: a packaged agent leaves updating to its package manager and
+  #   the release binary updates itself, so they are different binaries. None
+  #   is ever uploaded under a gwatch-agent-<os>-<arch> name, the only names
+  #   the self-updater takes.
+  # - None of these jobs is given GWATCH_SIGNING_KEY. The packages are not in
+  #   the signed self-update chain — their integrity is the sha256 their
+  #   package manager pins — and keeping the key in the one job that signs
+  #   means a compromised packaging tool (nfpm, wingetcreate, a Docker action)
+  #   can publish a bad package, which its manager's own checks and a person
+  #   can catch, but cannot sign an update every agent in the field would
+  #   install by itself.
+
+  # .deb and .rpm for amd64, arm64 and armhf, attached to the agent release.
+  # They are release assets, not an apt or dnf repository: a machine installs
+  # the file, and installs the next one to update (docs/HARDWARE.md).
+  agent-linux-packages:
+    name: Agent .deb and .rpm
+    if: startsWith(github.ref, 'refs/tags/agent-v')
+    needs: [agent-release, agent-packaging]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          check-latest: true
+          cache: true
+      - name: Tag matches cmd/gwatch-agent/VERSION
+        run: |
+          tag="${GITHUB_REF_NAME#agent-v}"
+          file="$(tr -d ' \t\r\n' < cmd/gwatch-agent/VERSION)"
+          if [ "$tag" != "$file" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match cmd/gwatch-agent/VERSION (${file})."
+            exit 1
+          fi
+          echo "AGENT_VERSION=$file" >> "$GITHUB_ENV"
+      - name: Build the packages
+        run: |
+          sh packaging/nfpm/package.sh "$AGENT_VERSION" dist/packages amd64 arm64 arm
+          (cd dist/packages && sha256sum *.deb *.rpm > "gwatch-agent-linux-packages-${AGENT_VERSION}.sha256")
+          cat "dist/packages/gwatch-agent-linux-packages-${AGENT_VERSION}.sha256"
+      - name: Attach them to the agent release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/packages/* --clobber
+
+  # The Homebrew tarballs go on the release; the formula goes to the tap
+  # (vars.HOMEBREW_TAP_REPO, default jxburros/homebrew-tap), pushed with the
+  # HOMEBREW_TAP_TOKEN secret. Without the secret the formula is kept as a
+  # workflow artifact and the job still succeeds: a missing tap is a step
+  # someone has not taken yet, not a broken release.
+  agent-homebrew:
+    name: Agent Homebrew formula
+    if: startsWith(github.ref, 'refs/tags/agent-v')
+    needs: [agent-release, agent-packaging]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO || 'jxburros/homebrew-tap' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          check-latest: true
+          cache: true
+      - name: Tag matches cmd/gwatch-agent/VERSION
+        run: |
+          tag="${GITHUB_REF_NAME#agent-v}"
+          file="$(tr -d ' \t\r\n' < cmd/gwatch-agent/VERSION)"
+          if [ "$tag" != "$file" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match cmd/gwatch-agent/VERSION (${file})."
+            exit 1
+          fi
+          echo "AGENT_VERSION=$file" >> "$GITHUB_ENV"
+      - name: Build the tarballs and render the formula
+        run: |
+          sh packaging/homebrew/package.sh "$AGENT_VERSION" dist/homebrew
+          ruby -c dist/homebrew/gwatch-agent.rb
+          (cd dist/homebrew && sha256sum *.tar.gz > "gwatch-agent-homebrew-${AGENT_VERSION}.sha256")
+      # Uploaded before the formula is pushed, so the URLs in the formula
+      # resolve the moment anyone can see it.
+      - name: Attach the tarballs to the agent release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/homebrew/*.tar.gz dist/homebrew/*.sha256 --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: homebrew-formula
+          path: dist/homebrew/gwatch-agent.rb
+          if-no-files-found: error
+      - name: Tap not configured
+        if: env.TAP_TOKEN == ''
+        run: echo "::notice::HOMEBREW_TAP_TOKEN is not set, so the formula was not pushed to ${TAP_REPO}. It is attached to this run as the homebrew-formula artifact; see docs/RELEASING.md#the-agent-packages."
+      - name: Push the formula to the tap
+        if: env.TAP_TOKEN != ''
+        run: |
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" tap
+          mkdir -p tap/Formula
+          cp dist/homebrew/gwatch-agent.rb tap/Formula/gwatch-agent.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/gwatch-agent.rb
+          if git diff --cached --quiet; then
+            echo "the tap already has this formula"
+          else
+            git commit -m "gwatch-agent ${AGENT_VERSION}"
+            git push origin HEAD
+          fi
+
+  # The winget package: the agent setup program built around a
+  # packagedBy=winget binary and published as
+  # gwatch-agent-winget-setup-<version>.exe, plus the three manifests that
+  # point at it (attached as gwatch-agent-winget-manifests-<version>.zip and
+  # as a workflow artifact). With the WINGET_TOKEN secret, wingetcreate opens
+  # the pull request to microsoft/winget-pkgs; without it the job succeeds and
+  # the manifests wait to be submitted by hand.
+  agent-winget:
+    name: Agent winget package
+    if: startsWith(github.ref, 'refs/tags/agent-v')
+    needs: [agent-release, agent-packaging]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          check-latest: true
+          cache: true
+      - name: Tag matches cmd/gwatch-agent/VERSION
+        run: |
+          tag="${GITHUB_REF_NAME#agent-v}"
+          file="$(tr -d ' \t\r\n' < cmd/gwatch-agent/VERSION)"
+          if [ "$tag" != "$file" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match cmd/gwatch-agent/VERSION (${file})."
+            exit 1
+          fi
+          echo "AGENT_VERSION=$file" >> "$GITHUB_ENV"
+      - name: Build the packaged agent
+        run: sh packaging/build-agent.sh winget "$AGENT_VERSION" dist/packaged windows/amd64
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+        shell: pwsh
+      # /F gives the setup program its own name; everything else is the
+      # ordinary agent installer (scripts/installer/gwatch-agent.iss).
+      - name: Build the winget setup program
+        shell: pwsh
+        run: |
+          $version = $env:AGENT_VERSION
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          $exe = Join-Path $PWD "dist\packaged\winget\windows-amd64\gwatch-agent.exe"
+          & $iscc "/DAppVersion=$version" "/DExePath=$exe" "/Fgwatch-agent-winget-setup-$version" "scripts\installer\gwatch-agent.iss"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force dist\winget | Out-Null
+          Copy-Item "scripts\installer\Output\gwatch-agent-winget-setup-$version.exe" dist\winget\
+      - name: Render the manifests
+        run: |
+          sh packaging/winget/render.sh "$AGENT_VERSION" "dist/winget/gwatch-agent-winget-setup-${AGENT_VERSION}.exe" "dist/winget/manifests/GWatch.Agent/${AGENT_VERSION}"
+      - name: Zip the manifests
+        shell: pwsh
+        run: Compress-Archive -Path "dist\winget\manifests\GWatch.Agent\$env:AGENT_VERSION\*" -DestinationPath "dist\winget\gwatch-agent-winget-manifests-$env:AGENT_VERSION.zip"
+      - name: Attach them to the agent release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" "dist/winget/gwatch-agent-winget-setup-${AGENT_VERSION}.exe" "dist/winget/gwatch-agent-winget-manifests-${AGENT_VERSION}.zip" --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winget-manifests
+          path: dist/winget/manifests
+          if-no-files-found: error
+      - name: winget-pkgs not configured
+        if: env.WINGET_TOKEN == ''
+        run: echo "::notice::WINGET_TOKEN is not set, so no pull request was opened on microsoft/winget-pkgs. The manifests are attached to the release and to this run; see docs/RELEASING.md#the-agent-packages."
+      - name: Open the winget-pkgs pull request
+        if: env.WINGET_TOKEN != ''
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+          (Get-FileHash wingetcreate.exe -Algorithm SHA256).Hash
+          .\wingetcreate.exe submit --prtitle "New version: GWatch.Agent version $env:AGENT_VERSION" --token $env:WINGET_TOKEN "dist\winget\manifests\GWatch.Agent\$env:AGENT_VERSION"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  # ghcr.io/jxburros/gwatch-agent, for watching a Docker host from a container
+  # on it (docs/HARDWARE.md#in-a-container). Multi-arch like the server's image
+  # plus linux/arm/v7, the Raspberry Pi class of Docker host. Tagged X.Y.Z,
+  # X.Y and latest from the agent-v tag; metadata-action's semver type cannot
+  # read a prefixed tag, hence the match patterns.
+  agent-docker-publish:
+    name: Publish agent container image
+    if: startsWith(github.ref, 'refs/tags/agent-v')
+    needs: [agent-release, agent-packaging]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/jxburros/gwatch-agent
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches cmd/gwatch-agent/VERSION
+        id: tag
+        run: |
+          tag="${GITHUB_REF_NAME#agent-v}"
+          file="$(tr -d ' \t\r\n' < cmd/gwatch-agent/VERSION)"
+          if [ "$tag" != "$file" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match cmd/gwatch-agent/VERSION (${file})."
+            exit 1
+          fi
+          echo "version=$file" >> "$GITHUB_OUTPUT"
+          echo "publishing ${IMAGE}:${file}"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=match,pattern=agent-v(\d+\.\d+\.\d+.*),group=1
+            type=match,pattern=agent-v(\d+\.\d+)\.\d+$,group=1
+            type=raw,value=latest
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packaging/docker/Dockerfile.agent
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          build-args: |
+            VERSION=${{ steps.tag.outputs.version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=agent
+          cache-to: type=gha,mode=max,scope=agent
 
   # The same v* tag also publishes the container image to GitHub's registry
   # (docs/DOCKER.md, docs/RELEASING.md#the-container-image). Separate from

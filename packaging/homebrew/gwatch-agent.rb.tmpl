@@ -1,0 +1,72 @@
+# Homebrew formula for the GWatch hardware agent, published to the
+# jxburros/homebrew-tap repository by the agent-homebrew job in
+# .github/workflows/ci.yml. Do not edit the copy in the tap: it is rendered
+# from packaging/homebrew/gwatch-agent.rb.tmpl on every agent-v* tag, with the
+# version and the sha256 of each tarball filled in by
+# packaging/homebrew/render.sh.
+#
+# The binary in these tarballs is built with -X main.packagedBy=homebrew, so it
+# never replaces itself: `brew upgrade` is how it is updated, and Homebrew's
+# record of what is installed stays true (docs/AGENT-DECISIONS.md, entry 10).
+class GwatchAgent < Formula
+  desc "Reports this machine's hardware health to a GWatch server"
+  homepage "https://github.com/jxburros/GWatch"
+  version "@VERSION@"
+  license :cannot_represent # GWatch Community License 1.0 (see LICENSE)
+
+  on_macos do
+    on_arm do
+      url "https://github.com/jxburros/GWatch/releases/download/agent-v@VERSION@/gwatch-agent-homebrew-@VERSION@-darwin-arm64.tar.gz"
+      sha256 "@SHA256_DARWIN_ARM64@"
+    end
+    on_intel do
+      url "https://github.com/jxburros/GWatch/releases/download/agent-v@VERSION@/gwatch-agent-homebrew-@VERSION@-darwin-amd64.tar.gz"
+      sha256 "@SHA256_DARWIN_AMD64@"
+    end
+  end
+
+  on_linux do
+    on_arm do
+      url "https://github.com/jxburros/GWatch/releases/download/agent-v@VERSION@/gwatch-agent-homebrew-@VERSION@-linux-arm64.tar.gz"
+      sha256 "@SHA256_LINUX_ARM64@"
+    end
+    on_intel do
+      url "https://github.com/jxburros/GWatch/releases/download/agent-v@VERSION@/gwatch-agent-homebrew-@VERSION@-linux-amd64.tar.gz"
+      sha256 "@SHA256_LINUX_AMD64@"
+    end
+  end
+
+  def install
+    bin.install "gwatch-agent"
+    doc.install "LICENSE"
+  end
+
+  def caveats
+    <<~EOS
+      Pair this machine with GWatch once (in GWatch: Nodes > Pair a machine):
+        gwatch-agent pair --server https://gwatch.lan:7230 --code XXXX-XXXX
+      then keep it reporting in the background, starting at login:
+        brew services start gwatch-agent
+
+      Pair and start the service as the same user: the token is kept in that
+      user's ~/.local/share/gwatch.
+
+      Homebrew keeps this agent up to date (brew upgrade); it does not
+      update itself.
+    EOS
+  end
+
+  service do
+    run [opt_bin/"gwatch-agent", "run"]
+    keep_alive true
+    log_path var/"log/gwatch-agent.log"
+    error_log_path var/"log/gwatch-agent.log"
+  end
+
+  test do
+    assert_match "gwatch-agent #{version} (", shell_output("#{bin}/gwatch-agent version")
+    assert_match "homebrew package", shell_output("#{bin}/gwatch-agent version")
+    # The binary Homebrew installed must leave updating to Homebrew.
+    assert_match "brew upgrade gwatch-agent", shell_output("#{bin}/gwatch-agent help 2>&1")
+  end
+end

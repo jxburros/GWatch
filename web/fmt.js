@@ -1,4 +1,5 @@
-// Formatting helpers: relative times, durations, milliseconds, percentages, bytes.
+// Formatting helpers: relative times, durations, milliseconds, percentages,
+// bytes, rates and readings in whatever unit a metric is measured in.
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -238,8 +239,79 @@ export function metricLabel(key) {
 export function metricValue(v, unit) {
   if (v == null || isNaN(v)) return '—';
   if (unit === '%') return pct(v, 0);
-  if (unit === 'B/s') return `${bytes(v)}/s`;
+  if (unit === 'B/s' || unit === 'bit/s') return rate(v, unit);
   return Number(v).toFixed(2);
+}
+
+/* ---------- Rates and other units ---------- */
+
+// Throughput is written in decimal (SI) steps — 1 kB/s is 1000 bytes a
+// second — because that is what the service says in an alert
+// (checks.bytesPerSecond: "12.3 MB/s"), and a chart that disagreed with the
+// alert it explains would be a puzzle. bytes() above stays binary: a size on
+// disk or in memory is conventionally counted in 1024s, a rate on a wire in
+// 1000s, and a rate in 1000s has the happy property that a round number of
+// bytes is a round number of megabytes too, so axis ticks stay nice.
+const RATE_UNITS = {
+  'B/s': ['B/s', 'kB/s', 'MB/s', 'GB/s', 'TB/s'],
+  'bit/s': ['bit/s', 'kbit/s', 'Mbit/s', 'Gbit/s', 'Tbit/s'],
+};
+
+/** The step (0 for B/s, 1 for kB/s …) a rate of this size is best read in. */
+function rateStep(v) {
+  let i = 0; let a = Math.abs(Number(v) || 0);
+  while (a >= 1000 && i < 4) { a /= 1000; i++; }
+  return i;
+}
+
+/** Bytes (or bits) per second → "0 B/s", "12.3 kB/s", "1.5 MB/s". Whole
+    numbers in the base unit, one decimal above it, as the service does. */
+export function rate(v, unit = 'B/s') {
+  if (v == null || isNaN(v)) return '—';
+  const names = RATE_UNITS[unit] || RATE_UNITS['B/s'];
+  const i = rateStep(v);
+  const n = Number(v) / 1000 ** i;
+  return `${i === 0 ? Math.round(n) : n.toFixed(1)} ${names[i]}`;
+}
+
+/** A plain number with as many decimals as its size deserves. */
+function plainNumber(v) {
+  const a = Math.abs(v);
+  return String(+Number(v).toFixed(a >= 100 ? 0 : a >= 10 ? 1 : 2));
+}
+
+/**
+ * Any reading in its own unit, as a chart's tooltip, summary, table or stat
+ * tile shows it: latency as milliseconds or seconds, a percentage to one
+ * decimal, a throughput in the largest rate unit that fits, and anything
+ * else — a load average, an SNMP gauge in a unit someone typed — as a number
+ * followed by that unit.
+ */
+export function unitValue(v, unit) {
+  if (v == null || isNaN(v)) return '—';
+  if (unit === '%') return pct(v, 1);
+  if (unit === 'ms') return ms(v);
+  if (RATE_UNITS[unit]) return rate(v, unit);
+  return unit ? `${plainNumber(v)} ${unit}` : plainNumber(v);
+}
+
+/**
+ * One tick label on a value axis. Every label on an axis is written in the
+ * same unit — the one its largest tick (`max`) is best read in — and with the
+ * decimals its tick `step` needs, so an axis reads "0, 0.5, 1.0, 1.5 MB/s"
+ * rather than hopping between kB/s and MB/s from one line to the next.
+ */
+export function unitAxis(v, unit, { max = v, step = 0 } = {}) {
+  const decimals = (scaled) => (scaled > 0 && scaled < 1 ? Math.min(3, Math.ceil(-Math.log10(scaled) - 1e-9)) : 0);
+  if (unit === '%') return `${Math.round(v * 10) / 10}%`;
+  if (unit === 'ms') return v >= 1000 ? `${(v / 1000).toFixed(v >= 10000 ? 0 : 1)} s` : `${Math.round(v * 10) / 10} ms`;
+  if (RATE_UNITS[unit]) {
+    const i = rateStep(Math.max(Math.abs(max), Math.abs(v)));
+    const div = 1000 ** i;
+    return `${(v / div).toFixed(decimals(step / div))} ${RATE_UNITS[unit][i]}`;
+  }
+  const n = step ? Number(v).toFixed(decimals(step)) : String(Math.round(v * 100) / 100);
+  return unit ? `${n} ${unit}` : n;
 }
 
 /**

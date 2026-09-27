@@ -904,7 +904,19 @@
   on('GET', /^\/api\/checks\/(\d+)\/results$/, (m, body, u) => { const f = findCheck(m[1]); if (!f) throw err(404, 'check not found'); const limit = Number(u.searchParams.get('limit')) || 50; return (resultLog[f.c.id] || []).slice(0, limit); });
   on('GET', /^\/api\/checks\/(\d+)\/state$/, (m) => { const f = findCheck(m[1]); if (!f) throw err(404, 'check not found'); return stateFor(f.n, f.c); });
   on('GET', /^\/api\/history$/, (m, body, u) => { const ids = u.searchParams.getAll('checkId'); const range = u.searchParams.get('range') || '24h'; const metric = u.searchParams.get('metric'); if (ids.length === 1) return metric ? metricHistory(ids[0], range, metric) : history(ids[0], range); return ids.map((id) => history(id, range)); });
-  on('GET', /^\/api\/history\/multi$/, (m, body, u) => { const ids = u.searchParams.getAll('checkId'); const range = u.searchParams.get('range') || '24h'; return ids.map((id) => history(id, range)); });
+  // Like the service: a metric applies to every id and one check that does
+  // not measure it fails the lot; auto=1 with no ids picks the checks that
+  // matter most, the way autoChecks does.
+  on('GET', /^\/api\/history\/multi$/, (m, body, u) => {
+    let ids = u.searchParams.getAll('checkId');
+    const range = u.searchParams.get('range') || '24h';
+    const metric = u.searchParams.get('metric');
+    if (!ids.length && u.searchParams.get('auto')) {
+      const order = { critical: 0, high: 1, normal: 2, low: 3 };
+      ids = nodes.filter((n) => n.enabled).sort((a, b) => order[a.importance] - order[b.importance]).flatMap((n) => n.checks.filter((c) => c.enabled && c.type !== 'system').slice(0, 1)).slice(0, 4).map((c) => c.id);
+    }
+    return ids.filter((id) => findCheck(id)).map((id) => (metric ? metricHistory(id, range, metric) : history(id, range)));
+  });
 
   // "Walk this device": a plausible mib-2 subtree for a four-port switch, so
   // the editor's picker can be seen without a real device on the network.
@@ -980,13 +992,20 @@
   on('POST', /^\/api\/backups\/restore$/, (m, body) => { if (body instanceof FormData && body.get('password') === 'wrong') throw err(400, 'wrong password or corrupt archive'); backupStatus.lastRestoreAt = iso(Date.now()); addEvent('restore', { title: 'Restored from uploaded backup' }); return { ok: true, nodes: nodes.length, checks: nodes.flatMap((n) => n.checks).length, results: 38110 }; });
   on('POST', /^\/api\/backups\/restore-existing$/, (m, body) => { if (!backups.some((b) => b.fileName === body.fileName)) throw err(404, 'backup not found'); if (body.password === 'wrong') throw err(400, 'wrong password or corrupt archive'); backupStatus.lastRestoreAt = iso(Date.now()); addEvent('restore', { title: 'Restored from backup', detail: body.fileName }); return { ok: true, nodes: nodes.length, checks: nodes.flatMap((n) => n.checks).length, results: body.includeHistory ? 38110 : 0 }; });
   on('GET', /^\/api\/logs$/, (m, body, u) => ({ lines: logLines.slice(-(Number(u.searchParams.get('limit')) || 200)), file: 'C:\\ProgramData\\GWatch\\logs\\gwatch.log' }));
-  on('GET', /^\/api\/export\/history\.csv$/, (m, body, u) => { const hs = history(u.searchParams.get('checkId'), u.searchParams.get('range') || '30d'); return { __csv: ['timestamp,avg_ms,min_ms,max_ms,jitter_ms,loss_pct,availability_pct,count,failures', ...hs.points.map((p) => [p.ts, p.avgMs ?? '', p.minMs ?? '', p.maxMs ?? '', p.jitterMs ?? '', p.lossPct ?? '', p.availability, p.count, p.failures].join(','))].join('\n') }; });
+  on('GET', /^\/api\/export\/history\.csv$/, (m, body, u) => { const metric = u.searchParams.get('metric'); const hs = metric ? metricHistory(u.searchParams.get('checkId'), u.searchParams.get('range') || '30d', metric) : history(u.searchParams.get('checkId'), u.searchParams.get('range') || '30d'); if (metric) return { __csv: ['timestamp,value,unit,availability_pct', ...hs.points.map((p) => [p.ts, p.value ?? '', hs.metricUnit || '', p.availability].join(','))].join('\n') }; return { __csv: ['timestamp,avg_ms,min_ms,max_ms,jitter_ms,loss_pct,availability_pct,count,failures', ...hs.points.map((p) => [p.ts, p.avgMs ?? '', p.minMs ?? '', p.maxMs ?? '', p.jitterMs ?? '', p.lossPct ?? '', p.availability, p.count, p.failures].join(','))].join('\n') }; });
   on('GET', /^\/api\/export\/results\.csv$/, (m, body, u) => ({ __csv: ['timestamp,success,status,message,latency_ms', ...(resultLog[u.searchParams.get('checkId')] || []).map((r) => [r.ts, r.success, r.status, JSON.stringify(r.message), r.latencyMs ?? ''].join(','))].join('\n') }));
   on('GET', /^\/api\/export\/events\.csv$/, () => ({ __csv: ['timestamp,type,node,check,title,detail', ...events.map((e) => [e.ts, e.type, e.nodeName || '', e.checkName || '', JSON.stringify(e.title), JSON.stringify(e.detail)].join(','))].join('\n') }));
   on('GET', /^\/api\/export\/config\.json$/, () => ({ nodes: clone(nodes), dashboards: clone(dashboards), maintenance: clone(maintenance) }));
 
   /* ---------- Added endpoints: status, network, charts, automation, updates ---------- */
-  let savedCharts = [{ id: 'chart-1', name: 'Gateway latency', config: { checkIds: [gateway.checks[0].id], metric: 'avg', range: '24h', style: 'area', threshold: 40 }, updatedAt: ago(3 * DAY) }];
+  // The first is saved the way charts were before series (#68), so the old
+  // shape keeps being exercised; the second mixes a latency with a machine's
+  // readings in two units, on two axes (#73).
+  const nasHw = nas.checks.find((c) => c.type === 'system');
+  let savedCharts = [
+    { id: 'chart-1', name: 'Gateway latency', config: { checkIds: [gateway.checks[0].id], metric: 'avg', range: '24h', style: 'area', threshold: 40 }, updatedAt: ago(3 * DAY) },
+    { id: 'chart-2', name: 'NAS under load', config: { series: [{ checkId: nas.checks[0].id, metric: 'avg' }, { checkId: nasHw.id, metric: 'cpu', named: true }, { checkId: nasHw.id, metric: 'memory', named: true }], range: '24h', style: 'line' }, updatedAt: ago(1 * DAY) },
+  ];
   const triggers = [{ id: 1, nodeId: plex.id, name: 'Restart Plex container', description: '', enabled: true, on: ['down'], checkId: null, latencyOverMs: 0, action: { type: 'script', interpreter: 'sh', code: 'docker restart plex' }, cooldownMinutes: 30, lastRunAt: ago(2 * HOUR), lastStatus: 'ok', lastOutput: 'plex', runCount: 3, createdAt: ago(10 * DAY), updatedAt: ago(10 * DAY) },
     { id: 2, nodeId: gateway.id, name: 'Post to Discord', description: 'Outage channel', enabled: true, on: ['down', 'recovered'], checkId: null, latencyOverMs: 0, action: { type: 'http', method: 'POST', url: 'https://discord.com/api/webhooks/…', body: '{"content":"{{node.name}} is {{status}}"}' }, cooldownMinutes: 0, lastRunAt: null, lastStatus: '', lastOutput: '', runCount: 0, createdAt: ago(3 * DAY), updatedAt: ago(3 * DAY) }];
   const endpoints = [{ id: 1, name: 'Router rebooted', slug: 'router-rebooted', description: 'Called by the router after a reboot', enabled: true, method: 'POST', token: 'abc123', action: { type: 'run_node', nodeId: gateway.id }, lastCalledAt: ago(5 * DAY), lastStatus: 'ok', lastOutput: 'Ran the checks of node 21.', callCount: 4, createdAt: ago(20 * DAY), updatedAt: ago(20 * DAY) }];
@@ -1248,6 +1267,35 @@
     else agents[i].revokedAt = iso(Date.now());
     return { ok: true };
   });
+
+  // Pairing codes. Nothing in mock mode can type a code in, so a code
+  // redeems itself: a few seconds after it is minted a machine "arrives", and
+  // a few seconds after that its first reading does — which is what lets the
+  // pairing dialog's confirmation (#69) be seen and tested without an agent.
+  const pairings = [];
+  const pairingDelays = { redeemMs: 6000, reportMs: 4000 };
+  window.__gwatchMockPairing = pairingDelays;
+  const pairingProgress = (p) => {
+    const age = Date.now() - +new Date(p.createdAt);
+    if (!p.revokedAt && !p.redeemedAt && age >= pairingDelays.redeemMs) {
+      const a = { id: Math.max(0, ...agents.map((x) => x.id)) + 1, name: p.name, nodeId: p.nodeId, prefix: 'gwa_mockpair', enabled: true, createdBy: 'pairing code (local)', createdAt: iso(Date.now()), revokedAt: null, lastSeenAt: null, lastAddr: '192.168.1.77', lastVersion: '0.5.0', hostname: 'mock-machine.lan', os: 'linux', arch: 'amd64' };
+      agents.push(a);
+      Object.assign(p, { redeemedAt: iso(Date.now()), agentId: a.id, redeemedAddr: '192.168.1.77' });
+    }
+    const agent = p.agentId ? agents.find((x) => x.id === p.agentId) : null;
+    if (agent && !agent.lastSeenAt && Date.now() - +new Date(p.redeemedAt) >= pairingDelays.reportMs) agent.lastSeenAt = iso(Date.now());
+    const state = p.redeemedAt ? (agent?.lastSeenAt ? 'reporting' : 'paired') : p.revokedAt ? 'cancelled' : Date.now() >= +new Date(p.expiresAt) ? 'expired' : 'pending';
+    return { pairing: clone(p), state, ...(agent ? { agent: clone(agent) } : {}) };
+  };
+  on('GET', /^\/api\/agents\/pairings$/, () => clone(pairings));
+  on('POST', /^\/api\/agents\/pairings$/, (m, body) => {
+    if (!body?.name?.trim()) throw err(400, 'give the machine a name so you can recognise it later');
+    const p = { id: pairings.length + 1, name: body.name.trim(), nodeId: body.nodeId ?? null, createdBy: 'local', createdAt: iso(Date.now()), expiresAt: iso(Date.now() + 15 * 60e3) };
+    pairings.push(p);
+    return { code: 'KQWX-HMTZ', pairing: clone(p) };
+  });
+  on('GET', /^\/api\/agents\/pairings\/(\d+)$/, (m) => { const p = pairings.find((x) => x.id === Number(m[1])); if (!p) throw err(404, 'not found'); return pairingProgress(p); });
+  on('DELETE', /^\/api\/agents\/pairings\/(\d+)$/, (m) => { const p = pairings.find((x) => x.id === Number(m[1])); if (!p) throw err(404, 'not found'); p.revokedAt = iso(Date.now()); return null; });
 
   on('GET', /^\/api\/export\/logs\.txt$/, () => ({ __csv: logLines.join('\n') }));
 

@@ -3,7 +3,8 @@
 import { api, getHistoryMulti, getHistoryMetric, qs } from '../api.js';
 import { h, icon, clear, replace, uid, statusPill, statusGlyph, importanceBadge, tagList, banner, toast, confirmDialog, showMenu, menuButton, emptyState, skeleton, eventRow, rangeChips, checkTypeLabel } from '../components.js';
 import { LineChart, toSeries, uptimeBar, uptimeLegend, SERIES_COLORS } from '../charts.js';
-import { relTime, ms as fmtMs, pct, dateTime, interval, plural, timeShort, nodeGroups, metricFamily, metricLabel, metricUnit } from '../fmt.js';
+import { relTime, ms as fmtMs, pct, dateTime, interval, plural, timeShort, nodeGroups, metricLabel } from '../fmt.js';
+import { namedMetrics } from '../chart-config.js';
 import { resultInspector } from './inspector.js';
 import { openTriggerEditor, triggerRow } from './automation.js';
 import { hardwarePanel } from './machines.js';
@@ -382,25 +383,13 @@ export async function mount(root, ctx) {
     return out;
   }
 
-  // checkMetrics lists the named metrics a check is configured to measure,
-  // as [{ name, unit }]: one per OID for an SNMP check, the recorded value
-  // for a json check that records one (#55), nothing for every other type.
-  // It mirrors model.Check.MetricUnits on the server, which is what decides
-  // whether /api/history will serve a name.
+  // checkMetrics lists the named metrics a check measures, as
+  // [{ name, unit, label }]: one per OID for an SNMP check, the recorded
+  // value for a json check that records one (#55), a hardware check's
+  // readings from its latest result (#60), nothing for every other type.
+  // The Charts tab's metric picker lists the same ones (chart-config.js).
   function checkMetrics(c) {
-    const cfg = c.config || {};
-    if (c.type === 'snmp') return (cfg.snmpOids || []).filter((o) => o.name).map((o) => ({ name: o.name, unit: o.unit || '' }));
-    if (c.type === 'json' && cfg.jsonRecord) return [{ name: (cfg.jsonMetric || '').trim() || 'value', unit: (cfg.jsonUnit || '').trim() }];
-    if (c.type === 'system') {
-      // A machine's disks, interfaces and devices are only known from what
-      // it last reported (#60), so the keys come from the latest result and
-      // the server accepts any key that result carried.
-      const last = (state.node?.lastResults || {})[c.id];
-      const rows = last?.details?.metricResults || [];
-      const keys = rows.length ? rows.map((r) => r.key) : Object.keys(last?.metrics || {});
-      return keys.map((key) => ({ name: key, unit: metricUnit(key), label: rows.find((r) => r.key === key)?.label || metricLabel(key), family: metricFamily(key).family }));
-    }
-    return [];
+    return namedMetrics(c, (state.node?.lastResults || {})[c.id]);
   }
 
   // chartGroups says which metrics share a chart. An SNMP OID or a json value

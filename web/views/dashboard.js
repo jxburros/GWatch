@@ -2,10 +2,10 @@
 // Widgets are dragged by their handle and resized from their edges; the
 // layout (x, y, width, height per widget) is saved with the dashboard.
 
-import { api, getHistoryMulti, getHistoryAuto, qs } from '../api.js';
+import { api } from '../api.js';
 import { h, icon, clear, replace, statusPill, statusSpine, statusWord, statusGlyph, checkChip, statusOrb, toast, confirmDialog, promptDialog, openModal, menuButton, field, textInput, numberInput, selectInput, checkbox, emptyState, skeleton, eventRow, rangeChips, statusMeta, uid } from '../components.js';
 import { relTime, bytes, plural, dateShort, duration, pct, nodeGroups, inGroup } from '../fmt.js';
-import { chartConfigEditor, renderConfiguredChart, normalizeChartConfig } from '../chart-config.js';
+import { chartConfigEditor, renderConfiguredChart, normalizeChartConfig, historyFetch, chartCsvItems } from '../chart-config.js';
 // charts.js is already in the graph by way of chart-config.js, so naming these
 // here costs nothing and spares the availability widget an await it does not
 // need — the widget must be able to fill itself in one synchronous step.
@@ -503,11 +503,9 @@ export async function mount(root, ctx) {
   function chartMenu(w) {
     const cfg = widgetConfig(w);
     const view = state.chartViews.get(w.id);
-    const ids = (cfg.checkIds || []).map(Number).filter(Boolean);
-    const csvItems = ids.map((id) => {
-      const c = findCheck(id);
-      return { label: `Export CSV — ${c ? `${c.node.name} › ${c.check.name}` : `check ${id}`}`, icon: 'download', href: `/api/export/history.csv${qs({ checkId: id, range: cfg.range || '24h' })}`, download: `history-${id}-${cfg.range || '24h'}.csv` };
-    });
+    // One CSV per series, a named metric (a machine's network, an SNMP OID)
+    // exporting its own values rather than the check's latency.
+    const csvItems = chartCsvItems(chartConfigFor(w), { nodes: state.nodes });
     return [
       view ? { label: 'Export chart as image', icon: 'image', onClick: () => view.exportPNG(`${(w.title || w.type).replace(/[^\w-]+/g, '-').toLowerCase()}-${cfg.range || '24h'}.png`) } : null,
       ...csvItems,
@@ -735,9 +733,11 @@ export async function mount(root, ctx) {
     const v = state.chartViews.get(id);
     if (v) { v.destroy(); state.chartViews.delete(id); }
   }
-  function fetchHistory(ids, range) {
-    const key = `${ids.join(',')}|${range}`;
-    if (!state.historyCache.has(key)) state.historyCache.set(key, ids.length ? getHistoryMulti(ids, range) : getHistoryAuto(range));
+  // A chart widget may also ask for one of a check's named metrics (#68);
+  // everything is cached by what was asked for, until the next refresh.
+  function fetchHistory(ids, range, metric) {
+    const key = `${ids.join(',')}|${range}|${metric || ''}`;
+    if (!state.historyCache.has(key)) state.historyCache.set(key, historyFetch(ids, range, metric));
     return state.historyCache.get(key);
   }
   function renderChart(w, body) {

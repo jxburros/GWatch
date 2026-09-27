@@ -12,9 +12,19 @@ import (
 const (
 	// SessionCookie is the name of the browser session cookie.
 	SessionCookie = "gwatch_session"
-	// SessionLifetime is how long a session stays valid without use. Every
-	// request that presents a live session slides the expiry forward.
+	// SessionLifetime is how long a session stays valid without use. Using a
+	// live session slides the expiry forward, in the database and in the
+	// browser's cookie alike (see SessionRenewInterval).
 	SessionLifetime = 30 * 24 * time.Hour
+	// SessionRenewInterval is how often a session in use has its expiry slid
+	// forward. Renewing is a database write and a fresh Set-Cookie, so it is
+	// done once this much of the lifetime has been used rather than on every
+	// request; an active session therefore never has less than
+	// SessionLifetime-SessionRenewInterval left to run. The cookie is renewed
+	// together with the row: a cookie that kept the expiry it was given at
+	// sign-in would be dropped by the browser 30 days later however busy the
+	// session had been, which signed people out out of the blue.
+	SessionRenewInterval = time.Hour
 	// APIKeyPrefix is the visible marker at the start of every API key.
 	APIKeyPrefix = "gw_"
 	// AgentTokenPrefix marks an agent enrolment token. It is deliberately

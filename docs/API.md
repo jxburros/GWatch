@@ -48,6 +48,16 @@ is what keeps a fresh install, and every install that predates accounts, working
 no setup. Turn on `general.requireLoginLocally` once accounts exist and even loopback
 has to sign in. The legacy access password keeps working for existing scripts.
 
+A loopback request that carries a reverse proxy's forwarding headers (`Forwarded`,
+`X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto` or `X-Real-IP`) is not
+`local`: it came through a proxy on this machine on behalf of someone elsewhere, and is
+judged like any other remote client. A signed-in account is always itself, even on the
+computer GWatch runs on — the cookie is resolved before the loopback shortcut.
+
+If the database cannot be asked whether a session cookie or API key is valid, the
+request is answered `503` with a short `Retry-After` rather than being treated as
+signed out; try again.
+
 `GET /api/me` reports the current principal:
 
 ```json
@@ -147,11 +157,11 @@ route is closed until it is opened on purpose.
 ### Sign-in and accounts
 
 - `GET /api/auth/setup` → `{ "usersConfigured": bool, "loginRequired": bool, "accessPasswordSet": bool, "localLoginForced": bool, "apiVersion": 1 }`. `loginRequired` is about *this* client.
-- `POST /api/auth/login` body `{ "username", "password" }` → the principal, and sets `gwatch_session` (HttpOnly, SameSite=Lax, 30-day sliding expiry, `Secure` only over HTTPS). Rate limited.
+- `POST /api/auth/login` body `{ "username", "password" }` → the principal, and sets `gwatch_session` (HttpOnly, SameSite=Lax, 30-day sliding expiry, `Secure` only when GWatch itself terminates HTTPS). Rate limited. While the session is in use its expiry slides forward about once an hour, and the response that slides it re-issues the cookie with the new expiry, so a session in regular use does not run out.
 - `POST /api/auth/logout` → `{ok:true}` and clears the cookie.
 - `POST /api/auth/change-password` body `{ "current", "new" }` → changes your own password and signs every browser of that account out. Any signed-in user; never an API key.
 - `GET /api/users` → `[User]`. `POST /api/users` body `{ "username", "password", "role": "admin"|"viewer" }` → `User` (201). The first account created is always an administrator, and on an install with no accounts a `local` or `password` principal may create it.
-- `PUT /api/users/{id}` body `{ "role"?, "password"? }` → `User`. Changing either ends that account's sessions.
+- `PUT /api/users/{id}` body `{ "role"?, "password"? }` → `User`. A new password ends that account's sessions; a new role applies to them from their next request, without signing them out.
 - `DELETE /api/users/{id}` → `{ok:true}`. Deleting or demoting the last administrator is refused with 400.
 - `GET /api/apikeys` → `[APIKey]` (revoked keys included, so the trail keeps their names).
 - `POST /api/apikeys` body `{ "name", "scope": "read"|"readwrite" }` → `{ "key": "gw_…", "apiKey": APIKey }` (201). An omitted scope means `read`. **The key is returned once and cannot be shown again.**
@@ -700,6 +710,11 @@ and can be cancelled in the meantime.
 - `POST /api/agents/pairings` body `{ "name": "Living room NAS", "nodeId": null|id }` →
   `{ "code": "XXXX-XXXX", "pairing": PairingCode }`. **The code is returned exactly
   once.** Only its sha256 digest is stored, exactly as an agent token's is.
+- `GET /api/agents/pairings/{id}` → `{ "state", "pairing": PairingCode, "agent"?: Agent }`.
+  How one code has got on: `state` is `pending`, `paired` (redeemed; `agent` is the
+  machine it enrolled), `reporting` (that machine's first reading has arrived),
+  `expired` or `cancelled`. The pairing dialog polls this to confirm the pairing as
+  it happens. Neither the code nor the agent's token is ever in the answer.
 - `DELETE /api/agents/pairings/{id}` → 204. Cancels an unused code. A code that was
   already redeemed is left as it is, so cancelling cannot rewrite an enrolment that
   already happened.
