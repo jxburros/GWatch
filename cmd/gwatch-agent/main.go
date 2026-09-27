@@ -84,6 +84,10 @@ type config struct {
 	name       string
 	repo       string
 	autoUpdate bool
+	// hostRoot is where the host's root filesystem is mounted when the agent
+	// runs in a container and is watching the machine around it rather than
+	// the container (docs/HARDWARE.md#in-a-container). Empty everywhere else.
+	hostRoot string
 }
 
 func usage() {
@@ -133,12 +137,28 @@ machines anyone logs into, which is the argument for doing this by default;
 --auto-update=false, or GWATCH_AGENT_AUTO_UPDATE=off, turns it off and leaves
 gwatch-agent update to be run by hand. GWatch is not involved either way: it
 is never asked what version to run and cannot make this machine install
-anything.
+anything.%s
 
 Environment: GWATCH_SERVER, GWATCH_AGENT_TOKEN, GWATCH_AGENT_CODE,
 GWATCH_AGENT_INTERVAL, GWATCH_AGENT_LISTEN, GWATCH_AGENT_TOKEN_FILE,
-GWATCH_AGENT_AUTO_UPDATE, GWATCH_AGENT_REPO override the defaults.
-`, version, defaultListen, tokenFile())
+GWATCH_AGENT_AUTO_UPDATE, GWATCH_AGENT_REPO, GWATCH_HOST_ROOT override the
+defaults.
+`, version, defaultListen, tokenFile(), packagedUsage())
+}
+
+// packagedUsage is the paragraph a packaged build adds to the usage text, so
+// that the description of self-update above is not the last word on a binary
+// that does not do it.
+func packagedUsage() string {
+	p, ok := currentPackaging()
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf(`
+
+This copy was installed from %s, and %s keeps it up to date: it
+does not replace itself, whatever the settings above say. To update it,
+%s.`, p.source, p.manager, p.updateCommand(""))
 }
 
 func main() {
@@ -161,6 +181,7 @@ func main() {
 	fs.StringVar(&cfg.name, "name", "", "override the hostname reported to GWatch")
 	fs.StringVar(&cfg.repo, "repo", envOr("GWATCH_AGENT_REPO", defaultRepo), "GitHub repository the agent takes its own updates from")
 	fs.BoolVar(&cfg.autoUpdate, "auto-update", envBool("GWATCH_AGENT_AUTO_UPDATE", true), "keep this agent up to date from signed agent releases")
+	fs.StringVar(&cfg.hostRoot, "host-root", os.Getenv("GWATCH_HOST_ROOT"), "in a container: where the host's / is mounted (e.g. /host), to report the host rather than the container")
 	var updateCheckOnly bool
 	fs.BoolVar(&updateCheckOnly, "check", false, "update: report whether a newer agent exists without installing it")
 	if err := fs.Parse(args); err != nil {
@@ -179,10 +200,52 @@ func main() {
 			cfg.token = stored
 		}
 	}
+	// The same goes for where to send readings. Pairing keeps the server it
+	// paired with beside the token, so that a service started with no
+	// arguments at all — the systemd unit a package installs, a Homebrew
+	// service — reports to it. Anything given on the command line or in the
+	// environment wins; the stored settings only fill in what was not said.
+	if strings.TrimSpace(cfg.server) == "" {
+		if s, err := readStoredSettings(); err == nil {
+			insecureGiven := false
+			fs.Visit(func(f *flag.Flag) {
+				if f.Name == "insecure" {
+					insecureGiven = true
+				}
+			})
+			cfg.applyStored(s, insecureGiven)
+		}
+	}
+
+	// A packaged build hands the service to the package that installed it.
+	// The agent's own service commands would register a second service beside
+	// the package's (a GWatchAgent unit next to gwatch-agent.service, both
+	// reporting), so they say what to use instead.
+	if p, ok := currentPackaging(); ok && p.ownsService {
+		switch cmd {
+		case "install", "uninstall", "start", "stop", "restart", "status":
+			fatal(p.refuseServiceCommand(cmd))
+		}
+	}
+
+	// Watching the host from inside a container is decided before any reading
+	// is taken, and a host root that is not there is an error rather than a
+	// warning: an agent that quietly fell back to reading the container would
+	// report a machine that does not exist under the name of one that does.
+	// Only the commands that take a reading ask; `update --check`, `rollback`
+	// or `version` in the same container have no reason to fail over it.
+	switch cmd {
+	case "run", "serve", "once", "print", "pair", "install":
+		if root := strings.TrimSpace(cfg.hostRoot); root != "" {
+			if err := sysmetrics.SetHostRoot(root); err != nil {
+				fatal(fmt.Errorf("%w (in a container, mount the host with -v /:%s:ro; to report the container itself instead, set GWATCH_HOST_ROOT to nothing)", err, root))
+			}
+		}
+	}
 
 	switch cmd {
 	case "version", "-v", "--version":
-		fmt.Printf("gwatch-agent %s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
+		fmt.Println(versionLine())
 		return
 	case "help", "-h", "--help":
 		usage()
@@ -224,7 +287,13 @@ func main() {
 	}
 
 	if err := cfg.validate(cmd); err != nil {
-		fatal(err)
+		// A distinct status for "not set up yet", so that a service manager
+		// can tell it from a crash: the packaged systemd unit does not restart
+		// on it (RestartPreventExitStatus=78), which keeps a machine that has
+		// been installed but not yet paired from logging the same complaint
+		// every few seconds until someone gets round to it.
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(exitNotConfigured)
 	}
 
 	prg := &program{cfg: cfg, mode: cmd}
@@ -273,6 +342,31 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+}
+
+// exitNotConfigured is EX_CONFIG from sysexits.h: the agent has no token or no
+// server, which no amount of restarting will fix.
+const exitNotConfigured = 78
+
+// versionLine is what `version` prints. The update path checks that a new
+// binary's version line contains the version the release claims, so the
+// version itself always comes first.
+func versionLine() string {
+	line := fmt.Sprintf("gwatch-agent %s (%s/%s", version, runtime.GOOS, runtime.GOARCH)
+	if p, ok := currentPackaging(); ok {
+		line += "; " + p.describe()
+	}
+	return line + ")"
+}
+
+// userAgent identifies this build to GWatch. A packaged build says which
+// package, which is how GWatch's logs can tell how an agent was installed
+// without a field of its own in the reading.
+func userAgent() string {
+	if p, ok := currentPackaging(); ok {
+		return "gwatch-agent/" + version + " (" + p.by + ")"
+	}
+	return "gwatch-agent/" + version
 }
 
 // validate reports a configuration the agent cannot run with, in the words
@@ -325,6 +419,9 @@ func (c config) serviceArgs(cmd string) []string {
 	}
 	if r := strings.TrimSpace(c.repo); r != "" && r != defaultRepo {
 		args = append(args, "--repo", r)
+	}
+	if r := strings.TrimSpace(c.hostRoot); r != "" {
+		args = append(args, "--host-root", r)
 	}
 	return args
 }
@@ -421,7 +518,11 @@ func (p *program) run(ctx context.Context) {
 		p.serve(ctx)
 		return
 	}
-	if p.cfg.autoUpdate {
+	if pk, ok := currentPackaging(); ok {
+		// Said once, at start, because it is the answer to "why is this
+		// machine behind?" and the log is where someone will look for it.
+		log.Printf("automatic updates are off: this agent was installed from %s, which keeps it up to date (%s)", pk.source, pk.updateCommand(""))
+	} else if p.cfg.autoUpdate {
 		go autoUpdate(ctx, p.cfg, p.restartForUpdate)
 	}
 	p.report(ctx)
@@ -515,7 +616,7 @@ func send(ctx context.Context, client *http.Client, cfg config, metrics model.Ho
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+cfg.token)
-	req.Header.Set("User-Agent", "gwatch-agent/"+version)
+	req.Header.Set("User-Agent", userAgent())
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -598,8 +699,16 @@ func pair(cfg *config) error {
 	if code == "" {
 		return errors.New("a pairing code is required, e.g. --code XXXX-XXXX (GWatch: Hardware › Pair a machine)")
 	}
+	pk, packaged := currentPackaging()
+	if packaged && pk.dataDir != "" && filepath.Dir(tokenFile()) == pk.dataDir {
+		if err := checkDataDirWritable(pk.dataDir); err != nil {
+			return err
+		}
+	}
 
-	hostname, _ := os.Hostname()
+	// The collector's idea of the name rather than the kernel's: in a
+	// container watching its host, the name worth pairing under is the host's.
+	hostname := sysmetrics.Hostname()
 	if n := strings.TrimSpace(cfg.name); n != "" {
 		hostname = n
 	}
@@ -617,7 +726,7 @@ func pair(cfg *config) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "gwatch-agent/"+version)
+	req.Header.Set("User-Agent", userAgent())
 
 	resp, err := newClient(*cfg).Do(req)
 	if err != nil {
@@ -648,6 +757,15 @@ func pair(cfg *config) error {
 	}
 	cfg.token = out.Token
 	cfg.code = ""
+	// Where to report goes beside the token, so that a service given no
+	// arguments knows it too. Losing it is not worth failing over — the token
+	// is the part that cannot be had again — but it is worth saying, since a
+	// service started without --server would then refuse to run.
+	if path != "" {
+		if err := saveStoredSettings(storedSettings{Server: cfg.baseURL(), Insecure: cfg.insecure, Name: strings.TrimSpace(cfg.name)}); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not save the server address beside the token (%v); give the service --server %s\n", err, cfg.baseURL())
+		}
+	}
 
 	name := out.Agent.Name
 	if name == "" {
@@ -665,6 +783,9 @@ func pair(cfg *config) error {
 		return fmt.Errorf("paired, but the first reading did not go through: %w", err)
 	}
 	fmt.Println("First reading accepted. This computer now appears under Hardware in GWatch.")
+	if packaged && path != "" {
+		pk.afterPair(path)
+	}
 	return nil
 }
 
@@ -711,6 +832,11 @@ func tokenFile() string {
 }
 
 func agentDataDir() string {
+	// A package that runs the agent as a fixed service keeps its data in one
+	// fixed place (see linuxPackageDataDir), whoever paired the machine.
+	if p, ok := currentPackaging(); ok && p.dataDir != "" {
+		return p.dataDir
+	}
 	if runtime.GOOS == "windows" {
 		if pd := os.Getenv("ProgramData"); pd != "" {
 			return filepath.Join(pd, "GWatch")
@@ -799,6 +925,73 @@ func readStoredToken() (string, error) {
 		return "", errors.New("the stored token file is empty")
 	}
 	return token, nil
+}
+
+// ---- the stored settings ----
+
+// storedSettings is what pairing learned besides the token: where the server
+// is, and the two things about talking to it that were decided when the
+// machine was paired. It lets `gwatch-agent run` with no arguments — which is
+// how a package's service runs it — report to the server the machine was
+// paired with, instead of refusing for want of a --server.
+//
+// None of it is secret, but it sits beside the token with the same
+// permissions, because it is the other half of what the token is for.
+type storedSettings struct {
+	Server   string `json:"server"`
+	Insecure bool   `json:"insecure,omitempty"`
+	Name     string `json:"name,omitempty"`
+}
+
+// settingsFile lives beside the token file, wherever that is.
+func settingsFile() string {
+	return filepath.Join(filepath.Dir(tokenFile()), "agent-settings.json")
+}
+
+func saveStoredSettings(s storedSettings) error {
+	b, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := settingsFile()
+	if err := os.WriteFile(path, append(b, '\n'), 0o600); err != nil {
+		return err
+	}
+	if err := os.Chmod(path, 0o600); err != nil && runtime.GOOS != "windows" {
+		return err
+	}
+	restrictWindowsACL(path)
+	return nil
+}
+
+func readStoredSettings() (storedSettings, error) {
+	var s storedSettings
+	b, err := os.ReadFile(settingsFile())
+	if err != nil {
+		return s, err
+	}
+	if err := json.Unmarshal(b, &s); err != nil {
+		return s, fmt.Errorf("%s: %w", settingsFile(), err)
+	}
+	if strings.TrimSpace(s.Server) == "" {
+		return s, errors.New("the stored settings name no server")
+	}
+	return s, nil
+}
+
+// applyStored fills in what the command line and environment left unsaid.
+// It is only called when no server was given, so the stored server is the
+// one in use; --insecure is taken from the store only in that case and only
+// when it was not given explicitly, because "this server's certificate is
+// self-signed" was a statement about that server and nothing else.
+func (c *config) applyStored(s storedSettings, insecureGiven bool) {
+	c.server = s.Server
+	if !insecureGiven {
+		c.insecure = s.Insecure
+	}
+	if strings.TrimSpace(c.name) == "" {
+		c.name = s.Name
+	}
 }
 
 // ---- serve mode ----

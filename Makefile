@@ -168,3 +168,24 @@ sign:
 # an installed GWatch will do before it replaces itself.
 verify-release:
 	go run ./cmd/gwatch-sign verify dist/gwatch-*
+
+# ---- Agent packages (docs/RELEASING.md#the-agent-packages) ----
+#
+# The .deb and .rpm for every Linux architecture the agent is released for,
+# into dist/packages, the way the agent-linux-packages CI job builds them. The
+# binaries inside are built with -X main.packagedBy=deb/rpm and leave updating
+# to apt or dnf (docs/AGENT-DECISIONS.md, entry 10). nfpm is pinned and run
+# with `go run`; set NFPM=nfpm to use an installed copy. The Homebrew tarballs
+# and formula (agent-homebrew) need GNU tar; the winget setup program needs
+# Inno Setup on Windows, so those are left to CI and to the scripts under
+# packaging/.
+NFPM ?= go run github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
+
+.PHONY: agent-packages agent-image
+agent-packages:
+	NFPM='$(NFPM)' sh packaging/nfpm/package.sh $(AGENT_VERSION) dist/packages
+
+# The agent's container image for this machine's platform (the Docker host
+# watcher — docs/HARDWARE.md#in-a-container).
+agent-image:
+	docker build -f packaging/docker/Dockerfile.agent --build-arg VERSION=$(AGENT_VERSION) -t gwatch-agent:$(AGENT_VERSION) .

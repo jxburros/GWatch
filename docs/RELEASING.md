@@ -21,6 +21,8 @@ make windows                      # cross-compile dist/gwatch.exe from Linux/mac
 make docker                       # build the container image (see DOCKER.md)
 make agent                        # build dist/gwatch-agent for this platform
 make agent-all                    # build it for Windows, Linux and macOS, amd64/arm64/arm
+make agent-packages               # the agent's .deb and .rpm, into dist/packages (nfpm, pinned, via go run)
+make agent-image                  # the agent's container image, for this platform
 make mcp-build / mcp-test / mcp-fmt   # the same, for the mcp/ module (see mcp/README.md)
 make keygen / sign / verify-release   # the release signing key and release assets (below)
 ```
@@ -38,7 +40,7 @@ service containers.
 ## Continuous integration
 
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on every push and pull
-request as four jobs:
+request as five jobs:
 
 | Job | Runner | What it does |
 |---|---|---|
@@ -46,14 +48,20 @@ request as four jobs:
 | `linux` ("Test (Linux)") | `ubuntu-latest` | gofmt, vet, build, full test suite (root and mcp/), a `-race` pass over `internal/engine`, `internal/api`, `internal/store` and `internal/hostmon`, the store/backup/api suites against PostgreSQL 16 and MySQL 8 service containers ([`DATABASE.md`](DATABASE.md#for-developers)), `govulncheck` for both modules, and the browser accessibility suite (`npm run test:e2e` — Playwright drives Chromium through every route with an axe-core scan) |
 | `macos` ("Test (macOS)") | `macos-latest` | vet + test only — deliberately lean, but this is what actually compiles and exercises `internal/sysmetrics/collect_darwin.go` |
 | `docker` ("Container image") | `ubuntu-latest` | builds the `Dockerfile` for `linux/amd64`, checks `gwatch version` inside it, then starts the container and waits for `/api/health` to answer 200 |
+| `agent-packaging` ("Agent packages") | `ubuntu-latest` | builds the agent's `.deb`/`.rpm` for all three architectures, installs the `.deb` on the runner's systemd and takes it through install → refuse to self-update → configure → run → purge, renders the Homebrew formula (`ruby -c`) and the winget manifests (validated against winget's 1.6.0 schemas), builds the agent image and has it read the runner through a mounted host root, and checks no package output is named like a self-update asset — see ["The agent packages"](#the-agent-packages) |
 
 Windows is the only one that builds an installer or touches PowerShell, since that is the
 only platform GWatch installs itself onto as a service; Linux and macOS exist to catch a
 platform-specific regression (a build tag, a syscall, a platform-tagged file the Windows
 job never compiles) before it reaches a tag push. `release` needs `ci`, `linux` and `macos`; the `docker` job is independent of it.
 
+The `ci` job also compiles the winget variant of the agent setup program, so a change to
+`scripts/installer/gwatch-agent.iss` that breaks it fails a pull request rather than a tag.
+
 Pushing a tag such as `v0.1.0` additionally runs the `release` job (below) and the
-`docker-publish` job (["The container image"](#the-container-image)), and pushing
+`docker-publish` job (["The container image"](#the-container-image)); pushing
+`agent-v0.5.0` runs `agent-release` and then the four agent packaging jobs
+(["The agent packages"](#the-agent-packages)); and pushing
 `mcp/v0.1.0` runs `mcp-tag`, a guard job — see
 ["Releasing the MCP companion"](#releasing-the-mcp-companion).
 
@@ -89,6 +97,7 @@ Pushing a tag such as `v0.1.0` additionally runs the `release` job (below) and t
 | `skill/` | The downloadable agent skill served by `GET /api/mcp/skill`, versioned by `skill/VERSION` |
 | `scripts/` | Windows build / install / uninstall PowerShell scripts |
 | `scripts/installer/` | The two Inno Setup scripts, their shared branding and the wizard artwork |
+| `packaging/` | The agent's packages: `build-agent.sh` (the packaged builds), `nfpm/` (`.deb`/`.rpm`, systemd unit, maintainer scripts), `homebrew/`, `winget/` and `docker/Dockerfile.agent` — see ["The agent packages"](#the-agent-packages) |
 | `VERSION` | The version every build reports; a release is the tag `v<VERSION>` |
 | `mcp/` | The MCP companion, a separate Go module with its own `VERSION` — see [`mcp/README.md`](../mcp/README.md) |
 | `Dockerfile`, `.dockerignore`, `docker-compose.yml` | The container image (`make docker`) and a ready-to-run Compose file — see [`DOCKER.md`](DOCKER.md) |
@@ -277,7 +286,8 @@ does not match `cmd/gwatch-agent/VERSION`, fails if the signing key is missing
 or is not one the shipped agents trust, then cross-compiles seven targets
 (the six the server is built for, plus `linux/arm` for the Raspberry Pi class
 of machine), signs and checksums each one, builds the Windows agent installer,
-and publishes a GitHub release of its own.
+and publishes a GitHub release of its own. Once it has, four more jobs add the
+agent's packages to that release — see ["The agent packages"](#the-agent-packages).
 
 ### The two release trains must never cross
 
@@ -314,6 +324,65 @@ that needs no network. There is no automatic rollback *after* a restart — that
 would need a watchdog the agent deliberately does not have — so an agent
 release is the one release worth being slow about. Tag it, let it reach your
 own machines, and look at them before you expect anyone else to take it.
+
+## The agent packages
+
+The agent is also published as a `.deb`, an `.rpm`, a Homebrew formula, a winget package
+and a container image ([`HARDWARE.md`](HARDWARE.md#installing-from-a-package-manager)).
+Each is a job on the `agent-v*` tag that runs after `agent-release` (so the release exists
+to attach to, and a failed release publishes no packages) and after `agent-packaging`, the
+pull-request job that built and exercised the same packages:
+
+| Job | Runner | Publishes | Needs |
+|---|---|---|---|
+| `agent-linux-packages` | `ubuntu-latest` | `gwatch-agent_<v>-1_{amd64,arm64,armhf}.deb`, `gwatch-agent-<v>-1.{x86_64,aarch64,armv7hl}.rpm` and `gwatch-agent-linux-packages-<v>.sha256` on the agent release | nothing |
+| `agent-homebrew` | `ubuntu-latest` | `gwatch-agent-homebrew-<v>-{darwin,linux}-{arm64,amd64}.tar.gz` (+ `.sha256`) on the release; `Formula/gwatch-agent.rb` to the tap | `HOMEBREW_TAP_TOKEN` to push the formula |
+| `agent-winget` | `windows-latest` | `gwatch-agent-winget-setup-<v>.exe` and `gwatch-agent-winget-manifests-<v>.zip` on the release; a pull request to `microsoft/winget-pkgs` | `WINGET_TOKEN` to open the pull request |
+| `agent-docker-publish` | `ubuntu-latest` | `ghcr.io/jxburros/gwatch-agent:<v>`, `:<major.minor>`, `:latest` for `linux/amd64`, `linux/arm64`, `linux/arm/v7` | nothing beyond `GITHUB_TOKEN` |
+
+Each repeats the tag-matches-`cmd/gwatch-agent/VERSION` guard. The two jobs with an
+optional secret **skip that one step, with a notice, when the secret is not set** — the
+formula and the manifests are then attached to the run as artifacts for doing by hand —
+so the packages can ship before the tap or the winget listing exists.
+
+**Packaged binaries are different binaries.** Every package is built with
+`-X main.packagedBy=<deb|rpm|homebrew|winget|docker>` by `packaging/build-agent.sh`, which
+makes the agent leave updating to its package manager (it refuses to replace itself and
+says which command to run — [`AGENT-DECISIONS.md`](AGENT-DECISIONS.md#10-a-packaged-agent-belongs-to-its-package-manager-it-does-not-update-itself)).
+So the jobs build the agent again rather than reusing `agent-release`'s binaries, and no
+package, and no binary inside one, is ever uploaded under a `gwatch-agent-<os>-<arch>` name
+— the only names the self-updater takes. That is tested
+(`TestPackagedAssetsAreInvisibleToTheUpdater`) and checked on every PR.
+
+**The signing key stays where it was.** None of these jobs is given `GWATCH_SIGNING_KEY`.
+The packages are not in the signed self-update chain — their integrity is the sha256
+their package manager pins, computed from the uploaded file by `packaging/*/render.sh` —
+and keeping the key in the one job that signs means a compromised packaging tool could
+publish a bad package, but could not sign an update that every self-updating agent would
+install unattended.
+
+### One-time setup for the packages
+
+1. **Homebrew tap.** Create the public repository `jxburros/homebrew-tap` (the
+   `homebrew-` prefix is what makes `brew install jxburros/tap/gwatch-agent` work), with a
+   `Formula/` directory or nothing at all. Create a fine-grained personal access token
+   with *Contents: read and write* on that repository only, and store it as the
+   `HOMEBREW_TAP_TOKEN` Actions secret. A fork publishing to a different tap sets the
+   `HOMEBREW_TAP_REPO` Actions variable (`owner/homebrew-name`).
+2. **winget.** Create a classic personal access token with the `public_repo` scope on the
+   account that will own the fork of `microsoft/winget-pkgs` (`wingetcreate` forks it on
+   first use), and store it as the `WINGET_TOKEN` secret. The first submission of
+   `GWatch.Agent` is reviewed by the winget-pkgs moderators like any new package; later
+   versions are ordinary update pull requests. Without the secret, submit the manifests
+   from the release zip with `wingetcreate submit <dir>` or by hand.
+3. **Container package.** After the first push, make `gwatch-agent` public in the
+   repository's Packages settings, as for the server image.
+4. **Linux packages** need nothing: they are release assets. There is no apt or dnf
+   repository, which is why a packaged Linux agent does not update unattended; a signed
+   repository is the follow-up that would change that.
+
+The `.deb`'s `Maintainer` field is `JX Holdings, LLC <https://github.com/jxburros/GWatch>`
+(`packaging/nfpm/nfpm.yaml`); put a real contact address there if one is wanted.
 
 ## The container image
 

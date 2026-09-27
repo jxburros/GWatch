@@ -1,0 +1,34 @@
+# Rendered by packaging/winget/render.sh on every agent-v* tag; see
+# docs/RELEASING.md#the-agent-packages.
+#
+# The installer is the ordinary agent setup program (scripts/installer/
+# gwatch-agent.iss) built around a binary made with -X main.packagedBy=winget,
+# and published as gwatch-agent-winget-setup-<version>.exe — a different file
+# from gwatch-agent-setup-<version>.exe, because the agent inside it leaves
+# updating to winget instead of replacing itself. Same AppId, so installing
+# either over the other is an in-place upgrade, and the ProductCode below is
+# that AppId as Inno Setup registers it.
+#
+# Silent installs with no /SERVER and /CODE install the files and leave the
+# machine unpaired; `winget install GWatch.Agent --override "..."` passes them
+# (docs/HARDWARE.md#windows-winget). Upgrades keep the pairing.
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+
+PackageIdentifier: GWatch.Agent
+PackageVersion: "@VERSION@"
+InstallerType: inno
+Scope: machine
+ElevationRequirement: elevatesSelf
+InstallModes:
+  - interactive
+  - silent
+  - silentWithProgress
+UpgradeBehavior: install
+ProductCode: "{7B2F9D14-6C58-4A31-B0E7-93A4C1D82F65}_is1"
+ReleaseDate: "@RELEASE_DATE@"
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/jxburros/GWatch/releases/download/agent-v@VERSION@/gwatch-agent-winget-setup-@VERSION@.exe
+    InstallerSha256: "@SHA256@"
+ManifestType: installer
+ManifestVersion: 1.6.0
