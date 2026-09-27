@@ -417,11 +417,18 @@ html.rail-pinned .main, body.rail-pinned .main { margin-left: var(--rail-expande
 }
 /* A single quiet sweep suggests live telemetry without turning navigation into
    a loading indicator. The solid accent rule remains visible underneath it. */
+/* The sweep is a gradient moved across a rule the full width of the bar, not
+   a short box slid along it. A box translated past the right-hand edge is
+   still layout overflow, and for the second or two of every cycle it spent
+   out there the whole page grew a horizontal scrollbar (#71). A background
+   that moves inside its own box can never make anything wider. */
 .topbar::after {
   content: "";
-  position: absolute; left: 0; bottom: -2px; width: 18%; height: 2px;
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.85), transparent);
-  transform: translateX(-120%);
+  position: absolute; left: 0; right: 0; bottom: -2px; height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.85), transparent) no-repeat;
+  background-size: 18% 100%;
+  background-position: -25% 0;
+  opacity: 0;
   animation: signal-scan 9s var(--ease) infinite;
   pointer-events: none;
 }
@@ -604,10 +611,10 @@ html.rail-pinned .main, body.rail-pinned .main { margin-left: var(--rail-expande
   to { transform: translate3d(0.6%, 0.35%, 0) scale(1.025); }
 }
 @keyframes signal-scan {
-  0%, 70% { transform: translateX(-120%); opacity: 0; }
+  0%, 70% { background-position: -25% 0; opacity: 0; }
   74% { opacity: 0.75; }
-  94% { transform: translateX(660%); opacity: 0.75; }
-  100% { transform: translateX(660%); opacity: 0; }
+  94% { background-position: 125% 0; opacity: 0.75; }
+  100% { background-position: 125% 0; opacity: 0; }
 }
 @keyframes reticle-turn { to { transform: rotate(1turn); } }
 
@@ -791,7 +798,12 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .list-item .grow { flex: 1; min-width: 0; }
 
 /* ---------- Empty / skeleton / banners ---------- */
-.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 0.5rem; padding: 2.25rem 1.25rem; color: var(--muted); }
+/* The empty state's reticle turns, and a turning square's corners reach
+   further out than the square does: in a narrow dashboard widget, which
+   scrolls its own body, that was enough to put a scrollbar on the widget for
+   part of every turn (#71). Clipping at the empty state's own edge keeps the
+   motion from counting as overflow; the padding leaves the reticle whole. */
+.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 0.5rem; padding: 2.25rem 1.25rem; color: var(--muted); overflow: clip; }
 .empty .empty-icon {
   position: relative; width: 4.25rem; height: 4.25rem;
   display: inline-flex; align-items: center; justify-content: center;
