@@ -108,6 +108,9 @@ var
   CodeEdit: TNewEdit;
   NameEdit: TNewEdit;
   InsecureCheck: TNewCheckBox;
+  { How the pairing went, for the last page to report (#69): 0 an upgrade
+    (already paired), 1 paired just now, 2 the pairing failed. }
+  PairOutcome: Integer;
 
 // The wizard skin. It is included here, after this script's own
 // declarations, so that its procedures are defined before
@@ -193,14 +196,6 @@ begin
   SkinMono(ServerEdit);
   SkinMono(CodeEdit);
   SkinNote(Note);
-  ApplyGWatchSkin;
-end;
-
-{ Every page is skinned as it is shown: some of the wizard's controls do not
-  exist until their page is first needed, and a page that arrived unskinned
-  would be a white rectangle in the middle of a dark wizard. }
-procedure CurPageChanged(CurPageID: Integer);
-begin
   ApplyGWatchSkin;
 end;
 
@@ -304,6 +299,46 @@ begin
   end;
 end;
 
+{ The last page says what actually happened (#69). Pairing is the step the
+  whole install is for, so a person who typed a code is told plainly that it
+  worked -- and which server this machine now reports to -- rather than being
+  shown the same words whether it worked or not. }
+procedure ShowPairOutcome;
+begin
+  case PairOutcome of
+    1:
+      begin
+        WizardForm.FinishedHeadingLabel.Caption := 'Paired with GWatch';
+        WizardForm.FinishedLabel.Caption :=
+          'This computer is paired with ' + GetServer + ' and the agent has sent its ' +
+          'first reading.' + #13#10 + #13#10 +
+          'It runs as a Windows service and starts with this computer. In GWatch, ' +
+          'it appears on its own node straight away -- the pairing dialog there ' +
+          'says so too.';
+      end;
+    2:
+      begin
+        WizardForm.FinishedHeadingLabel.Caption := 'Installed, but not paired';
+        WizardForm.FinishedLabel.Caption :=
+          'The agent is installed but could not pair with ' + GetServer + ', so ' +
+          'this computer is not reporting yet.' + #13#10 + #13#10 +
+          'Get a fresh pairing code in GWatch and run, from an Administrator ' +
+          'command prompt:' + #13#10 + #13#10 +
+          '  gwatch-agent install --server <address> --code <code>';
+      end;
+  end;
+end;
+
+{ Every page is skinned as it is shown: some of the wizard's controls do not
+  exist until their page is first needed, and a page that arrived unskinned
+  would be a white rectangle in the middle of a dark wizard. }
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  ApplyGWatchSkin;
+  if CurPageID = wpFinished then
+    ShowPairOutcome;
+end;
+
 { Pairing happens here rather than in [Run] because it is the one step that
   can fail for a reason the person can fix -- a mistyped code, a code that has
   already been used, a server that is not answering -- and a [Run] entry would
@@ -320,6 +355,7 @@ begin
   begin
     { An upgrade: the machine is already paired and holds its token, so the
       service only has to come back up with the newly installed executable. }
+    PairOutcome := 0;
     Exec(Exe, 'start', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Exit;
   end;
@@ -332,6 +368,10 @@ begin
 
   if not Exec(Exe, Args, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
     ResultCode := -1;
+  if ResultCode = 0 then
+    PairOutcome := 1
+  else
+    PairOutcome := 2;
   if ResultCode <> 0 then
     Answer := SuppressibleMsgBox(
       'The agent could not pair with ' + GetServer + '.' + #13#10 + #13#10 +

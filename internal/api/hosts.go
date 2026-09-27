@@ -533,6 +533,53 @@ func (s *Server) handleCreatePairing(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"code": code, "pairing": created})
 }
 
+// handleGetPairing reports how one pairing code has got on, which is what the
+// "Type this code on the other machine" dialog watches so it can say the
+// moment the machine comes in (#69) instead of leaving the person who typed
+// the code to go and look for it. The answer walks the same road the machine
+// does: the code is waiting, then it has been redeemed and a machine exists,
+// then that machine's first reading has arrived. It never carries the code
+// itself — GWatch does not have it — nor the agent's token.
+func (s *Server) handleGetPairing(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id, err := pathID(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	pairing, err := s.Store.GetPairingCode(ctx, id)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := map[string]any{"pairing": pairing, "state": pairingState(pairing, nil, time.Now())}
+	if pairing.AgentID != nil {
+		if agent, err := s.Store.GetAgent(ctx, *pairing.AgentID); err == nil {
+			out["agent"] = agent
+			out["state"] = pairingState(pairing, &agent, time.Now())
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// pairingState names where a pairing has got to: "pending" while the code
+// can still be typed, "paired" once a machine has redeemed it, "reporting"
+// once that machine's first reading has been accepted, and "expired" or
+// "cancelled" for a code that ended without a machine.
+func pairingState(p model.PairingCode, agent *model.Agent, now time.Time) string {
+	switch {
+	case p.Redeemed() && agent != nil && agent.LastSeenAt != nil:
+		return "reporting"
+	case p.Redeemed():
+		return "paired"
+	case p.Revoked():
+		return "cancelled"
+	case p.Expired(now):
+		return "expired"
+	}
+	return "pending"
+}
+
 // handleRevokePairing cancels an unused pairing code.
 func (s *Server) handleRevokePairing(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()

@@ -700,6 +700,11 @@ and can be cancelled in the meantime.
 - `POST /api/agents/pairings` body `{ "name": "Living room NAS", "nodeId": null|id }` →
   `{ "code": "XXXX-XXXX", "pairing": PairingCode }`. **The code is returned exactly
   once.** Only its sha256 digest is stored, exactly as an agent token's is.
+- `GET /api/agents/pairings/{id}` → `{ "state", "pairing": PairingCode, "agent"?: Agent }`.
+  How one code has got on: `state` is `pending`, `paired` (redeemed; `agent` is the
+  machine it enrolled), `reporting` (that machine's first reading has arrived),
+  `expired` or `cancelled`. The pairing dialog polls this to confirm the pairing as
+  it happens. Neither the code nor the agent's token is ever in the answer.
 - `DELETE /api/agents/pairings/{id}` → 204. Cancels an unused code. A code that was
   already redeemed is left as it is, so cancelling cannot rewrite an enrolment that
   already happened.

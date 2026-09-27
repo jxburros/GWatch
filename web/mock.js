@@ -1249,6 +1249,35 @@
     return { ok: true };
   });
 
+  // Pairing codes. Nothing in mock mode can type a code in, so a code
+  // redeems itself: a few seconds after it is minted a machine "arrives", and
+  // a few seconds after that its first reading does — which is what lets the
+  // pairing dialog's confirmation (#69) be seen and tested without an agent.
+  const pairings = [];
+  const pairingDelays = { redeemMs: 6000, reportMs: 4000 };
+  window.__gwatchMockPairing = pairingDelays;
+  const pairingProgress = (p) => {
+    const age = Date.now() - +new Date(p.createdAt);
+    if (!p.revokedAt && !p.redeemedAt && age >= pairingDelays.redeemMs) {
+      const a = { id: Math.max(0, ...agents.map((x) => x.id)) + 1, name: p.name, nodeId: p.nodeId, prefix: 'gwa_mockpair', enabled: true, createdBy: 'pairing code (local)', createdAt: iso(Date.now()), revokedAt: null, lastSeenAt: null, lastAddr: '192.168.1.77', lastVersion: '0.5.0', hostname: 'mock-machine.lan', os: 'linux', arch: 'amd64' };
+      agents.push(a);
+      Object.assign(p, { redeemedAt: iso(Date.now()), agentId: a.id, redeemedAddr: '192.168.1.77' });
+    }
+    const agent = p.agentId ? agents.find((x) => x.id === p.agentId) : null;
+    if (agent && !agent.lastSeenAt && Date.now() - +new Date(p.redeemedAt) >= pairingDelays.reportMs) agent.lastSeenAt = iso(Date.now());
+    const state = p.redeemedAt ? (agent?.lastSeenAt ? 'reporting' : 'paired') : p.revokedAt ? 'cancelled' : Date.now() >= +new Date(p.expiresAt) ? 'expired' : 'pending';
+    return { pairing: clone(p), state, ...(agent ? { agent: clone(agent) } : {}) };
+  };
+  on('GET', /^\/api\/agents\/pairings$/, () => clone(pairings));
+  on('POST', /^\/api\/agents\/pairings$/, (m, body) => {
+    if (!body?.name?.trim()) throw err(400, 'give the machine a name so you can recognise it later');
+    const p = { id: pairings.length + 1, name: body.name.trim(), nodeId: body.nodeId ?? null, createdBy: 'local', createdAt: iso(Date.now()), expiresAt: iso(Date.now() + 15 * 60e3) };
+    pairings.push(p);
+    return { code: 'KQWX-HMTZ', pairing: clone(p) };
+  });
+  on('GET', /^\/api\/agents\/pairings\/(\d+)$/, (m) => { const p = pairings.find((x) => x.id === Number(m[1])); if (!p) throw err(404, 'not found'); return pairingProgress(p); });
+  on('DELETE', /^\/api\/agents\/pairings\/(\d+)$/, (m) => { const p = pairings.find((x) => x.id === Number(m[1])); if (!p) throw err(404, 'not found'); p.revokedAt = iso(Date.now()); return null; });
+
   on('GET', /^\/api\/export\/logs\.txt$/, () => ({ __csv: logLines.join('\n') }));
 
   const realFetch = window.fetch.bind(window);
