@@ -84,10 +84,16 @@ once. Only a sha256 digest and the first 12 characters are stored. A key is neve
 administrator, whatever its scope:
 
 - `read` — the viewer read list above, minus the service log, triggers, endpoints,
-  automation metadata, retention status and update status.
+  automation metadata, retention status and update status. A check's request
+  headers, request body, custom-check environment and agentless metrics URL are
+  blanked for a key, since they routinely carry credentials; the SNMP and metrics
+  secrets come back masked, the same as for a browser.
 - `readwrite` — the same, plus creating, updating, deleting, enabling, running and
   silencing nodes and checks, notes, maintenance windows, dashboards, wallboards and
-  charts. A key may lay a wallboard out; it may not project one.
+  charts. A key may lay a wallboard out; it may not project one. It may **not**
+  create, edit or test a `custom` check, or a `system` check that reads an
+  agentless URL: both run code or carry a stored token to a chosen address, so an
+  administrator must create them in the web interface (403, not 401).
 
 **Denied to every key, whatever its scope** (403, not 401):
 `GET|PUT /api/settings`, `POST /api/settings/test-email`, `GET|PUT /api/database`,

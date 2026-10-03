@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -64,6 +65,39 @@ func (s *Server) remoteAddr(r *http.Request) string {
 
 func (s *Server) isLoopback(r *http.Request) bool { return isLoopbackRemote(s.remoteAddr(r)) }
 
+// Credential kinds for the failed-attempt limiter. Each kind keeps its own
+// per-client budget so that a success of one kind — an agent reporting in, a
+// read-only key, a tokenless hook — can no longer clear the failures another
+// kind (sign-in, the access password, a pairing code) is accumulating. Before
+// this, one shared bucket let anyone holding any valid credential reset the
+// budget between guesses and brute-force the rest (#89).
+const (
+	limiterLogin    = "login"
+	limiterAPIKey   = "apikey"
+	limiterPassword = "password"
+	limiterHook     = "hook"
+	limiterPair     = "pair"
+	limiterIngest   = "ingest"
+)
+
+// limiterKey namespaces a rate-limit bucket by credential kind and normalizes
+// the client address, so an IPv6 client cannot draw a fresh budget from every
+// address in a routed /64 (#89).
+func limiterKey(kind, ip string) string {
+	return kind + "|" + limiterIPKey(ip)
+}
+
+func limiterIPKey(ip string) string {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return ip
+	}
+	if v4 := parsed.To4(); v4 != nil {
+		return v4.String()
+	}
+	return parsed.Mask(net.CIDRMask(64, 128)).String() + "/64"
+}
+
 // presentedAPIKey returns the API key a request carries, if any.
 func presentedAPIKey(r *http.Request) string {
 	if k := strings.TrimSpace(r.Header.Get("X-API-Key")); k != "" {
@@ -98,7 +132,7 @@ func (s *Server) resolvePrincipal(w http.ResponseWriter, r *http.Request) (auth.
 
 	// 1. API key.
 	if raw := presentedAPIKey(r); raw != "" && auth.LooksLikeAPIKey(raw) {
-		if ok, wait := s.failLimiter.Allow(ip); !ok {
+		if ok, wait := s.failLimiter.Allow(limiterKey(limiterAPIKey, ip)); !ok {
 			return auth.Anonymous, &authError{http.StatusTooManyRequests, "too many failed attempts; try again shortly", wait}
 		}
 		k, err := s.Store.LookupAPIKey(ctx, auth.HashToken(raw))
@@ -111,7 +145,7 @@ func (s *Server) resolvePrincipal(w http.ResponseWriter, r *http.Request) (auth.
 			s.auditAuthFailure(ctx, "API key rejected", "An unknown or revoked API key was presented.", ip)
 			return auth.Anonymous, &authError{http.StatusUnauthorized, "invalid API key", 0}
 		}
-		s.failLimiter.Reset(ip)
+		s.failLimiter.Reset(limiterKey(limiterAPIKey, ip))
 		if !s.isLoopback(r) {
 			if ok, wait := s.apiLimiter.Allow(ip); !ok {
 				return auth.Anonymous, &authError{http.StatusTooManyRequests, "too many requests; slow down", wait}
@@ -160,11 +194,11 @@ func (s *Server) resolvePrincipal(w http.ResponseWriter, r *http.Request) (auth.
 	// installs that only ever set a password keep working after an upgrade.
 	if pw := general.AccessPassword; pw != "" {
 		if _, got, ok := r.BasicAuth(); ok {
-			if allowed, wait := s.failLimiter.Allow(ip); !allowed {
+			if allowed, wait := s.failLimiter.Allow(limiterKey(limiterPassword, ip)); !allowed {
 				return auth.Anonymous, &authError{http.StatusTooManyRequests, "too many failed attempts; try again shortly", wait}
 			}
 			if subtle.ConstantTimeCompare([]byte(got), []byte(pw)) == 1 {
-				s.failLimiter.Reset(ip)
+				s.failLimiter.Reset(limiterKey(limiterPassword, ip))
 				return auth.Principal{Kind: auth.KindPassword, Name: "access password", Role: auth.RoleAdmin}, nil
 			}
 			s.auditAuthFailure(ctx, "Access password rejected", "A client supplied the wrong access password.", ip)
@@ -176,7 +210,7 @@ func (s *Server) resolvePrincipal(w http.ResponseWriter, r *http.Request) (auth.
 	// every existing single-user install working with no setup at all. Once
 	// accounts exist the owner can turn "require sign-in on this computer" on,
 	// and then even loopback has to sign in.
-	if s.isLocalClient(r) {
+	if s.isLocalClient(r) && s.hostHeaderLocal(r) {
 		if !general.RequireLoginLocally {
 			return auth.Principal{Kind: auth.KindLocal, Name: "this computer", Role: auth.RoleAdmin}, nil
 		}
@@ -228,6 +262,73 @@ func (s *Server) isLocalClient(r *http.Request) bool {
 		}
 	}
 	return true
+}
+
+// hostHeaderLocal reports whether the request's Host header names this machine
+// rather than some external domain. A loopback peer earns the no-sign-in
+// administrator principal, so the one lever a remote attacker keeps is the Host
+// header: with DNS rebinding a page on evil.example can point the browser at
+// 127.0.0.1 while Host and Origin both read "evil.example", which the Origin
+// check alone cannot catch. An attacker-controlled domain never appears in the
+// allowed set, so requiring it closes the rebinding path (#86). Loopback
+// literals are always accepted — they are how a person actually reaches GWatch
+// on this machine — and /wall and /hook do not pass through here.
+func (s *Server) hostHeaderLocal(r *http.Request) bool {
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.ToLower(strings.Trim(host, "[]"))
+	if host == "" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() {
+			return true
+		}
+		return s.localHostSet()[host]
+	}
+	if host == "localhost" {
+		return true
+	}
+	return s.localHostSet()[host]
+}
+
+// localHostSet is the set of non-loopback names and addresses that still name
+// this machine: its hostname (full and short), its own interface addresses and
+// the host it is configured to listen on. It is built once — these do not
+// change while the process runs — and consulted by hostHeaderLocal.
+func (s *Server) localHostSet() map[string]bool {
+	s.localHostsOnce.Do(func() {
+		set := map[string]bool{"localhost": true}
+		add := func(v string) {
+			if v = strings.ToLower(strings.TrimSpace(v)); v != "" {
+				set[v] = true
+			}
+		}
+		if h, err := os.Hostname(); err == nil {
+			add(h)
+			if short, _, ok := strings.Cut(h, "."); ok {
+				add(short)
+			}
+		}
+		if addrs, err := net.InterfaceAddrs(); err == nil {
+			for _, a := range addrs {
+				if ipnet, ok := a.(*net.IPNet); ok {
+					add(ipnet.IP.String())
+				}
+			}
+		}
+		if s.Network != nil {
+			ni := s.Network()
+			if h, _, err := net.SplitHostPort(ni.ListenAddress); err == nil && h != "0.0.0.0" && h != "::" {
+				add(h)
+			}
+			add(ni.Hostname)
+		}
+		s.localHosts = set
+	})
+	return s.localHosts
 }
 
 // ---- middleware ----
@@ -487,7 +588,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip := s.clientIP(r)
-	if ok, wait := s.failLimiter.Allow(ip); !ok {
+	if ok, wait := s.failLimiter.Allow(limiterKey(limiterLogin, ip)); !ok {
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds()+0.999)))
 		writeError(w, http.StatusTooManyRequests, "too many sign-in attempts; try again shortly")
 		return
@@ -500,6 +601,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	if err != nil {
+		// No such user: spend the same argon2 time a real account would, so
+		// that an unknown name cannot be told from a wrong password by how
+		// quickly it is rejected (#91).
+		auth.SpendVerifyTime(body.Password)
+	}
 	if err != nil || auth.VerifyPassword(hash, body.Password) != nil {
 		s.auditAuthFailure(ctx, "Sign-in failed", fmt.Sprintf("Wrong user name or password for %q.", username), ip)
 		// One message for both cases: a different answer for "no such user"
@@ -507,7 +614,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "incorrect user name or password")
 		return
 	}
-	s.failLimiter.Reset(ip)
+	s.failLimiter.Reset(limiterKey(limiterLogin, ip))
 
 	token, err := auth.NewSessionToken()
 	if err != nil {
@@ -593,7 +700,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := auth.VerifyPassword(hash, body.Current); err != nil {
-		if ok, wait := s.failLimiter.Allow(s.clientIP(r)); !ok {
+		if ok, wait := s.failLimiter.Allow(limiterKey(limiterLogin, s.clientIP(r))); !ok {
 			w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds()+0.999)))
 			writeError(w, http.StatusTooManyRequests, "too many attempts; try again shortly")
 			return

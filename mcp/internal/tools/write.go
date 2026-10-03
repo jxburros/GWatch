@@ -81,7 +81,7 @@ func checkSchema(withID bool) map[string]any {
 			"method, expectedStatus, headers, body, ignoreTlsErrors (http family), keyword, keywordAbsent (keyword), " +
 			"jsonPath, jsonExpected (json), recordType, dnsServer, expectedIps (dns), certWarnDays (cert), " +
 			"pingCount (ping), latencyWarnMs and packetLossWarnPct (thresholds). " +
-			"The custom type runs a command on the GWatch host and is refused to API keys in most installs — prefer the built-in types."),
+			"The custom type runs a command on the GWatch host, and agentless-URL hardware checks reach a chosen URL with a stored token; both are refused to API keys (an administrator must create them in the web interface), so prefer the built-in types here."),
 	}
 	required := []string{"type", "name"}
 	if withID {

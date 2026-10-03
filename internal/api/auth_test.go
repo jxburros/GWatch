@@ -25,6 +25,7 @@ type creds struct {
 	Origin   string // send an Origin header, as a browser would
 	KeyInHdr bool   // send the key in X-API-Key instead of Authorization
 	Proxied  string // send X-Forwarded-For, as a reverse proxy would
+	Host     string // override the Host header (e.g. a rebound attacker domain)
 }
 
 // as performs a request with the given credentials and returns status, body
@@ -65,6 +66,9 @@ func as(t *testing.T, ts *httptest.Server, c creds, method, path string, body an
 	}
 	if c.Proxied != "" {
 		req.Header.Set("X-Forwarded-For", c.Proxied)
+	}
+	if c.Host != "" {
+		req.Host = c.Host
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

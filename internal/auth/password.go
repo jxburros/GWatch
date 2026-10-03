@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"golang.org/x/crypto/argon2"
@@ -58,6 +59,28 @@ func encodeHash(pw string, salt []byte, t, m uint32, p uint8, keyLen uint32) str
 	sum := argon2.IDKey([]byte(pw), salt, t, m, p, keyLen)
 	b64 := base64.RawStdEncoding.EncodeToString
 	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s", argon2.Version, m, t, p, b64(salt), b64(sum))
+}
+
+// dummyHash is a valid argon2id hash, computed once, that SpendVerifyTime
+// checks against. It lets a sign-in attempt for a name that does not exist
+// spend the same work as one for a real account, so that the two cannot be
+// told apart by how quickly they are rejected (#91).
+var dummyHash = sync.OnceValue(func() string {
+	h, err := HashPassword("gwatch-timing-equaliser")
+	if err != nil {
+		return ""
+	}
+	return h
+})
+
+// SpendVerifyTime runs one password verification against a fixed hash and
+// discards the result. The login handler calls it when no account matched the
+// supplied name, so that an unknown user costs the same argon2 time as a wrong
+// password for a real one and the timing reveals nothing (#91).
+func SpendVerifyTime(password string) {
+	if h := dummyHash(); h != "" {
+		_ = VerifyPassword(h, password)
+	}
 }
 
 // VerifyPassword checks pw against an encoded hash produced by HashPassword.

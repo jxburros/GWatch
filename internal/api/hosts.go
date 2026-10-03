@@ -612,7 +612,7 @@ func (s *Server) handleRevokePairing(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	ip := s.clientIP(r)
-	if allowed, wait := s.failLimiter.Allow(ip); !allowed {
+	if allowed, wait := s.failLimiter.Allow(limiterKey(limiterPair, ip)); !allowed {
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds()+0.999)))
 		writeError(w, http.StatusTooManyRequests, "too many failed attempts; try again shortly")
 		return
@@ -657,7 +657,7 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		s.rejectPairing(ctx, w, ip, "The code presented did not match the one it was looked up by.")
 		return
 	}
-	s.failLimiter.Reset(ip)
+	s.failLimiter.Reset(limiterKey(limiterPair, ip))
 
 	// From here the code is spent whatever happens next. That is the right way
 	// round: a failure after the claim costs the administrator a fresh code,
@@ -837,7 +837,7 @@ func (s *Server) handleIngestMetrics(w http.ResponseWriter, r *http.Request) {
 	// budget as a wrong password. A correct one gives its budget back, so an
 	// agent reporting every minute never exhausts it.
 	ip := s.clientIP(r)
-	if allowed, wait := s.failLimiter.Allow(ip); !allowed {
+	if allowed, wait := s.failLimiter.Allow(limiterKey(limiterIngest, ip)); !allowed {
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds()+0.999)))
 		writeError(w, http.StatusTooManyRequests, "too many failed attempts; try again shortly")
 		return
@@ -853,7 +853,7 @@ func (s *Server) handleIngestMetrics(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	s.failLimiter.Reset(ip)
+	s.failLimiter.Reset(limiterKey(limiterIngest, ip))
 
 	var metrics model.HostMetrics
 	if err := json.NewDecoder(io.LimitReader(r.Body, maxIngestBody)).Decode(&metrics); err != nil {

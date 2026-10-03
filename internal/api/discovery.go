@@ -208,7 +208,7 @@ func (s *Server) handleAddFromDiscovery(w http.ResponseWriter, r *http.Request) 
 			s.fail(w, err)
 			return
 		}
-		created = append(created, s.decorateNode(saved, s.Engine.States(), nil))
+		created = append(created, s.decorateNode(r, saved, s.Engine.States(), nil))
 		// The same map the duplicate test reads, so two items naming one
 		// address in a single request cannot both get through.
 		taken[strings.ToLower(ip)] = saved.Name

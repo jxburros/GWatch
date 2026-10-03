@@ -222,7 +222,12 @@ func (s *Server) handleWallboardView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	doc := wallboardView{
-		Overview:  ov,
+		// A shared board is meant to live on a TV or an embed, so its view is
+		// masked like every other read path: the signed-in routes pass through
+		// maskOverview and this one must too, or a board's URL would hand out
+		// SNMP communities, metrics tokens and check headers to anyone who
+		// opened it (#87).
+		Overview:  s.maskOverviewFor(r, ov),
 		Wallboard: board,
 		Health:    s.Engine.Health(ctx),
 		Trends:    s.wallboardTrends(r, board, ov),
