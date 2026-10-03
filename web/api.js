@@ -197,13 +197,15 @@ export const getHistoryAuto = (range) => api.get(`/api/history/multi?auto=1&rang
  * OIDs. The series' avgMs carries the metric as well as its `value`, so the
  * existing chart helpers plot it unchanged.
  */
-export const getHistoryMetric = (checkId, range, metric) =>
-  api.get(`/api/history${qs({ checkId, range: range || '24h', metric })}`);
+export const getHistoryMetric = (checkId, range, metric, end) =>
+  api.get(`/api/history${qs({ checkId, range: range || '24h', metric, end: end != null ? Math.round(end) : undefined })}`);
 
-export const getHistoryMulti = (checkIds, range) => {
+/** `end` (milliseconds) moves the window back from now — a timestacked chart
+ *  reads yesterday's 24 hours, the day before's … this way. */
+export const getHistoryMulti = (checkIds, range, end) => {
   const ids = (checkIds || []).filter((x) => x != null);
   if (!ids.length) return Promise.resolve([]);
-  return api.get(`/api/history/multi${qs({ checkId: ids, range })}`);
+  return api.get(`/api/history/multi${qs({ checkId: ids, range, end: end != null ? Math.round(end) : undefined })}`);
 };
 
 /**

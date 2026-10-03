@@ -6,6 +6,10 @@ import { api } from '../api.js';
 import { h, icon, clear, replace, toast, confirmDialog, promptDialog, menuButton, emptyState, skeleton, rangeChips, busy, uid } from '../components.js';
 import { chartConfigEditor, renderConfiguredChart, normalizeChartConfig, describeChartConfig, chartMetricSummary, cachedHistoryFetch, chartCsvItems } from '../chart-config.js';
 import { debounce } from '../api.js';
+import { TIMESTACK_PERIODS } from '../chart-config.js';
+
+// Turning timestack on starts from the period closest to the chart's range.
+const RANGE_TO_STACK = { '1h': '1h', '24h': '24h', '7d': '7d', '30d': '30d', '1y': '30d' };
 
 export async function mount(root, ctx) {
   const state = { nodes: [], saved: [], currentId: ctx.params.id || null, cfg: normalizeChartConfig({}), dirty: false, view: null, destroyed: false, cache: new Map(), editor: null };
@@ -88,11 +92,21 @@ export async function mount(root, ctx) {
     const host = h('div');
     const card = h('section', { class: 'card chart-card' },
       h('div', { class: 'card-head' }, h('h2', null, icon('chart'), c ? c.name : 'Untitled chart', h('span', { class: 'tag' }, chartMetricSummary(state.cfg))),
-        h('div', { class: 'card-actions' }, rangeChips(state.cfg.range, (r) => { state.cfg.range = r; state.dirty = true; renderSide(); setTitle(); renderMain(); }))),
+        h('div', { class: 'card-actions' },
+          // A timestacked chart's chips choose the period stacked, not a range.
+          state.cfg.timestack
+            ? rangeChips(state.cfg.timestack.period, (p) => { state.cfg.timestack = { ...state.cfg.timestack, period: p }; state.dirty = true; renderSide(); setTitle(); renderMain(); }, { ranges: TIMESTACK_PERIODS.map((p) => p.value) })
+            : rangeChips(state.cfg.range, (r) => { state.cfg.range = r; state.dirty = true; renderSide(); setTitle(); renderMain(); }),
+          h('button', { type: 'button', class: `chip ${state.cfg.timestack ? 'active' : ''}`, 'aria-pressed': state.cfg.timestack ? 'true' : 'false', title: 'Overlay this metric against itself: the last period over the ones before it', onclick: toggleStack }, icon('layers'), 'Timestack'))),
       host);
     main.append(card);
     state.view = renderConfiguredChart(host, state.cfg, { title: c ? c.name : 'Chart', fetch: fetchHistory, onData: (list) => { state.lastSeries = list; } });
-    main.append(h('p', { class: 'note' }, 'Tip: hover the chart for values, drag the range chips to compare periods, and use ', h('b', null, 'Pin to a dashboard'), ' to keep this exact chart on a dashboard.'));
+    main.append(h('p', { class: 'note' }, 'Tip: hover the chart for values, press ', h('b', null, 'Timestack'), ' to lay this metric over its own earlier days, weeks or months, and use ', h('b', null, 'Pin to a dashboard'), ' to keep this exact chart on a dashboard.'));
+  }
+
+  function toggleStack() {
+    state.cfg = normalizeChartConfig({ ...state.cfg, timestack: state.cfg.timestack ? null : { period: RANGE_TO_STACK[state.cfg.range] || '24h', layers: 4 } });
+    state.dirty = true; renderSide(); setTitle(); renderMain();
   }
 
   /* ---------- CRUD ---------- */

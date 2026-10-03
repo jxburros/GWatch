@@ -9,6 +9,71 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## 0.5.0
+
+Four requests from the field, and SNMP made a first-class way in. The agent is
+unchanged and stays at **gwatch-agent 0.5.0**.
+
+### Added
+
+- **Network map.** A new page, **Network map** in the sidebar, draws the
+  dependencies between nodes: each node sits under the node it *depends on*,
+  so a firewall or a gateway is at the top of everything an outage there would
+  silence. Nodes are coloured by status, and the lines out of a node that is
+  down are drawn red and dashed. Choose a node to see what is upstream of it
+  and what depends on it, and to change its dependency in place (a choice that
+  would make a loop is not offered). **Customise** lays the map out top to
+  bottom, left to right or radially; labels nodes by name, by name and address
+  or not at all; sizes them small, medium or large; draws lines curved,
+  straight or right-angled; narrows it to a group or tag, keeping the chain a
+  filtered node depends on, faded; and can hide nodes with no dependency. The
+  choices are remembered per browser. Zoom with the wheel or +/−, pan by
+  dragging or with the arrow keys, 0 to fit; export as SVG; "View as list"
+  gives the same tree as text. **Pin to a dashboard** adds it as the new
+  **Network map** widget, whose editor offers the same options. A node's page
+  links to it with **Show on the network map**.
+- **Timestacked charts.** The **Timestack** button on the Charts page (and the
+  same option in a chart widget's editor) lays one metric over itself — the
+  last 1 hour, 24 hours, 3 days, 7 days or 30 days over the periods before
+  it, 2 to 8 layers — on one time axis: "Last 24 hours", "Yesterday",
+  "2 days earlier"… with the current layer drawn thickest and each layer's
+  average in a tile. Saved charts and dashboard widgets keep it; the range
+  chips pick the stacked period while it is on. Behind it, the history API
+  takes an `end=` (Unix seconds or milliseconds, or RFC 3339) to read a window
+  that ends in the past, and a `3d` range.
+- **SNMP, easier to find and to set up.**
+  - A new **SNMP device** template: a ping and an SNMP check on v2c reading
+    uptime and the device name, ready to test.
+  - **Test connection** in the SNMP check reads the device's name, description
+    and uptime with the settings as typed, and says *Connected to …* or lists
+    what to check when nothing answers.
+  - **Pick interfaces** lists the device's ports by name, alias and
+    description with whether each link is up, and turns the ticked ones into
+    link-state, traffic in/out (64-bit counters by default) and optionally
+    error readings — no SNMP index to look up.
+  - A short how-to at the top of every SNMP check, a node page prompt
+    (**Add SNMP readings**) on anything that looks like network gear, the
+    same item in the node's menu, SNMP moved up the check-type picker, and a
+    new Help topic, *SNMP devices*.
+- **Sorting node lists.** The Nodes page has a **Sort** control — status
+  (worst first, as before), name A–Z or Z–A, address or importance — and can
+  show **one list** instead of group sections. Names sort as a person reads
+  them (case ignored, "switch 9" before "switch 10"). Both choices are
+  remembered, and `?sort=` works in a link. The *Status list* and *Node table*
+  widgets gained a **Sort by** option.
+- Help has new topics for the network map and SNMP devices, and the charts
+  topic covers timestacking.
+
+### Fixed
+
+- **Dragging a dashboard widget sent it pages down** until the page was
+  reloaded. The drop row was worked out from the CSS row height read as a bare
+  number — `11.375rem` taken as 11.375 pixels — so a drop a few hundred pixels
+  down landed a dozen or more rows further, and the widget stayed pinned there
+  while everything else closed up. The grid's own row height in pixels is
+  used now, a page that scrolls mid-drag no longer throws the drop off, and a
+  widget dropped into empty space floats up under the others.
+
 ## 0.4.0
 
 The 2026-09-27 sprint: everything labelled `sprint-plan` in the tracker. The

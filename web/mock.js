@@ -130,6 +130,10 @@
   ];
   const newHost = mkNode({ name: 'Garage camera', host: '192.168.1.71', group: 'Home Network', tags: ['camera'], importance: 'low' });
   newHost.checks = [mkCheck(newHost.id, 'ping', 'Ping', { config: { pingCount: 4 }, base: 5, noise: 0.5, status: 'unknown', message: '' })];
+  // What sits behind what, for the network map: the switch and the Pi-hole
+  // hang off the gateway, and the wired machines off the switch.
+  for (const n of [swtch, pihole]) n.dependsOnNodeId = gateway.id;
+  for (const n of [nas, backupSrv, ha, printer, newHost]) n.dependsOnNodeId = swtch.id;
   nodes.push(gateway, plex, nas, ha, site, weather, printer, pihole, backupSrv, swtch, newHost);
 
   /* ---------- Maintenance ---------- */
@@ -413,8 +417,8 @@
     const n = o.node; const c = o.check;
     events.push({ id: 0, ts: ago(msAgo), type, nodeId: n ? n.id : null, checkId: c ? c.id : null, nodeName: n ? n.name : undefined, checkName: c ? c.name : undefined, title: o.title || '', detail: o.detail || '', meta: o.meta ? JSON.stringify(o.meta) : undefined });
   }
-  ev(3 * DAY + 2 * HOUR, 'service_started', { title: 'GWatch service started', detail: 'Version 0.4.1 · windows/amd64 · listening on 127.0.0.1:7230' });
-  ev(3 * DAY + 2 * HOUR + 40 * MIN, 'service_stopped', { title: 'GWatch service stopped', detail: 'Stopped for upgrade to 0.4.1' });
+  ev(3 * DAY + 2 * HOUR, 'service_started', { title: 'GWatch service started', detail: 'Version 0.5.0 · windows/amd64 · listening on 127.0.0.1:7230' });
+  ev(3 * DAY + 2 * HOUR + 40 * MIN, 'service_stopped', { title: 'GWatch service stopped', detail: 'Stopped for upgrade to 0.5.0' });
   ev(3 * DAY + 2 * HOUR + 41 * MIN, 'backup', { title: 'Backup created', detail: 'gwatch-2026-09-15-0713.gwbackup · 12.4 MB · configuration + history' });
   ev(2 * DAY + 6 * HOUR, 'monitor_gap', { title: 'Monitoring gap of 45 minutes', detail: 'The computer was asleep or offline from 01:10 to 01:55. No checks ran during this time.' });
   ev(2 * DAY + 3 * HOUR, 'config_changed', { node: ha, title: 'Node updated', detail: 'Added JSON check "API alive"; interval of "Frontend" changed from 60 s to 120 s' });
@@ -514,7 +518,7 @@
     const runs = all.map((c) => states[c.id]?.lastRunAt).filter(Boolean).sort();
     const nexts = all.map((c) => states[c.id]?.nextRunAt).filter(Boolean).sort();
     return {
-      version: '0.4.1', serviceMode: 'service', serviceRunning: true, startedAt: ago(3 * DAY + 2 * HOUR), uptimeSeconds: Math.floor((Date.now() - (NOW - 3 * DAY - 2 * HOUR)) / 1000), now: iso(Date.now()), schedulerRunning: true,
+      version: '0.5.0', serviceMode: 'service', serviceRunning: true, startedAt: ago(3 * DAY + 2 * HOUR), uptimeSeconds: Math.floor((Date.now() - (NOW - 3 * DAY - 2 * HOUR)) / 1000), now: iso(Date.now()), schedulerRunning: true,
       lastCheckAt: runs[runs.length - 1] || null, lastSuccessAt: runs[runs.length - 1] || null, nextCheckAt: nexts[0] || null,
       checksTotal: all.length, checksEnabled: all.filter((c) => c.enabled && findNode(c.nodeId).enabled).length, checksRunning: 0,
       lastGap: { from: ago(2 * DAY + 6 * HOUR + 45 * MIN), to: ago(2 * DAY + 6 * HOUR), seconds: 2700 },
@@ -536,6 +540,9 @@
     { id: 'router', name: 'Router / gateway', description: 'Ping and DNS through the router; other nodes can depend on it.', icon: 'router', node: { name: 'Router', host: '192.168.1.1', group: 'Home Network', tags: ['critical'], importance: 'critical', enabled: true }, checks: [
       { type: 'ping', name: 'Ping', enabled: true, intervalSeconds: 30, timeoutSeconds: 3, retries: 2, failureThreshold: 0, config: { pingCount: 4, latencyWarnMs: 50, packetLossWarnPct: 10 } },
       { type: 'dns', name: 'DNS via router', enabled: true, intervalSeconds: 120, timeoutSeconds: 5, retries: 1, failureThreshold: 0, config: { target: 'example.com', dnsServer: '192.168.1.1' } }] },
+    { id: 'snmp-device', name: 'SNMP device', description: 'A managed switch, router, firewall, access point, printer or UPS that speaks SNMP: its uptime and name, then pick the ports to watch.', icon: 'router', node: { name: 'SNMP device', host: '192.168.1.4', group: 'Network', tags: [], importance: 'normal', enabled: true }, checks: [
+      { type: 'ping', name: 'Reachable (ping)', enabled: true, intervalSeconds: 60, timeoutSeconds: 10, retries: 1, failureThreshold: 2, config: { pingCount: 4 } },
+      { type: 'snmp', name: 'SNMP readings', enabled: true, intervalSeconds: 60, timeoutSeconds: 10, retries: 1, failureThreshold: 2, config: { snmpVersion: '2c', snmpPort: 161, snmpCommunity: 'public', snmpOids: [{ oid: '1.3.6.1.2.1.1.3.0', name: 'Uptime', kind: 'gauge', scale: 0.01, unit: 's' }, { oid: '1.3.6.1.2.1.1.5.0', name: 'Device name', kind: 'gauge', scale: 1 }] } }] },
     { id: 'api-endpoint', name: 'API endpoint', description: 'HTTP status plus a JSON value assertion.', icon: 'api', node: { name: 'API', host: 'https://api.example.com/health', group: 'Internet', tags: ['api'], importance: 'normal', enabled: true }, checks: [
       { type: 'http', name: 'HTTP', enabled: true, intervalSeconds: 120, timeoutSeconds: 10, retries: 1, failureThreshold: 0, config: { expectedStatus: '200', certCheck: true } },
       { type: 'json', name: 'JSON value', enabled: true, intervalSeconds: 300, timeoutSeconds: 10, retries: 1, failureThreshold: 0, config: { jsonPath: 'status', jsonExpected: 'ok' } }] },
@@ -550,7 +557,7 @@
     const out = [];
     const t0 = NOW - 3 * DAY - 2 * HOUR;
     const fmt = (t) => new Date(t).toISOString().replace('T', ' ').slice(0, 19);
-    out.push(`${fmt(t0)} INFO  gwatch 0.4.1 starting (service mode) data=C:\\ProgramData\\GWatch`);
+    out.push(`${fmt(t0)} INFO  gwatch 0.5.0 starting (service mode) data=C:\\ProgramData\\GWatch`);
     out.push(`${fmt(t0 + 120)} INFO  database opened gwatch.db (WAL) size=46.1MB`);
     out.push(`${fmt(t0 + 300)} INFO  scheduler started: 24 checks, 22 enabled, max concurrency 8`);
     out.push(`${fmt(t0 + 900)} INFO  http listening on 127.0.0.1:7230`);
@@ -571,8 +578,8 @@
   // OID, a json check's recorded value — the way the server does: raw points
   // only, with the metric's value repeated in avgMs so the chart helpers can
   // plot it without knowing it is not a latency.
-  function metricHistory(checkId, range, metric) {
-    const base = history(checkId, range);
+  function metricHistory(checkId, range, metric, end) {
+    const base = history(checkId, range, end);
     const { c } = findCheck(checkId);
     const units = checkMetricUnits(c);
     if (!(metric in units)) throw Object.assign(new Error(`check ${checkId} does not measure "${metric}"`), { status: 400 });
@@ -589,18 +596,21 @@
     return { ...base, source: 'raw', bucketSeconds: 0, metric, metricUnit: units[metric], points };
   }
 
-  function history(checkId, range) {
+  // `end` (ms) moves the window back, as the service's `end` does for a
+  // timestacked chart; absent or in the future, the window ends now.
+  function history(checkId, range, end) {
     const found = findCheck(checkId);
     if (!found) throw Object.assign(new Error('check not found'), { status: 404 });
     const { n, c } = found;
     const p = CHECK_PROFILES[c.id];
-    const spans = { '1h': HOUR, '24h': DAY, '7d': 7 * DAY, '30d': 30 * DAY, '1y': 365 * DAY };
-    const buckets = { '1h': [Math.min(60, c.intervalSeconds), 'raw'], '24h': [Math.max(60, c.intervalSeconds), 'raw'], '7d': [300, '5m'], '30d': [3600, '1h'], '1y': [86400, '1d'] };
+    const spans = { '1h': HOUR, '24h': DAY, '3d': 3 * DAY, '7d': 7 * DAY, '30d': 30 * DAY, '1y': 365 * DAY };
+    const buckets = { '1h': [Math.min(60, c.intervalSeconds), 'raw'], '24h': [Math.max(60, c.intervalSeconds), 'raw'], '3d': [300, '5m'], '7d': [300, '5m'], '30d': [3600, '1h'], '1y': [86400, '1d'] };
     const span = spans[range] || DAY;
     const [bucketSec, source] = buckets[range] || buckets['24h'];
-    const to = Date.now();
+    const real = Date.now();
+    const to = end != null && Number.isFinite(end) && end < real ? end : real;
     const from = to - span;
-    const r = rng(c.id * 131 + span / 1000);
+    const r = rng(c.id * 131 + span / 1000 + Math.round((real - to) / HOUR));
     const points = [];
     const step = bucketSec * 1000;
     let sum = 0, cnt = 0, fails = 0, min = Infinity, max = -Infinity;
@@ -611,11 +621,11 @@
       const f = (t - from) / span;
       // Gaps: a sleep gap around 35% and a short gap at 72%
       if ((f > 0.35 && f < 0.365) || (f > 0.72 && f < 0.727)) continue;
-      if (isPaused && t > to - 3 * DAY && p.status === 'paused') continue;
+      if (isPaused && t > real - 3 * DAY && p.status === 'paused') continue;
       if (p.status === 'unknown') continue;
       // Failures: currently down since downSince; a brief outage at ~20%
       let failedFrac = 0;
-      if (p.downSince != null && t >= to - p.downSince) failedFrac = 1;
+      if (p.downSince != null && t >= real - p.downSince) failedFrac = 1;
       else if (f > 0.20 && f < 0.208 && (c.type === 'ping' || c.type === 'http')) failedFrac = source === 'raw' ? 1 : 0.6;
       const count = source === 'raw' ? 1 : Math.max(1, Math.round(step / (c.intervalSeconds * 1000)));
       const failures = Math.round(count * failedFrac);
@@ -733,7 +743,7 @@
   const err = (status, message) => Object.assign(new Error(message), { status });
 
   on('GET', /^\/api\/health$/, () => health());
-  on('GET', /^\/api\/version$/, () => ({ version: '0.4.1', platform: 'windows/amd64', apiVersion: 1 }));
+  on('GET', /^\/api\/version$/, () => ({ version: '0.5.0', platform: 'windows/amd64', apiVersion: 1 }));
   // The mock always plays an administrator on the machine GWatch runs on:
   // there is nothing to sign in to, so the sign-in screen never appears.
   on('GET', /^\/api\/me$/, () => ({ kind: 'local', name: 'this computer', role: 'admin', isAdmin: true, canWrite: true, signedIn: false, theme: settings.general.theme, accentColor: settings.general.accentColor, indicators: clone(settings.indicators || []) }));
@@ -903,7 +913,9 @@
   on('POST', /^\/api\/checks\/(\d+)\/silence$/, (m, body) => { const f = findCheck(m[1]); if (!f) throw err(404, 'check not found'); const mins = Number(body.minutes) || 0; if (mins > 0) { silences[f.c.id] = Date.now() + mins * MIN; addEvent('silenced', { nodeId: f.n.id, nodeName: f.n.name, checkId: f.c.id, checkName: f.c.name, title: `Alerts silenced for ${mins} minutes` }); } else { delete silences[f.c.id]; addEvent('unsilenced', { nodeId: f.n.id, nodeName: f.n.name, checkId: f.c.id, checkName: f.c.name, title: 'Silence removed' }); } return stateFor(f.n, f.c); });
   on('GET', /^\/api\/checks\/(\d+)\/results$/, (m, body, u) => { const f = findCheck(m[1]); if (!f) throw err(404, 'check not found'); const limit = Number(u.searchParams.get('limit')) || 50; return (resultLog[f.c.id] || []).slice(0, limit); });
   on('GET', /^\/api\/checks\/(\d+)\/state$/, (m) => { const f = findCheck(m[1]); if (!f) throw err(404, 'check not found'); return stateFor(f.n, f.c); });
-  on('GET', /^\/api\/history$/, (m, body, u) => { const ids = u.searchParams.getAll('checkId'); const range = u.searchParams.get('range') || '24h'; const metric = u.searchParams.get('metric'); if (ids.length === 1) return metric ? metricHistory(ids[0], range, metric) : history(ids[0], range); return ids.map((id) => history(id, range)); });
+  // `end` as the service reads it: Unix seconds, Unix milliseconds or a date.
+  const endOf = (u) => { const raw = u.searchParams.get('end'); if (!raw) return undefined; const n = Number(raw); const t = Number.isFinite(n) ? (n > 1e11 ? n : n * 1000) : Date.parse(raw); if (!Number.isFinite(t)) throw err(400, `invalid end "${raw}"`); return t; };
+  on('GET', /^\/api\/history$/, (m, body, u) => { const ids = u.searchParams.getAll('checkId'); const range = u.searchParams.get('range') || '24h'; const metric = u.searchParams.get('metric'); const end = endOf(u); if (ids.length === 1) return metric ? metricHistory(ids[0], range, metric, end) : history(ids[0], range, end); return ids.map((id) => history(id, range, end)); });
   // Like the service: a metric applies to every id and one check that does
   // not measure it fails the lot; auto=1 with no ids picks the checks that
   // matter most, the way autoChecks does.
@@ -915,13 +927,16 @@
       const order = { critical: 0, high: 1, normal: 2, low: 3 };
       ids = nodes.filter((n) => n.enabled).sort((a, b) => order[a.importance] - order[b.importance]).flatMap((n) => n.checks.filter((c) => c.enabled && c.type !== 'system').slice(0, 1)).slice(0, 4).map((c) => c.id);
     }
-    return ids.filter((id) => findCheck(id)).map((id) => (metric ? metricHistory(id, range, metric) : history(id, range)));
+    const end = endOf(u);
+    return ids.filter((id) => findCheck(id)).map((id) => (metric ? metricHistory(id, range, metric, end) : history(id, range, end)));
   });
 
   // "Walk this device": a plausible mib-2 subtree for a four-port switch, so
   // the editor's picker can be seen without a real device on the network.
   on('POST', /^\/api\/snmp\/walk$/, (m, body) => {
     if (!body?.host) throw err(400, 'a host is required');
+    // A community of "wrong" goes unanswered, the way a real device ignores one.
+    if (body.version !== '3' && body.community === 'wrong') throw err(400, `request timeout (after 1 retries) reading ${body.host}`);
     const rows = [
       { oid: '1.3.6.1.2.1.1.1.0', type: 'OctetString', value: 'MikroTik CRS310, RouterOS 7.14', name: 'Description', kind: 'gauge' },
       { oid: '1.3.6.1.2.1.1.3.0', type: 'TimeTicks', value: '41235000', name: 'Uptime', kind: 'gauge' },
@@ -935,8 +950,15 @@
       rows.push({ oid: `1.3.6.1.2.1.31.1.1.1.6.${n}`, type: 'Counter64', value: String(1.4e11 + n * 7e8), name: `Port ${n} in`, kind: 'counter' });
       rows.push({ oid: `1.3.6.1.2.1.31.1.1.1.10.${n}`, type: 'Counter64', value: String(9.2e10 + n * 3e8), name: `Port ${n} out`, kind: 'counter' });
       rows.push({ oid: `1.3.6.1.2.1.2.2.1.14.${n}`, type: 'Counter32', value: n === 3 ? '1842' : '0', name: `Port ${n} errors in`, kind: 'counter' });
+      rows.push({ oid: `1.3.6.1.2.1.31.1.1.1.1.${n}`, type: 'OctetString', value: label, kind: 'gauge' });
+      rows.push({ oid: `1.3.6.1.2.1.31.1.1.1.18.${n}`, type: 'OctetString', value: ['Fibre to the ISP', 'Office desk', 'Loft access point', 'NAS'][i], kind: 'gauge' });
     });
-    return { rows, truncated: false, max: 500 };
+    // Only the subtree asked for, in OID order, as the service walks it.
+    const root = String(body.oid || '1.3.6.1.2.1').replace(/^\./, '');
+    const key = (oid) => oid.split('.').map((x) => x.padStart(10, '0')).join('.');
+    const picked = rows.filter((r) => r.oid === root || r.oid.startsWith(`${root}.`)).sort((x, y) => (key(x.oid) < key(y.oid) ? -1 : 1));
+    const max = Math.min(500, Number(body.max) || 500);
+    return { rows: picked.slice(0, max), truncated: picked.length > max, max: 500 };
   });
   on('GET', /^\/api\/events$/, (m, body, u) => {
     const q = (u.searchParams.get('q') || '').toLowerCase();
@@ -1139,8 +1161,8 @@
   on('PUT', /^\/api\/endpoints\/(\d+)$/, (m, body) => { const e = endpoints.find((x) => x.id === Number(m[1])); if (!e) throw err(404, 'not found'); Object.assign(e, body, { id: e.id, updatedAt: iso(Date.now()) }); return clone(e); });
   on('DELETE', /^\/api\/endpoints\/(\d+)$/, (m) => { const i = endpoints.findIndex((x) => x.id === Number(m[1])); if (i < 0) throw err(404, 'not found'); endpoints.splice(i, 1); return { ok: true }; });
   on('POST', /^\/api\/endpoints\/(\d+)\/run$/, (m) => { const e = endpoints.find((x) => x.id === Number(m[1])); if (!e) throw err(404, 'not found'); e.lastCalledAt = iso(Date.now()); e.lastStatus = 'ok'; e.callCount++; addEvent('endpoint_called', { title: `Endpoint called: ${e.name}` }); return { ok: true, output: 'mock run', startedAt: e.lastCalledAt, durationMs: 8 }; });
-  on('GET', /^\/api\/update\/status$/, () => ({ status: clone(updateStatus), repo: settings.general.updateRepo || 'jxburros/GWatch', version: '0.4.1' }));
-  on('POST', /^\/api\/update\/check$/, () => { updateStatus.last = { repo: 'jxburros/GWatch', currentVersion: '0.4.1', latestVersion: '0.5.0', updateAvailable: true, currentIsDev: false, releaseUrl: 'https://github.com/jxburros/GWatch/releases', releaseNotes: '- Charts tab\n- Audit tab\n- Triggers and endpoints', publishedAt: ago(2 * DAY), assetName: 'gwatch-windows-amd64.exe', assetUrl: '', assetSize: 12_000_000, checkedAt: iso(Date.now()) }; addEvent('update', { title: 'Checked for updates', detail: 'Current 0.4.1, latest 0.5.0 — update available' }); return clone(updateStatus.last); });
+  on('GET', /^\/api\/update\/status$/, () => ({ status: clone(updateStatus), repo: settings.general.updateRepo || 'jxburros/GWatch', version: '0.5.0' }));
+  on('POST', /^\/api\/update\/check$/, () => { updateStatus.last = { repo: 'jxburros/GWatch', currentVersion: '0.5.0', latestVersion: '0.5.1', updateAvailable: true, currentIsDev: false, releaseUrl: 'https://github.com/jxburros/GWatch/releases', releaseNotes: '- Charts tab\n- Audit tab\n- Triggers and endpoints', publishedAt: ago(2 * DAY), assetName: 'gwatch-windows-amd64.exe', assetUrl: '', assetSize: 12_000_000, checkedAt: iso(Date.now()) }; addEvent('update', { title: 'Checked for updates', detail: 'Current 0.5.0, latest 0.5.1 — update available' }); return clone(updateStatus.last); });
   on('POST', /^\/api\/update\/apply$/, () => { updateStatus.applied = true; updateStatus.restarting = true; updateStatus.lastApplyAt = iso(Date.now()); addEvent('update', { title: 'Update installed: 0.5.0' }); return { ok: true, info: updateStatus.last, restarting: true }; });
   /* ---------- Hardware ---------- */
   // Two machines: the computer "GWatch" is pretending to run on, and one that

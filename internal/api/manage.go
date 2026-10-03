@@ -688,7 +688,12 @@ func (s *Server) handleExportHistory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "checkId is required")
 		return
 	}
-	series, err := s.historyFor(r.Context(), *id, r.URL.Query().Get("range"), r.URL.Query().Get("metric"))
+	end, err := historyEnd(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	series, err := s.historyFor(r.Context(), *id, r.URL.Query().Get("range"), r.URL.Query().Get("metric"), end)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

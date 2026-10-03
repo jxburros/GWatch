@@ -16,39 +16,42 @@ by itself. (An optional, separate MCP companion can let an assistant *read* your
 monitoring if you set one up — see [`mcp/README.md`](mcp/README.md).) The product
 brief that defines the scope lives in [`local-network-monitoring-product-brief.md`](local-network-monitoring-product-brief.md).
 
-> **GWatch is in beta (0.4.0).** It works and it looks after your data, but the
+> **GWatch is in beta (0.5.0).** It works and it looks after your data, but the
 > interface and the JSON API can still change between releases, and bugs are likelier
 > now than they will be at 1.0 — which is reserved for the first public, stable
 > release. [`CHANGELOG.md`](CHANGELOG.md) lists what is in this version and the gaps it
 > ships with. Please [report anything that looks wrong](https://github.com/jxburros/GWatch/issues).
 
-## What's new in 0.4.0
+## What's new in 0.5.0
 
-Since 0.3.1: **chart any metric** — a machine's processor, memory, disks and
-network interfaces, SNMP readings and recorded JSON values as well as latency
-and loss — and **mix units on one chart** with a left and a right axis;
-throughput reads as **kB/s, MB/s, GB/s** instead of raw bytes; **pairing a
-machine confirms itself** the moment the agent pairs and reports; **sessions
-and roles hold steady** — no more sign-outs on a busy database or 30 days after
-signing in, and a role change applies at once; the page no longer grows a
-**scrollbar** for a few seconds at a time, and empty fields no longer say
-**"null"**; both **installers are light-themed**; the agent has **its own logo**;
-and Help covers everything added lately, with an **opt-in guided tutorial**.
+Since 0.4.0: a **network map** draws every node under the node it depends on —
+the firewall at the top, everything an outage there would silence beneath it —
+laid out three ways, styled to taste, editable in place and pinnable to a
+dashboard; **timestacked charts** lay a metric over its own yesterday, last
+week or last month on one axis, the way Nagios XI's timestacked performance
+graphs do; **SNMP is much quicker to set up** — an *SNMP device* template,
+**Test connection**, and **Pick interfaces** to tick ports by name instead of
+hunting for SNMP indexes; node lists **sort alphabetically** (or by address or
+importance) and can drop the group sections; and dragging a **dashboard
+widget** puts it where you let go instead of pages further down.
 
-The agent is released separately as **gwatch-agent 0.5.0**, now also packaged
-as a `.deb`/`.rpm`, a Homebrew formula, a winget package and a container image
-that can watch a Docker host. Full detail in [`CHANGELOG.md`](CHANGELOG.md).
+The agent is unchanged and stays at **gwatch-agent 0.5.0**. Full detail in
+[`CHANGELOG.md`](CHANGELOG.md).
 
 ## What it does
 
 - **Check types**: Ping, HTTP/S, HTTPS certificate, TCP port, DNS, Keyword, JSON, Custom
   script (run your own command), Hardware health (this computer, or any machine you
   install the small agent on — processor, memory, swap, load, disks, inodes, network and
-  disk throughput) and SNMP (readings off a router, switch or access point).
+  disk throughput) and SNMP (readings off a router, switch or access point — test the
+  connection and pick ports by name, no OIDs to look up).
 - **Every reading stands on its own**: each hardware metric, each SNMP OID and a JSON
   check's recorded value has its own value, status, threshold, chart, incident and
   trigger variable.
-- **Nodes** group several checks, with templates, groups, tags, dependencies and importance.
+- **Nodes** group several checks, with templates, groups, tags, dependencies and importance,
+  and sort by status, name, address or importance.
+- **Network map**: the dependencies between nodes drawn as a tree, coloured by status, with
+  the reach of an outage traced in red — on its own page or as a dashboard widget.
 - **Discovery**: ping a subnet, see what answers with its name and open ports, and add the
   devices you tick as nodes — with a template suggested for each. No nmap, nothing to install.
 - **Bulk edit** changes one setting — interval, timeout, thresholds, groups, tags, importance,
@@ -57,7 +60,8 @@ that can watch a Docker host. Full detail in [`CHANGELOG.md`](CHANGELOG.md).
   cooldowns, silencing, maintenance windows and dependency-aware suppression.
 - **Notification rules** across nodes — "tell me when two of my three DNS servers are
   down" — joined by all, any or at-least-N, with the same actions triggers use.
-- **Incident timeline**, **dashboards**, a **Charts** tab and an **Audit** tab with full
+- **Incident timeline**, **dashboards**, a **Charts** tab (with timestacked charts that lay a
+  metric over its own earlier days, weeks or months) and an **Audit** tab with full
   history — retained and rolled up automatically so the database never grows without bound.
 - **Automation**: triggers and custom inbound endpoints run webhooks, Slack/Teams/ntfy/
   Pushover notifications, git commands or scripts when something changes.

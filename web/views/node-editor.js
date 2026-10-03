@@ -2,7 +2,7 @@
 
 import { api } from '../api.js';
 import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, promptDialog, openModal, emptyState, skeleton, CHECK_TYPES, checkTypeLabel, uid, busy } from '../components.js';
-import { nodeGroups } from '../fmt.js';
+import { nodeGroups, duration } from '../fmt.js';
 import { resultInspector } from './inspector.js';
 // The interval choices, the three states of an alert override, the importance
 // levels and the ping methods are shared with the bulk editor, so both screens
@@ -701,6 +701,8 @@ export async function mount(root, ctx) {
 
     const presets = selectInput({
       options: [{ value: '', label: 'Presets…' }],
+      style: { width: 'auto' },
+      'aria-label': 'Add a preset reading',
       onchange: async () => {
         const [gi, ii] = presets.value.split(':');
         presets.value = '';
@@ -728,15 +730,30 @@ export async function mount(root, ctx) {
       presets.append(og);
     }
 
+    // Test connection: read the device's system group, which every SNMP
+    // agent answers, and say in words whether the settings above work.
+    const testOut = h('div', { class: 'snmp-test', 'aria-live': 'polite' });
+    const testBtn = h('button', { class: 'btn btn-sm', type: 'button', onclick: () => testConnection(c, testBtn, testOut) }, icon('zap'), 'Test connection');
+
     return h('div', { class: 'stack' },
+      h('div', { class: 'snmp-guide' },
+        h('div', { class: 'section-title' }, icon('router'), 'Reading a device over SNMP'),
+        h('ol', null,
+          h('li', null, 'Switch SNMP on in the device’s own admin page — usually under ', h('i', null, 'Administration › SNMP'), ' or ', h('i', null, 'Services'), '. Read-only is all GWatch needs; allow this computer’s address if the device asks which managers may read it.'),
+          h('li', null, 'Copy the community string (version 2c) or the user and passwords (version 3) below. Many devices start with the community ', h('code', null, 'public'), '.'),
+          h('li', null, h('b', null, 'Test connection'), ', then ', h('b', null, 'Pick interfaces'), ' to add link state and traffic for the ports you care about — no OIDs to look up.')),
+        h('a', { class: 'small', href: '#/help?topic=snmp' }, 'More about SNMP in Help')),
       h('div', { class: 'form-grid' },
         targetField(c, err, 'Device override', d.host ? `Uses node host (${d.host})` : '192.168.1.1', 'The router, switch or access point to read. Leave blank to use the node host.'),
         field({ label: 'SNMP version', input: version }),
         field({ label: 'Port', input: port, error: err.snmpPort, help: 'UDP 161 unless the device was changed.' })),
       credsWrap,
+      h('div', { class: 'row' }, testBtn, h('span', { class: 'muted small' }, 'Reads the device’s name, description and uptime with the settings above.')),
+      testOut,
       h('div', { class: 'row-between', style: { marginTop: '4px' } },
         h('div', { class: 'section-title', style: { marginBottom: 0 } }, 'Readings'),
         h('div', { class: 'btn-group' },
+          h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: (e) => pickInterfaces(c, e.currentTarget, renderRows) }, icon('wifi'), 'Pick interfaces'),
           presets,
           h('button', { class: 'btn btn-sm', type: 'button', onclick: (e) => walkDevice(c, e.currentTarget, renderRows) }, icon('search'), 'Walk this device'),
           h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { cfg.snmpOids.push(oidRow()); renderRows(); } }, icon('plus'), 'Add a reading'))),
@@ -745,6 +762,133 @@ export async function mount(root, ctx) {
       err.snmpOids ? h('div', { class: 'error small', style: { color: 'var(--down)' } }, err.snmpOids) : null,
       rowsWrap,
     );
+  }
+
+  // snmpWalk reads one subtree of the device with the check's settings. A
+  // saved check's credentials never reach the browser, so its id goes along
+  // and the service uses the stored ones for any box left blank.
+  function snmpWalk(c, oid, max) {
+    const cfg = c.config;
+    const host = (cfg.target || d.host || '').trim();
+    if (!host) return Promise.reject(new Error('Enter the device’s host on the node (or a target on this check) first.'));
+    return api.post('/api/snmp/walk', {
+      host,
+      checkId: c.id || 0,
+      version: cfg.snmpVersion || '2c',
+      port: Number(cfg.snmpPort) || 161,
+      community: cfg.snmpCommunity || '',
+      user: cfg.snmpUser || '',
+      authProto: cfg.snmpAuthProto || '',
+      authPass: cfg.snmpAuthPass || '',
+      privProto: cfg.snmpPrivProto || '',
+      privPass: cfg.snmpPrivPass || '',
+      oid,
+      max,
+    });
+  }
+
+  async function testConnection(c, btn, out) {
+    const host = (c.config.target || d.host || '').trim();
+    const done = busy(btn, 'Testing…');
+    try {
+      const answer = await snmpWalk(c, '1.3.6.1.2.1.1', 12);
+      const rows = answer?.rows || [];
+      const val = (oid) => rows.find((r) => r.oid === oid || r.oid === `.${oid}`)?.value || '';
+      const name = val('1.3.6.1.2.1.1.5.0'), descr = val('1.3.6.1.2.1.1.1.0'), ticks = Number(val('1.3.6.1.2.1.1.3.0'));
+      replace(out, h('div', { class: 'snmp-test-ok' }, icon('check'),
+        h('div', null,
+          h('b', null, `Connected to ${name || host}`),
+          descr ? h('div', { class: 'muted small' }, descr) : null,
+          Number.isFinite(ticks) && ticks > 0 ? h('div', { class: 'muted small' }, `Up for ${duration(ticks / 100)}`) : null,
+          !rows.length ? h('div', { class: 'muted small' }, 'It answered, but reported no system details.') : null)));
+    } catch (e) {
+      replace(out, h('div', { class: 'snmp-test-fail' }, icon('alert'),
+        h('div', null,
+          h('b', null, `No answer from ${host || 'the device'}`),
+          h('div', { class: 'muted small' }, e.message),
+          h('ul', { class: 'small' },
+            h('li', null, 'Is SNMP switched on in the device’s admin page, and is this computer allowed to read it?'),
+            h('li', null, 'Is the community (or the v3 user and passwords) exactly as the device has it? They are case-sensitive.'),
+            h('li', null, 'Is UDP port ', String(c.config.snmpPort || 161), ' open between here and the device?')))));
+    } finally { done(); }
+  }
+
+  // pickInterfaces lists the device's ports by name — ifName, ifDescr and
+  // whether each is up — and turns the ticked ones into readings. It saves
+  // looking up which SNMP index belongs to which port.
+  async function pickInterfaces(c, btn, onAdded) {
+    const cfg = c.config;
+    const done = busy(btn, 'Reading ports…');
+    let descr, names, oper, alias;
+    try {
+      [descr, names, oper, alias] = await Promise.all([
+        snmpWalk(c, '1.3.6.1.2.1.2.2.1.2', 200),
+        snmpWalk(c, '1.3.6.1.2.1.31.1.1.1.1', 200).catch(() => ({ rows: [] })),
+        snmpWalk(c, '1.3.6.1.2.1.2.2.1.8', 200).catch(() => ({ rows: [] })),
+        snmpWalk(c, '1.3.6.1.2.1.31.1.1.1.18', 200).catch(() => ({ rows: [] })),
+      ]);
+    } catch (e) { toast(`Could not read the device’s ports: ${e.message}`, { kind: 'error' }); done(); return; }
+    done();
+    const ports = new Map();
+    const idx = (oid) => String(oid).replace(/^\./, '').split('.').pop();
+    const add = (list, key) => { for (const r of list?.rows || []) { const i = idx(r.oid); if (!ports.has(i)) ports.set(i, { index: i }); ports.get(i)[key] = r.value; } };
+    add(descr, 'descr'); add(names, 'name'); add(oper, 'oper'); add(alias, 'alias');
+    if (!ports.size) { toast('The device answered, but listed no interfaces.', { kind: 'error' }); return; }
+    const list = [...ports.values()].sort((a, b) => Number(a.index) - Number(b.index));
+    const label = (p) => String(p.name || p.descr || p.alias || `Port ${p.index}`).trim();
+    const has = new Set(cfg.snmpOids.map((o) => (o.oid || '').replace(/^\./, '')));
+
+    const boxes = new Map();
+    const tb = h('tbody');
+    for (const p of list) {
+      const up = String(p.oper) === '1';
+      const box = h('input', { type: 'checkbox', checked: up && !/^(lo|loopback|null|bridge|br-|veth|docker)/i.test(p.name || p.descr || ''), 'aria-label': `Add ${label(p)}` });
+      boxes.set(box, p);
+      tb.append(h('tr', null, h('td', null, box), h('td', { class: 'num mono' }, p.index), h('td', null, h('b', null, p.name || '—'), p.alias ? h('div', { class: 'muted small' }, p.alias) : null),
+        h('td', { class: 'muted' }, p.descr || '—'),
+        h('td', null, p.oper == null ? h('span', { class: 'dim' }, '—') : h('span', { class: up ? 'text-up' : 'muted' }, up ? 'Up' : 'Down'))));
+    }
+    const wantLink = checkbox({ label: 'Link up / down (down marks the check down)', checked: true });
+    const wantTraffic = checkbox({ label: 'Traffic in and out, in bits per second', checked: true });
+    const wantErrors = checkbox({ label: 'Errors in and out (any error marks the check degraded)', checked: false });
+    const hc = checkbox({ label: 'Use 64-bit counters (right for anything faster than 100 Mbit/s)', checked: names.rows?.length > 0 });
+    const filter = textInput({ placeholder: 'Filter ports', 'aria-label': 'Filter ports', oninput: () => { const q = filter.value.trim().toLowerCase(); for (const tr of tb.children) tr.hidden = q ? !tr.textContent.toLowerCase().includes(q) : false; } });
+    const allUp = h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { for (const [b, p] of boxes) b.checked = String(p.oper) === '1'; } }, 'Tick the ports that are up');
+    const none = h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { for (const b of boxes.keys()) b.checked = false; } }, 'Untick all');
+
+    const go = h('button', { class: 'btn btn-primary', type: 'button', onclick: () => {
+      let added = 0;
+      const push = (oid, name, extra) => { if (has.has(oid)) return; cfg.snmpOids.push({ oid, name: uniqueReadingName(cfg, name), ...extra }); has.add(oid); added++; };
+      for (const [box, p] of boxes) {
+        if (!box.checked) continue;
+        const i = p.index, n = label(p);
+        if (wantLink.input.checked) push(`1.3.6.1.2.1.2.2.1.8.${i}`, `${n} link`, { kind: 'gauge', scale: 1, unit: '', critBelow: 1, critAbove: 1 });
+        if (wantTraffic.input.checked) {
+          push(hc.input.checked ? `1.3.6.1.2.1.31.1.1.1.6.${i}` : `1.3.6.1.2.1.2.2.1.10.${i}`, `${n} in`, { kind: 'counter', scale: 8, unit: 'bit/s' });
+          push(hc.input.checked ? `1.3.6.1.2.1.31.1.1.1.10.${i}` : `1.3.6.1.2.1.2.2.1.16.${i}`, `${n} out`, { kind: 'counter', scale: 8, unit: 'bit/s' });
+        }
+        if (wantErrors.input.checked) {
+          push(`1.3.6.1.2.1.2.2.1.14.${i}`, `${n} errors in`, { kind: 'counter', scale: 1, unit: '/s', warnAbove: 0 });
+          push(`1.3.6.1.2.1.2.2.1.20.${i}`, `${n} errors out`, { kind: 'counter', scale: 1, unit: '/s', warnAbove: 0 });
+        }
+      }
+      if (cfg.snmpOids.length > 64) toast('An SNMP check reads at most 64 values: untick some, or split the ports over a second SNMP check.', { kind: 'error' });
+      m.close();
+      if (added) { onAdded(); toast(`Added ${added} reading${added === 1 ? '' : 's'}.`, { kind: 'success' }); }
+    } }, 'Add readings');
+
+    const m = openModal({
+      title: 'Pick interfaces',
+      wide: true,
+      body: h('div', { class: 'stack-sm' },
+        h('p', { class: 'note' }, `${list.length} interface${list.length === 1 ? '' : 's'} found. Tick the ports to watch; GWatch works out the SNMP numbers for you.`),
+        h('div', { class: 'row-between' }, filter, h('div', { class: 'btn-group' }, allUp, none)),
+        h('div', { class: 'table-wrap', style: { maxHeight: '40vh', overflow: 'auto' } },
+          h('table', { class: 'table' }, h('thead', null, h('tr', null, h('th', null, ''), h('th', { class: 'num' }, 'Index'), h('th', null, 'Name'), h('th', null, 'Description'), h('th', null, 'Link'))), tb)),
+        h('div', { class: 'section-title' }, 'For each ticked port, read'),
+        h('div', { class: 'stack-sm', style: { gap: '6px' } }, wantLink, wantTraffic, wantErrors, hc)),
+      footer: [h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Cancel'), go],
+    });
   }
 
   // walkDevice asks the device what it can tell us and shows the answer as a
@@ -1105,13 +1249,25 @@ export async function mount(root, ctx) {
     } catch (e) { toast(e.message, { kind: 'error' }); state.saving = false; }
   }
 
+  // ?add=snmp (from a node's page, or the network device template's prompt)
+  // opens the editor with an SNMP check already added and in view.
+  const addType = ctx.query.get('add');
+  let focusAdded = null;
+  if (addType && CHECK_TYPES.some((t) => t.value === addType) && !(addType === 'snmp' && d.checks.some((c) => c.type === 'snmp'))) {
+    const c = defaultCheck(addType, state.settings);
+    d.checks.push(c); focusAdded = c._key;
+  }
   renderChecks();
   clear(root);
   root.append(h('div', { class: 'editor' }, nodeCard, checksCard,
     h('div', { class: 'sticky-actions' }, h('div', { class: 'card' },
       h('span', { class: 'muted small' }, isNew ? 'The node starts monitoring as soon as you create it.' : 'Changes apply immediately after saving.'),
       h('div', { class: 'btn-group' }, h('a', { class: 'btn', href: isNew ? '#/nodes' : `#/nodes/${d.id}` }, 'Cancel'), h('button', { class: 'btn btn-primary', type: 'button', onclick: save }, icon('save'), isNew ? 'Create node' : 'Save changes'))))));
-  setTimeout(() => nameInput.focus(), 30);
+  setTimeout(() => {
+    const cards = focusAdded ? checksList.querySelectorAll('.editor-check') : [];
+    const card = cards[cards.length - 1];
+    if (card) { card.scrollIntoView({ block: 'start' }); card.querySelector('input')?.focus(); } else nameInput.focus();
+  }, 30);
 
   return { destroy() { state.destroyed = true; } };
 }

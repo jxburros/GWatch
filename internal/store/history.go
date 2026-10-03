@@ -185,6 +185,8 @@ func ParseRange(name string) (RangeSpec, error) {
 		return RangeSpec{"1h", time.Hour, 0}, nil
 	case "24h", "":
 		return RangeSpec{"24h", 24 * time.Hour, 0}, nil
+	case "3d":
+		return RangeSpec{"3d", 3 * 24 * time.Hour, Bucket5m}, nil
 	case "7d":
 		return RangeSpec{"7d", 7 * 24 * time.Hour, Bucket5m}, nil
 	case "30d":
@@ -192,7 +194,7 @@ func ParseRange(name string) (RangeSpec, error) {
 	case "1y":
 		return RangeSpec{"1y", 365 * 24 * time.Hour, Bucket1d}, nil
 	}
-	return RangeSpec{}, fmt.Errorf("unsupported range %q (use 1h, 24h, 7d, 30d, 1y)", name)
+	return RangeSpec{}, fmt.Errorf("unsupported range %q (use 1h, 24h, 3d, 7d, 30d, 1y)", name)
 }
 
 // HistoryMetric builds a chart series for one of a check's named metrics —

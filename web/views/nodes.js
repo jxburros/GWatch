@@ -2,13 +2,22 @@
 
 import { api } from '../api.js';
 import { h, icon, clear, replace, statusSpine, statusWord, checkChip, importanceBadge, tagList, toggle, menuButton, toast, confirmDialog, openModal, emptyState, skeleton } from '../components.js';
-import { relTime, nodeGroups, inGroup } from '../fmt.js';
+import { relTime, nodeGroups, inGroup, NODE_SORTS, sortNodes, compareNames } from '../fmt.js';
 import { pairMachine } from './machines.js';
 
 const STATUS_ORDER = ['down', 'degraded', 'unknown', 'maintenance', 'up', 'paused'];
 
+// How the list is sorted and whether it is split into group sections are
+// remembered per browser; a link with ?sort= wins for that visit.
+const SORT_KEY = 'gw.nodeSort', SECTIONS_KEY = 'gw.nodeSections';
+function remembered(key, fallback) { try { return localStorage.getItem(key) || fallback; } catch { return fallback; } }
+function remember(key, v) { try { localStorage.setItem(key, v); } catch { /* private window: forgotten on reload */ } }
+
 export async function mount(root, ctx) {
   const state = { nodes: [], groups: { groups: [], tags: [] }, templates: null, q: ctx.query.get('q') || '', group: ctx.query.get('group') || '', status: ctx.query.get('status') || '', tag: ctx.query.get('tag') || '', destroyed: false };
+  state.sort = NODE_SORTS.some((o) => o.value === ctx.query.get('sort')) ? ctx.query.get('sort') : remembered(SORT_KEY, 'status');
+  if (!NODE_SORTS.some((o) => o.value === state.sort)) state.sort = 'status';
+  state.sections = remembered(SECTIONS_KEY, 'group') === 'none' ? 'none' : 'group';
 
   // A machine is a node too, so pairing one starts from here rather than from
   // a hardware section of its own.
@@ -25,7 +34,13 @@ export async function mount(root, ctx) {
 
   const searchInput = h('input', { type: 'search', placeholder: 'Search name, host, group or tag…', value: state.q, 'aria-label': 'Search nodes', oninput: () => { state.q = searchInput.value; renderList(); } });
   const countEl = h('span', { class: 'filter-count' });
-  const toolbar = h('div', { class: 'toolbar' }, h('div', { class: 'search' }, icon('search'), searchInput));
+  const sortSel = h('select', { 'aria-label': 'Sort nodes by', onchange: () => { state.sort = sortSel.value; remember(SORT_KEY, state.sort); renderList(); } },
+    NODE_SORTS.map((o) => h('option', { value: o.value, selected: o.value === state.sort }, o.label)));
+  const sectionsSel = h('select', { 'aria-label': 'Split the list into sections', onchange: () => { state.sections = sectionsSel.value; remember(SECTIONS_KEY, state.sections); renderList(); } },
+    h('option', { value: 'group', selected: state.sections === 'group' }, 'Sections by group'),
+    h('option', { value: 'none', selected: state.sections === 'none' }, 'One list'));
+  const toolbar = h('div', { class: 'toolbar' }, h('div', { class: 'search' }, icon('search'), searchInput),
+    h('label', { class: 'sort-control' }, h('span', { class: 'chip-label' }, 'Sort'), sortSel), sectionsSel);
   const filters = h('div', { class: 'filters' });
   // Search and filters belong to the same control: one panel above the list,
   // wearing the same label band as every other panel. The match count rides in
@@ -80,6 +95,7 @@ export async function mount(root, ctx) {
   // group sections are kept between renders, keyed by node id and group name,
   // and only what actually changed is written back.
   const rowEls = new Map();      // node id -> <article class="node-row">
+  const ALL = '\u0000all';      // the one section of a list not split by group
   const sectionEls = new Map();  // group name -> { el, head, rows }
 
   function renderList() {
@@ -109,7 +125,7 @@ export async function mount(root, ctx) {
       if (!byGroup.has(g)) byGroup.set(g, []);
       byGroup.get(g).push(n);
     }
-    const groupNames = [...byGroup.keys()].sort((a, b) => (a === 'Ungrouped') - (b === 'Ungrouped') || a.localeCompare(b));
+    const groupNames = [...byGroup.keys()].sort((a, b) => (a === ALL) - (b === ALL) || (a === 'Ungrouped') - (b === 'Ungrouped') || compareNames(a, b));
 
     // Drop what the new data no longer has. A section taken out takes its rows
     // with it, but their entries are pruned here too so the cache cannot grow.
@@ -120,10 +136,10 @@ export async function mount(root, ctx) {
     const keep = new Set();
     let prevSection = null;
     for (const g of groupNames) {
-      const nodes = byGroup.get(g).sort((a, b) => STATUS_ORDER.indexOf(a.status || 'unknown') - STATUS_ORDER.indexOf(b.status || 'unknown') || a.name.localeCompare(b.name));
+      const nodes = sortNodes(byGroup.get(g), state.sort);
       let sec = sectionEls.get(g);
       if (!sec) {
-        const el = h('section', { class: 'node-group', 'aria-label': g });
+        const el = h('section', { class: 'node-group', 'aria-label': g === ALL ? 'All nodes' : g });
         const head = h('div', { class: 'node-group-head' }, h('h2', null, g), h('span', { class: 'count' }));
         const list = h('div', { class: 'node-rows' });
         el.append(list);
@@ -133,7 +149,7 @@ export async function mount(root, ctx) {
       keep.add(sec.el);
       // Whether a section shows its heading depends on the filters, so it can
       // come and go on a section that is otherwise unchanged.
-      const wantHead = groupNames.length > 1 || g !== 'Ungrouped';
+      const wantHead = g !== ALL && (groupNames.length > 1 || g !== 'Ungrouped');
       if (wantHead) {
         sec.head.querySelector('.count').textContent = `${nodes.length} node${nodes.length === 1 ? '' : 's'}`;
         if (sec.head.parentNode !== sec.el) sec.el.insertBefore(sec.head, sec.rows);
@@ -163,6 +179,7 @@ export async function mount(root, ctx) {
   /** The one section a node is listed under: the group the list is filtered
    *  to when that filter is on, and otherwise its first group. */
   function sectionFor(n) {
+    if (state.sections === 'none') return ALL;
     const groups = nodeGroups(n);
     if (state.group && inGroup(n, state.group)) {
       return groups.find((g) => g.trim().toLowerCase() === state.group.trim().toLowerCase()) || state.group;
@@ -308,7 +325,7 @@ export async function mount(root, ctx) {
   return { refresh: load, destroy() { state.destroyed = true; } };
 }
 
-const TEMPLATE_ICONS = { website: 'globe', 'home-server': 'server', router: 'router', ping: 'activity', 'api-endpoint': 'api', 'tcp-service': 'link', dns: 'hash', blank: 'file' };
+const TEMPLATE_ICONS = { website: 'globe', 'home-server': 'server', router: 'router', 'snmp-device': 'wifi', ping: 'activity', 'api-endpoint': 'api', 'tcp-service': 'link', dns: 'hash', blank: 'file' };
 
 export async function openTemplatePicker(state, ctx) {
   const body = h('div', { class: 'stack-sm' }, h('p', null, 'Pick a starting point. Every setting can be changed afterwards.'), skeleton({ lines: 3 }));

@@ -1324,7 +1324,11 @@ func (s *Server) handleCheckState(w http.ResponseWriter, r *http.Request) {
 
 // historyFor builds one check's series. A metric name asks for one of the
 // check's own measurements (an SNMP check's OIDs) instead of its latency.
-func (s *Server) historyFor(ctx context.Context, checkID int64, rangeName, metric string) (model.HistorySeries, error) {
+//
+// end is where the window stops: now, or an earlier moment for a timestacked
+// chart, which lays yesterday's 24 hours (and the day before's …) over
+// today's.
+func (s *Server) historyFor(ctx context.Context, checkID int64, rangeName, metric string, end time.Time) (model.HistorySeries, error) {
 	rng, err := store.ParseRange(rangeName)
 	if err != nil {
 		return model.HistorySeries{}, err
@@ -1341,9 +1345,36 @@ func (s *Server) historyFor(ctx context.Context, checkID int64, rangeName, metri
 		if !s.checkHasMetric(ctx, c, metric) {
 			return model.HistorySeries{}, fmt.Errorf("check %d does not measure %q", checkID, metric)
 		}
-		return s.Store.HistoryMetric(ctx, c, n.Name, rng, time.Now(), metric)
+		return s.Store.HistoryMetric(ctx, c, n.Name, rng, end, metric)
 	}
-	return s.Store.History(ctx, c, n.Name, rng, time.Now())
+	return s.Store.History(ctx, c, n.Name, rng, end)
+}
+
+// historyEnd reads the optional `end` of a history request: Unix seconds,
+// Unix milliseconds or an RFC 3339 time. Absent, it is now; a moment in the
+// future is now too, since there is no history there to read.
+func historyEnd(r *http.Request) (time.Time, error) {
+	now := time.Now()
+	raw := strings.TrimSpace(r.URL.Query().Get("end"))
+	if raw == "" {
+		return now, nil
+	}
+	var end time.Time
+	if n, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		if n > 1e11 {
+			end = time.UnixMilli(n)
+		} else {
+			end = time.Unix(n, 0)
+		}
+	} else if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		end = t
+	} else {
+		return now, fmt.Errorf("invalid end %q (use Unix seconds, Unix milliseconds or an RFC 3339 time)", raw)
+	}
+	if end.After(now) {
+		return now, nil
+	}
+	return end, nil
 }
 
 // checkHasMetric reports whether a check measures a named metric — an SNMP
@@ -1384,7 +1415,12 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid checkId")
 		return
 	}
-	series, err := s.historyFor(r.Context(), id, r.URL.Query().Get("range"), r.URL.Query().Get("metric"))
+	end, err := historyEnd(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	series, err := s.historyFor(r.Context(), id, r.URL.Query().Get("range"), r.URL.Query().Get("metric"), end)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			s.fail(w, err)
@@ -1409,12 +1445,17 @@ func (s *Server) handleHistoryMulti(w http.ResponseWriter, r *http.Request) {
 			ids = append(ids, strconv.FormatInt(c.check.ID, 10))
 		}
 	}
+	end, err := historyEnd(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	for _, raw := range ids {
 		id, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
 			continue
 		}
-		series, err := s.historyFor(r.Context(), id, r.URL.Query().Get("range"), r.URL.Query().Get("metric"))
+		series, err := s.historyFor(r.Context(), id, r.URL.Query().Get("range"), r.URL.Query().Get("metric"), end)
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				continue

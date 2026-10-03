@@ -233,7 +233,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request, path string, k ke
 		})
 	case r.Method == http.MethodGet && path == "/health":
 		ok(w, map[string]any{
-			"version": "0.4.1", "serviceMode": "console", "serviceRunning": true,
+			"version": "0.5.0", "serviceMode": "console", "serviceRunning": true,
 			"schedulerRunning": true, "startedAt": time.Now().Add(-time.Hour), "uptimeSeconds": 3600,
 			"now": time.Now(), "checksTotal": 2, "checksEnabled": 2, "checksRunning": 0,
 			"databaseBytes": 4096, "alertsEnabled": false, "smtpConfigured": false,

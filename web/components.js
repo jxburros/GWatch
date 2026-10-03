@@ -98,6 +98,8 @@ const ICONS = {
   mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/>',
   database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.7-4 3-9 3s-9-1.3-9-3M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/>',
   heart: '<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/>',
+  network: '<rect x="9" y="2" width="6" height="5" rx="1"/><rect x="2" y="17" width="6" height="5" rx="1"/><rect x="16" y="17" width="6" height="5" rx="1"/><path d="M12 7v5M5 17v-2.5a1.5 1.5 0 0 1 1.5-1.5h11a1.5 1.5 0 0 1 1.5 1.5V17"/>',
+  maximize: '<path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/>',
   link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
   file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>',
@@ -809,11 +811,11 @@ export const CHECK_TYPES = [
   { value: 'http', label: 'HTTP/S', desc: 'Load a web page or API URL and check the response code and response time.' },
   { value: 'cert', label: 'HTTPS certificate', desc: 'Check that the TLS certificate is valid and warn before it expires.' },
   { value: 'tcp', label: 'TCP port', desc: 'Can a connection be opened on a port? Good for SSH (22), Plex (32400), databases.' },
+  { value: 'snmp', label: 'SNMP', desc: 'Read a switch, router, firewall, access point, printer or UPS directly: each port’s link and traffic, uptime, processor load. Test the connection and pick ports — no OIDs needed.' },
   { value: 'dns', label: 'DNS', desc: 'Does the hostname resolve, optionally to the addresses you expect?' },
   { value: 'keyword', label: 'Keyword', desc: 'Load a page and check that some text is present (or absent).' },
   { value: 'json', label: 'JSON', desc: 'Call an API and check that a value at a path matches what you expect.' },
   { value: 'custom', label: 'Custom script', desc: 'Run your own command on schedule and parse its status from the output.' },
   { value: 'system', label: 'Hardware health', desc: 'Processor, memory, disk space and throughput — for this computer, or for a machine running the agent.' },
-  { value: 'snmp', label: 'SNMP', desc: 'Read a router, switch or access point directly: interface traffic and errors, processor load, uptime.' },
 ];
 export function checkTypeLabel(t) { return (CHECK_TYPES.find((x) => x.value === t) || { label: t }).label; }

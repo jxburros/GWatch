@@ -128,10 +128,10 @@ export function interval(seconds) {
 
 export const RANGES = ['1h', '24h', '7d', '30d', '1y'];
 export function rangeLabel(r) {
-  return { '1h': '1 hour', '24h': '24 hours', '7d': '7 days', '30d': '30 days', '1y': '1 year' }[r] || r;
+  return { '1h': '1 hour', '24h': '24 hours', '3d': '3 days', '7d': '7 days', '30d': '30 days', '1y': '1 year' }[r] || r;
 }
 export function rangeMs(r) {
-  return { '1h': 3600e3, '24h': 86400e3, '7d': 7 * 86400e3, '30d': 30 * 86400e3, '1y': 365 * 86400e3 }[r] || 86400e3;
+  return { '1h': 3600e3, '24h': 86400e3, '3d': 3 * 86400e3, '7d': 7 * 86400e3, '30d': 30 * 86400e3, '1y': 365 * 86400e3 }[r] || 86400e3;
 }
 
 export function plural(n, singular, pluralForm) {
@@ -349,4 +349,44 @@ export function compareVersions(a, b) {
 export function agentIsBehind(running, latest) {
   if (!running || !latest) return false;
   return compareVersions(running, latest) < 0;
+}
+
+/* ---------- Sorting nodes ---------- */
+
+/** The orders a list of nodes can be put in. */
+export const NODE_SORTS = [
+  { value: 'status', label: 'Status (worst first)' },
+  { value: 'name', label: 'Name (A–Z)' },
+  { value: 'name-desc', label: 'Name (Z–A)' },
+  { value: 'host', label: 'Address' },
+  { value: 'importance', label: 'Importance' },
+];
+const STATUS_RANK = ['down', 'degraded', 'unknown', 'maintenance', 'up', 'paused'];
+const IMPORTANCE_RANK = ['critical', 'high', 'normal', 'low'];
+const collator = typeof Intl !== 'undefined' ? new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' }) : null;
+/** Names as a person sorts them: case ignored, and "node 9" before "node 10". */
+export function compareNames(a, b) {
+  const x = String(a ?? ''), y = String(b ?? '');
+  return collator ? collator.compare(x, y) : x.toLowerCase().localeCompare(y.toLowerCase());
+}
+const rank = (list, v) => { const i = list.indexOf(v); return i < 0 ? list.length : i; };
+
+/**
+ * A sorted copy of a list of nodes. `nodeOf` finds the node in an item (a
+ * dashboard row wraps one) and `statusOf` its status. Ties fall back to the
+ * name, so every order is stable from one refresh to the next. An unknown
+ * key sorts by status, which is how the Nodes page has always listed them.
+ */
+export function sortNodes(list, key = 'status', { nodeOf = (x) => x, statusOf = (x) => nodeOf(x)?.status } = {}) {
+  const name = (x) => nodeOf(x)?.name;
+  const byName = (a, b) => compareNames(name(a), name(b));
+  let cmp;
+  switch (key) {
+    case 'name': cmp = byName; break;
+    case 'name-desc': cmp = (a, b) => byName(b, a); break;
+    case 'host': cmp = (a, b) => compareNames(nodeOf(a)?.host, nodeOf(b)?.host) || byName(a, b); break;
+    case 'importance': cmp = (a, b) => rank(IMPORTANCE_RANK, nodeOf(a)?.importance || 'normal') - rank(IMPORTANCE_RANK, nodeOf(b)?.importance || 'normal') || byName(a, b); break;
+    default: cmp = (a, b) => rank(STATUS_RANK, statusOf(a) || 'unknown') - rank(STATUS_RANK, statusOf(b) || 'unknown') || byName(a, b);
+  }
+  return [...(list || [])].sort(cmp);
 }

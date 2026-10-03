@@ -195,13 +195,14 @@ Each node carries:
 ### Templates
 
 **Add node** starts from a template, which prefills sensible checks and
-thresholds. There are nine:
+thresholds. There are ten:
 
 | Template | Checks it creates |
 |---|---|
 | **Website** | *Website loads* (HTTP, expects 200-399), *Certificate* (port 443, warn 14 days), *Name resolves* (DNS, A) |
 | **Home server** | *Reachable (ping)*, *SSH port 22* (TCP), *Web interface* (HTTP, TLS errors ignored) |
 | **Network device** | *Reachable (ping)*, *Internet name lookup* (DNS for `google.com`), *Admin page port 80* (TCP) |
+| **SNMP device** | *Reachable (ping)*, *SNMP readings* (v2c, community `public`, uptime and device name) — then **Pick interfaces** for the ports |
 | **Ping only** | *Reachable (ping)* — the quickest way to add a printer or a camera |
 | **API endpoint** | *API responds* (HTTP, expects 200-299), *Status value* (JSON, `status` must equal `ok`) |
 | **TCP service** | *Port accepts connections* — port 32400, i.e. Plex, ready to change |
@@ -228,6 +229,14 @@ status, group and tag, with live counts.
 The list is sectioned by group, worst status first inside each section. With a
 group filter on, a node in several groups is listed under the group you
 filtered to rather than its first one.
+
+**Sort** beside the search box puts the list in another order — *Name (A–Z)*,
+*Name (Z–A)*, *Address* or *Importance* — and the box next to it turns the
+group sections off for **One list** of everything. Names sort the way a person
+reads them: case is ignored and "switch 9" comes before "switch 10". Both
+choices are remembered in this browser; `?sort=name` in the address picks one
+for a link. The *Status list* and *Node table* dashboard widgets have the same
+**Sort by** option.
 
 Each row's **Actions** menu holds *Open*, *Edit*, *Run all checks now*,
 *Duplicate* and *Delete node*. The page's own buttons are **Add node**,
@@ -398,7 +407,28 @@ Covered in full under [Hardware health and the agent](#13-hardware-health-and-th
 
 ### SNMP
 
-Reads OIDs straight off a router, switch or access point.
+Reads a switch, router, firewall, access point, printer or UPS directly: its
+uptime and name, each port's link state and traffic, processor load — anything
+the device publishes over SNMP.
+
+**The quick way.** Add a node from the **SNMP device** template (or, on an
+existing node's page, choose **Add SNMP readings** — the page offers it on
+anything that looks like network gear). In the SNMP check:
+
+1. Switch SNMP on in the device's own admin page, read-only. If it asks which
+   managers may read it, give it the address of the computer GWatch runs on.
+2. Enter the community string (v2c — many devices start with `public`) or the
+   v3 user and passwords.
+3. Press **Test connection**. It reads the device's name, description and
+   uptime and says *Connected to office-switch*, or lists what to look at when
+   nothing answers.
+4. Press **Pick interfaces**. The device's ports are listed by name and
+   description with whether each link is up; tick the ones to watch and GWatch
+   adds, for each, a link-state reading (a port going down marks the check
+   down) and traffic in and out in bits per second — 64-bit counters by
+   default — and optionally errors in and out. No SNMP index to look up.
+
+The rest of this section is the detail behind that.
 
 - **SNMP version** — *2c* with a community string, or *3* with a user,
   authentication (MD5 / SHA / SHA224 / SHA256 / SHA384 / SHA512) and optional
@@ -496,7 +526,7 @@ transaction — so a partial bulk edit is not a state you can end up in.
 more than one — the tabs along the top switch between them, and a default
 "Overview" dashboard is created on first run.
 
-There are thirteen widgets:
+There are fourteen widgets:
 
 | Widget | Shows |
 |---|---|
@@ -513,11 +543,38 @@ There are thirteen widgets:
 | **Response-time chart** | Response time over time |
 | **Packet-loss chart** | Loss over time |
 | **Uptime** | Availability as a bar |
+| **Network map** | Every node under the node it depends on, coloured by status (see [the network map](#the-network-map)) |
 
 **Arranging them.** Drag a widget by its grip to move it, and its corner to
 resize. From the keyboard, focus the grip and use the **arrow keys** to move it
 one cell at a time, or **Shift + arrows** to resize — the new position is read
-out as it changes, so this works with a screen reader.
+out as it changes, so this works with a screen reader. A widget lands in the
+cell under the pointer when you let go (0.4.0 and earlier could drop it many
+rows further down until the page was reloaded).
+
+### The network map
+
+**Network map** in the sidebar draws the dependencies between nodes: every node
+sits under the node it **depends on** — the firewall at the top, the switch
+under it, the machines plugged into the switch under that. Nodes are coloured
+by their status, and the lines out of a node that is down are drawn red and
+dashed, so the reach of an outage — everything whose alerts are being held back
+because of it — can be followed by eye. Nodes with no dependency either way are
+set apart in a block of their own.
+
+Choose a node to see what is upstream of it and what depends on it, and to
+change what it **depends on** without opening the editor (a node cannot be
+made to depend on anything below it, which would be a loop). **Customise**
+lays the map out top to bottom, left to right or radially; shows names, names
+and addresses, or just status dots; makes nodes smaller or larger; draws lines
+curved, straight or right-angled; narrows the map to a group or a tag (the
+nodes a filtered node depends on stay on the map, faded); and can hide nodes
+with no dependency. Those choices are remembered in this browser.
+
+Scroll or use **+** and **−** to zoom, drag to pan, press **0** to fit. **Pin to
+a dashboard** adds the map, as customised, as a *Network map* widget; **Export
+as SVG** saves the drawing. "View as list" under the map gives the same tree as
+text.
 
 ---
 
@@ -542,6 +599,18 @@ a squashed scale. **Y axis minimum/maximum** and the **threshold line** belong
 to the left axis. Throughput is written as a rate — B/s, kB/s, MB/s, GB/s, in
 steps of 1000, the same way alert emails write it.
 
+**Timestack.** The **Timestack** button beside the range chips lays one metric
+over itself — what Nagios XI calls a timestacked performance graph. Choose the
+period each layer covers — **1 hour, 24 hours, 3 days, 7 days or 30 days** —
+from the chips, and how many layers (2 to 8, the current one included) under
+**Configure**. With 24 hours and four layers, the last 24 hours are drawn over
+yesterday's and the two days before, on one time axis, each its own colour,
+the current one the thickest line, with each layer's average in a tile
+underneath. It is the quickest way to tell a normal evening peak from a new
+one. The first metric ticked is the one stacked (or, with nothing ticked, the
+first check GWatch picks). A timestacked chart saves, exports and pins to a
+dashboard like any other.
+
 Then:
 
 - **Save**, and **Save as a copy** for a variant.
@@ -558,7 +627,7 @@ Every chart in GWatch, here and elsewhere, has two things worth knowing about:
   accessible alternative and the fastest way to read an exact value off a busy
   line.
 
-**Ranges and resolution.** 1h and 24h are drawn from raw results, 7d from
+**Ranges and resolution.** 1h and 24h are drawn from raw results, 3d and 7d from
 5-minute rollups, 30d from hourly and 1y from daily. A **named metric** series
 — an SNMP reading, a recorded JSON value, a hardware metric — is always read
 from raw results, because the rollup tables have columns for latency, jitter

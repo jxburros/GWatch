@@ -14,7 +14,7 @@ follows it. Breaking changes bump the prefix (`/api/v2/…`) and the old prefix 
 working for at least one release, so integrations should use `/api/v1/…`.
 
 Every API response carries `X-GWatch-API-Version: 1`, and `GET /api/version` returns
-`{"version": "0.4.1", "platform": "windows/amd64", "apiVersion": 1}` (`platform` is
+`{"version": "0.5.0", "platform": "windows/amd64", "apiVersion": 1}` (`platform` is
 omitted for callers who have not identified themselves).
 
 ## Platform notes
@@ -534,10 +534,15 @@ checks; tags +critical on 5 nodes").
 
 ## History (charts)
 
-- `GET /api/history?checkId=ID&range=1h|24h|7d|30d|1y` → `HistorySeries`.
+- `GET /api/history?checkId=ID&range=1h|24h|3d|7d|30d|1y` → `HistorySeries`.
+  Optional `end=` (Unix seconds, Unix milliseconds or RFC 3339) ends the window at
+  that moment instead of now — a timestacked chart reads yesterday's 24 hours with
+  `range=24h&end=<now − 1 day>`. An `end` in the future is read as now; one that
+  cannot be parsed is a 400. `/api/history/multi` and `/api/export/history.csv`
+  take it too.
   Multiple: `GET /api/history?checkId=1&checkId=2&range=24h` → `[HistorySeries]` (always an array when more than one id, single object for one id... to keep it simple the UI should use `GET /api/history/multi?checkId=..&checkId=..&range=` → `[HistorySeries]`).
 - `GET /api/history/multi?checkId=1&checkId=2&range=24h` → `[HistorySeries]`. With `auto=1` and no `checkId`, the service picks up to 4 important checks (critical/high nodes, ping and HTTP first).
-- Point spacing by range: 1h/24h → raw results (or 5-minute rollups if raw is gone), 7d → 5-minute rollups, 30d → hourly, 1y → daily.
+- Point spacing by range: 1h/24h → raw results (or 5-minute rollups if raw is gone), 3d/7d → 5-minute rollups, 30d → hourly, 1y → daily.
 
 ### Named metrics
 
@@ -835,10 +840,11 @@ Each widget carries its grid position: `x` (0..3), `y` (row), `width` (1..4) and
 Widget types (`Widget.type`) and their `config`:
 | type | config | description |
 |---|---|---|
-| `chart` | the Charts-tab config: `{ "checkIds": [], "metric": "avg|min|max|jitter|loss|availability", "range": "24h", "style": "line|area|step|bars|scatter", "smooth", "points", "lineWidth", "shadeFailures", "legend", "grid", "yMin", "yMax", "threshold", "split", "uptime", "colors": {checkId: "#hex"} }` | fully configurable chart |
+| `chart` | the Charts-tab config: `{ "checkIds": [], "metric": "avg|min|max|jitter|loss|availability", "range": "24h", "style": "line|area|step|bars|scatter", "smooth", "points", "lineWidth", "shadeFailures", "legend", "grid", "yMin", "yMax", "threshold", "split", "uptime", "colors": {checkId: "#hex"}, "timestack": null | { "period": "1h|24h|3d|7d|30d", "layers": 2–8 } }` | fully configurable chart; with `timestack` the first series is laid over itself, one layer per earlier period |
 | `summary` | `{}` | overall health counts (up/degraded/down/unknown) |
 | `groups` | `{ "groups": ["Home Network", ...] }` (empty = all) | group status cards |
-| `status_list` | `{ "group": "", "tag": "", "nodeIds": [] }` | node/check status list, filtered (`group` matches any of a node's groups) |
+| `status_list` | `{ "group": "", "tag": "", "nodeIds": [], "sort": "" }` | node/check status list, filtered (`group` matches any of a node's groups); `sort` is `""` (as the overview lists them), `status`, `name`, `name-desc`, `host` or `importance` |
+| `network_map` | `{ "orientation": "down|right|radial", "labels": "name|name-host|none", "size": "small|medium|large", "edges": "curved|straight|elbow", "group": "", "tag": "", "onlyLinked": false, "colorEdges": true, "showLegend": true }` | the dependency map: every node under the node it depends on |
 | `latency_chart` | `{ "checkIds": [1,2], "range": "24h", "metric": "avg" }` | line chart of latency/response time |
 | `response_chart` | same as latency_chart (HTTP checks) | response time |
 | `loss_chart` | `{ "checkIds": [], "range": "24h" }` | packet loss % |
@@ -847,7 +853,7 @@ Widget types (`Widget.type`) and their `config`:
 | `cert_warnings` | `{}` | certificate expiry warnings |
 | `attention` | `{}` | needs-attention list |
 | `monitor_health` | `{}` | service health |
-| `table` | `{ "group": "", "tag": "" }` | filtered node table |
+| `table` | `{ "group": "", "tag": "", "sort": "" }` | filtered node table (`sort` as for `status_list`) |
 
 ## Wallboards
 

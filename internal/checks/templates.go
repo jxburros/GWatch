@@ -81,6 +81,27 @@ func Templates() []model.NodeTemplate {
 			},
 		},
 		{
+			// The template that makes SNMP the starting point rather than a
+			// check type found later: the readings every SNMP agent answers,
+			// a ping beside them, and "Pick interfaces" in the editor for the
+			// ports. It opens on v2c with the community most devices ship with.
+			ID:          "snmp-device",
+			Name:        "SNMP device",
+			Description: "A managed switch, router, firewall, access point, printer or UPS that speaks SNMP: its uptime and name, then pick the ports to watch for link state and traffic.",
+			Icon:        "router",
+			Node:        node("SNMP device", "Network", "snmp-device"),
+			Checks: []model.Check{
+				mk(model.CheckPing, "Reachable (ping)", model.CheckConfig{PingCount: 4}),
+				mk(model.CheckSNMP, "SNMP readings", model.CheckConfig{
+					SNMPVersion: "2c", SNMPPort: 161, SNMPCommunity: "public",
+					SNMPOIDs: []model.SNMPOID{
+						{OID: "1.3.6.1.2.1.1.3.0", Name: "Uptime", Kind: "gauge", Scale: 0.01, Unit: "s"},
+						{OID: "1.3.6.1.2.1.1.5.0", Name: "Device name", Kind: "gauge", Scale: 1},
+					},
+				}),
+			},
+		},
+		{
 			ID:          "ping",
 			Name:        "Ping only",
 			Description: "Just a reachability check: is the device answering on the network? The quickest way to add a printer, a camera or anything else that only needs to be there.",

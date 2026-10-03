@@ -718,3 +718,53 @@ func TestHistoryServesAJSONCheckMetric(t *testing.T) {
 		t.Fatalf("metric on a non-recording check = %d, want 400", code)
 	}
 }
+
+// A timestacked chart reads earlier windows of the same length: `end` moves
+// the window back, a future end is read as now, and a bad one is refused.
+func TestHistoryEndShiftsTheWindow(t *testing.T) {
+	ts, srv := newTestServer(t)
+	ctx := context.Background()
+
+	node := model.Node{Name: "Gateway", Host: "192.168.1.1", Enabled: true, Importance: model.ImportanceNormal, Checks: []model.Check{{
+		Type: model.CheckPing, Name: "Ping", Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5,
+	}}}
+	var created nodeDoc
+	if code := call(t, ts, "POST", "/api/nodes", node, &created); code != 201 {
+		t.Fatalf("create = %d", code)
+	}
+	checkID := created.Checks[0].ID
+	lat := 12.0
+	for _, ago := range []time.Duration{time.Hour, 25 * time.Hour} {
+		if _, err := srv.Store.InsertResult(ctx, model.Result{
+			CheckID: checkID, Timestamp: time.Now().Add(-ago), Success: true, Status: model.StatusUp, LatencyMS: &lat,
+		}); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+
+	var today, yesterday model.HistorySeries
+	if code := call(t, ts, "GET", fmt.Sprintf("/api/history?checkId=%d&range=24h", checkID), nil, &today); code != 200 {
+		t.Fatalf("history = %d", code)
+	}
+	end := time.Now().Add(-24 * time.Hour).Unix()
+	if code := call(t, ts, "GET", fmt.Sprintf("/api/history?checkId=%d&range=24h&end=%d", checkID, end), nil, &yesterday); code != 200 {
+		t.Fatalf("history end = %d", code)
+	}
+	if len(today.Points) != 1 || len(yesterday.Points) != 1 {
+		t.Fatalf("points today %d, yesterday %d; want one each", len(today.Points), len(yesterday.Points))
+	}
+	if !yesterday.To.Before(today.To.Add(-23 * time.Hour)) {
+		t.Fatalf("yesterday's window ends %v, want a day before %v", yesterday.To, today.To)
+	}
+
+	var multi []model.HistorySeries
+	if code := call(t, ts, "GET", fmt.Sprintf("/api/history/multi?checkId=%d&range=3d&end=%d", checkID, time.Now().Add(time.Hour).Unix()), nil, &multi); code != 200 {
+		t.Fatalf("multi 3d = %d", code)
+	}
+	if len(multi) != 1 || multi[0].Range != "3d" || multi[0].To.After(time.Now()) {
+		t.Fatalf("multi = %+v, want a 3d series ending no later than now", multi)
+	}
+	if code := call(t, ts, "GET", fmt.Sprintf("/api/history?checkId=%d&end=yesterday", checkID), nil, nil); code != 400 {
+		t.Fatalf("bad end = %d, want 400", code)
+	}
+}

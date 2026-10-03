@@ -533,7 +533,7 @@ export class LineChart {
         }
       }
       if (style !== 'scatter') {
-        ctx.strokeStyle = s.color; ctx.lineWidth = lw; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+        ctx.strokeStyle = s.color; ctx.lineWidth = Math.max(0.5, Number(s.lineWidth) || lw); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
         ctx.beginPath();
         for (const r of runs) { if (r.length >= 2) tracePath(r); }
         ctx.stroke();
