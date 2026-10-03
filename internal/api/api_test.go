@@ -395,15 +395,18 @@ func TestStreamEmitsUpdates(t *testing.T) {
 	}()
 	buf := make([]byte, 4096)
 	var got string
-	for !strings.Contains(got, "event: update") {
+	// Read until the config/event update the node POST produces arrives. The
+	// engine's host-sampling loop can broadcast a {"kind":"host"} update at any
+	// moment (it takes a first reading soon after start), so stopping at the
+	// first "event: update" would race it and capture the wrong one; keep
+	// reading past any such interleaved update until the one we triggered shows
+	// up, bounded by the request's 5s context.
+	for !strings.Contains(got, `"kind":"config"`) && !strings.Contains(got, `"kind":"event"`) {
 		n, err := resp.Body.Read(buf)
 		if err != nil {
 			t.Fatalf("stream read: %v (got %q)", err, got)
 		}
 		got += string(buf[:n])
-	}
-	if !strings.Contains(got, `"kind":"config"`) && !strings.Contains(got, `"kind":"event"`) {
-		t.Fatalf("unexpected stream payload: %q", got)
 	}
 }
 

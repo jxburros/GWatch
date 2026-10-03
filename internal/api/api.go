@@ -68,6 +68,12 @@ type Server struct {
 	// exercise non-loopback behaviour over a loopback httptest connection, and
 	// is never set outside tests.
 	remoteAddrOverride func(*http.Request) string
+
+	// localHosts is the set of Host-header names that name this machine, built
+	// once and used to refuse the no-sign-in local-admin principal to a request
+	// whose Host is some other domain rebound to 127.0.0.1 (#86).
+	localHostsOnce sync.Once
+	localHosts     map[string]bool
 }
 
 // Handler builds the router.
@@ -546,20 +552,38 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, maskOverview(ov))
+	writeJSON(w, http.StatusOK, s.maskOverviewFor(r, ov))
+}
+
+// maskOverviewFor masks the overview's credentials and, when the reader is an
+// API key, also strips the header/body/env/metrics-URL fields that routinely
+// carry credentials (#142) — see stripKeySensitiveChecks.
+func (s *Server) maskOverviewFor(r *http.Request, ov engine.Overview) engine.Overview {
+	return maskOverview(ov, auth.FromContext(r.Context()).Kind == auth.KindAPIKey)
 }
 
 // maskOverview hides the checks' credentials in the overview, which every
-// viewer and every read-only API key may read.
-func maskOverview(ov engine.Overview) engine.Overview {
+// viewer and every read-only API key may read. When stripKeySensitive is set
+// the extra fields that carry credentials are cleared as well, for a reader
+// that is an API key rather than a person at the browser.
+func maskOverview(ov engine.Overview, stripKeySensitive bool) engine.Overview {
 	nodes := make([]engine.NodeView, len(ov.Nodes))
 	copy(nodes, ov.Nodes)
 	for i := range nodes {
 		nodes[i].Node = maskNodeChecks(nodes[i].Node)
+		if stripKeySensitive {
+			nodes[i].Node = stripKeySensitiveChecks(nodes[i].Node)
+		}
 		views := make([]engine.CheckView, len(nodes[i].Checks))
 		copy(views, nodes[i].Checks)
 		for j := range views {
 			views[j].Check = maskCheck(views[j].Check)
+			if stripKeySensitive {
+				views[j].Check.Config.Headers = nil
+				views[j].Check.Config.Body = ""
+				views[j].Check.Config.Env = nil
+				views[j].Check.Config.MetricsURL = ""
+			}
 		}
 		nodes[i].Checks = views
 	}
@@ -579,7 +603,7 @@ func (s *Server) handleWallboard(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	doc := wallboardDoc{Overview: maskOverview(ov), Health: s.Engine.Health(r.Context()), Trends: []model.HistorySeries{}}
+	doc := wallboardDoc{Overview: s.maskOverviewFor(r, ov), Health: s.Engine.Health(r.Context()), Trends: []model.HistorySeries{}}
 	rng, _ := store.ParseRange("24h")
 	for _, c := range autoChecks(ov, 6) {
 		series, err := s.Store.History(r.Context(), c.check, c.node.Name, rng, time.Now())
@@ -648,6 +672,40 @@ type nodeDoc struct {
 	InMaintenance bool                       `json:"inMaintenance"`
 }
 
+// checkRunsCode reports whether a check configuration executes a command or
+// reaches a caller-chosen URL carrying a stored credential — the two shapes
+// that would turn an API key (an integration's credential, and the MCP
+// companion's) into code execution on the GWatch host or a way to send a
+// stored secret somewhere of the caller's choosing. Creating or editing one is
+// an administrator's act at the machine, never an API key's, whatever its
+// scope (#85).
+func checkRunsCode(c model.Check) bool {
+	if c.Type == model.CheckCustom {
+		return true
+	}
+	if c.Type == model.CheckSystem && c.Config.HostSource == model.HostSourceURL {
+		return true
+	}
+	return false
+}
+
+// denyKeyCodeCheck refuses, with a 403, an API key trying to create, edit or
+// test a check that runs code. The route policy already keeps viewers out of
+// these routes; this is the boundary a read-write key would otherwise cross.
+// It returns true when it has written the response, so the caller stops.
+func (s *Server) denyKeyCodeCheck(w http.ResponseWriter, r *http.Request, checks []model.Check) bool {
+	if auth.FromContext(r.Context()).Kind != auth.KindAPIKey {
+		return false
+	}
+	for _, c := range checks {
+		if checkRunsCode(c) {
+			s.deny(w, r, http.StatusForbidden, "custom checks and agentless-URL hardware checks can only be created, edited or tested by an administrator signed in to the web interface, never through an API key", true)
+			return true
+		}
+	}
+	return false
+}
+
 // checkSecretFields points at the credentials inside a check configuration.
 // They are masked on the way out and restored on the way in, the same way the
 // settings screen handles the SMTP password, so that reading a node — which
@@ -706,8 +764,36 @@ func restoreCheckSecrets(n *model.Node, existing model.Node) {
 	}
 }
 
-func (s *Server) decorateNode(n model.Node, states map[int64]model.CheckState, last map[int64]model.Result) nodeDoc {
+// stripKeySensitiveChecks blanks the check-config fields that are not
+// credentials in their own right but routinely carry them — request headers
+// (Authorization), the request body (a login probe's password), the
+// custom-check environment and the agentless metrics URL — before a node is
+// handed to an API key. A read-only key is the MCP companion's default, so
+// without this an assistant (and anything that can steer it through the data it
+// monitors) could read those values straight back (#142). Browser viewers and
+// administrators still receive them so the check editor keeps working; masking
+// them there, and sealing them at rest, is tracked in #142 and #88.
+func stripKeySensitiveChecks(n model.Node) model.Node {
+	if len(n.Checks) == 0 {
+		return n
+	}
+	checks := make([]model.Check, len(n.Checks))
+	copy(checks, n.Checks)
+	for i := range checks {
+		checks[i].Config.Headers = nil
+		checks[i].Config.Body = ""
+		checks[i].Config.Env = nil
+		checks[i].Config.MetricsURL = ""
+	}
+	n.Checks = checks
+	return n
+}
+
+func (s *Server) decorateNode(r *http.Request, n model.Node, states map[int64]model.CheckState, last map[int64]model.Result) nodeDoc {
 	n = maskNodeChecks(n)
+	if auth.FromContext(r.Context()).Kind == auth.KindAPIKey {
+		n = stripKeySensitiveChecks(n)
+	}
 	doc := nodeDoc{Node: n, StateByCheck: map[int64]model.CheckState{}}
 	for _, c := range n.Checks {
 		if st, ok := states[c.ID]; ok {
@@ -737,7 +823,7 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	states := s.Engine.States()
 	out := make([]nodeDoc, 0, len(nodes))
 	for _, n := range nodes {
-		out = append(out, s.decorateNode(n, states, nil))
+		out = append(out, s.decorateNode(r, n, states, nil))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -758,7 +844,7 @@ func (s *Server) handleGetNode(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.decorateNode(n, s.Engine.States(), last))
+	writeJSON(w, http.StatusOK, s.decorateNode(r, n, s.Engine.States(), last))
 }
 
 // normalizeTags cleans a tag list: blanks go, surrounding space goes, and two
@@ -880,6 +966,9 @@ func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 		writeDecodeError(w, err)
 		return
 	}
+	if s.denyKeyCodeCheck(w, r, n.Checks) {
+		return
+	}
 	n.ID = 0
 	for i := range n.Checks {
 		// A new node's checks are new too, so a masked credential here came
@@ -906,7 +995,7 @@ func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.configChanged(r.Context(), &created, fmt.Sprintf("Added node %s", created.Name), fmt.Sprintf("%d check(s): %s", len(created.Checks), checkNames(created.Checks)))
-	writeJSON(w, http.StatusCreated, s.decorateNode(created, s.Engine.States(), nil))
+	writeJSON(w, http.StatusCreated, s.decorateNode(r, created, s.Engine.States(), nil))
 }
 
 func checkNames(cs []model.Check) string {
@@ -948,6 +1037,9 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 		writeDecodeError(w, err)
 		return
 	}
+	if s.denyKeyCodeCheck(w, r, n.Checks) {
+		return
+	}
 	n.ID = id
 	restoreCheckSecrets(&n, existing)
 	if err := s.normalizeNode(&n); err != nil {
@@ -972,7 +1064,7 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 	}
 	detail := describeNodeChange(existing, updated, len(deleted))
 	s.configChanged(r.Context(), &updated, fmt.Sprintf("Updated node %s", updated.Name), detail)
-	writeJSON(w, http.StatusOK, s.decorateNode(updated, s.Engine.States(), nil))
+	writeJSON(w, http.StatusOK, s.decorateNode(r, updated, s.Engine.States(), nil))
 }
 
 func describeNodeChange(before, after model.Node, deletedChecks int) string {
@@ -1077,7 +1169,7 @@ func (s *Server) handleEnableNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.configChanged(r.Context(), &n, fmt.Sprintf("%s %s", map[bool]string{true: "Enabled", false: "Disabled"}[body.Enabled], n.Name), "Monitoring "+map[bool]string{true: "resumed", false: "paused; configuration kept"}[body.Enabled]+".")
-	writeJSON(w, http.StatusOK, s.decorateNode(n, s.Engine.States(), nil))
+	writeJSON(w, http.StatusOK, s.decorateNode(r, n, s.Engine.States(), nil))
 }
 
 func (s *Server) handleDuplicateNode(w http.ResponseWriter, r *http.Request) {
@@ -1103,7 +1195,7 @@ func (s *Server) handleDuplicateNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.configChanged(r.Context(), &created, fmt.Sprintf("Duplicated node as %s", created.Name), "The copy is disabled until you enable it.")
-	writeJSON(w, http.StatusCreated, s.decorateNode(created, s.Engine.States(), nil))
+	writeJSON(w, http.StatusCreated, s.decorateNode(r, created, s.Engine.States(), nil))
 }
 
 func (s *Server) handleRunNode(w http.ResponseWriter, r *http.Request) {
@@ -1148,7 +1240,7 @@ func (s *Server) handleSilenceNode(w http.ResponseWriter, r *http.Request) {
 		}
 		states[c.ID] = st
 	}
-	writeJSON(w, http.StatusOK, s.decorateNode(n, states, nil))
+	writeJSON(w, http.StatusOK, s.decorateNode(r, n, states, nil))
 }
 
 func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request) {
@@ -1204,11 +1296,17 @@ func (s *Server) handleTestCheck(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("unsupported check type %q", body.Check.Type))
 		return
 	}
+	if s.denyKeyCodeCheck(w, r, []model.Check{body.Check}) {
+		return
+	}
 	// The editor never holds the credentials of a saved check, so testing one
 	// straight after opening it sends them masked or blank. Fill them back in
 	// from the stored check, or the test would fail for a reason that has
-	// nothing to do with the device.
-	if body.Check.ID != 0 {
+	// nothing to do with the device. Only a person signed in at the browser
+	// may do this: restoring a stored secret for an API key would let a key
+	// run a check with credentials it cannot read, against a target it chose,
+	// and so send that secret to a host it controls (#85).
+	if body.Check.ID != 0 && auth.FromContext(r.Context()).Kind != auth.KindAPIKey {
 		if stored, err := s.Store.GetCheck(r.Context(), body.Check.ID); err == nil {
 			before := checkSecretFields(&stored.Config)
 			now := checkSecretFields(&body.Check.Config)

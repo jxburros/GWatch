@@ -390,7 +390,7 @@ func (s *Server) handleHook(w http.ResponseWriter, r *http.Request) {
 	// makes a mistyped URL diagnosable, but paying for it stops the slug space
 	// from being enumerated for free.
 	ip := s.clientIP(r)
-	if allowed, wait := s.failLimiter.Allow(ip); !allowed {
+	if allowed, wait := s.failLimiter.Allow(limiterKey(limiterHook, ip)); !allowed {
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds()+0.999)))
 		writeError(w, http.StatusTooManyRequests, "too many failed attempts; try again shortly")
 		return
@@ -431,7 +431,7 @@ func (s *Server) handleHook(w http.ResponseWriter, r *http.Request) {
 	}
 	// The caller got in, so give its budget back: an endpoint called on a
 	// schedule must never talk itself into a 429.
-	s.failLimiter.Reset(ip)
+	s.failLimiter.Reset(limiterKey(limiterHook, ip))
 	vars := actions.Vars{"method": r.Method, "remote": r.RemoteAddr}
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	vars["body"] = string(body)

@@ -553,7 +553,7 @@ func TestHookTokenAttemptsAreRateLimited(t *testing.T) {
 
 	// 3. The right token gets in and hands the budget straight back, so an
 	//    endpoint called on a schedule is never throttled by its own traffic.
-	srv.failLimiter.Reset("127.0.0.1")
+	srv.failLimiter.Reset(limiterKey(limiterHook, "127.0.0.1"))
 	for i := 0; i < failureLimit*3; i++ {
 		// 502 = the action ran and nothing was listening on port 1, which
 		// means the token was accepted.

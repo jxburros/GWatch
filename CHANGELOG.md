@@ -9,6 +9,47 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## Unreleased
+
+### Security
+
+- **A read-write API key can no longer run commands on the host.** Creating,
+  editing or testing a `custom` check — or a `system` check that reads an
+  agentless URL — now requires an administrator signed in to the web interface,
+  and is refused to every API key with 403. This closes a path by which a
+  read-write key (and so the MCP companion, if run with `--allow-write`) could
+  execute arbitrary commands as the service account ([#85]).
+- **DNS rebinding can no longer reach the local administrator.** A loopback
+  request is granted the no-sign-in administrator principal only when its `Host`
+  header names this machine (a loopback address, `localhost`, or the machine's
+  own hostname or addresses). A page on an external domain rebound to `127.0.0.1`
+  no longer counts as local ([#86]).
+- **A shared wallboard no longer leaks check credentials.** The projected
+  (token) wallboard view is now masked like every other read path, so a board's
+  share URL cannot hand out SNMP communities, metrics tokens or check headers
+  ([#87]).
+- **Read-only API keys no longer read check header/body/environment secrets.**
+  A check's request headers (e.g. `Authorization`), request body, custom-check
+  environment and agentless metrics URL are stripped from responses to API keys,
+  which are the MCP companion's default. Browser viewers and administrators still
+  see them so the editor works; masking them there and sealing them at rest is
+  still tracked ([#142], [#88]).
+- **The brute-force limiter now keeps a separate budget per credential kind.**
+  A success of one kind (an agent reporting in, a valid key, a hook) can no
+  longer clear the failed-attempt budget another kind (sign-in, the access
+  password, a pairing code) is accumulating, and IPv6 clients are keyed on their
+  /64 ([#89]).
+- **Sign-in timing no longer reveals which user names exist.** A sign-in for an
+  unknown name now spends the same argon2 work as one for a real account ([#91]).
+
+[#85]: https://github.com/jxburros/GWatch/issues/85
+[#86]: https://github.com/jxburros/GWatch/issues/86
+[#87]: https://github.com/jxburros/GWatch/issues/87
+[#88]: https://github.com/jxburros/GWatch/issues/88
+[#89]: https://github.com/jxburros/GWatch/issues/89
+[#91]: https://github.com/jxburros/GWatch/issues/91
+[#142]: https://github.com/jxburros/GWatch/issues/142
+
 ## 0.5.0
 
 Four requests from the field, and SNMP made a first-class way in. The agent is
