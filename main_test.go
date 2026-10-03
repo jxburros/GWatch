@@ -110,6 +110,8 @@ func TestEmbeddedWebAssets(t *testing.T) {
 		"web/views/settings.js",
 		"web/views/wallboard.js",
 		"web/views/charts.js",
+		"web/views/network-map.js",
+		"web/netmap.js",
 		"web/views/audit.js",
 		"web/views/automation.js",
 		"web/logo.svg",

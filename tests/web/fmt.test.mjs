@@ -193,3 +193,20 @@ test('unitAxis writes every tick on an axis in one scaled unit', () => {
   assert.equal(fmt.unitAxis(40, 'ms'), '40 ms');
   assert.equal(fmt.unitAxis(0.5, '', { max: 2, step: 0.5 }), '0.5');
 });
+
+test('sortNodes puts nodes in alphabetical, address, importance or status order', () => {
+  const list = [
+    { name: 'node 10', host: '192.168.1.10', status: 'up', importance: 'low' },
+    { name: 'Node 9', host: '192.168.1.9', status: 'down', importance: 'normal' },
+    { name: 'alpha', host: '10.0.0.1', status: 'degraded', importance: 'critical' },
+  ];
+  const names = (key) => fmt.sortNodes(list, key).map((n) => n.name);
+  assert.deepEqual(names('name'), ['alpha', 'Node 9', 'node 10'], 'case ignored, numbers in number order');
+  assert.deepEqual(names('name-desc'), ['node 10', 'Node 9', 'alpha']);
+  assert.deepEqual(names('host'), ['alpha', 'Node 9', 'node 10']);
+  assert.deepEqual(names('importance'), ['alpha', 'Node 9', 'node 10']);
+  assert.deepEqual(names('status'), ['Node 9', 'alpha', 'node 10'], 'worst first');
+  assert.equal(list[0].name, 'node 10', 'the list given is not reordered');
+  const wrapped = list.map((n) => ({ node: n, status: n.status }));
+  assert.deepEqual(fmt.sortNodes(wrapped, 'name', { nodeOf: (r) => r.node }).map((r) => r.node.name), ['alpha', 'Node 9', 'node 10']);
+});

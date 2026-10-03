@@ -4,12 +4,13 @@
 
 import { api } from '../api.js';
 import { h, icon, clear, replace, statusPill, statusSpine, statusWord, statusGlyph, checkChip, statusOrb, toast, confirmDialog, promptDialog, openModal, menuButton, field, textInput, numberInput, selectInput, checkbox, emptyState, skeleton, eventRow, rangeChips, statusMeta, uid } from '../components.js';
-import { relTime, bytes, plural, dateShort, duration, pct, nodeGroups, inGroup } from '../fmt.js';
-import { chartConfigEditor, renderConfiguredChart, normalizeChartConfig, historyFetch, chartCsvItems } from '../chart-config.js';
+import { relTime, bytes, plural, dateShort, duration, pct, nodeGroups, inGroup, NODE_SORTS, sortNodes } from '../fmt.js';
+import { chartConfigEditor, renderConfiguredChart, normalizeChartConfig, cachedHistoryFetch, chartCsvItems, TIMESTACK_PERIODS } from '../chart-config.js';
 // charts.js is already in the graph by way of chart-config.js, so naming these
 // here costs nothing and spares the availability widget an await it does not
 // need — the widget must be able to fill itself in one synchronous step.
 import { uptimeBar, uptimeLegend } from '../charts.js';
+import { renderNetworkMap, mapConfigEditor } from '../netmap.js';
 
 export const COLS = 4;
 export const WIDGET_TYPES = [
@@ -25,6 +26,7 @@ export const WIDGET_TYPES = [
   { type: 'cert_warnings', label: 'Certificate warnings', desc: 'Certificates that expire soon or are invalid.', w: 1, h: 1, config: {} },
   { type: 'attention', label: 'Needs attention', desc: 'Everything that is currently down or degraded, with dependency context.', w: 2, h: 1, config: {} },
   { type: 'monitor_health', label: 'Monitor health', desc: 'Is the GWatch service itself running and checking?', w: 1, h: 1, config: {} },
+  { type: 'network_map', label: 'Network map', desc: 'Every node under the node it depends on, coloured by status.', w: 4, h: 3, config: { orientation: 'down', labels: 'name' } },
   { type: 'table', label: 'Node table', desc: 'A table of nodes for a group or tag.', w: 4, h: 2, config: { group: '', tag: '' } },
 ];
 const LEGACY_CHARTS = { latency_chart: { metric: 'avg', unit: 'ms' }, response_chart: { metric: 'avg', unit: 'ms' }, loss_chart: { metric: 'loss', unit: '%' } };
@@ -91,6 +93,10 @@ export function resolve(items, moved) {
     const order = items.filter((i) => i !== moved).sort((a, b) => a.y - b.y || a.x - b.x);
     for (let i = 0; i < order.length; i++) for (let j = 0; j < i; j++) if (collides(order[i], order[j])) { order[i].y = order[j].y + order[j].h; changed = true; }
   }
+  compact(items, moved);
+  // Gravity applies to the moved widget too: dropped into empty space below
+  // the rest, it rises to sit under them rather than staying stranded there.
+  while (moved.y > 0 && !items.some((it) => collides({ ...moved, y: moved.y - 1 }, it) && it !== moved)) moved.y--;
   return compact(items, moved);
 }
 
@@ -248,6 +254,14 @@ export async function mount(root, ctx) {
     renderWidgets();
     toast('Widget added', { kind: 'success' });
   }
+  // A timestacked chart widget's chips pick the period it stacks.
+  async function setWidgetStack(w, period) {
+    const cfg = widgetConfig(w);
+    cfg.timestack = { ...(cfg.timestack || { layers: 4 }), period }; w.config = cfg;
+    disposeChart(w.id);
+    await persist().catch(() => {});
+    renderWidgets();
+  }
   async function setWidgetRange(w, range) {
     const cfg = widgetConfig(w);
     cfg.range = range; w.config = cfg;
@@ -322,7 +336,8 @@ export async function mount(root, ctx) {
     const head = h('div', { class: 'widget-head' }, h('h2', { class: 'card-title' }, dragHandle, h('span', { class: 'truncate', title: w.title || meta.label }, w.title || meta.label)));
     const actions = h('div', { class: 'widget-edit-bar' });
     if (CHART_LIKE.has(w.type)) {
-      actions.append(rangeChips(cfg.range || (w.type === 'uptime_chart' ? '7d' : '24h'), (r) => setWidgetRange(w, r)));
+      if (w.type === 'chart' && cfg.timestack) actions.append(rangeChips(cfg.timestack.period || '24h', (p) => setWidgetStack(w, p), { ranges: TIMESTACK_PERIODS.map((p) => p.value) }));
+      else actions.append(rangeChips(cfg.range || (w.type === 'uptime_chart' ? '7d' : '24h'), (r) => setWidgetRange(w, r)));
       actions.append(menuButton(() => chartMenu(w), { label: 'Chart options', small: true, cls: 'admin-only' }));
     } else {
       actions.append(menuButton(() => [
@@ -410,8 +425,23 @@ export async function mount(root, ctx) {
     const gap = parseFloat(cs.columnGap) || 1;
     const padding = parseFloat(cs.paddingLeft) || 0;
     const cellW = (rect.width - padding * 2 - gap * (COLS - 1)) / COLS;
-    const rowH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--row-h')) || 168;
-    return { rect, gap, padding, cellW, rowH };
+    return { rect, gap, padding, cellW, rowH: rowHeight(cs) };
+  }
+  // One grid row in pixels. --row-h is written in rem, so reading the custom
+  // property and parseFloat-ing it gave 11.375 — rem taken for pixels — and a
+  // drop a few hundred pixels down worked out as a row sixteen times further
+  // than the pointer, which left the widget pages below the rest until a
+  // reload compacted it back up. The grid's own computed row track is
+  // already in pixels; the custom property, resolved against the root font
+  // size, is the fallback.
+  function rowHeight(cs = getComputedStyle(grid)) {
+    const track = parseFloat(String(cs.gridAutoRows || '').split(' ')[0]);
+    if (Number.isFinite(track) && track > 0 && /px$/.test(String(cs.gridAutoRows).split(' ')[0])) return track;
+    const raw = getComputedStyle(document.documentElement).getPropertyValue('--row-h').trim();
+    const n = parseFloat(raw);
+    if (!Number.isFinite(n) || n <= 0) return 182;
+    if (/r?em$/.test(raw)) return n * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16);
+    return n;
   }
   function layoutOf(w) { return state.layout.find((l) => l.id === w.id); }
 
@@ -419,7 +449,7 @@ export async function mount(root, ctx) {
     if (e.button !== 0 || window.innerWidth < 900) return;
     e.preventDefault();
     const l = layoutOf(w); if (!l) return;
-    const { rect, gap, padding, cellW, rowH } = cellSize();
+    const { gap, padding, cellW, rowH } = cellSize();
     const cardRect = card.getBoundingClientRect();
     const offX = e.clientX - cardRect.left, offY = e.clientY - cardRect.top;
     const placeholder = h('div', { class: 'widget-placeholder' });
@@ -435,7 +465,10 @@ export async function mount(root, ctx) {
         card.style.setProperty('--drag-w', `${cardRect.width}px`); card.style.setProperty('--drag-h', `${cardRect.height}px`);
         card.style.gridColumn = ''; card.style.gridRow = '';
       }
-      const gx = ev.clientX - rect.left - padding - offX, gy = ev.clientY - rect.top - padding - offY + grid.scrollTop;
+      // The grid's position now, not at the start: the page may have
+      // scrolled under the pointer since.
+      const now = grid.getBoundingClientRect();
+      const gx = ev.clientX - now.left - padding - offX, gy = ev.clientY - now.top - padding - offY;
       card.style.left = `${gx}px`; card.style.top = `${gy}px`;
       const nx = Math.round(gx / (cellW + gap)), ny = Math.round(gy / (rowH + gap));
       const tx = Math.min(COLS - ghost.w, Math.max(0, nx)), ty = Math.max(0, ny);
@@ -540,13 +573,15 @@ export async function mount(root, ctx) {
 
   function nodesFiltered(cfg) {
     const ov = state.overview?.nodes || [];
-    return ov.filter((entry) => {
+    const list = ov.filter((entry) => {
       const n = entry.node;
       if (cfg.group && !inGroup(n, cfg.group)) return false;
       if (cfg.tag && !(n.tags || []).includes(cfg.tag)) return false;
       if (cfg.nodeIds?.length && !cfg.nodeIds.map(Number).includes(Number(n.id))) return false;
       return true;
     });
+    // No sort chosen keeps the order the overview gives, as before.
+    return cfg.sort ? sortNodes(list, cfg.sort, { nodeOf: (r) => r.node, statusOf: (r) => r.status }) : list;
   }
 
   function renderWidgetBody(w, cfg, body, actions) {
@@ -567,6 +602,7 @@ export async function mount(root, ctx) {
       case 'attention': return renderAttention(body, ov);
       case 'monitor_health': return renderMonitorHealth(body, actions);
       case 'table': return renderTable(body, cfg);
+      case 'network_map': return renderMapWidget(w, body, cfg);
       default: body.append(h('div', { class: 'note' }, `Unknown widget type "${w.type}".`));
     }
   }
@@ -728,6 +764,16 @@ export async function mount(root, ctx) {
     body.append(h('div', { class: 'table-wrap' }, table));
   }
 
+  /* ---------- Network map ---------- */
+  // Drawn into the body each time it is rendered; the map is SVG built in one
+  // synchronous step, so a live update rewriting it does not flash.
+  function renderMapWidget(w, body, cfg) {
+    body.classList.add('widget-map');
+    renderNetworkMap(body, state.overview?.nodes || [], cfg, { title: w.title || 'Network map' });
+    const open = h('a', { class: 'icon-btn', href: '#/map', title: 'Open the network map', 'aria-label': 'Open the network map' }, icon('external'));
+    if (!body.closest('.widget')?.querySelector('.widget-edit-bar a[href="#/map"]')) body.closest('.widget')?.querySelector('.widget-edit-bar')?.prepend(open);
+  }
+
   /* ---------- Charts ---------- */
   function disposeChart(id) {
     const v = state.chartViews.get(id);
@@ -735,11 +781,7 @@ export async function mount(root, ctx) {
   }
   // A chart widget may also ask for one of a check's named metrics (#68);
   // everything is cached by what was asked for, until the next refresh.
-  function fetchHistory(ids, range, metric) {
-    const key = `${ids.join(',')}|${range}|${metric || ''}`;
-    if (!state.historyCache.has(key)) state.historyCache.set(key, historyFetch(ids, range, metric));
-    return state.historyCache.get(key);
-  }
+  const fetchHistory = cachedHistoryFetch(state.historyCache);
   function renderChart(w, body) {
     disposeChart(w.id);
     const host = h('div', { style: { flex: '1', minHeight: '0', display: 'flex', flexDirection: 'column' } });
@@ -860,8 +902,9 @@ export function openWidgetEditor(existing, state) {
         }
         case 'status_list': case 'table': {
           const g = groupSel(); const t = tagSel();
-          cfgControls.group = () => g.value; cfgControls.tag = () => t.value;
-          cfgArea.append(h('div', { class: 'form-grid' }, field({ label: 'Group', input: g }), field({ label: 'Tag', input: t })));
+          const so = selectInput({ options: [{ value: '', label: 'As GWatch lists them' }, ...NODE_SORTS], value: cfg.sort || '' });
+          cfgControls.group = () => g.value; cfgControls.tag = () => t.value; cfgControls.sort = () => so.value;
+          cfgArea.append(h('div', { class: 'form-grid-3' }, field({ label: 'Group', input: g }), field({ label: 'Tag', input: t }), field({ label: 'Sort by', input: so })));
           if (w.type === 'status_list') {
             const sel = new Set((cfg.nodeIds || []).map(Number));
             const list = h('div', { class: 'check-list' });
@@ -888,6 +931,12 @@ export function openWidgetEditor(existing, state) {
           cfgArea.append(field({ label: 'Time range', input: r }), field({ label: 'Checks', input: list, help: 'Leave all unticked to let GWatch pick important checks.' }));
           break;
         }
+        case 'network_map': {
+          const ed = mapConfigEditor(cfg, { groups: state.groups });
+          cfgControls.__map = () => ed.value;
+          cfgArea.append(ed);
+          break;
+        }
         case 'incidents': {
           const n = numberInput({ value: cfg.limit || 10, min: 1, max: 50 });
           cfgControls.limit = () => Number(n.value) || 10;
@@ -909,6 +958,7 @@ export function openWidgetEditor(existing, state) {
       let cfg = {};
       let type = w.type;
       if (chartEditor) { cfg = chartEditor.value; type = 'chart'; }
+      else if (cfgControls.__map) cfg = cfgControls.__map();
       else for (const [k, get] of Object.entries(cfgControls)) cfg[k] = get();
       result = { id: w.id, type, title: titleInput.value.trim(), x: existing?.x ?? null, y: existing?.y ?? null, width: Number(widthSel.value), height: Number(heightSel.value), config: cfg };
       m.close();

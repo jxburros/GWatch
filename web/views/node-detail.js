@@ -64,6 +64,8 @@ export async function mount(root, ctx) {
         menuButton(() => [
           { label: n.enabled === false ? 'Enable node' : 'Disable node', icon: 'power', onClick: () => setEnabled(n.enabled === false), adminOnly: true },
           { label: 'Duplicate', icon: 'copy', onClick: duplicate, adminOnly: true },
+          (n.checks || []).some((c) => c.type === 'snmp') ? null : { label: 'Add SNMP readings', icon: 'wifi', href: `#/nodes/${n.id}/edit?add=snmp`, adminOnly: true },
+          { label: 'Show on the network map', icon: 'network', href: `#/map?node=${n.id}` },
           { sep: true, adminOnly: true },
           { label: 'Silence alerts for 1 hour', icon: 'bellOff', onClick: () => silence(60), adminOnly: true },
           { label: 'Silence alerts for 8 hours', icon: 'bellOff', onClick: () => silence(480), adminOnly: true },
@@ -120,6 +122,19 @@ export async function mount(root, ctx) {
     const checks = n.checks || [];
     if (!checks.length) { checksEl.append(h('div', { class: 'card' }, emptyState({ icon: 'activity', title: 'No checks on this node', text: 'Add a ping, HTTP or TCP check so GWatch can start watching it.', actions: h('a', { class: 'btn btn-primary admin-only', href: `#/nodes/${n.id}/edit` }, 'Add checks') }))); return; }
     for (const c of checks) checksEl.append(checkCard(c));
+    if (looksLikeNetworkGear(n) && !checks.some((c) => c.type === 'snmp')) {
+      checksEl.append(h('div', { class: 'card snmp-cta admin-only' },
+        h('div', null, h('b', null, 'Read this device over SNMP'),
+          h('div', { class: 'muted small' }, 'Switches, routers, firewalls and access points can report their uptime and each port’s link state and traffic. Test the connection and pick the ports in a couple of clicks.')),
+        h('a', { class: 'btn btn-primary btn-sm', href: `#/nodes/${n.id}/edit?add=snmp` }, icon('wifi'), 'Add SNMP readings')));
+    }
+  }
+  // A device SNMP is likely to help with: started from a network template, or
+  // tagged or named like network gear.
+  function looksLikeNetworkGear(n) {
+    if (['router', 'snmp-device'].includes(n.template)) return true;
+    const words = [n.name, ...(n.tags || []), ...(n.groups || [])].join(' ').toLowerCase();
+    return /\b(router|switch|firewall|gateway|access point|ap|ups|printer|network|snmp)\b/.test(words);
   }
 
   function checkCard(c) {

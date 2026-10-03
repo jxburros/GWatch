@@ -23,6 +23,12 @@
 // metric automatic charts use), which is also what an older GWatch reading a
 // newer config falls back on.
 
+//
+// Timestacked charts (`timestack: { period, layers }`), what Nagios XI calls a
+// Timestacked Performance Graph: one metric laid over itself — the last 24
+// hours, the 24 before that, the 24 before those — on a single time axis, so
+// today can be read against yesterday and last week at a glance.
+
 import { api, getHistoryMulti, getHistoryAuto, getHistoryMetric, qs } from './api.js';
 import { h, icon, clear, replace, field, textInput, numberInput, selectInput, checkbox, emptyState, uid } from './components.js';
 import { LineChart, toSeries, uptimeBar, uptimeLegend, seriesColors, CHART_STYLES, groupByUnits } from './charts.js';
@@ -38,6 +44,41 @@ export const METRICS = [
 ];
 export function metricMeta(m) { return METRICS.find((x) => x.value === m) || METRICS[0]; }
 const BUILTIN = new Set(METRICS.map((m) => m.value));
+
+const HOUR_MS = 3600e3, DAY_MS = 86400e3;
+/**
+ * The windows a timestacked chart can lay over each other. `range` is the
+ * history range each layer is read as; `unit`, `per` and `each` name how far
+ * back a layer is ("2 days earlier").
+ */
+export const TIMESTACK_PERIODS = [
+  { value: '1h', label: '1 hour', ms: HOUR_MS, unit: 'hour', each: 1 },
+  { value: '24h', label: '24 hours (day)', ms: DAY_MS, unit: 'day', each: 1 },
+  { value: '3d', label: '3 days', ms: 3 * DAY_MS, unit: 'day', each: 3 },
+  { value: '7d', label: '7 days (week)', ms: 7 * DAY_MS, unit: 'week', each: 1 },
+  { value: '30d', label: '30 days (month)', ms: 30 * DAY_MS, unit: 'day', each: 30 },
+];
+export const TIMESTACK_MAX_LAYERS = 8;
+export function timestackPeriod(v) { return TIMESTACK_PERIODS.find((p) => p.value === v) || TIMESTACK_PERIODS[1]; }
+
+/** What layer `i` of a timestack is called: "Last 24 hours", "Yesterday",
+ *  "2 days earlier", "Week before", "60 days earlier". */
+export function timestackLabel(period, i) {
+  const p = timestackPeriod(period);
+  if (i === 0) return `Last ${p.label.replace(/ \(.*\)$/, '')}`;
+  if (p.value === '24h' && i === 1) return 'Yesterday';
+  if (p.value === '7d' && i === 1) return 'Week before';
+  const n = i * p.each;
+  return `${n} ${p.unit}${n === 1 ? '' : 's'} earlier`;
+}
+
+/** A timestack setting with its defaults, or null when the chart is not one. */
+export function normalizeTimestack(ts) {
+  if (!ts || typeof ts !== 'object' || ts.enabled === false) return null;
+  const period = TIMESTACK_PERIODS.some((p) => p.value === ts.period) ? ts.period : '24h';
+  const layers = Math.min(TIMESTACK_MAX_LAYERS, Math.max(2, Math.round(Number(ts.layers)) || 4));
+  return { period, layers };
+}
 
 /** True for one of GWatch's own measurements of a check, false for a metric
  *  the check names itself (a hardware reading, an SNMP OID …). */
@@ -96,6 +137,7 @@ export function normalizeChartConfig(cfg = {}) {
   c.height = Math.min(800, Math.max(120, Number(c.height) || 260));
   c.split = !!c.split;
   c.uptime = !!c.uptime;
+  c.timestack = normalizeTimestack(c.timestack);
   return c;
 }
 
@@ -170,6 +212,7 @@ export function chartMetricSummary(cfg) {
 export function describeChartConfig(cfg) {
   const c = normalizeChartConfig(cfg);
   const checks = c.checkIds.length;
+  if (c.timestack) return [chartMetricSummary(c), `timestacked ${c.timestack.layers} × ${rangeLabel(c.timestack.period)}`, c.style].join(' · ');
   const parts = [chartMetricSummary(c), rangeLabel(c.range), checks ? `${checks} check${checks === 1 ? '' : 's'}` : 'auto checks', c.style];
   return parts.join(' · ');
 }
@@ -291,6 +334,17 @@ export function chartConfigEditor(cfg, { nodes = [], onChange, compact = false, 
   const grid = checkbox({ label: 'Show grid lines', checked: c.grid, onChange: emit });
   const split = checkbox({ label: 'One chart per check', checked: c.split, onChange: emit });
   const uptime = checkbox({ label: 'Show availability bars underneath', checked: c.uptime, onChange: emit });
+  // Timestack: lay the metric over itself, one layer per earlier period.
+  const stackOn = checkbox({ label: 'Timestack: overlay this metric against itself over time', checked: !!c.timestack, onChange: () => { syncStack(); emit(); } });
+  const stackPeriod = selectInput({ options: TIMESTACK_PERIODS.map((p) => ({ value: p.value, label: p.label })), value: c.timestack?.period || '24h', onchange: emit });
+  const stackLayers = numberInput({ value: c.timestack?.layers || 4, min: 2, max: TIMESTACK_MAX_LAYERS, step: 1, oninput: emit });
+  const stackFields = h('div', { class: 'form-grid' },
+    field({ label: 'Stack each', input: stackPeriod, help: 'The length of one layer: the last 24 hours over the 24 before them, and so on.' }),
+    field({ label: 'Layers', input: stackLayers, help: `How many periods to lay over each other (2–${TIMESTACK_MAX_LAYERS}), the current one included.` }));
+  const stackNote = h('div', { class: 'help' }, 'A timestacked chart plots the first metric ticked above (or the first check GWatch picks), and replaces the time range.');
+  const stackWrap = h('div', { class: 'stack-sm timestack-fields' }, stackFields, stackNote);
+  function syncStack() { stackWrap.hidden = !stackOn.input.checked; range.disabled = stackOn.input.checked; }
+  syncStack();
   const colorsWrap = h('div', { class: 'series-colors' });
   const colors = { ...c.colors };
   const picker = metricPicker(nodes, c.series, { onChange: () => { renderColors(); syncAuto(); emit(); }, loadNode });
@@ -328,6 +382,7 @@ export function chartConfigEditor(cfg, { nodes = [], onChange, compact = false, 
     pickerField,
     autoField,
     h('div', { class: 'form-grid' }, field({ label: 'Time range', input: range }), field({ label: 'Style', input: style })),
+    h('div', { class: 'stack-sm' }, stackOn, stackWrap),
     field({ label: 'Line colours', input: colorsWrap }),
     h('div', { class: 'form-grid' },
       field({ label: 'Line thickness', input: width }),
@@ -342,6 +397,7 @@ export function chartConfigEditor(cfg, { nodes = [], onChange, compact = false, 
     series: picker.value, metric: autoMetric.value, range: range.value, style: style.value, lineWidth: width.value, height: height.value,
     yMin: yMin.value, yMax: yMax.value, threshold: threshold.value, smooth: smooth.input.checked, points: points.input.checked, shadeFailures: shade.input.checked,
     legend: legend.input.checked, grid: grid.input.checked, split: split.input.checked, uptime: uptime.input.checked, colors,
+    timestack: stackOn.input.checked ? { period: stackPeriod.value, layers: stackLayers.value } : null,
   }) });
   return wrap;
 }
@@ -355,17 +411,17 @@ export function chartConfigEditor(cfg, { nodes = [], onChange, compact = false, 
  * for check by check: /api/history/multi applies one metric to every id and
  * refuses the lot when one check does not measure it.
  */
-export function historyFetch(ids, range, metric) {
-  if (metric) return getHistoryMetric(ids[0], range, metric);
-  return ids.length ? getHistoryMulti(ids, range) : getHistoryAuto(range);
+export function historyFetch(ids, range, metric, end) {
+  if (metric) return getHistoryMetric(ids[0], range, metric, end);
+  return ids.length ? getHistoryMulti(ids, range, end) : getHistoryAuto(range);
 }
 
 /** historyFetch behind a cache (a Map the caller owns and clears on refresh). */
 export function cachedHistoryFetch(cache) {
-  return (ids, range, metric) => {
-    const key = `${ids.join(',')}|${range}|${metric || ''}`;
+  return (ids, range, metric, end) => {
+    const key = `${ids.join(',')}|${range}|${metric || ''}|${end ?? ''}`;
     if (!cache.has(key)) {
-      const p = historyFetch(ids, range, metric);
+      const p = historyFetch(ids, range, metric, end);
       // A failed request is not kept, so the next refresh asks again.
       p.catch(() => { if (cache.get(key) === p) cache.delete(key); });
       cache.set(key, p);
@@ -408,6 +464,39 @@ export async function loadChartSeries(cfg, fetchFn = historyFetch) {
     out.push({ spec: s, hs });
   }
   out.missing = missing;
+  return out;
+}
+
+/**
+ * Fetches the layers of a timestacked chart: the same series read over
+ * `layers` windows of the period, each ending one period before the last.
+ * Resolves to [{ spec, hs, layer, shift }] — `shift` is how far the layer's
+ * points move forward to sit on the current window — with `.spec` the one
+ * series stacked. `now` is rounded down to the minute, so the earlier layers
+ * are asked for the same window on every redraw within it and stay cached.
+ */
+export async function loadTimestackSeries(cfg, fetchFn = historyFetch, now = Date.now()) {
+  const c = normalizeChartConfig(cfg);
+  const ts = c.timestack || normalizeTimestack({});
+  const period = timestackPeriod(ts.period);
+  let spec = c.series[0];
+  if (!spec) {
+    // Nothing ticked: stack the first check GWatch would have picked.
+    const auto = asList(await fetchFn([], ts.period));
+    if (!auto.length) { const none = []; none.spec = null; return none; }
+    spec = { checkId: Number(auto[0].checkId), metric: c.metric };
+  }
+  const named = !isBuiltinMetric(spec);
+  const end = Math.floor(now / 60e3) * 60e3;
+  const lists = await Promise.all(Array.from({ length: ts.layers }, (_, i) => Promise.resolve()
+    .then(() => fetchFn([spec.checkId], ts.period, named ? spec.metric : undefined, i === 0 ? undefined : end - i * period.ms))
+    .then(asList).catch(() => [])));
+  const out = [];
+  lists.forEach((list, i) => {
+    const hs = list[0];
+    if (hs && !(spec.metric === 'loss' && !named && hs.checkType !== 'ping')) out.push({ spec, hs, layer: i, shift: i * period.ms });
+  });
+  out.spec = spec;
   return out;
 }
 
@@ -482,6 +571,7 @@ export function renderConfiguredChart(host, cfg, { title = 'Chart', fetch: fetch
   host.append(body);
   let destroyed = false;
   const load = async () => {
+    if (c.timestack) { await loadStack(); return; }
     let entries;
     try { entries = await loadChartSeries(c, fetchFn || historyFetch); } catch (e) { replace(body, h('div', { class: 'note' }, 'Could not load history: ' + e.message)); return; }
     if (destroyed) return;
@@ -572,6 +662,59 @@ export function renderConfiguredChart(host, cfg, { title = 'Chart', fetch: fetch
         const fine = isBuiltinMetric(spec) && (spec.metric === 'loss' || spec.metric === 'availability');
         const v = entryFigure(s.entry);
         statsEl.append(h('div', { class: 'stat' }, h('div', { class: 'stat-value mono' }, fine ? pct(v, 2) : unitValue(v, s.unit)), h('div', { class: 'stat-label' }, s.name)));
+      });
+      body.append(statsEl);
+    }
+  };
+  // A timestacked chart: one LineChart, one line per layer, every layer's
+  // points moved forward onto the current window so they share its time axis.
+  const loadStack = async () => {
+    let layers;
+    try { layers = await loadTimestackSeries(c, fetchFn || historyFetch); } catch (e) { replace(body, h('div', { class: 'note' }, 'Could not load history: ' + e.message)); return; }
+    if (destroyed) return;
+    if (!layers.length || !layers.some((l) => (l.hs.points || []).length)) {
+      replace(body, emptyState({ icon: 'activity', title: 'Nothing to stack yet', text: 'This metric has no history in these periods yet.', compact: true }));
+      return;
+    }
+    onData && onData(layers.map((l) => l.hs), layers);
+    clear(body);
+    charts.forEach((ch) => ch.destroy()); charts.length = 0;
+    const ts = c.timestack;
+    const spec = layers.spec;
+    const palette = seriesColors();
+    const first = c.colors[seriesKey(spec)] || c.colors[spec.checkId] || palette[0];
+    const others = palette.filter((x) => x.toLowerCase() !== String(first).toLowerCase());
+    const unit = entryUnit(layers[0]);
+    const lead = layers[0].hs;
+    const what = `${lead.nodeName ? `${lead.nodeName} › ` : ''}${lead.checkName || `Check ${lead.checkId}`} — ${seriesMetricLabel(spec, lead.checkType)}`;
+    const series = layers.map((l) => {
+      const s = toSeries(l.hs, isBuiltinMetric(spec) ? spec.metric : 'avg', l.layer === 0 ? first : others[(l.layer - 1) % others.length]);
+      return { ...s, unit, name: timestackLabel(ts.period, l.layer), lineWidth: l.layer === 0 ? c.lineWidth + 0.75 : c.lineWidth, points: s.points.map((p) => ({ ...p, t: p.t + l.shift })) };
+    });
+    // The current layer decides the window; older ones were moved onto it.
+    const base = layers.find((l) => l.layer === 0)?.hs || lead;
+    const from = +new Date(base.from), to = +new Date(base.to);
+    const buckets = [...new Set(layers.map((l) => l.hs.bucketSeconds || 0))];
+    const full = isBuiltinMetric(spec) && (spec.metric === 'loss' || spec.metric === 'availability');
+    body.append(h('div', { class: 'section-title timestack-title' }, `${what} · ${ts.layers} × ${rangeLabel(ts.period)}`));
+    const hostEl = h('div', { class: 'chart-host', style: fill ? { flex: '1', minHeight: '0', display: 'flex', flexDirection: 'column' } : null });
+    body.append(hostEl);
+    const chart = new LineChart(hostEl, {
+      unit, yMin: c.yMin != null ? c.yMin : full ? 0 : null, yMax: c.yMax != null ? c.yMax : full ? 100 : null, threshold: c.threshold,
+      // Failure shading would mix the layers' outages into one band; the
+      // lines themselves break where a check failed.
+      style: c.style, smooth: c.smooth, points: c.points, lineWidth: c.lineWidth, shadeFailures: false, legend: c.legend, alwaysLegend: true, grid: c.grid,
+      height: fill ? null : c.height, title, ariaLabel: `${title} timestacked chart: ${what}, ${ts.layers} periods of ${rangeLabel(ts.period)}`,
+    });
+    charts.push(chart);
+    chart.setData({ series, from, to, bucketSeconds: buckets.length === 1 ? buckets[0] : 0 });
+    if (layers.length < ts.layers) body.append(h('p', { class: 'note' }, `${plural(ts.layers - layers.length, 'earlier period')} could not be read.`));
+    if (!fill) {
+      clear(statsEl);
+      // One tile per layer: its average over its own period.
+      layers.forEach((l, i) => {
+        const v = entryFigure(l);
+        statsEl.append(h('div', { class: 'stat' }, h('div', { class: 'stat-value mono' }, full ? pct(v, 2) : unitValue(v, unit)), h('div', { class: 'stat-label' }, series[i].name)));
       });
       body.append(statsEl);
     }

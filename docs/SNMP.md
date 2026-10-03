@@ -33,9 +33,22 @@ Where the setting lives:
 | Synology / QNAP | *Control Panel › Terminal & SNMP* — tick SNMP, choose v2c or v3 |
 | Most printers | the embedded web page, under *Network › SNMP* |
 
-Then, in GWatch: **Nodes › the device › Edit › Add check › SNMP**. Fill in the
-community, and press **Test this check** before saving. If the test says
-*no response*, read the last section of this page.
+Then, in GWatch, the quickest route:
+
+1. **Nodes › Add node › SNMP device** for a new device, or, for one already
+   being watched, **Add SNMP readings** on its page (or **Edit › Add check ›
+   SNMP**).
+2. Fill in the community (or the v3 user and passwords) and press **Test
+   connection**. It reads the device's name, description and uptime and says
+   *Connected to …* — or, when nothing answers, lists the usual reasons.
+3. Press **Pick interfaces**. The ports are listed by name and description,
+   with whether each link is up. Tick the ones to watch: each gets a
+   link-state reading (down marks the check down) and traffic in and out in
+   bits per second, from the 64-bit counters by default, and optionally its
+   error counters. GWatch works out the SNMP index of each port for you.
+4. Save. **Test this check** on the saved check runs it once in full.
+
+If the test says *no response*, read the last section of this page.
 
 ### v2c or v3
 

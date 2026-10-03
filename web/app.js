@@ -14,6 +14,7 @@ const routes = [
   { pattern: /^\/nodes\/(\d+)\/edit$/, view: () => import('./views/node-editor.js'), params: ['id'], nav: 'nodes' },
   { pattern: /^\/nodes\/(\d+)$/, view: () => import('./views/node-detail.js'), params: ['id'], nav: 'nodes' },
   { pattern: /^\/charts(?:\/([\w-]+))?$/, view: () => import('./views/charts.js'), params: ['id'], nav: 'charts' },
+  { pattern: /^\/map$/, view: () => import('./views/network-map.js'), nav: 'map' },
   { pattern: /^\/incidents$/, view: () => import('./views/incidents.js'), nav: 'incidents' },
   { pattern: /^\/audit(?:\/([a-z]+))?$/, view: () => import('./views/audit.js'), params: ['tab'], nav: 'audit' },
   { pattern: /^\/settings(?:\/([a-z]+))?$/, view: () => import('./views/settings.js'), params: ['tab'], nav: 'settings' },

@@ -15,7 +15,7 @@
 import { test, expect } from '@playwright/test';
 import { FIRST_NODE, openApp } from './helpers.mjs';
 
-const PAGES = ['dashboard', 'nodes', `nodes/${FIRST_NODE}`, 'charts', 'incidents', 'settings/hardware', 'help'];
+const PAGES = ['dashboard', 'nodes', `nodes/${FIRST_NODE}`, 'charts', 'map', 'incidents', 'settings/hardware', 'help'];
 
 for (const route of PAGES) {
   test(`#/${route} never overflows sideways while it animates`, async ({ page }) => {
