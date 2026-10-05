@@ -38,6 +38,10 @@ func ValidateConfigOwner(path string) error {
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("configuration is not a regular file: %s", path)
 	}
+	return validateOwner(path)
+}
+
+func validateOwner(path string) error {
 	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
 	if err != nil {
 		return err
@@ -51,13 +55,13 @@ func ValidateConfigOwner(path string) error {
 		return err
 	}
 	sid := owner.String()
-	if sid != "S-1-5-18" && sid != "S-1-5-32-544" && sid != user.User.Sid.String() {
+	if sid != "S-1-5-18" && sid != "S-1-5-32-544" && (sid != user.User.Sid.String() || windows.GetCurrentProcessToken().IsElevated()) {
 		return fmt.Errorf("untrusted configuration owner: %s", path)
 	}
 	return nil
 }
 
-func EnsurePrivateFile(path string) error { return protectDir(path) }
+func protectFile(path string) error { return protectDir(path) }
 
 func EnsureServiceDir(path string) error {
 	if !windows.GetCurrentProcessToken().IsElevated() {

@@ -26,6 +26,26 @@ var (
 	rollupKeys    = []string{"check_id", "bucket_seconds", "bucket_start"}
 )
 
+// Rebuilding after retention may leave only part of an old bucket's source
+// data. Results are immutable: fewer samples means less information, not a
+// correction. Never replace a retained complete aggregate with that fragment.
+func (s *Store) rollupUpsertClause() string {
+	if s.d.name() != "mysql" {
+		return s.d.upsertClause(rollupKeys, rollupColList) + " WHERE excluded.count >= rollups.count"
+	}
+	var updates []string
+	for _, col := range rollupColList {
+		if col == "check_id" || col == "bucket_seconds" || col == "bucket_start" || col == "count" {
+			continue
+		}
+		updates = append(updates, col+"=IF(VALUES(count) >= rollups.count, VALUES("+col+"), rollups."+col+")")
+	}
+	// MySQL evaluates assignments left-to-right, so update the comparison's
+	// count last, after every other field has seen the original sample count.
+	updates = append(updates, "count=GREATEST(rollups.count, VALUES(count))")
+	return "ON DUPLICATE KEY UPDATE " + strings.Join(updates, ", ")
+}
+
 // RollupFromRaw (re)computes 5-minute buckets from raw results whose
 // timestamp is in [from, to). Buckets are upserted so the call is idempotent.
 func (s *Store) RollupFromRaw(ctx context.Context, from, to time.Time) (int64, error) {
@@ -46,7 +66,7 @@ func (s *Store) RollupFromRaw(ctx context.Context, from, to time.Time) (int64, e
 		       100.0 * SUM(success) / COUNT(*)
 		FROM results WHERE ts >= ? AND ts < ?
 		GROUP BY check_id, b
-		`+s.d.upsertClause(rollupKeys, rollupColList),
+		`+s.rollupUpsertClause(),
 		Bucket5m, Bucket5m, fromB*1000, toB*1000)
 	if err != nil {
 		return 0, err
@@ -101,9 +121,9 @@ func (s *Store) rollupRange(ctx context.Context, srcBucket, dstBucket int, fromB
 		       CASE WHEN SUM(CASE WHEN avg_loss_pct IS NOT NULL THEN count ELSE 0 END) > 0
 		            THEN SUM(avg_loss_pct * count) / SUM(CASE WHEN avg_loss_pct IS NOT NULL THEN count ELSE 0 END) END,
 		       100.0 * SUM(success_count) / SUM(count)
-		FROM rollups WHERE bucket_seconds = ? AND bucket_start >= ? AND bucket_start < ?
+		FROM rollups AS source_rollups WHERE bucket_seconds = ? AND bucket_start >= ? AND bucket_start < ?
 		GROUP BY check_id, b
-		` + s.d.upsertClause(rollupKeys, rollupColList)
+		` + s.rollupUpsertClause()
 	args := []any{dstBucket, bucketArg, srcBucket, fromB, toB}
 	var res sql.Result
 	var err error

@@ -28,7 +28,7 @@ func ValidateConfigOwner(path string) error {
 	return nil
 }
 
-func EnsurePrivateFile(path string) error { return os.Chmod(path, 0600) }
+func protectFile(path string) error { return os.Chmod(path, 0600) }
 
 func EnsureServiceDir(path string) error {
 	if os.Geteuid() != 0 {
@@ -49,4 +49,16 @@ func EnsureServiceDir(path string) error {
 		}
 	}
 	return EnsurePrivateDir(path)
+}
+
+func validateOwner(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || (st.Uid != 0 && st.Uid != uint32(os.Geteuid())) {
+		return fmt.Errorf("untrusted owner: %s", path)
+	}
+	return nil
 }

@@ -877,7 +877,11 @@ func (u *Updater) target(ctx context.Context, repo, version string) (model.Updat
 // like any other.
 func (u *Updater) Apply(ctx context.Context, repo, version string) (model.UpdateInfo, error) {
 	if u.PackagedBy != "" {
-		return model.UpdateInfo{}, fmt.Errorf("installed by %s; update through that package manager instead of replacing its executable", u.PackagedBy)
+		command := map[string]string{"docker": "docker compose pull && docker compose up -d", "deb": "sudo apt install --only-upgrade gwatch", "rpm": "sudo dnf upgrade gwatch", "homebrew": "brew upgrade gwatch", "winget": "winget upgrade GWatch.GWatch"}[u.PackagedBy]
+		if command == "" {
+			command = "use the package manager that installed this executable"
+		}
+		return model.UpdateInfo{}, fmt.Errorf("installed by %s; to update, %s", u.PackagedBy, command)
 	}
 	u.mu.Lock()
 	if u.status.Applying {

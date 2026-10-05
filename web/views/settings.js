@@ -379,6 +379,7 @@ export async function mount(root, ctx) {
     const renderUrls = (ni) => {
       clear(urls);
       if (!ni) { urls.append(h('span', { class: 'muted' }, 'Network information unavailable.')); return; }
+      if (ni.restartNeeded) urls.append(h('button', { type: 'button', class: 'btn', onclick: async () => { try { await api.post('/api/restart'); toast('GWatch is restarting'); } catch (e) { toast(e.message, { kind: 'error' }); } } }, 'Restart GWatch'));
       urls.append(h('a', { href: ni.localUrl, target: '_blank', rel: 'noopener' }, icon('home'), ni.localUrl, h('span', { class: 'dim' }, ' — this computer')));
       if (ni.remoteAccess) {
         if (!ni.lanUrls?.length) urls.append(h('span', { class: 'muted' }, 'No network addresses found on this computer.'));
@@ -402,9 +403,8 @@ export async function mount(root, ctx) {
           field({ label: 'Listen port', input: port, help: 'Changes take effect after saving. Reopen GWatch at the new port.' }),
           proxy,
           h('p', { class: 'note' }, 'Enable the proxy setting only when browsers always reach GWatch over HTTPS. It marks session cookies Secure.'),
-          g.remoteAccess && (g.accessPassword || info?.passwordSet) && !g.behindHTTPSProxy && !info?.localUrl?.startsWith('https:') ? banner('warn', 'The shared access password is sent without encryption over HTTP. Use HTTPS before sending it across your network.') : null,
+          (g.remoteAccess || info?.remoteAccess) && (g.accessPassword || info?.passwordSet) && !g.behindHTTPSProxy && !info?.localUrl?.startsWith('https:') ? banner('warn', 'The shared access password is sent without encryption over HTTP. Use HTTPS before sending it across your network.') : null,
           info?.firewallCommand ? h('div', null, h('p', { class: 'note' }, 'Allow this port through your firewall:'), h('pre', null, info.firewallCommand)) : null,
-          info?.restartNeeded ? h('button', { type: 'button', class: 'btn', onclick: async () => { try { await api.post('/api/restart'); toast('GWatch is restarting'); } catch (e) { toast(e.message, { kind: 'error' }); } } }, 'Restart GWatch') : null,
           info?.listenAddress ? h('p', { class: 'note' }, 'Listening on ', h('code', null, info.listenAddress), info.remoteAccess ? ' — reachable from the network.' : ' — this computer only.', info.restartNeeded ? h('span', { class: 'text-down' }, ' Rebinding failed; a restart is needed.') : null) : null,
         ),
         h('hr', { class: 'divider' }), h('div', { class: 'form-actions' }, saveBtn)),

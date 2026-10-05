@@ -395,7 +395,7 @@ func (s *Server) accessControl(next http.Handler) http.Handler {
 		// may well arrive through a proxy that rewrites Host, where this check
 		// would misfire. So it is applied exactly where it is both needed and
 		// safe.
-		if r.Method != http.MethodGet && r.Method != http.MethodHead && ((p.Kind == auth.KindLocal || p.Kind == auth.KindPassword) && crossSite(r) || r.Header.Get("Sec-Fetch-Site") == "cross-site") {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && ((p.Kind == auth.KindLocal || p.Kind == auth.KindPassword) && crossSite(r) || r.Header.Get("Sec-Fetch-Site") == "cross-site" || r.Header.Get("Sec-Fetch-Site") == "same-site" || r.Header.Get("Origin") == "null") {
 			s.deny(w, r, http.StatusForbidden, "this request came from another website; open GWatch directly to make changes", true)
 			return
 		}

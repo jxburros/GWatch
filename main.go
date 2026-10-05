@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -744,22 +745,27 @@ func browserHost(addr string) string {
 	return net.JoinHostPort(host, port)
 }
 
-func openBrowser(url string) {
+func openBrowser(address string) {
 	if runtime.GOOS == "linux" && os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
-		fmt.Println("Open this address in your browser:", url)
+		fmt.Println("Open this address in your browser:", address)
+		if parsed, err := url.Parse(address); err == nil {
+			for _, ip := range api.LANAddresses() {
+				fmt.Println("LAN (when remote access is enabled):", "http://"+net.JoinHostPort(ip, parsed.Port()))
+			}
+		}
 		return
 	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", address)
 	case "darwin":
-		cmd = exec.Command("open", url)
+		cmd = exec.Command("open", address)
 	default:
-		cmd = exec.Command("xdg-open", url)
+		cmd = exec.Command("xdg-open", address)
 	}
 	if err := cmd.Start(); err != nil {
-		fmt.Println("Open this address in your browser:", url)
+		fmt.Println("Open this address in your browser:", address)
 	}
 }
 

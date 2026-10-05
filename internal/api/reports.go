@@ -71,7 +71,7 @@ func (s *Server) handleGenerateReport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "choose a range of up to 366 days")
 		return
 	}
-	d := model.ReportDefinition{Name: "GWatch availability report"}
+	d := model.ReportDefinition{Name: "GWatch availability report", IncludeLatencyCharts: r.URL.Query().Get("charts") == "1"}
 	if v := r.URL.Query().Get("groups"); v != "" {
 		d.Groups = strings.Split(v, ",")
 	}

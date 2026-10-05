@@ -53,3 +53,27 @@ func TestReportAvailabilityScopeAndEscaping(t *testing.T) {
 		t.Fatal("scope ignored")
 	}
 }
+
+func TestOptionalGroupLatencyCharts(t *testing.T) {
+	s := storetest.Open(t)
+	ctx := context.Background()
+	n, err := s.CreateNode(ctx, model.Node{Name: "router", Groups: []string{"Office"}, Checks: []model.Check{{Name: "ping", Type: model.CheckPing}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local).AddDate(0, 0, -2)
+	latency := 12.0
+	err = s.InsertRollupsBatch(ctx, []model.Rollup{{CheckID: n.Checks[0].ID, BucketSecs: 86400, BucketStart: day, Count: 4, SuccessCount: 4, AvgMS: &latency, Availability: 100}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	html, err := Generate(ctx, s, model.ReportDefinition{IncludeLatencyCharts: true}, day, now)
+	if err != nil || !strings.Contains(html, "<svg") || !strings.Contains(html, "Office") || !strings.Contains(html, "12.00 ms") {
+		t.Fatalf("chart missing: %v", err)
+	}
+	html, err = Generate(ctx, s, model.ReportDefinition{}, day, now)
+	if err != nil || strings.Contains(html, "<svg") {
+		t.Fatal("chart option ignored")
+	}
+}

@@ -179,7 +179,7 @@ jobs:
         run: |
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=ci-${GITHUB_SHA::7}" -o dist/gwatch-agent-windows-amd64.exe ./cmd/gwatch-agent
       - name: Install Inno Setup
-        run: choco install innosetup --version=6.4.3 --no-progress -y
+        run: choco install innosetup --version=6.4.3 --allow-downgrade --no-progress -y
         shell: pwsh
       # Runs under pwsh: Git Bash rewrites /D... arguments as Windows paths
       # (MSYS path conversion), which ISCC then reads as extra script names.
@@ -222,10 +222,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (-not (Test-Path "scripts\installer\Output\gwatch-agent-winget-setup-$version.exe")) { Write-Host "::error::ISCC did not write gwatch-agent-winget-setup-$version.exe"; exit 1 }
 
-  # GWatch installs as a service only on Windows, but it builds and runs as a
-  # plain console process anywhere, and internal/sysmetrics has a real
-  # linux_amd64/linux_arm64 build-tagged file (collect_linux.go) that the
-  # Windows job never compiles. This job is the one that does.
+  # Linux exercises native collectors, database backends, and the installed
+  # systemd service, including journal output and uninstall cleanup.
   linux:
     name: Test (Linux)
     runs-on: ubuntu-latest
@@ -343,7 +341,8 @@ jobs:
         run: |
           go build -o "$RUNNER_TEMP/gwatch-install-test" .
           sudo "$RUNNER_TEMP/gwatch-install-test" install --data-dir "$RUNNER_TEMP/gwatch-service-data" --listen 127.0.0.1:7239 --no-start
-          systemd-analyze verify /etc/systemd/system/GWatch.service
+          # The root service executable is inside a protected root-only directory.
+          sudo systemd-analyze verify /etc/systemd/system/GWatch.service
           systemctl cat GWatch | grep -q 'RestartSec=5s'
           systemctl cat GWatch | grep -q '/usr/local/libexec/gwatch/gwatch'
           if systemctl is-active --quiet GWatch; then echo 'no-start was ignored'; exit 1; fi
@@ -709,7 +708,7 @@ jobs:
       # invisible to the in-app updater by design, and it isn't
       # Authenticode-signed.
       - name: Install Inno Setup
-        run: choco install innosetup --version=6.4.3 --no-progress -y
+        run: choco install innosetup --version=6.4.3 --allow-downgrade --no-progress -y
         shell: pwsh
       - name: Build Windows installers
         shell: pwsh
@@ -823,7 +822,7 @@ jobs:
           ls -lh dist
 
       - name: Install Inno Setup
-        run: choco install innosetup --version=6.4.3 --no-progress -y
+        run: choco install innosetup --version=6.4.3 --allow-downgrade --no-progress -y
         shell: pwsh
       - name: Build the agent installer
         shell: pwsh
@@ -1024,7 +1023,7 @@ jobs:
       - name: Build the packaged agent
         run: sh packaging/build-agent.sh winget "$AGENT_VERSION" dist/packaged windows/amd64
       - name: Install Inno Setup
-        run: choco install innosetup --version=6.4.3 --no-progress -y
+        run: choco install innosetup --version=6.4.3 --allow-downgrade --no-progress -y
         shell: pwsh
       # /F gives the setup program its own name; everything else is the
       # ordinary agent installer (scripts/installer/gwatch-agent.iss).

@@ -40,20 +40,20 @@ service containers.
 ## Continuous integration
 
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on every push and pull
-request as five jobs:
+request with the following jobs:
 
 | Job | Runner | What it does |
 |---|---|---|
 | `ci` ("Lint, build, test (Windows)") | `windows-latest` | gofmt, vet, `go mod tidy`/`verify`, build + full test suite, the mcp/ module, web-asset `node --check` plus the jsdom suite (`npm test`, `tests/web/`), PowerShell script parsing, and compiles both Inno Setup installers |
-| `linux` ("Test (Linux)") | `ubuntu-latest` | gofmt, vet, build, full test suite (root and mcp/), a `-race ./...` pass, the store/backup/api/engine/hostmon suites against PostgreSQL 16 and MySQL 8 service containers ([`DATABASE.md`](DATABASE.md#for-developers)), `govulncheck` for both modules, and the browser accessibility suite (`npm run test:e2e` — Playwright drives Chromium through every route with an axe-core scan) |
+| `linux` ("Test (Linux)") | `ubuntu-latest` | gofmt, vet, staticcheck, build, full test and race suites (root and mcp/), the migration/store/backup/api/engine/hostmon suites against PostgreSQL 16 and MySQL 8 service containers ([`DATABASE.md`](DATABASE.md#for-developers)), `govulncheck` for both modules, and the browser accessibility suite (`npm run test:e2e` — Playwright drives Chromium through every route with an axe-core scan) |
 | `macos` ("Test (macOS)") | `macos-latest` | vet + test only — deliberately lean, but this is what actually compiles and exercises `internal/sysmetrics/collect_darwin.go` |
-| `docker` ("Container image") | `ubuntu-latest` | builds the `Dockerfile` for `linux/amd64`, checks `gwatch version` inside it, then starts the container and waits for `/api/health` to answer 200 |
+| `docker` ("Container image") | `ubuntu-latest` | builds the `Dockerfile` for `linux/amd64` and `linux/arm/v7`, checks `gwatch version` inside it, then starts the container and waits for `/api/health` to answer 200 |
 | `agent-packaging` ("Agent packages") | `ubuntu-latest` | builds the agent's `.deb`/`.rpm` for all three architectures, installs the `.deb` on the runner's systemd and takes it through install → refuse to self-update → configure → run → purge, renders the Homebrew formula (`ruby -c`) and the winget manifests (validated against winget's 1.6.0 schemas), builds the agent image and has it read the runner through a mounted host root, and checks no package output is named like a self-update asset — see ["The agent packages"](#the-agent-packages) |
 
-Windows is the only one that builds an installer or touches PowerShell, since that is the
-only platform GWatch installs itself onto as a service; Linux and macOS exist to catch a
-platform-specific regression (a build tag, a syscall, a platform-tagged file the Windows
-job never compiles) before it reaches a tag push. `release` needs `ci`, `linux` and `macos`; the `docker` job is independent of it.
+Windows builds the Inno Setup installers and validates PowerShell scripts. Linux tests
+the installed systemd service and journal output; Linux and macOS both exercise their
+native collectors. `release` needs `ci`, `linux` and `macos`; the `docker` test job is
+independent of it, while `docker-publish` also waits for `docker` and `release`.
 
 The `ci` job also compiles the winget variant of the agent setup program, so a change to
 `scripts/installer/gwatch-agent.iss` that breaks it fails a pull request rather than a tag.
@@ -69,7 +69,7 @@ Pushing a tag such as `v0.1.0` additionally runs the `release` job (below) and t
 
 | Path | Purpose |
 |---|---|
-| `main.go` | CLI, Windows service wrapper (kardianos/service), HTTP server bound to localhost |
+| `main.go` | CLI, cross-platform service wrapper (kardianos/service), HTTP server bound to localhost by default |
 | `migrate_db.go` | `gwatch migrate-db`: copies a SQLite install into a PostgreSQL/MySQL database |
 | `internal/model` | Shared data types and JSON wire format |
 | `internal/dbconfig` | Which database to open: flags, `GWATCH_DB_*`, `database.json`, then the SQLite default |
@@ -392,7 +392,7 @@ The `.deb`'s `Maintainer` field is `JX Holdings, LLC <https://github.com/jxburro
 ## The container image
 
 The same `v*` tag also runs `docker-publish`, which builds the `Dockerfile` for
-`linux/amd64` and `linux/arm64` and pushes the result to GitHub's registry as
+`linux/amd64`, `linux/arm64` and `linux/arm/v7` and pushes the result to GitHub's registry as
 `ghcr.io/jxburros/gwatch`, tagged `X.Y.Z`, `X.Y` and `latest`. It runs beside `release`
 rather than inside it — a separate runner (Linux, with buildx and QEMU), a separate
 permission (`packages: write`, granted to that job only) and the same tag-matches-VERSION

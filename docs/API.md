@@ -1196,12 +1196,14 @@ See [`RESTORE.md`](RESTORE.md) for the end-to-end restore-to-a-new-machine proce
   `checkIds`, notes, `durationSeconds`, and acknowledgment/resolution elapsed seconds.
 - `GET /api/reports` and `PUT /api/reports` are administrator-only. PUT replaces the list
   of definitions: `id` (unique string), `name`, `enabled`, `groups`, `tags`, `period`
-  (`weekly` or `monthly`), `recipients`, and `targetAvailability` (0 disables the target).
+  (`weekly` or `monthly`), `recipients`, `targetAvailability` (0 disables the target),
+  and `includeLatencyCharts`.
   Calendar periods follow the service time zone. Schedules begin with the next complete
   period after creation and retry failed delivery no more often than hourly.
 - `GET /api/reports/generate?from=<RFC3339>&to=<RFC3339>&groups=<comma-separated>&tags=<comma-separated>&target=99.9`
   downloads self-contained printable HTML for up to 366 days. Viewers/read keys may
-  generate a report. Node availability aggregates observed samples across its checks.
+  generate a report. Add `charts=1` for group latency charts. Node availability
+  aggregates observed samples across its checks.
 - `GET /api/agents/latest` returns an empty release without network access when
   automatic update checks are disabled. When enabled it caches the agent release lookup.
 
