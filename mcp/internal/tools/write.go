@@ -70,7 +70,7 @@ func firstPositive(v, def int) int {
 func checkSchema(withID bool) map[string]any {
 	props := map[string]any{
 		"type": enum("The check type.",
-			"ping", "http", "keyword", "json", "tcp", "dns", "cert", "custom"),
+			"ping", "http", "keyword", "json", "tcp", "dns", "cert"),
 		"name":             str("A short name for the check, e.g. \"Ping\" or \"Homepage\"."),
 		"enabled":          boolean("Whether the check runs (default true)."),
 		"intervalSeconds":  integer("How often the check runs, in seconds (minimum 10, default 60)."),

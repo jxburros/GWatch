@@ -203,9 +203,11 @@ export function hexToRgb(hex) {
 export function applyAccent(hex) {
   const rgb = hexToRgb(hex);
   if (!rgb) return;
-  document.documentElement.style.setProperty('--accent-rgb', rgb.join(', '));
+  const value = rgb.join(', ');
+  const changed = document.documentElement.style.getPropertyValue('--accent-rgb') !== value;
+  document.documentElement.style.setProperty('--accent-rgb', value);
   try { localStorage.setItem('gw.accent', hex.toLowerCase()); } catch { /* ignore */ }
-  notifyTheme();
+  if (changed) notifyTheme();
 }
 export const ACCENT_PRESETS = [
   { name: 'Signal', hex: '#43c9c0' }, { name: 'Violet', hex: '#7c6cff' }, { name: 'Blue', hex: '#3b82f6' }, { name: 'Cyan', hex: '#06b6d4' },
@@ -819,3 +821,16 @@ export const CHECK_TYPES = [
   { value: 'system', label: 'Hardware health', desc: 'Processor, memory, disk space and throughput — for this computer, or for a machine running the agent.' },
 ];
 export function checkTypeLabel(t) { return (CHECK_TYPES.find((x) => x.value === t) || { label: t }).label; }
+
+/** Preserve keyboard focus across a synchronous refresh using stable semantic keys. */
+export function preserveFocus(root) {
+  const active = document.activeElement;
+  if (!active || !root.contains(active)) return () => {};
+  const key = (el) => el.dataset.focusKey || el.getAttribute('href') || el.getAttribute('aria-label') || el.id;
+  const wanted = key(active);
+  return () => {
+    if (active.isConnected || !wanted) return;
+    [...root.querySelectorAll('a,button,input,select,textarea,[tabindex]')].find((el) => key(el) === wanted)?.focus({ preventScroll: true });
+  };
+}
+export function scrollBehavior() { return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'; }

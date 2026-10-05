@@ -153,7 +153,7 @@ const ctxBase = {
       titleEl.classList.add('title-enter');
     }
     titleEl.textContent = title;
-    document.title = title === 'Dashboard' ? 'GWatch' : `${title} — GWatch`;
+    document.title = title === 'Dashboard' ? 'GWatch' : `${title} â€” GWatch`;
     clear(actionsEl);
     if (actions) replace(actionsEl, actions);
     syncPageBar();
@@ -238,7 +238,7 @@ function enterView() {
  *  above is not enough on its own: an update arriving inside that window would
  *  hand freshly built elements to `.view-enter`, and they would fade in from
  *  nothing under content that was already on screen. So a refresh ends the
- *  animation first — anything it renders is then simply there. */
+ *  animation first â€” anything it renders is then simply there. */
 function endEnterAnimation() {
   clearTimeout(enterTimer);
   enterTimer = 0;
@@ -246,6 +246,7 @@ function endEnterAnimation() {
 }
 
 function setNav(name) {
+  document.getElementById('settings-link').hidden = name === 'settings';
   document.querySelectorAll('.nav-link[data-nav]').forEach((a) => {
     const active = a.dataset.nav === name;
     a.classList.toggle('active', active);
@@ -271,13 +272,15 @@ document.getElementById('api-banner-retry').addEventListener('click', () => { re
 /* ---------- Service health dot ---------- */
 let lastHealth = null;
 async function refreshHealth() {
+  if (document.hidden) return;
+  if (document.hidden) return;
   try {
     lastHealth = await api.get('/api/health');
     renderHealth();
   } catch {
     lastHealth = null;
     healthLink.className = 'nav-link service-health issue';
-    healthLink.querySelector('.health-text').textContent = 'Service unreachable';
+    if (healthLink.querySelector('.health-text').textContent !== 'Service unreachable') healthLink.querySelector('.health-text').textContent = 'Service unreachable';
   }
 }
 function renderHealth() {
@@ -291,14 +294,15 @@ function renderHealth() {
   if (hl.backup?.lastBackupAt && !hl.backup.lastBackupOk) issues.push('backup failed');
   if (hl.recentErrors?.length) issues.push('recent errors');
   healthLink.className = `nav-link service-health ${issues.length ? 'issue' : 'ok'}`;
-  healthLink.querySelector('.health-text').textContent = issues.length ? 'Service issue' : 'Service healthy';
-  healthLink.title = issues.length ? issues.join(', ') : `Service healthy · last check ${relTime(hl.lastCheckAt)}`;
+  const text = issues.length ? 'Service issue' : 'Service healthy';
+  if (healthLink.querySelector('.health-text').textContent !== text) healthLink.querySelector('.health-text').textContent = text;
+  healthLink.title = issues.length ? issues.join(', ') : `Service healthy Â· last check ${relTime(hl.lastCheckAt)}`;
 }
 export function getHealth() { return lastHealth; }
 
 /* ---------- Header indicators ---------- */
 /** The orbs under the page name. Which ones appear is decided by rules the
- *  administrator configures in Settings › Indicators; because a viewer may not
+ *  administrator configures in Settings â€º Indicators; because a viewer may not
  *  read settings, the effective list arrives with the identity from /api/me,
  *  exactly as the theme does, so every account evaluates the same rules.
  *
@@ -327,7 +331,7 @@ function indicatorCount(st, cond) {
 /** Whether there is anything for the header to report on at all: a node that
  *  exists, is being watched, and has produced at least one result. A fresh
  *  install, one whose nodes are all paused, and one where the first round of
- *  checks has not finished yet all answer no — and all three are honestly
+ *  checks has not finished yet all answer no â€” and all three are honestly
  *  described by the blue orb rather than by a green "all clear" nobody has
  *  earned or a yellow warning about something that is merely young. */
 function anythingConnected(st) {
@@ -349,10 +353,14 @@ function indicatorHref(cond) {
 function indicatorOrb({ colour, label, href, count }) {
   return h('a', { class: `indicator ind-${colour}`, href, title: label, 'aria-label': label },
     h('span', { class: 'orb', 'aria-hidden': 'true' }),
-    count > 1 ? h('span', { class: 'indicator-count', 'aria-hidden': 'true' }, String(count)) : null);
+    h('span', { class: 'indicator-label', 'aria-hidden': 'true' }, label));
 }
 
+let indicatorSignature = '';
 function renderIndicators(st) {
+  const signature = JSON.stringify([st.total, st.up, st.down, st.degraded, st.unknown, st.maintenance, st.attention, st.certWarnings, st.serviceOk, st.serviceIssues, indicatorRules]);
+  if (signature === indicatorSignature && dotsEl.childElementCount) return;
+  indicatorSignature = signature;
   clear(dotsEl);
   const connected = anythingConnected(st);
   const firing = [];
@@ -374,7 +382,7 @@ function renderIndicators(st) {
       const detail = f.rule.condition?.kind === 'serviceHealth' ? (st.serviceIssues || []).join(', ') : `${f.count}`;
       dotsEl.append(indicatorOrb({
         colour: INDICATOR_RANK[f.rule.colour] != null ? f.rule.colour : 'yellow',
-        label: detail ? `${f.rule.name} — ${detail}` : f.rule.name,
+        label: detail ? `${f.rule.name} â€” ${detail}` : f.rule.name,
         href: indicatorHref(f.rule.condition || {}),
         count: f.count,
       }));
@@ -382,16 +390,17 @@ function renderIndicators(st) {
   } else if (!connected) {
     dotsEl.append(indicatorOrb({
       colour: 'idle',
-      label: st.total ? 'Nothing connected yet — waiting for the first results' : 'No nodes yet — add one to start monitoring',
+      label: st.total ? 'Nothing connected yet â€” waiting for the first results' : 'No nodes yet â€” add one to start monitoring',
       href: st.total ? '#/nodes' : '#/nodes/new',
     }));
   } else {
-    dotsEl.append(indicatorOrb({ colour: 'ok', label: `All clear — ${st.up} of ${st.total} nodes healthy`, href: '#/dashboard' }));
+    dotsEl.append(indicatorOrb({ colour: 'ok', label: `All clear â€” ${st.up} of ${st.total} nodes healthy`, href: '#/dashboard' }));
   }
 }
 
 let lastStatus = null;
 async function refreshStatus() {
+  if (document.hidden) return;
   try { lastStatus = await api.get('/api/status'); } catch { clear(dotsEl); return; }
   renderIndicators(lastStatus);
 }
@@ -405,8 +414,8 @@ function setIndicatorRules(rules) {
 
 /* ---------- Application updates ---------- */
 /** The badge in the header is the only place an update announces itself
- *  outside Settings. It appears for an administrator — nobody else can install
- *  one — and leads to Settings › Updates, where the version is chosen. */
+ *  outside Settings. It appears for an administrator â€” nobody else can install
+ *  one â€” and leads to Settings â€º Updates, where the version is chosen. */
 const updateBadge = document.getElementById('update-badge');
 const updateBadgeLabel = document.getElementById('update-badge-label');
 let updateStatus = null;
@@ -426,11 +435,10 @@ function renderUpdateBadge() {
   updateBadge.hidden = !available;
   if (!available) return;
   updateBadgeLabel.textContent = last.latestVersion || 'Update';
-  updateBadge.title = `GWatch ${last.latestVersion} is available${last.prerelease ? ' (pre-release)' : ''} — you are running ${last.currentVersion}`;
+  updateBadge.title = `GWatch ${last.latestVersion} is available${last.prerelease ? ' (pre-release)' : ''} â€” you are running ${last.currentVersion}`;
 }
 
-/** Offer the update when GWatch is opened. "Not now" asks again next time, as
- *  intended; "Skip this version" stops it for that version only, so the next
+/** Offer the update when GWatch is opened. "Not now" and "Skip this version" both dismiss this version, so the next
  *  release asks again. The choice is per browser, which is where the dialog
  *  is: it is a prompt, not a policy. */
 function skippedVersion() {
@@ -442,7 +450,7 @@ function skipVersion(v) {
 
 function promptForUpdate() {
   const last = updateStatus?.last;
-  if (promptedThisLoad || !identity.isAdmin) return;
+  if (promptedThisLoad || !identity.isAdmin || !onboardingDone() || location.hash.includes('/onboarding')) return;
   if (!updateStatus?.promptOnOpen || !last?.updateAvailable || last.error) return;
   if (!updateStatus.canApply || !last.assetUrl) return; // nothing this dialog could do
   if (skippedVersion() === last.latestVersion) return;
@@ -450,12 +458,12 @@ function promptForUpdate() {
   const m = openModal({
     title: `GWatch ${last.latestVersion} is available`,
     body: [
-      h('p', null, `You are running ${last.currentVersion}. ${last.prerelease ? 'This is a pre-release, published for testing and not finished work. ' : ''}Installing downloads the release, checks its signature, replaces this copy and restarts the service — monitoring pauses for a few seconds.`),
+      h('p', null, `You are running ${last.currentVersion}. ${last.prerelease ? 'This is a pre-release, published for testing and not finished work. ' : ''}Installing downloads the release, checks its signature, replaces this copy and restarts the service â€” monitoring pauses for a few seconds.`),
       last.releaseNotes ? h('details', { class: 'collapsible' }, h('summary', null, 'Release notes'), h('div', { class: 'update-notes' }, last.releaseNotes)) : null,
     ],
     footer: [
       h('button', { class: 'btn', type: 'button', onclick: () => { skipVersion(last.latestVersion); m.close(); } }, 'Skip this version'),
-      h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Not now'),
+      h('button', { class: 'btn', type: 'button', onclick: () => { skipVersion(last.latestVersion); m.close(); } }, 'Not now'),
       h('button', { class: 'btn btn-primary', type: 'button', onclick: () => { m.close(); navigate('/settings/updates'); } }, 'Go to updates'),
     ],
   });
@@ -466,6 +474,7 @@ function promptForUpdate() {
  *  was done moments ago, or automatic checks are off) and then offers the
  *  update. */
 async function refreshUpdates({ open = false } = {}) {
+  if (document.hidden) return;
   if (!identity.isAdmin) { if (updateBadge) updateBadge.hidden = true; return; }
   try {
     let doc = await api.get('/api/update/status');
@@ -484,6 +493,7 @@ async function refreshUpdates({ open = false } = {}) {
 
 /* ---------- Live updates ---------- */
 const refreshCurrent = debounce(() => {
+  if (document.hidden) return;
   if (current?.instance?.refresh) {
     endEnterAnimation();
     Promise.resolve(current.instance.refresh()).catch((e) => console.warn('refresh failed', e));
@@ -511,6 +521,7 @@ refreshStatus();
 
 /* ---------- Relative-time ticking ---------- */
 setInterval(() => {
+  if (document.hidden) return;
   document.querySelectorAll('[data-rel]').forEach((el) => { if (el.dataset.rel) el.textContent = relTime(el.dataset.rel); });
 }, 10000);
 
@@ -535,8 +546,8 @@ onDenied((message) => toast(message, { kind: 'error', timeout: 8000 }));
 // is open: an administrator changes the account's role, the session ends, or
 // the answer at start-up simply failed. api.js reports every change it sees
 // (a refusal, a reconnect and the checks below all ask), and the page follows
-// it: the shell restyles, and the view on screen — which decided what to
-// offer from ctx.me when it was built — is built again for the new standing.
+// it: the shell restyles, and the view on screen â€” which decided what to
+// offer from ctx.me when it was built â€” is built again for the new standing.
 onIdentity((next) => {
   applyIdentity(next);
   authSetup = null; // whether a sign-in is needed may have changed with it
@@ -552,7 +563,7 @@ function remount() {
 // A tab can stay open for days. Ask again every few minutes, and whenever it
 // comes back into view (a laptop waking up), so a change made elsewhere shows
 // up without waiting for something to be refused.
-setInterval(() => loadAppearance(), 5 * 60e3);
+setInterval(() => { if (!document.hidden) loadAppearance(); }, 5 * 60e3);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') loadAppearance(); });
 
 /* ---------- Hardware, which is now part of Nodes ---------- */
@@ -589,7 +600,7 @@ window.addEventListener('unhandledrejection', (e) => {
 // and skipping or finishing the tour sets the flag that stops this happening
 // a second time.
 // Returns true when it took over, in which case the hashchange it just caused
-// does the routing — calling route() as well would mount the tour twice.
+// does the routing â€” calling route() as well would mount the tour twice.
 function firstRunRedirect() {
   if (onboardingDone()) return false;
   if (parseHash().path !== '/dashboard') return false;

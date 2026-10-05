@@ -1,4 +1,4 @@
-; GWatch Windows installer (Inno Setup 6).
+﻿; GWatch Windows installer (Inno Setup 6).
 ;
 ; Builds gwatch-setup-<version>.exe from an already-built gwatch.exe. This
 ; script does not compile Go code -- build the executable first (see
@@ -94,6 +94,9 @@ NetworkPageDescription=Choose the port GWatch listens on and whether other devic
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop icon"; GroupDescription: "Additional icons:"; Flags: unchecked
 
+[Dirs]
+Name: "{commonappdata}\GWatch"; Permissions: admins-full system-full
+
 [Files]
 Source: "{#ExePath}"; DestDir: "{app}"; DestName: "gwatch.exe"; Flags: ignoreversion
 ; The licence and the terms digest travel with the install, so they are still
@@ -116,7 +119,7 @@ Filename: "{app}\gwatch.exe"; Parameters: "install --data-dir ""{commonappdata}\
 ; so just start it again -- it was stopped in PrepareToInstall below.
 Filename: "{app}\gwatch.exe"; Parameters: "start"; StatusMsg: "Starting the GWatch service..."; Flags: runhidden waituntilterminated; Check: NeedsStart
 ; Optional firewall rule for LAN access.
-Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""GWatch"" dir=in action=allow protocol=TCP localport={code:GetPort}"; StatusMsg: "Adding a Windows Firewall rule for GWatch..."; Flags: runhidden; Check: WantLan
+Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""GWatch"" dir=in action=allow profile=private,domain remoteip=localsubnet program=""{app}\gwatch.exe"" protocol=TCP localport={code:GetPort}"; StatusMsg: "Adding a Windows Firewall rule for GWatch..."; Flags: runhidden; Check: WantLan
 ; Finish-page checkbox.
 Filename: "{app}\gwatch.exe"; Parameters: "open --listen ""{code:GetListenAddr}"""; Description: "Open GWatch in your browser"; Flags: postinstall skipifsilent nowait
 

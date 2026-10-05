@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/jxburros/GWatch/internal/permissions"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,6 +41,17 @@ type Box struct {
 // Load reads the key file at path, creating it with a fresh random key (mode
 // 0600) if it does not exist.
 func Load(path string) (*Box, error) {
+	if err := permissions.EnsurePrivateDir(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
+	if _, err := os.Lstat(path); err == nil {
+		if err := permissions.ValidateConfigOwner(path); err != nil {
+			return nil, err
+		}
+		if err := permissions.EnsurePrivateFile(path); err != nil {
+			return nil, err
+		}
+	}
 	raw, err := os.ReadFile(path)
 	if err == nil {
 		key, err := parseKey(raw)
@@ -93,7 +105,7 @@ func parseKey(raw []byte) ([]byte, error) {
 // then rename into place.
 func writeKeyFile(path string, key []byte) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := permissions.EnsurePrivateDir(dir); err != nil {
 		return fmt.Errorf("create key dir: %w", err)
 	}
 	tmp, err := os.CreateTemp(dir, ".gwatch-key-*")
@@ -102,7 +114,7 @@ func writeKeyFile(path string, key []byte) error {
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
-	if err := tmp.Chmod(0o600); err != nil {
+	if err := permissions.EnsurePrivateFile(tmpName); err != nil {
 		tmp.Close()
 		return fmt.Errorf("chmod key file: %w", err)
 	}

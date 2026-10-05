@@ -3,7 +3,7 @@
 // layout (x, y, width, height per widget) is saved with the dashboard.
 
 import { api } from '../api.js';
-import { h, icon, clear, replace, statusPill, statusSpine, statusWord, statusGlyph, checkChip, statusOrb, toast, confirmDialog, promptDialog, openModal, menuButton, field, textInput, numberInput, selectInput, checkbox, emptyState, skeleton, eventRow, rangeChips, statusMeta, uid } from '../components.js';
+import { preserveFocus, h, icon, clear, replace, statusPill, statusSpine, statusWord, statusGlyph, checkChip, statusOrb, toast, confirmDialog, promptDialog, openModal, menuButton, field, textInput, numberInput, selectInput, checkbox, emptyState, skeleton, eventRow, rangeChips, statusMeta, uid } from '../components.js';
 import { relTime, bytes, plural, dateShort, duration, pct, nodeGroups, inGroup, NODE_SORTS, sortNodes } from '../fmt.js';
 import { chartConfigEditor, renderConfiguredChart, normalizeChartConfig, cachedHistoryFetch, chartCsvItems, TIMESTACK_PERIODS } from '../chart-config.js';
 // charts.js is already in the graph by way of chart-config.js, so naming these
@@ -136,10 +136,12 @@ export async function mount(root, ctx) {
     state.current = (id && list.find((d) => String(d.id) === String(id))) || list[0] || null;
     state.layout = state.current ? toLayout(state.current.widgets || []) : [];
   }
+  let refreshToken = 0;
   async function refreshData() {
+    const token = ++refreshToken;
     if (state.interacting) return;
     const [overview, health] = await Promise.all([api.get('/api/overview'), api.get('/api/health').catch(() => state.health)]);
-    if (state.destroyed || state.interacting) return;
+    if (state.destroyed || state.interacting || token !== refreshToken) return;
     state.overview = overview; state.health = health;
     state.historyCache.clear();
     refreshWidgets();
@@ -291,9 +293,11 @@ export async function mount(root, ctx) {
       const view = state.chartViews.get(w.id);
       if (view) { view.refresh(); continue; }
       if (w.type === 'uptime_chart') { fillUptime(state.uptimeLists.get(w.id), w); continue; }
+      const restore = preserveFocus(card._body);
       clear(card._body);
       replace(card._actions, card._actionKids);
       try { renderWidgetBody(w, widgetConfig(w), card._body, card._actions); } catch (e) { console.error(e); card._body.append(h('div', { class: 'note' }, 'Could not render this widget.')); }
+      restore();
     }
   }
 
@@ -658,7 +662,7 @@ export async function mount(root, ctx) {
 
   function renderStatusList(body, cfg) {
     const rows = nodesFiltered(cfg);
-    if (!rows.length) { body.append(emptyState({ icon: 'server', title: 'No nodes match', text: state.nodes.length ? 'Adjust the widget filter to include some nodes.' : 'Add your router, a website or a home server to see status here.', compact: true, actions: state.nodes.length ? null : h('a', { class: 'btn btn-primary btn-sm', href: '#/nodes' }, 'Go to Nodes') })); return; }
+    if (!rows.length) { body.append(emptyState({ icon: 'server', title: state.nodes.length ? 'No nodes match' : 'No nodes yet', text: state.nodes.length ? 'Adjust the widget filter to include some nodes.' : 'Add your router, a website or a home server to see status here.', compact: true, actions: state.nodes.length ? null : h('a', { class: 'btn btn-primary btn-sm', href: '#/nodes' }, 'Go to Nodes') })); return; }
     const list = h('div', { class: 'status-rows' });
     for (const r of rows) {
       const n = r.node;
@@ -698,8 +702,8 @@ export async function mount(root, ctx) {
 
   function renderAttention(body, ov) {
     const items = ov.attention || [];
-    if (!items.length) { body.append(h('div', { class: 'all-good' }, icon('check'), h('strong', null, 'Nothing needs attention'), h('span', null, 'All monitored nodes are healthy.'))); return; }
-    const list = h('div', null);
+    if (!items.length) { body.append(h('div', { class: 'all-good' }, icon('check'), h('strong', null, state.nodes.length ? 'Nothing needs attention' : 'No nodes yet'), h('span', null, state.nodes.length ? 'All monitored nodes are healthy.' : 'Add a node to start monitoring.'))); return; }
+    const list = h('div', { class: 'attention-list' });
     for (const a of items) {
       list.append(h('div', { class: 'attention-row' },
         statusSpine(a.status, { key: `att:${a.nodeId}:${a.checkName}` }),
@@ -708,10 +712,13 @@ export async function mount(root, ctx) {
           h('div', { class: 'a-title' }, h('a', { href: `#/nodes/${a.nodeId}`, style: { color: 'inherit' } }, a.nodeName), ` › ${a.checkName}`),
           h('div', { class: 'a-msg' }, a.message || ''),
           a.affectedBy ? h('div', { class: 'affected-note' }, icon('link'), `${a.nodeName} unavailable because ${a.affectedBy} is down`) : null),
-        h('div', { class: 'a-since', title: a.since ? new Date(a.since).toLocaleString() : '' }, a.since ? (relTime(a.since, now()) === 'just now' ? 'since just now' : `since ${relTime(a.since, now()).replace(' ago', '')} ago`) : ''),
+        h('div', { class: 'a-since', title: a.since ? new Date(a.since).toLocaleString() : '' }, a.since ? relTime(a.since, now()) : ''),
       ));
     }
-    body.append(list);
+    body.classList.add('attention-widget');
+    const more = h('a', { class: 'attention-more', href: '#/incidents' }, `${items.length} issues → Incidents`);
+    body.append(list, more);
+    requestAnimationFrame(() => { if (!list.isConnected) return; const bottom = list.getBoundingClientRect().bottom; const hidden = [...list.children].filter((row) => row.getBoundingClientRect().bottom > bottom + 1).length; more.textContent = hidden ? `+${hidden} more → Incidents` : `${items.length} issues → Incidents`; });
   }
 
   function renderMonitorHealth(body, actions) {

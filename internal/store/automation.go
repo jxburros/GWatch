@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS rule_state (
 
 const triggerCols = `id, node_id, name, description, enabled, conditions, check_id, latency_over_ms, metric, metric_over, action, cooldown_minutes, last_run_at, last_status, last_output, run_count, created_at, updated_at`
 
-func scanTrigger(sc interface{ Scan(...any) error }) (model.Trigger, error) {
+func (s *Store) scanTrigger(sc interface{ Scan(...any) error }) (model.Trigger, error) {
 	var t model.Trigger
 	var enabled int
 	var conds, action, created, updated string
@@ -94,6 +94,7 @@ func scanTrigger(sc interface{ Scan(...any) error }) (model.Trigger, error) {
 		t.On = []string{}
 	}
 	_ = json.Unmarshal([]byte(action), &t.Action)
+	_ = t.Action.TransformSecrets(s.openSecret)
 	t.CheckID = int64Ptr(check)
 	t.LastRunAt = parseTime(lastRun)
 	t.CreatedAt, t.UpdatedAt = mustTime(created), mustTime(updated)
@@ -116,7 +117,7 @@ func (s *Store) ListTriggers(ctx context.Context, nodeID *int64) ([]model.Trigge
 	defer rows.Close()
 	out := []model.Trigger{}
 	for rows.Next() {
-		t, err := scanTrigger(rows)
+		t, err := s.scanTrigger(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -128,7 +129,7 @@ func (s *Store) ListTriggers(ctx context.Context, nodeID *int64) ([]model.Trigge
 // GetTrigger returns one trigger.
 func (s *Store) GetTrigger(ctx context.Context, id int64) (model.Trigger, error) {
 	row := s.queryRow(ctx, "SELECT "+triggerCols+" FROM triggers WHERE id = ?", id)
-	t, err := scanTrigger(row)
+	t, err := s.scanTrigger(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return t, ErrNotFound
 	}
@@ -138,6 +139,10 @@ func (s *Store) GetTrigger(ctx context.Context, id int64) (model.Trigger, error)
 // SaveTrigger inserts (ID == 0) or updates a trigger. Run statistics are
 // kept from the stored row on update.
 func (s *Store) SaveTrigger(ctx context.Context, t model.Trigger) (model.Trigger, error) {
+	action := t.Action
+	if err := action.TransformSecrets(s.sealSecret); err != nil {
+		return t, err
+	}
 	now := time.Now()
 	if t.On == nil {
 		t.On = []string{}
@@ -146,7 +151,7 @@ func (s *Store) SaveTrigger(ctx context.Context, t model.Trigger) (model.Trigger
 	if t.ID == 0 {
 		t.CreatedAt = now
 		newID, err := s.insertID(ctx, `INSERT INTO triggers(node_id, name, description, enabled, conditions, check_id, latency_over_ms, metric, metric_over, action, cooldown_minutes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			t.NodeID, t.Name, t.Description, boolInt(t.Enabled), jsonString(t.On), nullInt64(t.CheckID), t.LatencyOverMS, t.Metric, t.MetricOver, jsonString(t.Action), t.CooldownMinutes, fmtTime(now), fmtTime(now))
+			t.NodeID, t.Name, t.Description, boolInt(t.Enabled), jsonString(t.On), nullInt64(t.CheckID), t.LatencyOverMS, t.Metric, t.MetricOver, jsonString(action), t.CooldownMinutes, fmtTime(now), fmtTime(now))
 		if err != nil {
 			return t, err
 		}
@@ -154,7 +159,7 @@ func (s *Store) SaveTrigger(ctx context.Context, t model.Trigger) (model.Trigger
 		return t, nil
 	}
 	res, err := s.exec(ctx, `UPDATE triggers SET node_id=?, name=?, description=?, enabled=?, conditions=?, check_id=?, latency_over_ms=?, metric=?, metric_over=?, action=?, cooldown_minutes=?, updated_at=? WHERE id=?`,
-		t.NodeID, t.Name, t.Description, boolInt(t.Enabled), jsonString(t.On), nullInt64(t.CheckID), t.LatencyOverMS, t.Metric, t.MetricOver, jsonString(t.Action), t.CooldownMinutes, fmtTime(now), t.ID)
+		t.NodeID, t.Name, t.Description, boolInt(t.Enabled), jsonString(t.On), nullInt64(t.CheckID), t.LatencyOverMS, t.Metric, t.MetricOver, jsonString(action), t.CooldownMinutes, fmtTime(now), t.ID)
 	if err != nil {
 		return t, err
 	}
@@ -190,7 +195,7 @@ func (s *Store) DeleteTrigger(ctx context.Context, id int64) error {
 
 const endpointCols = `id, name, slug, description, enabled, method, token, allow_no_token, action, last_called_at, last_status, last_output, call_count, created_at, updated_at`
 
-func scanEndpoint(sc interface{ Scan(...any) error }) (model.Endpoint, error) {
+func (s *Store) scanEndpoint(sc interface{ Scan(...any) error }) (model.Endpoint, error) {
 	var e model.Endpoint
 	var enabled, allowNoToken int
 	var action, created, updated string
@@ -201,6 +206,8 @@ func scanEndpoint(sc interface{ Scan(...any) error }) (model.Endpoint, error) {
 	e.Enabled = enabled == 1
 	e.AllowNoToken = allowNoToken == 1
 	_ = json.Unmarshal([]byte(action), &e.Action)
+	_ = e.Action.TransformSecrets(s.openSecret)
+	e.Token, _ = s.openSecret(e.Token)
 	e.LastCalledAt = parseTime(lastCalled)
 	e.CreatedAt, e.UpdatedAt = mustTime(created), mustTime(updated)
 	return e, nil
@@ -215,7 +222,7 @@ func (s *Store) ListEndpoints(ctx context.Context) ([]model.Endpoint, error) {
 	defer rows.Close()
 	out := []model.Endpoint{}
 	for rows.Next() {
-		e, err := scanEndpoint(rows)
+		e, err := s.scanEndpoint(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -227,7 +234,7 @@ func (s *Store) ListEndpoints(ctx context.Context) ([]model.Endpoint, error) {
 // GetEndpoint returns one endpoint by id.
 func (s *Store) GetEndpoint(ctx context.Context, id int64) (model.Endpoint, error) {
 	row := s.queryRow(ctx, "SELECT "+endpointCols+" FROM endpoints WHERE id = ?", id)
-	e, err := scanEndpoint(row)
+	e, err := s.scanEndpoint(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return e, ErrNotFound
 	}
@@ -237,7 +244,7 @@ func (s *Store) GetEndpoint(ctx context.Context, id int64) (model.Endpoint, erro
 // GetEndpointBySlug returns one endpoint by its URL slug.
 func (s *Store) GetEndpointBySlug(ctx context.Context, slug string) (model.Endpoint, error) {
 	row := s.queryRow(ctx, "SELECT "+endpointCols+" FROM endpoints WHERE slug = ?", slug)
-	e, err := scanEndpoint(row)
+	e, err := s.scanEndpoint(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return e, ErrNotFound
 	}
@@ -246,12 +253,20 @@ func (s *Store) GetEndpointBySlug(ctx context.Context, slug string) (model.Endpo
 
 // SaveEndpoint inserts (ID == 0) or updates an endpoint.
 func (s *Store) SaveEndpoint(ctx context.Context, e model.Endpoint) (model.Endpoint, error) {
+	action := e.Action
+	if err := action.TransformSecrets(s.sealSecret); err != nil {
+		return e, err
+	}
+	token, err := s.sealSecret(e.Token)
+	if err != nil {
+		return e, err
+	}
 	now := time.Now()
 	e.UpdatedAt = now
 	if e.ID == 0 {
 		e.CreatedAt = now
 		newID, err := s.insertID(ctx, `INSERT INTO endpoints(name, slug, description, enabled, method, token, allow_no_token, action, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-			e.Name, e.Slug, e.Description, boolInt(e.Enabled), e.Method, e.Token, boolInt(e.AllowNoToken), jsonString(e.Action), fmtTime(now), fmtTime(now))
+			e.Name, e.Slug, e.Description, boolInt(e.Enabled), e.Method, token, boolInt(e.AllowNoToken), jsonString(action), fmtTime(now), fmtTime(now))
 		if err != nil {
 			if s.d.isUniqueViolation(err) {
 				return e, fmt.Errorf("an endpoint with the slug %q already exists", e.Slug)
@@ -262,7 +277,7 @@ func (s *Store) SaveEndpoint(ctx context.Context, e model.Endpoint) (model.Endpo
 		return e, nil
 	}
 	res, err := s.exec(ctx, `UPDATE endpoints SET name=?, slug=?, description=?, enabled=?, method=?, token=?, allow_no_token=?, action=?, updated_at=? WHERE id=?`,
-		e.Name, e.Slug, e.Description, boolInt(e.Enabled), e.Method, e.Token, boolInt(e.AllowNoToken), jsonString(e.Action), fmtTime(now), e.ID)
+		e.Name, e.Slug, e.Description, boolInt(e.Enabled), e.Method, token, boolInt(e.AllowNoToken), jsonString(action), fmtTime(now), e.ID)
 	if err != nil {
 		if s.d.isUniqueViolation(err) {
 			return e, fmt.Errorf("an endpoint with the slug %q already exists", e.Slug)
@@ -301,7 +316,7 @@ func (s *Store) DeleteEndpoint(ctx context.Context, id int64) error {
 
 const ruleCols = `id, name, enabled, join_kind, at_least, conditions, actions, cooldown_minutes, notify_cleared, created_at, updated_at`
 
-func scanRule(sc interface{ Scan(...any) error }) (model.Rule, error) {
+func (s *Store) scanRule(sc interface{ Scan(...any) error }) (model.Rule, error) {
 	var r model.Rule
 	var enabled, notifyCleared int
 	var conds, acts, created, updated string
@@ -315,6 +330,9 @@ func scanRule(sc interface{ Scan(...any) error }) (model.Rule, error) {
 		r.Conditions = []model.RuleCondition{}
 	}
 	_ = json.Unmarshal([]byte(acts), &r.Actions)
+	for i := range r.Actions {
+		_ = r.Actions[i].TransformSecrets(s.openSecret)
+	}
 	if r.Actions == nil {
 		r.Actions = []model.Action{}
 	}
@@ -331,7 +349,7 @@ func (s *Store) ListRules(ctx context.Context) ([]model.Rule, error) {
 	defer rows.Close()
 	out := []model.Rule{}
 	for rows.Next() {
-		r, err := scanRule(rows)
+		r, err := s.scanRule(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -343,7 +361,7 @@ func (s *Store) ListRules(ctx context.Context) ([]model.Rule, error) {
 // GetRule returns one rule.
 func (s *Store) GetRule(ctx context.Context, id int64) (model.Rule, error) {
 	row := s.queryRow(ctx, "SELECT "+ruleCols+" FROM rules WHERE id = ?", id)
-	r, err := scanRule(row)
+	r, err := s.scanRule(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return r, ErrNotFound
 	}
@@ -353,6 +371,12 @@ func (s *Store) GetRule(ctx context.Context, id int64) (model.Rule, error) {
 // SaveRule inserts (ID == 0) or updates a rule. Its state (RuleState) is a
 // separate row and is left alone.
 func (s *Store) SaveRule(ctx context.Context, r model.Rule) (model.Rule, error) {
+	actions := append([]model.Action(nil), r.Actions...)
+	for i := range actions {
+		if err := actions[i].TransformSecrets(s.sealSecret); err != nil {
+			return r, err
+		}
+	}
 	now := time.Now()
 	if r.Conditions == nil {
 		r.Conditions = []model.RuleCondition{}
@@ -367,7 +391,7 @@ func (s *Store) SaveRule(ctx context.Context, r model.Rule) (model.Rule, error) 
 	if r.ID == 0 {
 		r.CreatedAt = now
 		newID, err := s.insertID(ctx, `INSERT INTO rules(name, enabled, join_kind, at_least, conditions, actions, cooldown_minutes, notify_cleared, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-			r.Name, boolInt(r.Enabled), r.Join, r.AtLeast, jsonString(r.Conditions), jsonString(r.Actions), r.CooldownMinutes, boolInt(r.NotifyCleared), fmtTime(now), fmtTime(now))
+			r.Name, boolInt(r.Enabled), r.Join, r.AtLeast, jsonString(r.Conditions), jsonString(actions), r.CooldownMinutes, boolInt(r.NotifyCleared), fmtTime(now), fmtTime(now))
 		if err != nil {
 			return r, err
 		}
@@ -375,7 +399,7 @@ func (s *Store) SaveRule(ctx context.Context, r model.Rule) (model.Rule, error) 
 		return r, nil
 	}
 	res, err := s.exec(ctx, `UPDATE rules SET name=?, enabled=?, join_kind=?, at_least=?, conditions=?, actions=?, cooldown_minutes=?, notify_cleared=?, updated_at=? WHERE id=?`,
-		r.Name, boolInt(r.Enabled), r.Join, r.AtLeast, jsonString(r.Conditions), jsonString(r.Actions), r.CooldownMinutes, boolInt(r.NotifyCleared), fmtTime(now), r.ID)
+		r.Name, boolInt(r.Enabled), r.Join, r.AtLeast, jsonString(r.Conditions), jsonString(actions), r.CooldownMinutes, boolInt(r.NotifyCleared), fmtTime(now), r.ID)
 	if err != nil {
 		return r, err
 	}

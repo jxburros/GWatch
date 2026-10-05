@@ -1,155 +1,59 @@
-// Incident timeline: every event grouped by day with filters and notes.
-
+// Incident lifecycle, with the raw event feed kept as a separate view.
 import { api, qs } from '../api.js';
-import { h, icon, clear, replace, eventIcon, eventMeta, EVENT_META, toast, openModal, field, selectInput, textarea, emptyState, skeleton } from '../components.js';
-import { dayHeading, dayKey, timeShort, relTime, metricLabel } from '../fmt.js';
-
-const TYPE_GROUPS = [
-  { value: '', label: 'All events' },
-  { value: 'down', label: 'Went down' },
-  { value: 'recovered', label: 'Recovered' },
-  { value: 'warning', label: 'Warnings' },
-  { value: 'cert_warning', label: 'Certificate warnings' },
-  { value: 'content_changed', label: 'Response changed' },
-  { value: 'alert_sent', label: 'Alerts sent' },
-  { value: 'alert_suppressed', label: 'Alerts suppressed' },
-  { value: 'alert_failed', label: 'Alerts failed' },
-  { value: 'silenced', label: 'Silenced' },
-  { value: 'maintenance_began', label: 'Maintenance began' },
-  { value: 'maintenance_ended', label: 'Maintenance ended' },
-  { value: 'affected_by_parent', label: 'Affected by parent' },
-  { value: 'rule_fired', label: 'Rules fired & cleared' },
-  { value: 'config_changed', label: 'Configuration changes' },
-  { value: 'service_started', label: 'Service started' },
-  { value: 'service_stopped', label: 'Service stopped' },
-  { value: 'monitor_gap', label: 'Monitoring gaps' },
-  { value: 'internal_error', label: 'Internal errors' },
-  { value: 'backup', label: 'Backups' },
-  { value: 'restore', label: 'Restores' },
-  { value: 'retention', label: 'Retention' },
-  { value: 'note', label: 'Notes' },
-];
-const PAGE = 100;
+import { h, replace, selectInput, textarea, field, toast, openModal, emptyState, eventRow, preserveFocus } from '../components.js';
+import { relTime, duration, dateTime } from '../fmt.js';
+import * as eventsView from './incident-events.js';
+import * as reportsView from './reports.js';
 
 export async function mount(root, ctx) {
-  const state = { events: [], nodes: [], type: ctx.query.get('type') || '', nodeId: ctx.query.get('nodeId') || '', hasMore: true, loading: false, destroyed: false };
-
-  const typeSel = selectInput({ options: TYPE_GROUPS, value: state.type, 'aria-label': 'Event type', onchange: () => { state.type = typeSel.value; reload(); } });
-  const nodeSel = selectInput({ options: [{ value: '', label: 'All nodes' }], value: '', 'aria-label': 'Node', onchange: () => { state.nodeId = nodeSel.value; reload(); } });
-  const toolbar = h('section', { class: 'filter-bar', 'aria-label': 'Filter events' }, h('div', { class: 'toolbar' }, h('div', { style: { minWidth: '220px' } }, typeSel), h('div', { style: { minWidth: '220px' } }, nodeSel)));
-  const listEl = h('div', null, skeleton({ lines: 5 }));
-  const moreWrap = h('div', { style: { display: 'flex', justifyContent: 'center', marginTop: '8px' } });
-  root.append(toolbar, listEl, moreWrap);
-
-  ctx.setTitle('Incidents', {
-    actions: [
-      h('a', { class: 'btn', href: '#/audit/events' }, icon('audit'), 'Full audit log'),
-      h('a', { class: 'btn', href: `/api/export/events.csv${qs({ nodeId: state.nodeId || null, limit: 5000 })}`, download: 'events.csv' }, icon('download'), 'Export CSV'),
-      h('button', { class: 'btn btn-primary', type: 'button', onclick: addNote }, icon('note'), 'Add note'),
-    ],
-  });
-
-  async function loadNodes() {
+  const tab = ctx.query.get('tab') || (ctx.query.has('type') ? 'events' : 'active');
+  const tabs = h('nav', { class: 'tabs', 'aria-label': 'Incident sections' },
+    ...[['active', 'Incidents'], ['events', 'Events'], ['reports', 'Reports']].map(([id, name]) => h('a', { href: `#/incidents?tab=${id}`, class: tab === id ? 'tab active' : 'tab', 'aria-current': tab === id ? 'page' : null }, name)));
+  const body = h('div', { class: 'stack' }); root.append(tabs, body);
+  if (tab === 'events') return eventsView.mount(body, ctx);
+  if (tab === 'reports') return reportsView.mount(body, ctx);
+  ctx.setTitle('Incidents');
+  let destroyed = false, request = 0;
+  const filter = selectInput({ 'aria-label': 'Incident state', value: 'active', options: ['active', 'all', 'open', 'acknowledged', 'resolved'].map((value) => ({ value, label: value[0].toUpperCase() + value.slice(1) })), onchange: () => load() });
+  const list = h('div', { class: 'stack' }); body.append(h('div', { class: 'toolbar' }, filter), list);
+  async function load() {
+    const token = ++request;
     try {
-      state.nodes = await api.get('/api/nodes');
-      clear(nodeSel);
-      nodeSel.append(h('option', { value: '' }, 'All nodes'));
-      for (const n of state.nodes) nodeSel.append(h('option', { value: n.id }, n.name));
-      nodeSel.value = state.nodeId;
-    } catch { /* keep the "all nodes" option */ }
+      const rows = await api.get(`/api/incidents${qs({ state: filter.value })}`);
+      if (destroyed || token !== request) return;
+      const restore = preserveFocus(list);
+      replace(list, ...(rows || []).map((i) => h('article', { class: 'card' },
+        h('div', { class: 'row-between' }, h('h2', null, h('a', { href: `#/nodes/${i.nodeId}` }, i.nodeName)), h('span', { class: 'pill' }, i.state)),
+        h('p', { class: 'note' }, `Opened ${relTime(i.openedAt)} · ${duration(i.durationSeconds)} · ${(i.checkIds || []).length} checks`),
+        i.acknowledgedAt ? h('p', { class: 'note' }, `Acknowledged by ${i.acknowledgedBy || 'operator'} ${relTime(i.acknowledgedAt)}`) : null,
+        h('button', { class: 'btn', type: 'button', 'data-focus-key': `incident:${i.id}`, onclick: () => detail(i.id) }, 'Timeline and notes'))));
+      if (!rows?.length) list.append(emptyState({ icon: 'check', title: 'No incidents match', text: filter.value === 'active' ? 'There are no open or acknowledged outages.' : 'Try another incident state.' }));
+      restore();
+    } catch (e) { if (!destroyed && token === request) replace(list, emptyState({ icon: 'alert', title: 'Could not load incidents', text: e.message })); }
   }
-
-  async function fetchPage(before) {
-    return api.get(`/api/events${qs({ limit: PAGE, before, type: state.type, nodeId: state.nodeId })}`);
-  }
-  async function reload() {
-    state.events = []; state.hasMore = true;
-    replace(listEl, skeleton({ lines: 5 }));
+  async function detail(id) {
     try {
-      const rows = await fetchPage(null);
-      if (state.destroyed) return;
-      state.events = rows || [];
-      state.hasMore = state.events.length >= PAGE;
-      render();
-    } catch (e) { replace(listEl, h('div', { class: 'card' }, emptyState({ icon: 'alert', title: 'Could not load events', text: e.message }))); }
+      const { incident: i, events } = await api.get(`/api/incidents/${id}`);
+      if (destroyed) return;
+      const note = textarea({ rows: 3, placeholder: 'What happened or what you changed…' });
+      const contents = h('div', { class: 'stack' },
+        h('p', null, `${i.state} · opened ${dateTime(i.openedAt)} · duration ${duration(i.durationSeconds)}`),
+        i.acknowledgedAt ? h('p', { class: 'note' }, `Acknowledged by ${i.acknowledgedBy || 'operator'} at ${dateTime(i.acknowledgedAt)}`) : null,
+        i.resolvedAt ? h('p', { class: 'note' }, `Resolved by ${i.resolvedBy || 'monitor'} at ${dateTime(i.resolvedAt)}`) : null,
+        i.timeToAcknowledgeSeconds != null ? h('p', { class: 'note' }, `Time to acknowledge: ${duration(i.timeToAcknowledgeSeconds)}`) : null,
+        i.timeToResolveSeconds != null ? h('p', { class: 'note' }, `Time to resolve: ${duration(i.timeToResolveSeconds)}`) : null,
+        h('h3', null, 'Notes'), ...(i.notes || []).map((n) => h('p', null, h('b', null, `${n.actor || 'Operator'} · ${dateTime(n.at)}: `), n.text)),
+        h('h3', null, 'Timeline'), ...(events || []).map((e) => eventRow(e)),
+        ctx.me?.canWrite ? field({ label: 'Note', input: note }) : null);
+      const action = (name, label) => h('button', { type: 'button', class: 'btn', onclick: async (ev) => {
+        if (name === 'note' && !note.value.trim()) { note.focus(); return; }
+        ev.currentTarget.disabled = true;
+        try { await api.post(`/api/incidents/${id}/${name}`, { note: note.value.trim() }); modal.close(); await load(); toast('Incident updated', { kind: 'success' }); }
+        catch (e) { ev.currentTarget.disabled = false; toast(e.message, { kind: 'error' }); }
+      } }, label);
+      const modal = openModal({ title: `${i.nodeName} — incident`, body: contents, footer: ctx.me?.canWrite ? [i.state === 'open' ? action('acknowledge', 'Acknowledge') : null, i.state !== 'resolved' ? action('resolve', 'Resolve') : null, action('note', 'Add note')] : [] });
+    } catch (e) { toast(e.message, { kind: 'error' }); }
   }
-  async function loadMore(btn) {
-    if (!state.events.length) return;
-    btn.disabled = true; btn.textContent = 'Loading…';
-    try {
-      const last = state.events[state.events.length - 1];
-      const rows = await fetchPage(last.id);
-      state.events.push(...(rows || []));
-      state.hasMore = (rows || []).length >= PAGE;
-      render();
-    } catch (e) { toast(e.message, { kind: 'error' }); btn.disabled = false; btn.textContent = 'Load more'; }
-  }
-  async function refresh() {
-    // Pull the newest page and merge unseen events at the top.
-    try {
-      const rows = await fetchPage(null);
-      if (state.destroyed) return;
-      const seen = new Set(state.events.map((e) => e.id));
-      const fresh = (rows || []).filter((e) => !seen.has(e.id));
-      if (fresh.length) { state.events = [...fresh, ...state.events]; render(); }
-    } catch { /* ignore transient errors */ }
-  }
-
-  function render() {
-    clear(listEl); clear(moreWrap);
-    if (!state.events.length) {
-      listEl.append(h('div', { class: 'card' }, emptyState({ icon: 'activity', title: 'No events yet', text: state.type || state.nodeId ? 'Nothing matches these filters.' : 'Outages, recoveries, alerts and maintenance will appear here as they happen.' })));
-      return;
-    }
-    const days = new Map();
-    for (const ev of state.events) { const k = dayKey(ev.ts); if (!days.has(k)) days.set(k, []); days.get(k).push(ev); }
-    for (const [, evs] of days) {
-      const sec = h('section', { class: 'timeline-day' }, h('h2', null, dayHeading(evs[0].ts)));
-      const tl = h('div', { class: 'timeline' });
-      for (const ev of evs) tl.append(row(ev));
-      sec.append(tl);
-      listEl.append(sec);
-    }
-    if (state.hasMore) {
-      const btn = h('button', { class: 'btn', type: 'button', onclick: () => loadMore(btn) }, 'Load more');
-      moreWrap.append(btn);
-    }
-  }
-
-  function row(ev) {
-    const m = eventMeta(ev.type);
-    const detail = [];
-    if (ev.detail) detail.push(ev.detail);
-    let reason = null;
-    try { const meta = ev.meta ? (typeof ev.meta === 'string' ? JSON.parse(ev.meta) : ev.meta) : null; if (meta?.reason) reason = meta.reason; } catch { /* ignore */ }
-    if (ev.type === 'alert_suppressed' && reason && !(ev.detail || '').toLowerCase().includes(String(reason).toLowerCase())) detail.push(`suppressed — ${reason}`);
-    return h('article', { class: 'event-row' },
-      eventIcon(ev.type),
-      h('div', { class: 'ev-body' },
-        h('div', { class: 'row', style: { gap: '8px' } }, h('span', { class: 'ev-type' }, m.label), ev.nodeName ? h('a', { class: 'ev-node', href: `#/nodes/${ev.nodeId}` }, ev.nodeName, ev.checkName ? ` › ${ev.checkName}` : '') : null,
-          // The metric an event is about, when it is about one (a hardware
-          // check's disk rather than the check as a whole).
-          ev.metric ? h('span', { class: 'tag ev-metric', title: ev.metric }, metricLabel(ev.metric)) : null),
-        h('div', { class: 'ev-title' }, ev.title || m.label),
-        detail.length ? h('div', { class: 'ev-detail' }, detail.join(' · ')) : null),
-      h('div', { class: 'ev-time', title: new Date(ev.ts).toLocaleString() }, timeShort(ev.ts, { seconds: true }), h('div', { class: 'dim' }, relTime(ev.ts))));
-  }
-
-  async function addNote() {
-    const text = textarea({ placeholder: 'e.g. Rebooted the router, ISP outage reported, updated Plex…', rows: 3 });
-    const nodeOpt = selectInput({ options: [{ value: '', label: 'General (no node)' }, ...state.nodes.map((n) => ({ value: n.id, label: n.name }))], value: state.nodeId || '' });
-    const form = h('form', { class: 'stack-sm', onsubmit: (e) => { e.preventDefault(); submit(); } }, field({ label: 'Note', input: text }), field({ label: 'Related node', input: nodeOpt }));
-    const m = openModal({ title: 'Add a note to the timeline', body: form, footer: [h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn btn-primary', type: 'button', onclick: () => submit() }, 'Add note')] });
-    async function submit() {
-      if (!text.value.trim()) { text.focus(); return; }
-      try {
-        await api.post('/api/events/note', { nodeId: nodeOpt.value ? Number(nodeOpt.value) : null, text: text.value.trim() });
-        m.close(); toast('Note added', { kind: 'success' }); reload();
-      } catch (e) { toast(e.message, { kind: 'error' }); }
-    }
-    setTimeout(() => text.focus(), 50);
-  }
-
-  await Promise.all([loadNodes(), reload()]);
-  return { refresh, destroy() { state.destroyed = true; } };
+  await load();
+  return { refresh: load, destroy() { destroyed = true; request++; } };
 }

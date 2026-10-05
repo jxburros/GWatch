@@ -171,7 +171,7 @@ func verify(args []string) error {
 		keys = k
 	}
 	if len(keys) == 0 {
-		return errors.New("no public key given and this build pins none; pass -pub ed25519:...")
+		return errors.New("no public key given and this build pins none; pass -pub with an ed25519 public key")
 	}
 	checked := 0
 	for _, f := range files {

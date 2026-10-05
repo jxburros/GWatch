@@ -1,0 +1,21 @@
+import './dom.mjs';
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createWall } from '../../web/wall-render.js';
+import { freshRoot } from './dom.mjs';
+test('wall retries automatically after its first request fails', async (t) => {
+  const intervals = [];
+  t.mock.method(globalThis, 'setInterval', (fn, ms) => { intervals.push({ fn, ms }); return 1; });
+  t.mock.method(globalThis, 'clearInterval', () => {});
+  let calls = 0, failures = 0;
+  const root = freshRoot();
+  const wall = createWall(root, async () => { if (++calls === 1) throw new Error('offline'); return { wallboard: { panels: [{ type: 'message', config: { text: 'Recovered' } }] } }; }, { onError: () => failures++ });
+  t.after(() => wall.destroy());
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(failures, 1);
+  const retry = intervals.find((x) => x.ms === 5000);
+  assert.ok(retry, 'retry armed despite no successful initial load');
+  retry.fn();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.match(root.textContent, /Recovered/);
+});

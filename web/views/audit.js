@@ -39,7 +39,7 @@ export async function mount(root, ctx) {
   async function tabEvents() {
     const f = { q: ctx.query.get('q') || '', type: ctx.query.get('type') || '', nodeId: ctx.query.get('nodeId') || '', since: '', until: '' };
     const events = [];
-    let hasMore = true;
+    let hasMore = true, request = 0, loading = false;
     const q = h('input', { type: 'search', value: f.q, placeholder: 'Search title, detail, node or check…', 'aria-label': 'Search events' });
     const type = selectInput({ options: TYPE_OPTIONS, value: f.type });
     const node = selectInput({ options: [{ value: '', label: 'All nodes' }, ...state.nodes.map((n) => ({ value: n.id, label: n.name }))], value: f.nodeId });
@@ -59,14 +59,18 @@ export async function mount(root, ctx) {
 
     async function fetchPage(before) { return api.get(`/api/events${qs({ ...params(), limit: PAGE, before })}`); }
     async function reload() {
+      const token = ++request; loading = true;
       events.length = 0; hasMore = true;
       replace(listEl, skeleton({ lines: 6 }));
-      try { const rows = await fetchPage(null); if (state.destroyed) return; events.push(...(rows || [])); hasMore = events.length >= PAGE; render(); }
-      catch (e) { replace(listEl, h('div', { class: 'card' }, emptyState({ icon: 'alert', title: 'Could not load events', text: e.message }))); }
+      try { const rows = await fetchPage(null); if (state.destroyed || token !== request) return; events.push(...(rows || [])); hasMore = events.length >= PAGE; render(); }
+      catch (e) { if (token === request && !state.destroyed) replace(listEl, h('div', { class: 'card' }, emptyState({ icon: 'alert', title: 'Could not load events', text: e.message }))); }
+      finally { if (token === request) loading = false; }
     }
     async function loadMore(btn) {
+      if (loading) return;
+      const token = ++request; loading = true;
       const done = busy(btn, 'Loading…');
-      try { const rows = await fetchPage(events[events.length - 1]?.id); events.push(...(rows || [])); hasMore = (rows || []).length >= PAGE; render(); } catch (e) { toast(e.message, { kind: 'error' }); done(); }
+      try { const rows = await fetchPage(events[events.length - 1]?.id); if (state.destroyed || token !== request) return; events.push(...(rows || [])); hasMore = (rows || []).length >= PAGE; render(); } catch (e) { if (token === request) toast(e.message, { kind: 'error' }); } finally { if (token === request) loading = false; done(); }
     }
     function render() {
       clear(listEl); clear(foot);
@@ -94,7 +98,9 @@ export async function mount(root, ctx) {
     }
     await reload();
     state.refresh = async () => {
-      try { const rows = await fetchPage(null); if (state.destroyed) return; const seen = new Set(events.map((e) => e.id)); const fresh = (rows || []).filter((e) => !seen.has(e.id)); if (fresh.length) { events.unshift(...fresh); render(); } } catch { /* ignore */ }
+      if (loading) return;
+      const token = ++request;
+      try { const rows = await fetchPage(null); if (state.destroyed || token !== request) return; const seen = new Set(events.map((e) => e.id)); const fresh = (rows || []).filter((e) => !seen.has(e.id)); if (fresh.length) { events.unshift(...fresh); render(); } } catch { /* ignore */ }
     };
     return h('div', null,
       h('section', { class: 'filter-bar', 'aria-label': 'Filter the audit log' }, h('div', { class: 'audit-toolbar' }, field({ label: 'Search', input: q }), field({ label: 'Type', input: type }), field({ label: 'Node', input: node }), field({ label: 'From', input: since }), field({ label: 'Until', input: until }), h('div', { class: 'btn-group' }, applyBtn, exportBtn))),

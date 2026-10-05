@@ -52,7 +52,7 @@ export async function mount(root, ctx) {
       ? h('select', {
         'aria-label': 'Which wallboard',
         onchange: (e) => ctx.navigate(`/wallboard/${e.target.value}`),
-      }, ...boards.map((b) => h('option', { value: String(b.id), selected: b.id === board.id ? '' : null }, b.name)))
+      }, ...boards.map((b) => h('option', { value: String(b.id), selected: b.id === board.id }, b.name)))
       : null,
     h('a', { class: 'btn btn-sm', href: '#/wallboards' }, icon('settings'), 'Configure'),
     h('a', { class: 'btn btn-sm', href: '#/dashboard' }, icon('logout'), 'Exit')));

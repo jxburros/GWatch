@@ -125,6 +125,10 @@ func windowsMemory() (mem model.HostMemory, err error) {
 	if rc == 0 {
 		return mem, callErr
 	}
+	return memoryFromWindows(st), nil
+}
+
+func memoryFromWindows(st memoryStatusEx) (mem model.HostMemory) {
 	mem.TotalBytes = st.TotalPhys
 	mem.AvailableBytes = st.AvailPhys
 	if st.AvailPhys <= st.TotalPhys {
@@ -132,7 +136,10 @@ func windowsMemory() (mem model.HostMemory, err error) {
 	}
 	if st.TotalPageFile > st.TotalPhys {
 		mem.SwapTotalBytes = st.TotalPageFile - st.TotalPhys
-		committed := st.TotalPageFile - st.AvailPageFile
+		var committed uint64
+		if st.TotalPageFile >= st.AvailPageFile {
+			committed = st.TotalPageFile - st.AvailPageFile
+		}
 		if committed > mem.UsedBytes {
 			used := committed - mem.UsedBytes
 			if used > mem.SwapTotalBytes {
@@ -141,7 +148,7 @@ func windowsMemory() (mem model.HostMemory, err error) {
 			mem.SwapUsedBytes = used
 		}
 	}
-	return mem, nil
+	return mem
 }
 
 func windowsBootTime() (time.Time, error) {
@@ -281,6 +288,11 @@ func windowsInterfaces() ([]ifaceCounters, error) {
 	if rc != 0 {
 		return nil, fmt.Errorf("GetIfTable failed (%d)", rc)
 	}
+	names, addrs := windowsInterfaceNames()
+	return parseWindowsInterfaces(buf, names, addrs)
+}
+
+func parseWindowsInterfaces(buf []byte, names map[uint32]string, addrs map[string][]string) ([]ifaceCounters, error) {
 	if len(buf) < int(unsafe.Sizeof(uint32(0))) {
 		return nil, fmt.Errorf("GetIfTable returned no table")
 	}
@@ -296,7 +308,9 @@ func windowsInterfaces() ([]ifaceCounters, error) {
 		Row mibIfRow
 	}{}.Row)
 
-	names, addrs := windowsInterfaceNames()
+	if uintptr(len(buf)) < offset || uint64(count) > uint64((uintptr(len(buf))-offset)/rowSize) {
+		return nil, fmt.Errorf("GetIfTable returned a truncated table")
+	}
 	var out []ifaceCounters
 	for i := uint32(0); i < count; i++ {
 		start := offset + uintptr(i)*rowSize

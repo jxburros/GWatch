@@ -9,7 +9,50 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
-## Unreleased
+## 0.6.0 — 2026-10-05
+
+### Added and fixed
+
+- Grouped incidents with acknowledgment, resolution, attributed notes and timing,
+  plus an Events tab retaining the raw audit timeline. Acknowledgment stops repeat
+  notifications until recovery; a node incident closes when all enabled checks recover.
+- Weekly/monthly availability reports by groups or tags, optional availability
+  targets, incident durations, slowest checks and expiring certificates. Reports
+  arrive as HTML email with a printable HTML attachment; generate any range on demand.
+- Warning cooldowns no longer delay down alerts. Database or SMTP failures allow
+  retries; dependency probes wait for in-flight parents; silence expiry re-evaluates
+  rules. Scheduler fairness and overdue-check health metrics prevent silent starvation.
+- Subprocess trees are terminated on timeout and captured output is bounded.
+  Pausing/running a check concurrently cannot corrupt its state. Hardware Test works;
+  SNMP resets no longer produce huge false rates. Scheduled pruning keeps manual backups.
+- Linux/macOS verified installers, ARMv7 server artifacts and image, journal logging,
+  configurable listening port and UI restart. Agent installation uses a protected
+  executable location, Windows updates retain the executable extension, lifecycle
+  commands work without a token, and serve mode has separate credentials and TLS support.
+- Keyboard focus, theme accessibility, chart labels, empty states, wallboard fit/retry,
+  bulk selections, community-password feedback, onboarding/update dismissal and hidden
+  tab work are corrected. Static assets have validators and directory listings are disabled.
+- Real-server browser and MCP smoke tests, full Linux race coverage, additional database
+  engine/host tests, collector parser tests, staticcheck, pinned release tooling and
+  scheduled vulnerability checks. Publishing waits for signed release success.
+
+### Upgrade notes
+
+- GWatch and GWatch Agent are independently versioned **0.6.0**. The bundled MCP
+  companion is **0.1.1**, with agent skill **1.0.1**.
+- Treat credentials present in old shared wallboard URLs/config exports as exposed:
+  rotate affected credentials and wallboard share links after upgrading.
+- Signing jobs use the protected `release` Environment and accept only commits on
+  main. The maintainer migration workflow moves the signing key as encrypted data;
+  remove the repository secret after confirming the Environment copy.
+- Daily rollups now use the service's local calendar and DST boundaries. Existing
+  days are rebuilt where source detail remains. Historical daily-only UTC buckets
+  retain their original boundaries; hourly-only archives have hour-level precision
+  in time zones whose offsets include partial hours.
+- Availability is based on observed samples. Missing samples are not treated as up;
+  historical incidents before this upgrade are not reconstructed from old event logs.
+- For a TLS-terminating reverse proxy, explicitly enable `behindHTTPSProxy` to mark
+  session cookies Secure. Enable it only when clients actually use HTTPS.
 
 ### Security
 
@@ -31,9 +74,9 @@ disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 - **Read-only API keys no longer read check header/body/environment secrets.**
   A check's request headers (e.g. `Authorization`), request body, custom-check
   environment and agentless metrics URL are stripped from responses to API keys,
-  which are the MCP companion's default. Browser viewers and administrators still
-  see them so the editor works; masking them there and sealing them at rest is
-  still tracked ([#142], [#88]).
+  which are the MCP companion's default. Browser responses mask these values and preserve them on save. Check headers,
+  bodies, environments, notification credentials and endpoint tokens are sealed
+  at rest; upgrades migrate existing plaintext values ([#142], [#88]).
 - **The brute-force limiter now keeps a separate budget per credential kind.**
   A success of one kind (an agent reporting in, a valid key, a hook) can no
   longer clear the failed-attempt budget another kind (sign-in, the access

@@ -27,9 +27,13 @@ sum() {
 	sha256sum "$f" | cut -d' ' -f1
 }
 
+darwin_arm64=$(sum darwin-arm64) || exit 1
+darwin_amd64=$(sum darwin-amd64) || exit 1
+linux_arm64=$(sum linux-arm64) || exit 1
+linux_amd64=$(sum linux-amd64) || exit 1
 sed -e "s/@VERSION@/$version/g" \
-	-e "s/@SHA256_DARWIN_ARM64@/$(sum darwin-arm64)/" \
-	-e "s/@SHA256_DARWIN_AMD64@/$(sum darwin-amd64)/" \
-	-e "s/@SHA256_LINUX_ARM64@/$(sum linux-arm64)/" \
-	-e "s/@SHA256_LINUX_AMD64@/$(sum linux-amd64)/" \
+	-e "s/@SHA256_DARWIN_ARM64@/${darwin_arm64}/" \
+	-e "s/@SHA256_DARWIN_AMD64@/${darwin_amd64}/" \
+	-e "s/@SHA256_LINUX_ARM64@/${linux_arm64}/" \
+	-e "s/@SHA256_LINUX_AMD64@/${linux_amd64}/" \
 	"$here/gwatch-agent.rb.tmpl"

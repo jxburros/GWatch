@@ -273,6 +273,17 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request, path string, k ke
 	case r.Method == http.MethodPost && path == "/events/note":
 		s.addNote(w, r)
 	case r.Method == http.MethodPost && path == "/checks/test":
+		var input struct {
+			Check map[string]any `json:"check"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			fail(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if privilegedCheck(input.Check) {
+			fail(w, http.StatusForbidden, "API keys cannot execute privileged checks")
+			return
+		}
 		ok(w, map[string]any{"checkId": 0, "ts": time.Now(), "success": true, "status": "up",
 			"message": "reachable in 3 ms", "latencyMs": 3.0, "attempts": 1, "details": map[string]any{}})
 	default:
@@ -455,6 +466,12 @@ func (s *Server) createNode(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "name and host are required")
 		return
 	}
+	for _, c := range in.Checks {
+		if privilegedCheck(c) {
+			fail(w, http.StatusForbidden, "API keys cannot manage privileged checks")
+			return
+		}
+	}
 	in.syncGroups()
 	in.ID = s.nextID
 	s.nextID++
@@ -479,6 +496,12 @@ func (s *Server) updateNode(w http.ResponseWriter, r *http.Request, path string)
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		fail(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
+	}
+	for _, c := range in.Checks {
+		if privilegedCheck(c) {
+			fail(w, http.StatusForbidden, "API keys cannot manage privileged checks")
+			return
+		}
 	}
 	in.syncGroups()
 	in.ID = n.ID
@@ -604,4 +627,12 @@ func fail(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+func privilegedCheck(c map[string]any) bool {
+	if c["type"] == "custom" {
+		return true
+	}
+	config, _ := c["config"].(map[string]any)
+	return c["type"] == "system" && config["hostSource"] == "url"
 }

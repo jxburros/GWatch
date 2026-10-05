@@ -130,3 +130,21 @@ test('the hardware threshold bulk field sends one merged list entry', () => {
   setPath(body, f.path, bulkValue(f, { metric: 'disk', warn: 90, crit: 98 }));
   assert.deepEqual(body, { config: { metricThresholds: [{ metric: 'disk', warn: 90, crit: 98 }] } });
 });
+
+test('unticking one check keeps it unchanged even while its node remains selected', async (t) => {
+  const { root } = await mountView(bulkView, undefined, t);
+  const row = root.querySelector('.bulk-node');
+  const name = row.querySelector('.bulk-node-name').textContent;
+  const node = window.__gwatchMock.nodes.find((n) => n.name === name);
+  tick(row.querySelector('.bulk-node-head input[type="checkbox"]'));
+  const checkBoxes = [...row.querySelectorAll('input[type="checkbox"]')].slice(1);
+  assert.ok(checkBoxes.length > 1);
+  tick(checkBoxes[0], false);
+  const before = node.checks[0].intervalSeconds;
+  const selects = root.querySelectorAll('.bulk-row select');
+  selects[1].value = '300'; selects[1].dispatchEvent(new window.Event('change', { bubbles: true }));
+  [...root.querySelectorAll('.btn')].find((b) => b.textContent.includes('Apply changes')).click();
+  await confirmDialog();
+  await waitFor(() => node.checks.slice(1).every((c) => c.intervalSeconds === 300));
+  assert.equal(node.checks[0].intervalSeconds, before);
+});

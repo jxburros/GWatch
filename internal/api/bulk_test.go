@@ -49,7 +49,7 @@ func TestBulkEditAppliesOneIntervalAcrossNodesAndChecks(t *testing.T) {
 	var res bulkResponse
 	body := map[string]any{
 		"nodeIds":  []int64{a.ID},
-		"checkIds": []int64{b.Checks[0].ID},
+		"checkIds": []int64{a.Checks[0].ID, a.Checks[1].ID, b.Checks[0].ID},
 		"check":    map[string]any{"intervalSeconds": 120},
 	}
 	if code := call(t, ts, "PATCH", "/api/nodes/bulk", body, &res); code != 200 {

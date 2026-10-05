@@ -19,6 +19,7 @@ FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 ARG VERSION=
 ARG TARGETOS
 ARG TARGETARCH
+ARG TARGETVARIANT
 
 WORKDIR /src
 
@@ -34,8 +35,8 @@ COPY . .
 
 RUN set -eu; \
     version="${VERSION:-$(tr -d ' \t\r\n' < VERSION)}"; \
-    CGO_ENABLED=0 GOOS="${TARGETOS:-}" GOARCH="${TARGETARCH:-}" \
-      go build -trimpath -ldflags "-s -w -X main.version=${version}" -o /out/gwatch .
+    CGO_ENABLED=0 GOOS="${TARGETOS:-}" GOARCH="${TARGETARCH:-}" GOARM="${TARGETVARIANT#v}" \
+      go build -trimpath -ldflags "-s -w -X main.version=${version} -X main.packagedBy=docker" -o /out/gwatch .
 
 FROM alpine:3.22
 

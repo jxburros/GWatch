@@ -220,14 +220,15 @@ export function subscribeUpdates(handler, { pollMs = 15000 } = {}) {
   let usingPoll = false;
 
   const startPoll = () => {
-    if (pollTimer || stopped) return;
+    if (pollTimer || stopped || document.hidden) return;
     usingPoll = true;
     pollTimer = setInterval(() => handler(null), pollMs);
   };
   const stopPoll = () => { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } usingPoll = false; };
 
   const connect = () => {
-    if (stopped || typeof EventSource === 'undefined') { startPoll(); return; }
+    if (document.hidden || stopped) return;
+    if (typeof EventSource === 'undefined') { startPoll(); return; }
     try {
       es = new EventSource('/api/stream');
     } catch {
@@ -245,19 +246,29 @@ export function subscribeUpdates(handler, { pollMs = 15000 } = {}) {
       startPoll();
     });
   };
+  const visibility = () => {
+    stopPoll();
+    if (es) { es.close(); es = null; }
+    if (!document.hidden && !stopped) { connect(); handler(null); }
+  };
+  document.addEventListener('visibilitychange', visibility);
   connect();
 
   return () => {
+    document.removeEventListener('visibilitychange', visibility);
     stopped = true;
     stopPoll();
     if (es) { try { es.close(); } catch { /* ignore */ } es = null; }
   };
 }
 
-export function debounce(fn, wait = 500) {
-  let t = null;
+export function debounce(fn, wait = 500, maxWait = Math.max(2000, wait * 4)) {
+  let t = null, max = null, latest;
+  const run = () => { clearTimeout(t); clearTimeout(max); t = max = null; fn(...latest); };
   return (...args) => {
+    latest = args;
     clearTimeout(t);
-    t = setTimeout(() => { t = null; fn(...args); }, wait);
+    if (!max) max = setTimeout(run, maxWait);
+    t = setTimeout(run, wait);
   };
 }

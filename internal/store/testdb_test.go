@@ -87,13 +87,6 @@ func isFileBacked() bool {
 	return b == "" || b == "sqlite"
 }
 
-func requireFileBacked(t *testing.T, why string) {
-	t.Helper()
-	if !isFileBacked() {
-		t.Skipf("%s: only under SQLite", why)
-	}
-}
-
 // rawDB opens cfg without going through the store, for tests that build a
 // database by hand the way an older GWatch would have left it. Statements
 // written in SQLite's form are translated with the dialect, as the store

@@ -74,7 +74,7 @@ export async function mount(root, ctx) {
     }
     side.append(h('section', { class: 'card saved-card' }, h('div', { class: 'card-title' }, 'Saved charts'), list));
     state.editor = chartConfigEditor(state.cfg, { nodes: state.nodes, onChange: onEdit });
-    side.append(h('section', { class: 'card' }, h('div', { class: 'card-title' }, 'Configure'), state.editor));
+    side.append(h('details', { class: 'card chart-config-fold', open: true }, h('summary', { class: 'card-title' }, 'Configure'), state.editor));
   }
   const rerender = debounce(() => renderMain(), 250);
   function onEdit(cfg) {

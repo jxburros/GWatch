@@ -197,3 +197,13 @@ data; we do not want it and have nowhere to put it.
 - [`REMOTE-ACCESS.md`](REMOTE-ACCESS.md) — reaching GWatch from outside your
   network without exposing it
 - [`LICENSE`](../LICENSE) — what you may do with the code
+
+
+### Availability reports and agent lookups (0.6)
+
+Scheduled reports are opt-in and send only through the configured SMTP server to the
+recipients you choose. Report definitions, incident notes and delivery state stay in the
+configured local/database backend. The agent-version lookup (`GET /api/agents/latest`)
+contacts GitHub only while automatic update checks are enabled; disabling them prevents
+that background request as well. Exported shareable configuration removes credentials,
+account/key/agent records, incident notes and report recipients.

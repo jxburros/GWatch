@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/jxburros/GWatch/internal/permissions"
 	"net"
 	"net/url"
 	"os"
@@ -208,14 +209,33 @@ func OpenDSN(ctx context.Context, cfg DBConfig) (*Store, error) {
 		cfg.KeyFile = filepath.Join(filepath.Dir(cfg.Path), KeyFileName)
 	}
 	if cfg.Driver == "sqlite" {
-		if err := os.MkdirAll(filepath.Dir(cfg.Path), 0o755); err != nil {
+		if err := permissions.EnsurePrivateDir(filepath.Dir(cfg.Path)); err != nil {
 			return nil, fmt.Errorf("create data dir: %w", err)
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(cfg.KeyFile), 0o755); err != nil {
+	if err := permissions.EnsurePrivateDir(filepath.Dir(cfg.KeyFile)); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
 
+	if cfg.Driver == "sqlite" && cfg.Path != ":memory:" {
+		f, err := os.OpenFile(cfg.Path, os.O_CREATE|os.O_RDWR, 0600)
+		if err != nil {
+			return nil, err
+		}
+		f.Close()
+		if err := permissions.EnsurePrivateFile(cfg.Path); err != nil {
+			return nil, err
+		}
+	}
+	if cfg.Driver == "sqlite" && cfg.Path != ":memory:" {
+		for _, suffix := range []string{"-wal", "-shm"} {
+			if _, err := os.Stat(cfg.Path + suffix); err == nil {
+				if err := permissions.EnsurePrivateFile(cfg.Path + suffix); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
 	writer, err := openPool(cfg, true)
 	if err != nil {
 		return nil, err
@@ -266,6 +286,10 @@ func OpenDSN(ctx context.Context, cfg DBConfig) (*Store, error) {
 		return nil, err
 	}
 	if err := s.migrateSecrets(ctx); err != nil {
+		s.Close()
+		return nil, err
+	}
+	if err := s.migrateActionSecrets(ctx); err != nil {
 		s.Close()
 		return nil, err
 	}

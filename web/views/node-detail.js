@@ -1,7 +1,7 @@
 // Node detail: header, per-check cards with result inspector, charts, events.
 
 import { api, getHistoryMulti, getHistoryMetric, qs } from '../api.js';
-import { h, icon, clear, replace, uid, statusPill, statusGlyph, importanceBadge, tagList, banner, toast, confirmDialog, showMenu, menuButton, emptyState, skeleton, eventRow, rangeChips, checkTypeLabel } from '../components.js';
+import { scrollBehavior, h, icon, clear, replace, uid, statusPill, statusGlyph, importanceBadge, tagList, banner, toast, confirmDialog, showMenu, menuButton, emptyState, skeleton, eventRow, rangeChips, checkTypeLabel } from '../components.js';
 import { LineChart, toSeries, uptimeBar, uptimeLegend, SERIES_COLORS } from '../charts.js';
 import { relTime, ms as fmtMs, pct, dateTime, interval, plural, timeShort, nodeGroups, metricLabel } from '../fmt.js';
 import { namedMetrics } from '../chart-config.js';
@@ -79,14 +79,14 @@ export async function mount(root, ctx) {
     });
     replace(headEl, h('div', { class: 'detail-head' },
       h('div', { class: 'd-title' },
-        h('h1', null, statusPill(n.status || 'unknown', { large: true }), n.name),
+        h('div', null, statusPill(n.status || 'unknown', { large: true })),
         h('div', { class: 'd-meta' },
           n.host ? h('span', { class: 'host' }, n.host) : null,
           nodeGroups(n).map((g) => h('span', { class: 'tag tag-group' }, g)),
           ...(n.tags || []).map((t) => h('span', { class: 'tag' }, t)),
           importanceBadge(n.importance),
           n.template ? h('span', { class: 'dim small' }, `from ${n.template} template`) : null,
-          state.triggers.length ? h('a', { class: 'tag', href: '#triggers', onclick: (e) => { e.preventDefault(); triggersEl.scrollIntoView({ behavior: 'smooth' }); } }, icon('zap'), ` ${state.triggers.length} trigger${state.triggers.length === 1 ? '' : 's'}`) : null,
+          state.triggers.length ? h('a', { class: 'tag', href: '#triggers', onclick: (e) => { e.preventDefault(); triggersEl.scrollIntoView({ behavior: scrollBehavior() }); } }, icon('zap'), ` ${state.triggers.length} trigger${state.triggers.length === 1 ? '' : 's'}`) : null,
         ),
         n.notes ? h('p', { class: 'muted', style: { maxWidth: '720px', whiteSpace: 'pre-wrap' } }, n.notes) : null,
       ),
@@ -339,7 +339,7 @@ export async function mount(root, ctx) {
     // unchanged the existing canvases are handed the new points and redraw
     // themselves; a new canvas would start life blank and unsized, which is
     // the other half of the flash.
-    const metricChecks = checks.filter((x) => checkMetrics(x).length);
+    const metricChecks = checks.filter((x) => x.type !== 'system' && checkMetrics(x).length);
     const shape = JSON.stringify([state.range, timed.length > 0, latencySeries.map((hs) => hs.checkName), pings.map((hs) => hs.checkName), metricChecks.map((c) => [c.id, checkMetrics(c).map((m) => m.name)])]);
     if (shape === state.historyShape && state.uptimeEl && historyBody.contains(state.uptimeEl)) {
       state.latChart?.setData(latData());
@@ -390,7 +390,7 @@ export async function mount(root, ctx) {
   function uptimeContent(list) {
     const out = [h('div', { class: 'section-title' }, `Availability — ${state.range}`)];
     for (const hs of list) {
-      const avail = hs.summary?.availability;
+      const avail = hs.summary?.count > 0 ? hs.summary.availability : null;
       const cls = avail == null ? '' : avail >= 99.9 ? 'text-up' : avail >= 95 ? 'text-degraded' : 'text-down';
       out.push(h('div', { class: 'uptime-row' }, h('div', { class: 'uptime-name' }, hs.checkName, h('div', { class: 'sub' }, `${hs.summary?.count ?? 0} samples · ${hs.summary?.failures ?? 0} failures`)), uptimeBar(hs.points, { bucketSeconds: hs.bucketSeconds, from: hs.from, to: hs.to, label: hs.checkName }), h('div', { class: `uptime-pct ${cls}` }, pct(avail, 2))));
     }

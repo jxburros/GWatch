@@ -56,6 +56,8 @@ type Manifest struct {
 // archive has none of the last four fields, and Restore leaves what they
 // describe untouched when they are absent.
 type Config struct {
+	Incidents   []model.Incident          `json:"incidents,omitempty"`
+	Reports     []model.ReportDefinition  `json:"reports,omitempty"`
 	Settings    model.Settings            `json:"settings"`
 	Nodes       []model.Node              `json:"nodes"`
 	Dashboards  []model.Dashboard         `json:"dashboards"`
@@ -97,6 +99,12 @@ func ValidFileName(name string) bool {
 func ExportConfig(ctx context.Context, st *store.Store) (Config, error) {
 	var cfg Config
 	var err error
+	if cfg.Incidents, err = st.ExportIncidents(ctx); err != nil {
+		return cfg, err
+	}
+	if err = st.GetSetting(ctx, "reports", &cfg.Reports); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return cfg, err
+	}
 	if cfg.Settings, err = st.LoadSettings(ctx); err != nil {
 		return cfg, err
 	}
@@ -138,6 +146,15 @@ func ExportConfig(ctx context.Context, st *store.Store) (Config, error) {
 
 // Create writes an encrypted archive into dir and returns its metadata.
 func Create(ctx context.Context, st *store.Store, dir, password string, includeHistory bool, appVersion string) (model.BackupInfo, error) {
+	return create(ctx, st, dir, password, includeHistory, appVersion, "gwatch-backup-")
+}
+
+// CreateScheduled marks archives eligible for automatic retention. Older archives remain manual.
+func CreateScheduled(ctx context.Context, st *store.Store, dir, password string, includeHistory bool, appVersion string) (model.BackupInfo, error) {
+	return create(ctx, st, dir, password, includeHistory, appVersion, "gwatch-auto-")
+}
+
+func create(ctx context.Context, st *store.Store, dir, password string, includeHistory bool, appVersion, prefix string) (model.BackupInfo, error) {
 	if strings.TrimSpace(password) == "" {
 		return model.BackupInfo{}, errors.New("a password is required to encrypt the backup")
 	}
@@ -145,9 +162,9 @@ func Create(ctx context.Context, st *store.Store, dir, password string, includeH
 		return model.BackupInfo{}, err
 	}
 	now := time.Now()
-	name := fmt.Sprintf("gwatch-backup-%s%s", now.Format("20060102-150405"), Extension)
+	name := fmt.Sprintf("%s%s%s", prefix, now.Format("20060102-150405.000000000"), Extension)
 	if includeHistory {
-		name = fmt.Sprintf("gwatch-backup-%s-full%s", now.Format("20060102-150405"), Extension)
+		name = fmt.Sprintf("%s%s-full%s", prefix, now.Format("20060102-150405.000000000"), Extension)
 	}
 	path := filepath.Join(dir, name)
 	tmp := path + ".tmp"
@@ -283,12 +300,30 @@ func List(dir string) ([]model.BackupInfo, error) {
 // first, same order as List) and removes the rest. It returns the file names
 // that were removed. keep <= 0 removes nothing.
 func Prune(dir string, keep int) ([]string, error) {
+	return prune(dir, keep, false)
+}
+
+// PruneScheduled only removes archives explicitly created by the scheduler.
+func PruneScheduled(dir string, keep int) ([]string, error) {
+	return prune(dir, keep, true)
+}
+
+func prune(dir string, keep int, scheduledOnly bool) ([]string, error) {
 	if keep <= 0 {
 		return nil, nil
 	}
 	list, err := List(dir)
 	if err != nil {
 		return nil, err
+	}
+	if scheduledOnly {
+		auto := list[:0]
+		for _, item := range list {
+			if strings.HasPrefix(item.FileName, "gwatch-auto-") {
+				auto = append(auto, item)
+			}
+		}
+		list = auto
 	}
 	if len(list) <= keep {
 		return nil, nil
@@ -486,6 +521,12 @@ func restoreConfig(ctx context.Context, st *store.Store, cfg Config, sum *Summar
 		}
 		sum.Nodes++
 		sum.Checks += len(n.Checks)
+	}
+	if err := st.RestoreIncidents(ctx, cfg.Incidents); err != nil {
+		return err
+	}
+	if err := st.PutSetting(ctx, "reports", cfg.Reports); err != nil {
+		return err
 	}
 	if err := st.SetDependencies(ctx, deps); err != nil {
 		return err

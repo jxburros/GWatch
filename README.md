@@ -163,3 +163,5 @@ terms, privacy and disclaimer documents above before it installs anything.
 
 GWatch is developed by **Jeffrey Guntly** and **Garrett Guntly**, and published by
 **JX Holdings, LLC**.
+
+For signed Linux installation, systemd, headless setup and Raspberry Pi builds, see [Installing on Linux](docs/INSTALL-LINUX.md).

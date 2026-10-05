@@ -198,6 +198,7 @@ func TestEvaluateHostBelowThreshold(t *testing.T) {
 // read with the same meaning, inodes following the disk pair.
 func TestEvaluateHostReadsLegacyThresholds(t *testing.T) {
 	now := time.Now()
+	//lint:ignore SA1019 Intentional validation of legacy persisted hardware thresholds.
 	legacy := model.CheckConfig{CPUWarnPct: 90, MemWarnPct: 90, MemCritPct: 97, DiskWarnPct: 85, DiskCritPct: 95, LoadWarnPerCore: 2}
 	list := legacy.EffectiveMetricThresholds()
 	keys := map[string]model.MetricThreshold{}
@@ -507,6 +508,7 @@ func TestValidateSystemCheck(t *testing.T) {
 		{"unknown source", model.CheckConfig{HostSource: "carrier pigeon"}, "unsupported hardware source"},
 		{"agent with no machine", model.CheckConfig{HostSource: model.HostSourceAgent}, "which registered machine"},
 		{"url with no url", model.CheckConfig{HostSource: model.HostSourceURL}, "metrics URL is required"},
+		//lint:ignore SA1019 Intentional validation of legacy persisted hardware thresholds.
 		{"percentage out of range", model.CheckConfig{CPUWarnPct: 140}, "between 0 (off) and 100"},
 		{"critical below warning", model.CheckConfig{DiskWarnPct: 90, DiskCritPct: 50}, "at or above its warning threshold"},
 		{"negative load", model.CheckConfig{LoadWarnPerCore: -1}, "cannot be negative"},

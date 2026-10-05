@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/jxburros/GWatch/internal/permissions"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -55,6 +56,14 @@ func Complete(dataDir string, cfg store.DBConfig) store.DBConfig {
 // Load reads database.json from dataDir and opens the sealed password. A
 // missing file is not an error: it returns the SQLite default and false.
 func Load(dataDir string) (cfg store.DBConfig, found bool, err error) {
+	if err := permissions.ValidateConfigOwner(Path(dataDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return store.DBConfig{}, false, err
+	}
+	if _, err := os.Stat(Path(dataDir)); err == nil {
+		if err := permissions.EnsurePrivateFile(Path(dataDir)); err != nil {
+			return store.DBConfig{}, false, err
+		}
+	}
 	raw, err := os.ReadFile(Path(dataDir))
 	if errors.Is(err, os.ErrNotExist) {
 		return Default(dataDir), false, nil
@@ -93,7 +102,7 @@ func Save(dataDir string, cfg store.DBConfig) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+	if err := permissions.EnsurePrivateDir(dataDir); err != nil {
 		return fmt.Errorf("create data dir: %w", err)
 	}
 	box, err := secrets.Load(filepath.Join(dataDir, store.KeyFileName))
@@ -123,6 +132,9 @@ func Save(dataDir string, cfg store.DBConfig) error {
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, append(raw, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write %s: %w", tmp, err)
+	}
+	if err := permissions.EnsurePrivateFile(tmp); err != nil {
+		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)

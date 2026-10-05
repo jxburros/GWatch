@@ -14,11 +14,13 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -31,6 +33,8 @@ import (
 	"github.com/jxburros/GWatch/internal/engine"
 	"github.com/jxburros/GWatch/internal/logging"
 	"github.com/jxburros/GWatch/internal/model"
+	"github.com/jxburros/GWatch/internal/permissions"
+	"github.com/jxburros/GWatch/internal/serviceinstall"
 	"github.com/jxburros/GWatch/internal/store"
 	"github.com/jxburros/GWatch/internal/update"
 )
@@ -48,6 +52,7 @@ var skillFiles embed.FS
 
 // version is set at build time with -ldflags "-X main.version=1.2.3".
 var version = "dev"
+var packagedBy string
 
 const (
 	serviceName    = "GWatch"
@@ -60,8 +65,10 @@ const (
 const restartExitCode = 3
 
 type config struct {
-	dataDir string
-	listen  string
+	noStart  bool
+	rollback bool
+	dataDir  string
+	listen   string
 	// db holds the --db-* flags. Empty fields were not given; the database
 	// is decided by dbconfig.Resolve (flags over environment over
 	// database.json over the SQLite default).
@@ -107,6 +114,8 @@ func main() {
 	fs := flag.NewFlagSet("gwatch", flag.ContinueOnError)
 	fs.Usage = usage
 	cfg := config{}
+	fs.BoolVar(&cfg.noStart, "no-start", false, "install without starting the service")
+	fs.BoolVar(&cfg.rollback, "rollback", false, "update: restore the previous executable")
 	fs.StringVar(&cfg.dataDir, "data-dir", envOr("GWATCH_DATA_DIR", defaultDataDir()), "directory for the database, logs and backups")
 	fs.StringVar(&cfg.listen, "listen", envOr("GWATCH_LISTEN", "127.0.0.1:7230"), "address to serve the web interface on (127.0.0.1:7230 = this computer only, 0.0.0.0:7230 = whole network)")
 	fs.StringVar(&cfg.db.Driver, "db-driver", "", "database to use: sqlite (default), postgres or mysql")
@@ -136,6 +145,25 @@ func main() {
 	case "open":
 		openBrowser("http://" + browserHost(cfg.listen))
 		return
+	case "update":
+		if !cfg.rollback {
+			fmt.Fprintln(os.Stderr, "use Settings > Updates, or gwatch update --rollback")
+			os.Exit(2)
+		}
+		if packagedBy != "" {
+			fmt.Fprintln(os.Stderr, "use your package manager to roll back")
+			os.Exit(1)
+		}
+		exe, err := update.Executable()
+		if err == nil {
+			err = rollbackServer(exe)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println("Previous executable restored; run gwatch restart.")
+		return
 	case "migrate-db":
 		if err := migrateDB(context.Background(), cfg); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
@@ -155,7 +183,29 @@ func main() {
 		DisplayName: serviceDisplay,
 		Description: serviceDesc,
 		Arguments:   []string{"run", "--data-dir", cfg.dataDir, "--listen", cfg.listen},
-		Option:      service.KeyValue{"StartType": "automatic", "OnFailure": "restart", "OnFailureDelayDuration": "5s"},
+		Option:      service.KeyValue{"StartType": "automatic", "OnFailure": "restart", "OnFailureDelayDuration": "5s", "SystemdScript": serviceinstall.SystemdScript},
+	}
+	if cmd == "install" && runtime.GOOS == "linux" {
+		if err := permissions.EnsurePrivateDir("/etc/gwatch"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if _, err := os.Stat("/etc/gwatch/gwatch.env"); os.IsNotExist(err) {
+			data := fmt.Sprintf("GWATCH_DATA_DIR=%q\nGWATCH_LISTEN=%q\n", cfg.dataDir, cfg.listen)
+			if err := os.WriteFile("/etc/gwatch/gwatch.env", []byte(data), 0600); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		}
+		svcConfig.Arguments = []string{"run"}
+	}
+	if cmd == "install" {
+		exe, err := serviceinstall.Executable("gwatch")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		svcConfig.Executable = exe
 	}
 	svc, err := service.New(prg, svcConfig)
 	if err != nil {
@@ -171,7 +221,7 @@ func main() {
 			os.Exit(1)
 		}
 	case "install":
-		if err := os.MkdirAll(cfg.dataDir, 0o755); err != nil {
+		if err := permissions.EnsurePrivateDir(cfg.dataDir); err != nil {
 			fmt.Fprintln(os.Stderr, "error: cannot create data directory:", err)
 			os.Exit(1)
 		}
@@ -194,6 +244,9 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Printf("Installed service %q (data in %s).\n", serviceName, cfg.dataDir)
+		if cfg.noStart {
+			return
+		}
 		if err := svc.Start(); err != nil {
 			fmt.Fprintln(os.Stderr, "warning: service installed but could not be started:", err)
 			os.Exit(1)
@@ -339,11 +392,11 @@ func (p *program) Stop(s service.Service) error {
 // is cancelled or an interrupt arrives. requestRestart is invoked after a
 // successful self-update.
 func runApp(ctx context.Context, cfg config, mode string, requestRestart func()) error {
-	if err := os.MkdirAll(cfg.dataDir, 0o755); err != nil {
+	if err := permissions.EnsurePrivateDir(cfg.dataDir); err != nil {
 		return fmt.Errorf("create data dir %s: %w", cfg.dataDir, err)
 	}
 	var stdout *os.File
-	if mode == "console" {
+	if mode == "console" || os.Getenv("INVOCATION_ID") != "" {
 		stdout = os.Stdout
 	}
 	log, err := logging.New(filepath.Join(cfg.dataDir, "logs"), stdoutWriter(stdout))
@@ -400,7 +453,7 @@ func runApp(ctx context.Context, cfg config, mode string, requestRestart func())
 	}
 	lm := &listenManager{base: cfg.listen, log: log}
 	updater := &api.Updater{
-		Client: &update.Client{}, Version: version, Restart: requestRestart, Log: log,
+		Client: &update.Client{}, Version: version, PackagedBy: packagedBy, Restart: requestRestart, Log: log,
 		Prefs: func() model.UpdateSettings { return eng.Settings().Updates },
 		Repo:  func() string { return eng.Settings().General.UpdateRepo },
 	}
@@ -408,7 +461,7 @@ func runApp(ctx context.Context, cfg config, mode string, requestRestart func())
 	// service. Whether they run at all is a setting (Settings › Updates).
 	go updater.Run(ctx)
 	srv := &api.Server{Engine: eng, Store: st, Log: log, Web: webFS, Skill: skillFS, BackupDir: filepath.Join(cfg.dataDir, "backups"), DataDir: cfg.dataDir, Version: version,
-		Updater: updater,
+		Updater: updater, Restart: requestRestart,
 		Network: func() model.NetworkInfo { return lm.info(eng.Settings().General) },
 	}
 	httpServer := &http.Server{
@@ -423,6 +476,12 @@ func runApp(ctx context.Context, cfg config, mode string, requestRestart func())
 	if err := lm.apply(eng.Settings().General, errCh); err != nil {
 		eng.Stop()
 		return err
+	}
+	if exe, err := update.Executable(); err == nil {
+		if _, err := os.Stat(exe + ".old"); err == nil {
+			_ = os.Remove(exe + ".rollback")
+			_ = os.Rename(exe+".old", exe+".rollback")
+		}
 	}
 	if mode == "console" {
 		fmt.Printf("GWatch %s is running. Open http://%s — press Ctrl+C to stop.\n", version, browserHost(lm.current()))
@@ -473,11 +532,10 @@ type listenManager struct {
 	log    *logging.Logger
 	server *http.Server
 
-	mu       sync.Mutex
-	ln       net.Listener
-	addr     string // effective address
-	expected map[net.Listener]bool
-	lastErr  string
+	mu      sync.Mutex
+	ln      net.Listener
+	addr    string // effective address
+	lastErr string
 }
 
 // effective returns the address to bind for the given settings.
@@ -486,10 +544,13 @@ func effectiveListen(base string, g model.GeneralSettings) string {
 	if err != nil {
 		return base
 	}
+	if g.ListenPort > 0 && g.ListenPort <= 65535 {
+		port = strconv.Itoa(g.ListenPort)
+	}
 	if g.RemoteAccess && isLoopbackHost(host) {
 		return net.JoinHostPort("", port)
 	}
-	return base
+	return net.JoinHostPort(host, port)
 }
 
 func (m *listenManager) current() string {
@@ -563,6 +624,13 @@ func (m *listenManager) info(g model.GeneralSettings) model.NetworkInfo {
 	fmt.Sscanf(portStr, "%d", &port)
 	remote := !isLoopbackHost(host)
 	info := model.NetworkInfo{ListenAddress: addr, RemoteAccess: remote, PasswordSet: g.AccessPassword != "", Port: port, LocalURL: "http://" + browserHost(addr), LANURLs: []string{}, RestartNeeded: lastErr != ""}
+	if runtime.GOOS == "linux" {
+		if _, err := exec.LookPath("ufw"); err == nil {
+			info.FirewallCommand = fmt.Sprintf("sudo ufw allow %d/tcp", port)
+		} else if _, err := exec.LookPath("firewall-cmd"); err == nil {
+			info.FirewallCommand = fmt.Sprintf("sudo firewall-cmd --add-port=%d/tcp --permanent && sudo firewall-cmd --reload", port)
+		}
+	}
 	if hn, err := os.Hostname(); err == nil {
 		info.Hostname = hn
 	}
@@ -677,17 +745,45 @@ func browserHost(addr string) string {
 	return net.JoinHostPort(host, port)
 }
 
-func openBrowser(url string) {
+func openBrowser(address string) {
+	if runtime.GOOS == "linux" && os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
+		fmt.Println("Open this address in your browser:", address)
+		if parsed, err := url.Parse(address); err == nil {
+			for _, ip := range api.LANAddresses() {
+				fmt.Println("LAN (when remote access is enabled):", "http://"+net.JoinHostPort(ip, parsed.Port()))
+			}
+		}
+		return
+	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", address)
 	case "darwin":
-		cmd = exec.Command("open", url)
+		cmd = exec.Command("open", address)
 	default:
-		cmd = exec.Command("xdg-open", url)
+		cmd = exec.Command("xdg-open", address)
 	}
 	if err := cmd.Start(); err != nil {
-		fmt.Println("Open this address in your browser:", url)
+		fmt.Println("Open this address in your browser:", address)
 	}
+}
+
+func rollbackServer(exe string) error {
+	previous := exe + ".rollback"
+	if _, err := os.Stat(previous); err != nil {
+		previous = exe + ".old"
+		if _, err = os.Stat(previous); err != nil {
+			return err
+		}
+	}
+	failed := exe + ".failed"
+	if err := os.Rename(exe, failed); err != nil {
+		return err
+	}
+	if err := os.Rename(previous, exe); err != nil {
+		_ = os.Rename(failed, exe)
+		return err
+	}
+	return nil
 }

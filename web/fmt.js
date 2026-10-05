@@ -304,7 +304,7 @@ export function unitValue(v, unit) {
 export function unitAxis(v, unit, { max = v, step = 0 } = {}) {
   const decimals = (scaled) => (scaled > 0 && scaled < 1 ? Math.min(3, Math.ceil(-Math.log10(scaled) - 1e-9)) : 0);
   if (unit === '%') return `${Math.round(v * 10) / 10}%`;
-  if (unit === 'ms') return v >= 1000 ? `${(v / 1000).toFixed(v >= 10000 ? 0 : 1)} s` : `${Math.round(v * 10) / 10} ms`;
+  if (unit === 'ms') { const div = Math.abs(max) >= 1000 ? 1000 : 1; return `${step ? (v / div).toFixed(decimals(step / div)) : String(Math.round(v / div * 10) / 10)} ${div === 1000 ? 's' : 'ms'}`; }
   if (RATE_UNITS[unit]) {
     const i = rateStep(Math.max(Math.abs(max), Math.abs(v)));
     const div = 1000 ** i;

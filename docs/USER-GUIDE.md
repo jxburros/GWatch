@@ -1226,3 +1226,17 @@ A short list of things that exist but are easy to never find.
 | [`REMOTE-ACCESS.md`](REMOTE-ACCESS.md) | Reaching GWatch from outside, safely |
 | [`RESTORE.md`](RESTORE.md) | Moving to a new machine |
 | [`PRIVACY.md`](PRIVACY.md) | What is stored, where, and what never leaves |
+
+
+## Incidents and reports
+
+Incidents opens on active outages, grouped by node. Open an incident to acknowledge
+it (stopping repeat notifications), add an attributed note, or resolve it. Recovery of
+all enabled checks closes it automatically. Its timeline retains the related monitoring
+events and shows acknowledgment/resolution duration. The Events tab keeps the raw log.
+
+The Reports tab generates a printable HTML report for a selected range, group/tag scope
+and optional availability target. Administrators can save weekly or monthly email
+schedules. Configure SMTP first. The attached HTML is self-contained; open it in your
+browser and Print to PDF. No external PDF service is contacted. Reports include
+observed-sample availability, incident durations, slow checks and expiring certificates.

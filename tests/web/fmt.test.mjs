@@ -210,3 +210,7 @@ test('sortNodes puts nodes in alphabetical, address, importance or status order'
   const wrapped = list.map((n) => ({ node: n, status: n.status }));
   assert.deepEqual(fmt.sortNodes(wrapped, 'name', { nodeOf: (r) => r.node }).map((r) => r.node.name), ['alpha', 'Node 9', 'node 10']);
 });
+
+test('sub-millisecond latency ticks have distinct labels', () => {
+  assert.deepEqual([0, 0.05, 0.1, 0.15].map((v) => fmt.unitAxis(v, 'ms', { max: 0.15, step: 0.05 })), ['0.00 ms', '0.05 ms', '0.10 ms', '0.15 ms']);
+});

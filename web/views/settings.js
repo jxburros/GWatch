@@ -57,6 +57,8 @@ export async function mount(root, ctx) {
 
   function renderNav() {
     clear(nav);
+    const search = h('input', { type: 'search', 'aria-label': 'Find a settings section', placeholder: 'Find a section…', oninput: () => { for (const link of nav.querySelectorAll('a')) link.hidden = !link.textContent.toLowerCase().includes(search.value.toLowerCase()); } });
+    nav.append(search);
     for (const t of visibleTabs) nav.append(h('a', { href: `#/settings/${t.id}`, class: t.id === state.tab ? 'active' : '', 'aria-current': t.id === state.tab ? 'page' : null }, t.label));
   }
 
@@ -368,6 +370,8 @@ export async function mount(root, ctx) {
     const s = state.settings || await loadSettings();
     const g = s.general;
     const info = await api.get('/api/network').catch(() => null);
+    const port = numberInput({ value: g.listenPort || 7230, min: 1, max: 65535, oninput: () => { g.listenPort = Number(port.value); } });
+    const proxy = checkbox({ label: 'GWatch is behind an HTTPS reverse proxy', checked: !!g.behindHTTPSProxy, onChange: (v) => { g.behindHTTPSProxy = v; } });
     const remote = toggle({ label: 'Allow access from other devices on my network', checked: !!g.remoteAccess, onChange: (v) => { g.remoteAccess = v; } });
     const pw = h('input', { type: 'password', value: g.accessPassword || '', autocomplete: 'new-password', placeholder: info?.passwordSet ? '(unchanged)' : 'Optional but recommended', oninput: () => { g.accessPassword = pw.value; } });
     const clearPw = h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { pw.value = ''; g.accessPassword = ''; toast('Password will be removed when you save', { kind: 'info' }); } }, 'Remove password');
@@ -375,6 +379,7 @@ export async function mount(root, ctx) {
     const renderUrls = (ni) => {
       clear(urls);
       if (!ni) { urls.append(h('span', { class: 'muted' }, 'Network information unavailable.')); return; }
+      if (ni.restartNeeded) urls.append(h('button', { type: 'button', class: 'btn', onclick: async () => { try { await api.post('/api/restart'); toast('GWatch is restarting'); } catch (e) { toast(e.message, { kind: 'error' }); } } }, 'Restart GWatch'));
       urls.append(h('a', { href: ni.localUrl, target: '_blank', rel: 'noopener' }, icon('home'), ni.localUrl, h('span', { class: 'dim' }, ' — this computer')));
       if (ni.remoteAccess) {
         if (!ni.lanUrls?.length) urls.append(h('span', { class: 'muted' }, 'No network addresses found on this computer.'));
@@ -395,6 +400,11 @@ export async function mount(root, ctx) {
     return h('form', { class: 'stack', onsubmit: (e) => { e.preventDefault(); saveBtn.click(); } },
       h('section', { class: 'card' }, h('h2', null, 'Remote access'), h('p', { class: 'lead' }, 'By default the interface is only served on this computer. Turn this on to open it from a phone, tablet or another PC on the same network. GWatch is never exposed to the internet by itself.'),
         h('div', { class: 'stack' }, remote,
+          field({ label: 'Listen port', input: port, help: 'Changes take effect after saving. Reopen GWatch at the new port.' }),
+          proxy,
+          h('p', { class: 'note' }, 'Enable the proxy setting only when browsers always reach GWatch over HTTPS. It marks session cookies Secure.'),
+          (g.remoteAccess || info?.remoteAccess) && (g.accessPassword || info?.passwordSet) && !g.behindHTTPSProxy && !info?.localUrl?.startsWith('https:') ? banner('warn', 'The shared access password is sent without encryption over HTTP. Use HTTPS before sending it across your network.') : null,
+          info?.firewallCommand ? h('div', null, h('p', { class: 'note' }, 'Allow this port through your firewall:'), h('pre', null, info.firewallCommand)) : null,
           info?.listenAddress ? h('p', { class: 'note' }, 'Listening on ', h('code', null, info.listenAddress), info.remoteAccess ? ' — reachable from the network.' : ' — this computer only.', info.restartNeeded ? h('span', { class: 'text-down' }, ' Rebinding failed; a restart is needed.') : null) : null,
         ),
         h('hr', { class: 'divider' }), h('div', { class: 'form-actions' }, saveBtn)),
@@ -1246,6 +1256,7 @@ export async function mount(root, ctx) {
           h('div', { class: 'health-cards' },
             hcard(ok(hl.serviceRunning, 'Running', 'Stopped'), `Background ${hl.serviceMode === 'service' ? 'service' : 'process'}`, `up ${duration(hl.uptimeSeconds)} · since ${dateTime(hl.startedAt, { seconds: false })}`),
             hcard(ok(hl.schedulerRunning, 'Running', 'Stopped'), 'Scheduler', `${hl.checksEnabled} of ${hl.checksTotal} checks enabled · ${hl.checksRunning} running now`),
+            hcard(hl.overdueChecks || 0, 'Overdue checks', hl.overdueChecks ? `Oldest overdue by ${duration(hl.oldestOverdueSeconds)}` : 'No checks are overdue'),
             hcard(hl.lastCheckAt ? relTime(hl.lastCheckAt) : 'never', 'Last check completed', hl.lastSuccessAt ? `last success ${relTime(hl.lastSuccessAt)}` : ''),
             hcard(hl.nextCheckAt ? relTime(hl.nextCheckAt) : '—', 'Next scheduled check', hl.nextCheckAt ? dateTime(hl.nextCheckAt) : ''),
             hcard(gap ? duration(gap.seconds) : 'None detected', 'Last sleep / offline gap', gap ? `${dateTime(gap.from, { seconds: false })} → ${timeShort(gap.to)}` : 'The monitoring computer has not been asleep or offline recently.'),

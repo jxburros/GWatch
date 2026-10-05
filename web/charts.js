@@ -361,7 +361,7 @@ export class LineChart {
     const yMin = lo != null ? lo : Math.min(0, vmin);
     let yMax = hi != null ? hi : vmax + (vmax - yMin) * 0.12 || 1;
     if (unit === '%' && hi == null) yMax = Math.min(100, Math.max(yMax, 1));
-    const yt = niceTicks(yMin, yMax, 5);
+    const yt = niceTicks(yMin, yMax, this.opts.yTicks || 5);
     if (hi != null) yt.max = hi;
     if (lo != null) yt.min = lo;
     yt.unit = unit;

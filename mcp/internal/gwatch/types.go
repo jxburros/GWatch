@@ -134,13 +134,15 @@ type Summary struct {
 
 // GroupStatus is one row of the overview's per-group tally.
 type GroupStatus struct {
-	Name     string `json:"name"`
-	Status   string `json:"status"`
-	Up       int    `json:"up"`
-	Degraded int    `json:"degraded"`
-	Down     int    `json:"down"`
-	Unknown  int    `json:"unknown"`
-	Total    int    `json:"total"`
+	Paused      int    `json:"paused"`
+	Maintenance int    `json:"maintenance"`
+	Name        string `json:"name"`
+	Status      string `json:"status"`
+	Up          int    `json:"up"`
+	Degraded    int    `json:"degraded"`
+	Down        int    `json:"down"`
+	Unknown     int    `json:"unknown"`
+	Total       int    `json:"total"`
 }
 
 // AttentionItem is one check the overview says a human should look at.
@@ -157,12 +159,15 @@ type AttentionItem struct {
 
 // CertWarning is an expiring certificate reported by the overview.
 type CertWarning struct {
-	NodeID        int64  `json:"nodeId"`
-	NodeName      string `json:"nodeName"`
-	CheckID       int64  `json:"checkId"`
-	CheckName     string `json:"checkName"`
-	DaysRemaining int    `json:"daysRemaining"`
-	Subject       string `json:"subject,omitempty"`
+	Valid         bool      `json:"valid"`
+	NotAfter      time.Time `json:"notAfter"`
+	Error         string    `json:"error,omitempty"`
+	NodeID        int64     `json:"nodeId"`
+	NodeName      string    `json:"nodeName"`
+	CheckID       int64     `json:"checkId"`
+	CheckName     string    `json:"checkName"`
+	DaysRemaining int       `json:"daysRemaining"`
+	Subject       string    `json:"subject,omitempty"`
 }
 
 // Overview is GET /api/v1/overview.

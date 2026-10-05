@@ -395,7 +395,7 @@ func (s *Server) accessControl(next http.Handler) http.Handler {
 		// may well arrive through a proxy that rewrites Host, where this check
 		// would misfire. So it is applied exactly where it is both needed and
 		// safe.
-		if (p.Kind == auth.KindLocal || p.Kind == auth.KindPassword) && r.Method != http.MethodGet && r.Method != http.MethodHead && crossSite(r) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && ((p.Kind == auth.KindLocal || p.Kind == auth.KindPassword) && crossSite(r) || r.Header.Get("Sec-Fetch-Site") == "cross-site" || r.Header.Get("Sec-Fetch-Site") == "same-site" || r.Header.Get("Origin") == "null") {
 			s.deny(w, r, http.StatusForbidden, "this request came from another website; open GWatch directly to make changes", true)
 			return
 		}
@@ -423,11 +423,14 @@ func (s *Server) accessControl(next http.Handler) http.Handler {
 // a script, any non-browser client) is not cross-site.
 func crossSite(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
-	if origin == "" || origin == "null" {
+	if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+		return true
+	}
+	if origin == "" {
 		return false
 	}
 	u, err := url.Parse(origin)
-	if err != nil {
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 		return true // an Origin we cannot read is not one we can trust
 	}
 	return !strings.EqualFold(u.Host, r.Host)
@@ -661,7 +664,7 @@ func (s *Server) sessionCookie(r *http.Request, token string, expires time.Time)
 		// so signing in there would appear to work and then bounce straight
 		// back to the sign-in screen. The login and every renewal go through
 		// here, so the cookie keeps the same attributes for its whole life.
-		Secure: r.TLS != nil,
+		Secure: r.TLS != nil || s.Engine.Settings().General.BehindHTTPSProxy,
 	}
 	if token == "" {
 		c.MaxAge = -1

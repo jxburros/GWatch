@@ -9,7 +9,7 @@ update that does not verify is refused, not installed with a warning.
 
 ```bash
 make test                         # go vet + unit and integration tests (SQLite)
-make ci                           # everything CI runs: gofmt, vet, go mod tidy, race tests,
+make ci                           # local checks (CI also tests platform/backend integrations): gofmt, vet, go mod tidy, race tests,
                                   #   the mcp/ module, the jsdom web suite and the Playwright/axe suite
 make cover                        # race tests plus a per-function coverage report
 make test-postgres / test-mysql   # the store, backup, API, engine and hostmon suites against a server
@@ -40,20 +40,20 @@ service containers.
 ## Continuous integration
 
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on every push and pull
-request as five jobs:
+request with the following jobs:
 
 | Job | Runner | What it does |
 |---|---|---|
 | `ci` ("Lint, build, test (Windows)") | `windows-latest` | gofmt, vet, `go mod tidy`/`verify`, build + full test suite, the mcp/ module, web-asset `node --check` plus the jsdom suite (`npm test`, `tests/web/`), PowerShell script parsing, and compiles both Inno Setup installers |
-| `linux` ("Test (Linux)") | `ubuntu-latest` | gofmt, vet, build, full test suite (root and mcp/), a `-race` pass over `internal/engine`, `internal/api`, `internal/store` and `internal/hostmon`, the store/backup/api suites against PostgreSQL 16 and MySQL 8 service containers ([`DATABASE.md`](DATABASE.md#for-developers)), `govulncheck` for both modules, and the browser accessibility suite (`npm run test:e2e` — Playwright drives Chromium through every route with an axe-core scan) |
+| `linux` ("Test (Linux)") | `ubuntu-latest` | gofmt, vet, staticcheck, build, full test and race suites (root and mcp/), the migration/store/backup/api/engine/hostmon suites against PostgreSQL 16 and MySQL 8 service containers ([`DATABASE.md`](DATABASE.md#for-developers)), `govulncheck` for both modules, and the browser accessibility suite (`npm run test:e2e` — Playwright drives Chromium through every route with an axe-core scan) |
 | `macos` ("Test (macOS)") | `macos-latest` | vet + test only — deliberately lean, but this is what actually compiles and exercises `internal/sysmetrics/collect_darwin.go` |
-| `docker` ("Container image") | `ubuntu-latest` | builds the `Dockerfile` for `linux/amd64`, checks `gwatch version` inside it, then starts the container and waits for `/api/health` to answer 200 |
+| `docker` ("Container image") | `ubuntu-latest` | builds the `Dockerfile` for `linux/amd64` and `linux/arm/v7`, checks `gwatch version` inside it, then starts the container and waits for `/api/health` to answer 200 |
 | `agent-packaging` ("Agent packages") | `ubuntu-latest` | builds the agent's `.deb`/`.rpm` for all three architectures, installs the `.deb` on the runner's systemd and takes it through install → refuse to self-update → configure → run → purge, renders the Homebrew formula (`ruby -c`) and the winget manifests (validated against winget's 1.6.0 schemas), builds the agent image and has it read the runner through a mounted host root, and checks no package output is named like a self-update asset — see ["The agent packages"](#the-agent-packages) |
 
-Windows is the only one that builds an installer or touches PowerShell, since that is the
-only platform GWatch installs itself onto as a service; Linux and macOS exist to catch a
-platform-specific regression (a build tag, a syscall, a platform-tagged file the Windows
-job never compiles) before it reaches a tag push. `release` needs `ci`, `linux` and `macos`; the `docker` job is independent of it.
+Windows builds the Inno Setup installers and validates PowerShell scripts. Linux tests
+the installed systemd service and journal output; Linux and macOS both exercise their
+native collectors. `release` needs `ci`, `linux` and `macos`; the `docker` test job is
+independent of it, while `docker-publish` also waits for `docker` and `release`.
 
 The `ci` job also compiles the winget variant of the agent setup program, so a change to
 `scripts/installer/gwatch-agent.iss` that breaks it fails a pull request rather than a tag.
@@ -69,7 +69,7 @@ Pushing a tag such as `v0.1.0` additionally runs the `release` job (below) and t
 
 | Path | Purpose |
 |---|---|
-| `main.go` | CLI, Windows service wrapper (kardianos/service), HTTP server bound to localhost |
+| `main.go` | CLI, cross-platform service wrapper (kardianos/service), HTTP server bound to localhost by default |
 | `migrate_db.go` | `gwatch migrate-db`: copies a SQLite install into a PostgreSQL/MySQL database |
 | `internal/model` | Shared data types and JSON wire format |
 | `internal/dbconfig` | Which database to open: flags, `GWATCH_DB_*`, `database.json`, then the SQLite default |
@@ -392,7 +392,7 @@ The `.deb`'s `Maintainer` field is `JX Holdings, LLC <https://github.com/jxburro
 ## The container image
 
 The same `v*` tag also runs `docker-publish`, which builds the `Dockerfile` for
-`linux/amd64` and `linux/arm64` and pushes the result to GitHub's registry as
+`linux/amd64`, `linux/arm64` and `linux/arm/v7` and pushes the result to GitHub's registry as
 `ghcr.io/jxburros/gwatch`, tagged `X.Y.Z`, `X.Y` and `latest`. It runs beside `release`
 rather than inside it — a separate runner (Linux, with buildx and QEMU), a separate
 permission (`packages: write`, granted to that job only) and the same tag-matches-VERSION
@@ -486,3 +486,27 @@ go build -ldflags "-s -w \
 Several keys may be given, comma-separated. A build with no key at all still
 reports that a new release exists, but Settings › Updates refuses to install it
 and says so.
+
+## Protected publishing
+
+Signing jobs require the `release` GitHub Environment, verify their commit is an ancestor of `origin/main`, disable build-cache restores and use actions pinned to commits. Configure that environment to require a reviewer and restrict deployment tags to `v*` and `agent-v*`. Move `GWATCH_SIGNING_KEY` from repository secrets into this environment and remove the repository copy; an environment declaration alone cannot protect a remaining repository secret. GitHub never reveals an existing secret. If the offline seed is unavailable, the main-only `Migrate release signing secret` workflow seals it directly to the release Environment public key, producing only a ciphertext envelope. Apply that JSON through the Environment secrets API, confirm the destination exists, then delete the repository secret. The environment reviewer must verify the destination public key and key id against the API before approving. Optional Homebrew/winget tokens are available only to their publishing steps, and checkouts do not persist credentials. Container publication waits for the signed release. Weekly CI includes vulnerability scans.
+
+The Linux job runs staticcheck, all root race tests, real-server browser tests and shell installer lint. `make ci` is the local subset; use `make test-postgres`, `make test-mysql` and the alternative SQLite build/test targets for backend coverage. Installers are published with their respective core/agent releases.
+
+
+### Protected signing-key migration
+
+Create the `release` Environment with required maintainer review and selected deployment
+branches/tags (`main` for this one-time migration, `v*` and `agent-v*` for releases).
+Get its secrets public key and key ID from the GitHub API. Dispatch
+`migrate-signing-secret.yml` on main with those two public values. Approve the Environment
+job after checking that the values name this repository's Environment. The artifact
+contains only an anonymous sealed-box ciphertext, which only GitHub's Environment key
+can decrypt. PUT the artifact JSON to the Environment's `GWATCH_SIGNING_KEY` secret
+endpoint, confirm it exists, then delete the repository-level copy. Never print or
+download the plaintext key. The migration helper cannot decrypt secrets.
+
+`?mock=1` is enabled only by the development server's `/__gwatch_dev__` marker;
+production binaries ignore it. Regenerate template fixtures with
+`go run ./tests/e2e/generate-fixtures.go`; CI browser tests run axe contrast checks in
+both explicitly verified themes and exercise the real service and MCP companion.
