@@ -89,8 +89,10 @@ func TestHistoryServesHardwareMetrics(t *testing.T) {
 func TestSavingAHardwareCheckNormalisesItsThresholds(t *testing.T) {
 	ts, _ := newTestServer(t)
 
+	//lint:ignore SA1019 Intentional validation of legacy persisted hardware thresholds.
 	legacy := createHardwareNode(t, ts, model.CheckConfig{HostSource: model.HostSourceLocal, CPUWarnPct: 80, DiskWarnPct: 70, DiskCritPct: 90})
 	cfg := legacy.Checks[0].Config
+	//lint:ignore SA1019 Intentional validation of legacy persisted hardware thresholds.
 	if cfg.CPUWarnPct != 0 || cfg.DiskWarnPct != 0 || cfg.DiskCritPct != 0 {
 		t.Errorf("flat fields should be cleared on save: %+v", cfg)
 	}

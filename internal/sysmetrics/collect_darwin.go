@@ -126,34 +126,7 @@ func darwinMemory() (mem model.HostMemory, err error) {
 	if err != nil {
 		return mem, err
 	}
-	pageSize := uint64(4096)
-	pages := map[string]uint64{}
-	sc := bufio.NewScanner(bytes.NewReader(out))
-	for sc.Scan() {
-		line := sc.Text()
-		if i := strings.Index(line, "page size of "); i >= 0 {
-			if v, err := strconv.ParseUint(strings.Fields(line[i+len("page size of "):])[0], 10, 64); err == nil && v > 0 {
-				pageSize = v
-			}
-			continue
-		}
-		name, value, ok := strings.Cut(line, ":")
-		if !ok {
-			continue
-		}
-		v, err := strconv.ParseUint(strings.TrimSuffix(strings.TrimSpace(value), "."), 10, 64)
-		if err != nil {
-			continue
-		}
-		pages[strings.TrimSpace(name)] = v
-	}
-	used := (pages["Pages wired down"] + pages["Pages active"] + pages["Pages occupied by compressor"]) * pageSize
-	if used > mem.TotalBytes {
-		used = mem.TotalBytes
-	}
-	mem.UsedBytes = used
-	mem.AvailableBytes = mem.TotalBytes - used
-	mem.CachedBytes = (pages["Pages inactive"] + pages["Pages speculative"] + pages["Pages purgeable"]) * pageSize
+	mem = parseDarwinMemory(mem.TotalBytes, out)
 
 	// struct xsw_usage: total, available and used, each a 64-bit byte count.
 	if sw, err := sysctlRaw("vm.swapusage"); err == nil && len(sw) >= 24 {
@@ -246,7 +219,10 @@ func darwinInterfaces(ctx context.Context) ([]ifaceCounters, error) {
 	}
 	up, loopback := upInterfaces()
 	addrs := interfaceAddresses()
+	return parseDarwinInterfaces(out, up, loopback, addrs)
+}
 
+func parseDarwinInterfaces(out []byte, up, loopback map[string]bool, addrs map[string][]string) ([]ifaceCounters, error) {
 	var trailing = -1 // columns after Obytes in the header
 	byName := map[string]ifaceCounters{}
 	var order []string
@@ -311,4 +287,41 @@ func useHostRoot(dir string) error {
 		return nil
 	}
 	return ErrHostRootUnsupported
+}
+
+func parseDarwinMemory(total uint64, out []byte) (mem model.HostMemory) {
+	mem.TotalBytes = total
+	pageSize := uint64(4096)
+	pages := map[string]uint64{}
+	sc := bufio.NewScanner(bytes.NewReader(out))
+	for sc.Scan() {
+		line := sc.Text()
+		if i := strings.Index(line, "page size of "); i >= 0 {
+			fields := strings.Fields(line[i+len("page size of "):])
+			if len(fields) > 0 {
+				if v, err := strconv.ParseUint(fields[0], 10, 64); err == nil && v > 0 {
+					pageSize = v
+				}
+			}
+			continue
+		}
+		name, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		v, err := strconv.ParseUint(strings.TrimSuffix(strings.TrimSpace(value), "."), 10, 64)
+		if err != nil {
+			continue
+		}
+		pages[strings.TrimSpace(name)] = v
+	}
+	used := (pages["Pages wired down"] + pages["Pages active"] + pages["Pages occupied by compressor"]) * pageSize
+	if used > mem.TotalBytes {
+		used = mem.TotalBytes
+	}
+	mem.UsedBytes = used
+	mem.AvailableBytes = mem.TotalBytes - used
+	mem.CachedBytes = (pages["Pages inactive"] + pages["Pages speculative"] + pages["Pages purgeable"]) * pageSize
+
+	return mem
 }

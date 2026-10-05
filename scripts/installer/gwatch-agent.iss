@@ -1,4 +1,4 @@
-; GWatch Agent Windows installer (Inno Setup 6).
+﻿; GWatch Agent Windows installer (Inno Setup 6).
 ;
 ; The agent is the small program that goes on the OTHER machines -- the ones
 ; you want GWatch to report the health of. It is a separate setup program from
@@ -110,6 +110,7 @@ Name: "{group}\Uninstall GWatch Agent"; Filename: "{uninstallexe}"
 
 [UninstallRun]
 Filename: "{app}\gwatch-agent.exe"; Parameters: "uninstall"; RunOnceId: "GWatchAgentServiceUninstall"; Flags: runhidden waituntilterminated
+Filename: "{sys}\sc.exe"; Parameters: "delete GWatchAgent"; RunOnceId: "GWatchAgentServiceFallback"; Flags: runhidden waituntilterminated
 
 [Code]
 var
@@ -361,7 +362,7 @@ begin
   if CurStep <> ssPostInstall then Exit;
   Exe := ExpandConstant('{app}\gwatch-agent.exe');
 
-  if ServiceExists then
+  if ServiceExists and (GetCode = '') then
   begin
     { An upgrade: the machine is already paired and holds its token, so the
       service only has to come back up with the newly installed executable. }
@@ -369,6 +370,9 @@ begin
     Exec(Exe, 'start', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Exit;
   end;
+
+  if ServiceExists then
+    Exec(Exe, 'uninstall', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
   Args := 'install --server "' + GetServer + '" --code ' + GetCode;
   if GetMachineName <> '' then

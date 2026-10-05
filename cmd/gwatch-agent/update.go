@@ -245,6 +245,7 @@ func verifyReports(ctx context.Context, path string, cfg config) error {
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Env = append(os.Environ(),
 		"GWATCH_SERVER="+cfg.server,
+		"GWATCH_AGENT_CERT_PIN="+cfg.certPin,
 		"GWATCH_AGENT_TOKEN="+cfg.token,
 	)
 	out, err := cmd.CombinedOutput()

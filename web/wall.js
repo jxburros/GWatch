@@ -12,7 +12,8 @@ import { createWall } from './wall-render.js';
 // The same switch as entry.js: with ?mock=1 the in-browser mock backend
 // answers the one request this page makes, so the board can be looked at
 // (and its accessibility checked) with no service behind it.
-if (/(^|[?&])mock=1(&|$)/.test(location.search)) {
+if (/(^|[?&])mock=1(&|$)/.test(location.search) &&
+    await fetch('/__gwatch_dev__', { cache: 'no-store' }).then((r) => r.headers.get('X-GWatch-Development') === '1').catch(() => false)) {
   await import('./mock.js');
 }
 
@@ -62,7 +63,7 @@ function start() {
         wall.destroy();
         return;
       }
-      if (failures >= 2) showProblem('Waiting for GWatch', e.message || 'The service is not answering. This screen will carry on trying.');
+      if (failures >= 1) showProblem('Waiting for GWatch', e.message || 'The service is not answering. This screen will carry on trying.');
     },
   });
 

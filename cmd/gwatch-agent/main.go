@@ -27,7 +27,8 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/subtle"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -37,7 +38,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -49,6 +49,8 @@ import (
 	"github.com/kardianos/service"
 
 	"github.com/jxburros/GWatch/internal/model"
+	"github.com/jxburros/GWatch/internal/permissions"
+	"github.com/jxburros/GWatch/internal/serviceinstall"
 	"github.com/jxburros/GWatch/internal/sysmetrics"
 )
 
@@ -64,7 +66,7 @@ const (
 const (
 	defaultInterval = time.Minute
 	minInterval     = 10 * time.Second
-	defaultListen   = "0.0.0.0:9713"
+	defaultListen   = "127.0.0.1:9713"
 	// requestTimeout bounds one report. It is well under the smallest useful
 	// interval so a hung server cannot stall the next reading.
 	requestTimeout = 20 * time.Second
@@ -81,6 +83,7 @@ type config struct {
 	interval   time.Duration
 	listen     string
 	insecure   bool
+	certPin    string
 	name       string
 	repo       string
 	autoUpdate bool
@@ -127,7 +130,7 @@ ends up holding can do one thing only: submit this machine's readings.
 
 A token obtained with a pairing code is saved to
   %s
-readable only by the account that paired the machine. run, once and serve use
+readable only by the account that paired the machine. run and once use
 it when --token is not given.
 
 Keeping itself up to date: a running agent checks for a new agent release
@@ -177,11 +180,14 @@ func main() {
 	fs.StringVar(&cfg.code, "code", os.Getenv("GWATCH_AGENT_CODE"), "pairing code shown in GWatch (Hardware › Pair a machine), e.g. XXXX-XXXX")
 	fs.DurationVar(&cfg.interval, "interval", envDuration("GWATCH_AGENT_INTERVAL", defaultInterval), "how often to send a reading")
 	fs.StringVar(&cfg.listen, "listen", envOr("GWATCH_AGENT_LISTEN", defaultListen), "serve mode: address to listen on")
+	fs.StringVar(&cfg.certPin, "cert-pin", os.Getenv("GWATCH_AGENT_CERT_PIN"), "pinned SHA-256 server public key")
 	fs.BoolVar(&cfg.insecure, "insecure", false, "accept an untrusted TLS certificate from the server (use only with a self-signed certificate you recognise)")
 	fs.StringVar(&cfg.name, "name", "", "override the hostname reported to GWatch")
 	fs.StringVar(&cfg.repo, "repo", envOr("GWATCH_AGENT_REPO", defaultRepo), "GitHub repository the agent takes its own updates from")
 	fs.BoolVar(&cfg.autoUpdate, "auto-update", envBool("GWATCH_AGENT_AUTO_UPDATE", true), "keep this agent up to date from signed agent releases")
 	fs.StringVar(&cfg.hostRoot, "host-root", os.Getenv("GWATCH_HOST_ROOT"), "in a container: where the host's / is mounted (e.g. /host), to report the host rather than the container")
+	var noStart bool
+	fs.BoolVar(&noStart, "no-start", false, "install without starting")
 	var updateCheckOnly bool
 	fs.BoolVar(&updateCheckOnly, "check", false, "update: report whether a newer agent exists without installing it")
 	if err := fs.Parse(args); err != nil {
@@ -195,7 +201,7 @@ func main() {
 	}
 	// A machine paired earlier already has its token on disk, so the commands
 	// that need one should not have to be told it again.
-	if cfg.token == "" && cfg.code == "" {
+	if cfg.token == "" && cfg.code == "" && cmd != "serve" {
 		if stored, err := readStoredToken(); err == nil {
 			cfg.token = stored
 		}
@@ -308,10 +314,19 @@ func main() {
 			fatal(err)
 		}
 	case "install":
+		if _, err := saveToken(cfg.token); err != nil {
+			fatal(err)
+		}
+		if err := saveStoredSettings(storedSettings{Server: cfg.baseURL(), Insecure: cfg.insecure, CertPin: cfg.certPin, Name: cfg.name}); err != nil {
+			fatal(err)
+		}
 		if err := svc.Install(); err != nil {
 			fatal(fmt.Errorf("install failed: %w (on Windows run this from an Administrator prompt)", err))
 		}
 		fmt.Printf("Installed service %q.\n", serviceName)
+		if noStart {
+			return
+		}
 		if err := svc.Start(); err != nil {
 			fatal(fmt.Errorf("service installed but could not be started: %w", err))
 		}
@@ -372,6 +387,10 @@ func userAgent() string {
 // validate reports a configuration the agent cannot run with, in the words
 // someone setting it up would use.
 func (c config) validate(cmd string) error {
+	switch cmd {
+	case "uninstall", "status", "start", "stop", "restart":
+		return nil
+	}
 	if c.token == "" {
 		return fmt.Errorf("a token is required: pair this machine with %s, or pass --token (GWatch: Hardware › Pair a machine)",
 			"gwatch-agent pair --server URL --code XXXX-XXXX")
@@ -405,6 +424,9 @@ func (c config) serviceArgs(cmd string) []string {
 	} else {
 		args = append(args, "--server", c.server, "--interval", c.interval.String())
 	}
+	if c.certPin != "" {
+		args = append(args, "--cert-pin", c.certPin)
+	}
 	if c.insecure {
 		args = append(args, "--insecure")
 	}
@@ -430,12 +452,21 @@ func (c config) serviceArgs(cmd string) []string {
 // manager. It is here rather than inline so that the commands which only need
 // to ask after the service — update, for one — describe it the same way.
 func newService(prg *program, cfg config, cmd string) (service.Service, error) {
+	exe := ""
+	if cmd == "install" {
+		var err error
+		exe, err = serviceinstall.Executable("gwatch-agent")
+		if err != nil {
+			return nil, err
+		}
+	}
 	return service.New(prg, &service.Config{
+		Executable:  exe,
 		Name:        serviceName,
 		DisplayName: serviceDisplay,
 		Description: serviceDesc,
 		Arguments:   cfg.serviceArgs(cmd),
-		Option:      service.KeyValue{"StartType": "automatic", "OnFailure": "restart", "OnFailureDelayDuration": "5s"},
+		Option:      service.KeyValue{"StartType": "automatic", "OnFailure": "restart", "OnFailureDelayDuration": "5s", "SystemdScript": strings.ReplaceAll(serviceinstall.SystemdScript, "/etc/gwatch/gwatch.env", "/etc/gwatch-agent/agent.env")},
 	})
 }
 
@@ -748,6 +779,11 @@ func pair(cfg *config) error {
 		return fmt.Errorf("GWatch accepted the code but did not return a token; pair the machine again")
 	}
 
+	if cfg.insecure && resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 {
+		sum := sha256.Sum256(resp.TLS.PeerCertificates[0].RawSubjectPublicKeyInfo)
+		cfg.certPin = hex.EncodeToString(sum[:])
+		cfg.insecure = false
+	}
 	path, err := saveToken(out.Token)
 	if err != nil {
 		// The token is real and the code is spent, so losing it here would
@@ -762,7 +798,7 @@ func pair(cfg *config) error {
 	// is the part that cannot be had again — but it is worth saying, since a
 	// service started without --server would then refuse to run.
 	if path != "" {
-		if err := saveStoredSettings(storedSettings{Server: cfg.baseURL(), Insecure: cfg.insecure, Name: strings.TrimSpace(cfg.name)}); err != nil {
+		if err := saveStoredSettings(storedSettings{Server: cfg.baseURL(), Insecure: cfg.insecure, CertPin: cfg.certPin, Name: strings.TrimSpace(cfg.name)}); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not save the server address beside the token (%v); give the service --server %s\n", err, cfg.baseURL())
 		}
 	}
@@ -870,7 +906,7 @@ func agentDataDir() string {
 // service manager will show it to anyone who asks.
 func saveToken(token string) (string, error) {
 	path := tokenFile()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := permissions.EnsurePrivateDir(filepath.Dir(path)); err != nil {
 		return "", fmt.Errorf("create %s: %w", filepath.Dir(path), err)
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
@@ -897,18 +933,8 @@ func saveToken(token string) (string, error) {
 // leaves SYSTEM and the administrators group. It does nothing anywhere else,
 // where the mode bits have already said the same thing.
 func restrictWindowsACL(path string) {
-	if runtime.GOOS != "windows" {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	// The well-known SIDs are used rather than the group names, which are
-	// translated on a localised Windows and would not match.
-	cmd := exec.CommandContext(ctx, "icacls", path, "/inheritance:r",
-		"/grant:r", "*S-1-5-18:(R,W)", "/grant:r", "*S-1-5-32-544:(R,W)")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not restrict permissions on %s: %v: %s\n",
-			path, err, strings.TrimSpace(string(out)))
+	if err := permissions.EnsurePrivateFile(path); err != nil {
+		fmt.Fprintf(os.Stderr, "cannot protect %s: %v\n", path, err)
 	}
 }
 
@@ -938,6 +964,7 @@ func readStoredToken() (string, error) {
 // None of it is secret, but it sits beside the token with the same
 // permissions, because it is the other half of what the token is for.
 type storedSettings struct {
+	CertPin  string `json:"certPin,omitempty"`
 	Server   string `json:"server"`
 	Insecure bool   `json:"insecure,omitempty"`
 	Name     string `json:"name,omitempty"`
@@ -986,6 +1013,9 @@ func readStoredSettings() (storedSettings, error) {
 // self-signed" was a statement about that server and nothing else.
 func (c *config) applyStored(s storedSettings, insecureGiven bool) {
 	c.server = s.Server
+	if c.certPin == "" {
+		c.certPin = s.CertPin
+	}
 	if !insecureGiven {
 		c.insecure = s.Insecure
 	}
@@ -1027,11 +1057,17 @@ func (p *program) serve(ctx context.Context) {
 func (p *program) metricsHandler() http.Handler {
 	collector := newCollector(p.cfg)
 	want := []byte(p.cfg.token)
+	limiter := newServeLimiter()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
 		got := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
-		if subtle.ConstantTimeCompare([]byte(got), want) != 1 {
+		if status := limiter.authenticate(r.RemoteAddr, []byte(got), want, time.Now()); status != 0 {
+			if status == http.StatusTooManyRequests {
+				w.Header().Set("Retry-After", "60")
+				http.Error(w, "too many failed attempts", status)
+				return
+			}
 			w.Header().Set("WWW-Authenticate", `Bearer realm="gwatch-agent"`)
 			http.Error(w, "a token is required", http.StatusUnauthorized)
 			return
@@ -1052,7 +1088,9 @@ func (p *program) metricsHandler() http.Handler {
 
 func newClient(cfg config) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if cfg.insecure {
+	if cfg.certPin != "" {
+		transport.TLSClientConfig = pinnedTLS(cfg.certPin)
+	} else if cfg.insecure {
 		transport.TLSClientConfig = insecureTLS()
 	}
 	return &http.Client{Transport: transport, Timeout: requestTimeout}

@@ -48,3 +48,11 @@ test('the group filter matches any of a node\'s groups, and the others are chips
   const chips = [...row.querySelectorAll('.n-groups .tag-group')].map((c) => c.textContent);
   assert.deepEqual(chips, nas.groups.filter((g) => g !== second));
 });
+
+test('live refresh preserves the focused filter by group and value', async (t) => {
+  const { root, instance } = await mountView(nodesView, undefined, t);
+  const chip = root.querySelector('[data-focus-key="Group:Home Network"]');
+  chip.focus();
+  await instance.refresh();
+  assert.equal(document.activeElement.dataset.focusKey, 'Group:Home Network');
+});

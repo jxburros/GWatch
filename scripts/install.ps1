@@ -22,6 +22,14 @@ if (-not (Test-Path $Exe)) { throw "gwatch.exe not found at $Exe (build it with 
 $target = Join-Path $InstallDir "gwatch.exe"
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
+$acl = New-Object System.Security.AccessControl.DirectorySecurity
+$acl.SetAccessRuleProtection($true, $false)
+foreach ($sid in @("S-1-5-18", "S-1-5-32-544")) {
+    $identity = New-Object System.Security.Principal.SecurityIdentifier($sid)
+    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($identity, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
+    $acl.AddAccessRule($rule)
+}
+Set-Acl -LiteralPath $DataDir -AclObject $acl
 
 $service = Get-Service -Name "GWatch" -ErrorAction SilentlyContinue
 if ($service) {

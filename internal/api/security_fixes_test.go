@@ -120,9 +120,9 @@ func TestAPIKeyReadStripsHeaderSecrets(t *testing.T) {
 		t.Fatalf("the overview leaked a check header to a key:\n%s", body)
 	}
 
-	// The browser admin still receives it, so the check editor keeps working.
-	if _, body, _ := as(t, ts, creds{Cookie: admin}, "GET", "/api/nodes", nil, nil); !strings.Contains(body, "HDRSECRET") {
-		t.Fatalf("the admin editor must still see the header:\n%s", body)
+	// Browser administrators also receive a mask; saving it preserves the stored value.
+	if _, body, _ := as(t, ts, creds{Cookie: admin}, "GET", "/api/nodes", nil, nil); strings.Contains(body, "HDRSECRET") || !strings.Contains(body, passwordMask) {
+		t.Fatalf("the admin editor must receive a header mask:\n%s", body)
 	}
 }
 

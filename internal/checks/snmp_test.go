@@ -575,7 +575,7 @@ func TestCounterDeltaUnwindsAWrap(t *testing.T) {
 		{"32-bit, no wrap", snmpCounter{raw: 1000, bits: 32}, snmpCounter{raw: 1500, bits: 32}, 500},
 		{"32-bit wrap", snmpCounter{raw: 1<<32 - 100, bits: 32}, snmpCounter{raw: 100, bits: 32}, 200},
 		{"64-bit, no wrap", snmpCounter{raw: 1 << 40, bits: 64}, snmpCounter{raw: 1<<40 + 7, bits: 64}, 7},
-		{"64-bit wrap", snmpCounter{raw: 1<<64 - 3, bits: 64}, snmpCounter{raw: 4, bits: 64}, 7},
+		{"64-bit reset", snmpCounter{raw: 1<<64 - 3, bits: 64}, snmpCounter{raw: 4, bits: 64}, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -737,4 +737,12 @@ func manyOIDs(n int) []model.SNMPOID {
 		out[i] = model.SNMPOID{OID: fmt.Sprintf("1.3.6.1.2.1.2.2.1.10.%d", i), Name: fmt.Sprintf("Port %d", i)}
 	}
 	return out
+}
+
+func TestCounterResetIsNotARate(t *testing.T) {
+	for _, pair := range [][2]snmpCounter{{{raw: 5000000000000, bits: 64}, {raw: 1000, bits: 64}}, {{raw: 3000000000, bits: 32}, {raw: 1000, bits: 32}}, {{raw: 1000, bits: 32}, {raw: 1001, bits: 64}}} {
+		if counterIntervalValid(pair[0], pair[1]) {
+			t.Fatalf("reset accepted: %+v", pair)
+		}
+	}
 }

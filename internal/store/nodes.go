@@ -170,6 +170,9 @@ func (s *Store) UpdateNode(ctx context.Context, n model.Node) (model.Node, []int
 			existing[id] = true
 		}
 		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
 		keep := map[int64]bool{}
 		for i := range n.Checks {
 			c := n.Checks[i]
@@ -316,56 +319,14 @@ func (s *Store) BulkUpdate(ctx context.Context, nodes []model.Node, checks []mod
 
 const checkCols = `id, node_id, type, name, enabled, interval_seconds, timeout_seconds, retries, failure_threshold, config, alerts, sort_order, created_at, updated_at`
 
-// checkSecrets points at the fields of a check configuration that are
-// credentials rather than settings. They are sealed with the same machine
-// key as the settings document, so a copy of gwatch.db carries no readable
-// community string, SNMP v3 password or metrics token.
-//
-// Request headers are deliberately not in this list: they are free-form
-// key/value pairs the editor shows back as typed, and sealing some of them by
-// guessing at their names would be worse than saying plainly (as docs/API.md
-// does) that a header is stored as written.
-func checkSecrets(cfg *model.CheckConfig) []*string {
-	return []*string{&cfg.MetricsToken, &cfg.SNMPCommunity, &cfg.SNMPAuthPass, &cfg.SNMPPrivPass}
-}
-
 // sealCheckConfig encrypts a check's secret fields in place. A value that is
 // already sealed is left alone, so re-saving an untouched check does not
 // re-encrypt it.
 func (s *Store) sealCheckConfig(cfg *model.CheckConfig) error {
-	for _, field := range checkSecrets(cfg) {
-		if *field == "" || secrets.IsSealed(*field) {
-			continue
-		}
-		v, err := s.secrets.Seal(*field)
-		if err != nil {
-			return fmt.Errorf("seal check secret: %w", err)
-		}
-		*field = v
-	}
-	return nil
+	return cfg.TransformSecrets(s.sealSecret)
 }
-
-// openCheckConfig decrypts a check's secret fields in place. Values written
-// before sealing existed are not sealed and come back unchanged; one that
-// cannot be decrypted (a replaced key file) is emptied rather than failing
-// the whole load, and the reason is reported by SecretsHealthy.
 func (s *Store) openCheckConfig(cfg *model.CheckConfig) {
-	var firstErr error
-	for _, field := range checkSecrets(cfg) {
-		v, err := s.secrets.Open(*field)
-		if err != nil {
-			*field = ""
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		*field = v
-	}
-	if firstErr != nil {
-		s.setSecretsErr(fmt.Errorf("check configuration: %w", firstErr))
-	}
+	_ = cfg.TransformSecrets(s.openSecret)
 }
 
 func (s *Store) scanCheck(sc interface{ Scan(...any) error }) (model.Check, error) {
@@ -504,19 +465,19 @@ func (s *Store) SetCheckEnabled(ctx context.Context, id int64, enabled bool) err
 
 // ---- check state ----
 
-const stateCols = `check_id, status, consecutive_failures, last_run_at, last_success_at, last_change_at, next_run_at, last_message, last_latency_ms, alert_active, alert_suppressed, suppress_reason, last_alert_at, silenced_until, affected_by_check_id, warning_active, cert_warning_active, last_content_hash, last_content_value, metric_status`
+const stateCols = `check_id, status, consecutive_failures, last_run_at, last_success_at, last_change_at, next_run_at, last_message, last_latency_ms, alert_active, alert_suppressed, suppress_reason, last_alert_at, last_warn_at, silenced_until, affected_by_check_id, warning_active, cert_warning_active, last_content_hash, last_content_value, metric_status`
 
 // stateColList is stateCols as a slice, for the generated upsert.
 var stateColList = strings.Split(strings.ReplaceAll(stateCols, " ", ""), ",")
 
 func scanState(sc interface{ Scan(...any) error }) (model.CheckState, error) {
 	var st model.CheckState
-	var lastRun, lastSuccess, lastChange, nextRun, lastAlert, silenced sql.NullString
+	var lastRun, lastSuccess, lastChange, nextRun, lastAlert, lastWarn, silenced sql.NullString
 	var lat sql.NullFloat64
 	var affected sql.NullInt64
 	var alertActive, alertSuppressed, warn, certWarn int
 	var metricStatus string
-	if err := sc.Scan(&st.CheckID, &st.Status, &st.ConsecutiveFailures, &lastRun, &lastSuccess, &lastChange, &nextRun, &st.LastMessage, &lat, &alertActive, &alertSuppressed, &st.SuppressReason, &lastAlert, &silenced, &affected, &warn, &certWarn, &st.LastContentHash, &st.LastContentValue, &metricStatus); err != nil {
+	if err := sc.Scan(&st.CheckID, &st.Status, &st.ConsecutiveFailures, &lastRun, &lastSuccess, &lastChange, &nextRun, &st.LastMessage, &lat, &alertActive, &alertSuppressed, &st.SuppressReason, &lastAlert, &lastWarn, &silenced, &affected, &warn, &certWarn, &st.LastContentHash, &st.LastContentValue, &metricStatus); err != nil {
 		return st, err
 	}
 	if metricStatus != "" {
@@ -527,6 +488,7 @@ func scanState(sc interface{ Scan(...any) error }) (model.CheckState, error) {
 	st.LastChangeAt = parseTime(lastChange)
 	st.NextRunAt = parseTime(nextRun)
 	st.LastAlertAt = parseTime(lastAlert)
+	st.LastWarnAt = parseTime(lastWarn)
 	st.SilencedUntil = parseTime(silenced)
 	st.LastLatencyMS = floatPtr(lat)
 	st.AffectedByCheckID = int64Ptr(affected)
@@ -581,7 +543,7 @@ func (s *Store) saveStateTx(ctx context.Context, tx *wtx, st model.CheckState) e
 	}
 	_, err := tx.exec(ctx, insertValues("check_state", stateColList)+" "+s.d.upsertClause([]string{"check_id"}, stateColList),
 		st.CheckID, string(st.Status), st.ConsecutiveFailures, fmtTimePtr(st.LastRunAt), fmtTimePtr(st.LastSuccessAt), fmtTimePtr(st.LastChangeAt), fmtTimePtr(st.NextRunAt),
-		st.LastMessage, nullFloat(st.LastLatencyMS), boolInt(st.AlertActive), boolInt(st.AlertSuppressed), st.SuppressReason, fmtTimePtr(st.LastAlertAt), fmtTimePtr(st.SilencedUntil),
+		st.LastMessage, nullFloat(st.LastLatencyMS), boolInt(st.AlertActive), boolInt(st.AlertSuppressed), st.SuppressReason, fmtTimePtr(st.LastAlertAt), fmtTimePtr(st.LastWarnAt), fmtTimePtr(st.SilencedUntil),
 		nullInt64(st.AffectedByCheckID), boolInt(st.WarningActive), boolInt(st.CertWarningActive), st.LastContentHash, st.LastContentValue, metricStatus)
 	return err
 }
@@ -617,6 +579,10 @@ func scanResult(sc interface{ Scan(...any) error }) (model.Result, error) {
 func (s *Store) InsertResult(ctx context.Context, r model.Result) (model.Result, error) {
 	err := s.writeTx(ctx, func(tx *wtx) error {
 		var err error
+		var previous string
+		if scanErr := tx.queryRow(ctx, "SELECT status FROM check_state WHERE check_id=?", r.CheckID).Scan(&previous); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+			return scanErr
+		}
 		r, err = s.insertResultTx(ctx, tx, r)
 		return err
 	})
@@ -648,11 +614,18 @@ func (s *Store) insertResultTx(ctx context.Context, tx *wtx, r model.Result) (mo
 func (s *Store) RecordResult(ctx context.Context, r model.Result, st model.CheckState) (model.Result, error) {
 	err := s.writeTx(ctx, func(tx *wtx) error {
 		var err error
+		var previous string
+		if scanErr := tx.queryRow(ctx, "SELECT status FROM check_state WHERE check_id=?", r.CheckID).Scan(&previous); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+			return scanErr
+		}
 		r, err = s.insertResultTx(ctx, tx, r)
 		if err != nil {
 			return err
 		}
-		return s.saveStateTx(ctx, tx, st)
+		if err := s.saveStateTx(ctx, tx, st); err != nil {
+			return err
+		}
+		return s.reconcileIncidentTx(ctx, tx, r, st, previous == "down")
 	})
 	return r, err
 }
@@ -1115,11 +1088,15 @@ func (s *Store) migrateCheckSecrets(ctx context.Context) error {
 		if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 			continue
 		}
-		for _, field := range checkSecrets(&cfg) {
-			if *field != "" && !secrets.IsSealed(*field) {
-				todo = append(todo, pending{id: id, cfg: cfg})
-				break
+		changed := false
+		_ = cfg.TransformSecrets(func(v string) (string, error) {
+			if v != "" && !secrets.IsSealed(v) {
+				changed = true
 			}
+			return v, nil
+		})
+		if changed {
+			todo = append(todo, pending{id: id, cfg: cfg})
 		}
 	}
 	rows.Close()

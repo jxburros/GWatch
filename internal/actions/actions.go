@@ -8,7 +8,6 @@
 package actions
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -17,6 +16,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/jxburros/GWatch/internal/model"
+	"github.com/jxburros/GWatch/internal/subprocess"
 )
 
 // Vars are the values substituted for {{name}} placeholders. Keys use dots
@@ -155,6 +156,9 @@ func Validate(a model.Action) error {
 	}
 	switch a.Type {
 	case model.ActionHTTP:
+		if _, err := expandURL(a.URL, nil); err != nil {
+			return err
+		}
 		u := strings.TrimSpace(a.URL)
 		if u == "" {
 			return errors.New("a URL is required")
@@ -280,7 +284,11 @@ func (r *Runner) runHTTP(ctx context.Context, a model.Action, vars Vars, res mod
 			method = "GET"
 		}
 	}
-	url := strings.TrimSpace(Expand(a.URL, vars))
+	url, expandErr := expandURL(a.URL, vars)
+	if expandErr != nil {
+		res.Error = expandErr.Error()
+		return res
+	}
 	if !strings.HasPrefix(strings.ToLower(url), "http://") && !strings.HasPrefix(strings.ToLower(url), "https://") {
 		res.Error = "the URL must start with http:// or https:// (after expanding placeholders): " + url
 		return res
@@ -556,12 +564,9 @@ func (r *Runner) runScript(ctx context.Context, a model.Action, vars Vars, res m
 		cmd.Dir = filepath.Dir(path)
 	}
 	cmd.Env = append(os.Environ(), Env(vars)...)
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
 	cmd.Stdin = strings.NewReader(vars["body"])
-	err = cmd.Run()
-	res.Output = strings.TrimSpace(buf.String())
+	output, err := subprocess.Run(cmd)
+	res.Output = strings.TrimSpace(output)
 	if err != nil {
 		res.Error = describeExecError(ctx, err)
 		return res
@@ -579,4 +584,43 @@ func describeExecError(ctx context.Context, err error) string {
 		return fmt.Sprintf("exited with status %d", ee.ExitCode())
 	}
 	return err.Error()
+}
+
+// expandURL treats substitutions as data in their URL component. The authority
+// is fixed by the administrator, never selected by hook input.
+func expandURL(template string, vars Vars) (string, error) {
+	template = strings.TrimSpace(template)
+	schemeEnd := strings.Index(template, "://")
+	if schemeEnd < 0 {
+		return "", errors.New("URL requires http:// or https://")
+	}
+	authorityEnd := len(template)
+	if i := strings.IndexAny(template[schemeEnd+3:], "/?#"); i >= 0 {
+		authorityEnd = schemeEnd + 3 + i
+	}
+	if strings.Contains(template[:authorityEnd], "{{") {
+		return "", errors.New("URL placeholders are not allowed in scheme or host")
+	}
+	suffix := template[authorityEnd:]
+	query, fragment := strings.IndexByte(suffix, '?'), strings.IndexByte(suffix, '#')
+	var output strings.Builder
+	previous := 0
+	for _, match := range placeholder.FindAllStringSubmatchIndex(suffix, -1) {
+		output.WriteString(suffix[previous:match[0]])
+		value := vars[suffix[match[2]:match[3]]]
+		if query >= 0 && match[0] > query && (fragment < 0 || match[0] < fragment) {
+			output.WriteString(url.QueryEscape(value))
+		} else {
+			output.WriteString(url.PathEscape(value))
+		}
+		previous = match[1]
+	}
+	output.WriteString(suffix[previous:])
+	expanded := output.String()
+	value := template[:authorityEnd] + expanded
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", errors.New("invalid HTTP action URL")
+	}
+	return value, nil
 }

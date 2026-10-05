@@ -19,21 +19,22 @@ const (
 
 // Logger is safe for concurrent use.
 type Logger struct {
-	mu     sync.Mutex
-	file   *os.File
-	path   string
-	ring   []string
-	next   int
-	count  int
-	stdout io.Writer
+	mu      sync.Mutex
+	file    *os.File
+	path    string
+	ring    []string
+	next    int
+	count   int
+	stdout  io.Writer
+	journal bool
 }
 
 // New creates a logger writing to dir/gwatch.log. When dir is empty only
 // stdout and the ring buffer are used.
 func New(dir string, stdout io.Writer) (*Logger, error) {
-	l := &Logger{ring: make([]string, ringSize), stdout: stdout}
+	l := &Logger{ring: make([]string, ringSize), stdout: stdout, journal: os.Getenv("INVOCATION_ID") != ""}
 	if dir != "" {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, err
 		}
 		l.path = filepath.Join(dir, "gwatch.log")
@@ -45,7 +46,7 @@ func New(dir string, stdout io.Writer) (*Logger, error) {
 }
 
 func (l *Logger) open() error {
-	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -81,7 +82,12 @@ func (l *Logger) write(level, msg string) {
 		l.count++
 	}
 	if l.stdout != nil {
-		fmt.Fprintln(l.stdout, line)
+		if l.journal {
+			priority := map[string]string{"INFO": "6", "WARN": "4", "ERROR": "3"}[level]
+			fmt.Fprintf(l.stdout, "<%s>%s\n", priority, msg)
+		} else {
+			fmt.Fprintln(l.stdout, line)
+		}
 	}
 	if l.file != nil {
 		fmt.Fprintln(l.file, line)

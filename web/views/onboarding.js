@@ -137,6 +137,7 @@ export async function mount(root, ctx) {
   // so usually the browser's own click does the advancing and this does not
   // fire twice.
   function onKey(e) {
+    if (e.defaultPrevented || !card.contains(e.target)) return;
     if (e.key === 'Escape') { e.preventDefault(); leave(); return; }
     if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
     const a = document.activeElement;

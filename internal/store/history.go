@@ -56,12 +56,42 @@ func (s *Store) RollupFromRaw(ctx context.Context, from, to time.Time) (int64, e
 }
 
 // RollupUp aggregates smaller buckets into larger ones for [from, to).
+func localDay(t time.Time) time.Time {
+	t = t.In(time.Local)
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+}
+
+// Daily buckets follow service-local calendar days. AddDate preserves 23/25-hour
+// DST days; Bucket1d remains the logical resolution rather than elapsed duration.
 func (s *Store) RollupUp(ctx context.Context, srcBucket, dstBucket int, from, to time.Time) (int64, error) {
+	if srcBucket <= 0 || dstBucket <= 0 {
+		return 0, fmt.Errorf("invalid rollup bucket size")
+	}
+	if dstBucket == Bucket1d {
+		var first, last sql.NullInt64
+		err := s.queryRow(ctx, "SELECT MIN(bucket_start), MAX(bucket_start) FROM rollups WHERE bucket_seconds = ? AND bucket_start >= ? AND bucket_start < ?", srcBucket, localDay(from).Unix(), localDay(to).AddDate(0, 0, 1).Unix()).Scan(&first, &last)
+		if err != nil || !first.Valid {
+			return 0, err
+		}
+		var total int64
+		for day := localDay(time.Unix(first.Int64, 0)); !day.After(time.Unix(last.Int64, 0)); day = day.AddDate(0, 0, 1) {
+			n, err := s.rollupRange(ctx, srcBucket, dstBucket, day.Unix(), day.AddDate(0, 0, 1).Unix(), s.d.castInt("?"), day.Unix())
+			total += n
+			if err != nil {
+				return total, err
+			}
+		}
+		return total, nil
+	}
 	fromB := from.Unix() - from.Unix()%int64(dstBucket)
 	toB := to.Unix() - to.Unix()%int64(dstBucket) + int64(dstBucket)
-	res, err := s.exec(ctx, `
-		INSERT INTO rollups(`+rollupCols+`)
-		SELECT check_id, `+s.d.castInt("?")+`, bucket_start - (bucket_start % `+s.d.castInt("?")+`) AS b,
+	return s.rollupRange(ctx, srcBucket, dstBucket, fromB, toB, "bucket_start - (bucket_start % "+s.d.castInt("?")+")", int64(dstBucket))
+}
+
+func (s *Store) rollupRange(ctx context.Context, srcBucket, dstBucket int, fromB, toB int64, bucketExpr string, bucketArg int64) (int64, error) {
+	query := `
+		INSERT INTO rollups(` + rollupCols + `)
+		SELECT check_id, ` + s.d.castInt("?") + `, ` + bucketExpr + ` AS b,
 		       SUM(count), SUM(success_count), SUM(fail_count),
 		       MIN(min_ms), MAX(max_ms),
 		       CASE WHEN SUM(CASE WHEN avg_ms IS NOT NULL THEN success_count ELSE 0 END) > 0
@@ -73,8 +103,26 @@ func (s *Store) RollupUp(ctx context.Context, srcBucket, dstBucket int, from, to
 		       100.0 * SUM(success_count) / SUM(count)
 		FROM rollups WHERE bucket_seconds = ? AND bucket_start >= ? AND bucket_start < ?
 		GROUP BY check_id, b
-		`+s.d.upsertClause(rollupKeys, rollupColList),
-		dstBucket, dstBucket, srcBucket, fromB, toB)
+		` + s.d.upsertClause(rollupKeys, rollupColList)
+	args := []any{dstBucket, bucketArg, srcBucket, fromB, toB}
+	var res sql.Result
+	var err error
+	if dstBucket == Bucket1d {
+		err = s.writeTx(ctx, func(tx *wtx) error {
+			var writeErr error
+			res, writeErr = tx.exec(ctx, query, args...)
+			if writeErr != nil {
+				return writeErr
+			}
+			// Replace legacy UTC buckets only where source data can rebuild the day.
+			// Older daily-only history stays intact because its detail is irrecoverable.
+			_, writeErr = tx.exec(ctx, `DELETE FROM rollups WHERE bucket_seconds = ? AND bucket_start >= ? AND bucket_start < ? AND bucket_start <> ? AND check_id IN (SELECT check_id FROM (SELECT DISTINCT check_id FROM rollups WHERE bucket_seconds = ? AND bucket_start >= ? AND bucket_start < ?) AS source_checks)`, Bucket1d, fromB, toB, bucketArg, srcBucket, fromB, toB)
+			return writeErr
+		})
+	} else {
+		res, err = s.exec(ctx, query, args...)
+	}
+
 	if err != nil {
 		return 0, err
 	}

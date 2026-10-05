@@ -331,6 +331,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
 // of schema_version: it predates the version-tracked mechanism and a step may
 // depend on a column it adds existing.
 var addedColumns = []struct{ table, column, ddl string }{
+	{"check_state", "last_warn_at", "ALTER TABLE check_state ADD COLUMN last_warn_at TEXT"},
 	{"endpoints", "allow_no_token", "ALTER TABLE endpoints ADD COLUMN allow_no_token INTEGER NOT NULL DEFAULT 0"},
 	{"events", "actor", "ALTER TABLE events ADD COLUMN actor TEXT NOT NULL DEFAULT ''"},
 	{"results", "stddev_ms", "ALTER TABLE results ADD COLUMN stddev_ms REAL"},

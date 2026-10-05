@@ -1,5 +1,7 @@
 # Installing GWatch on Windows
 
+For Linux and Raspberry Pi, see [Installing on Linux](INSTALL-LINUX.md).
+
 > **This is a beta.** GWatch works and keeps your data safely, but features and the
 > layout can still change between releases. See
 > [`CHANGELOG.md`](../CHANGELOG.md) for what this version includes and what it does

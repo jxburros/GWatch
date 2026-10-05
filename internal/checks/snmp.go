@@ -99,10 +99,23 @@ func previousSNMP(checkID int64, version string, now time.Time, readings map[str
 	return prev, true
 }
 
-// counterDelta returns how much a counter advanced between two readings,
-// unwinding a wrap-around at the counter's own width. A 64-bit counter wraps
-// naturally in uint64 arithmetic; a 32-bit one is masked back to its width.
+// Counter64 decreases are resets. Counter32 wraps are accepted only in a
+// narrow boundary window (last/first 1 MiB); ambiguous decreases are skipped
+// instead of turning a reboot into a critical rate spike.
+func counterIntervalValid(prev, cur snmpCounter) bool {
+	if prev.bits != cur.bits {
+		return false
+	}
+	if cur.raw >= prev.raw {
+		return true
+	}
+	return cur.bits == 32 && prev.raw >= (1<<32)-(1<<20) && cur.raw < 1<<20
+}
+
 func counterDelta(prev, cur snmpCounter) uint64 {
+	if !counterIntervalValid(prev, cur) {
+		return 0
+	}
 	d := cur.raw - prev.raw
 	if cur.bits == 32 {
 		d &= 0xFFFFFFFF
@@ -194,7 +207,7 @@ func runSNMPCheck(ctx context.Context, check model.Check, target string, opts Op
 			if havePrev {
 				if before, seen := prev.byOID[key]; seen {
 					secs := now.Sub(prev.at).Seconds()
-					if secs > 0 {
+					if secs > 0 && counterIntervalValid(before, snmpCounter{raw: raw, bits: bits}) {
 						rate := o.Scaled(float64(counterDelta(before, snmpCounter{raw: raw, bits: bits})) / secs)
 						val.Rate = fptr(rate)
 						measured = val.Rate

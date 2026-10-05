@@ -58,6 +58,7 @@ export function createWall(root, load, { onError } = {}) {
   root.append(wall);
 
   function tickClocks() {
+    if (document.hidden) return;
     const d = new Date();
     for (const c of state.clocks) {
       c.time.textContent = timeShort(d, { seconds: !!c.seconds });
@@ -72,11 +73,13 @@ export function createWall(root, load, { onError } = {}) {
   }
 
   async function refresh() {
+    if (document.hidden || state.destroyed) return;
     let doc;
     try {
       doc = await load();
     } catch (e) {
       if (state.destroyed) return;
+      rearm(5);
       if (onError) onError(e);
       else clear(wall).append(emptyState({ icon: 'alert', title: 'Could not load this wallboard', text: e.message }));
       return;
@@ -87,9 +90,9 @@ export function createWall(root, load, { onError } = {}) {
     rearm();
   }
 
-  function rearm() {
+  function rearm(retrySeconds) {
     clearInterval(state.timer);
-    const secs = Math.max(5, state.doc?.wallboard?.layout?.refreshSeconds || 20);
+    const secs = retrySeconds || Math.max(5, state.doc?.wallboard?.layout?.refreshSeconds || 20);
     state.timer = setInterval(() => { refresh(); }, secs * 1000);
   }
 
@@ -121,6 +124,8 @@ export function createWall(root, load, { onError } = {}) {
     tickClocks();
   }
 
+  const visibility = () => { if (!document.hidden) refresh(); };
+  document.addEventListener('visibilitychange', visibility);
   refresh();
 
   return {
@@ -128,6 +133,7 @@ export function createWall(root, load, { onError } = {}) {
     redraw() { if (state.doc) draw(); },
     destroy() {
       state.destroyed = true;
+      document.removeEventListener('visibilitychange', visibility);
       clearInterval(state.timer);
       clearInterval(state.clockTimer);
       clearCharts();
@@ -239,8 +245,15 @@ function attention(body, doc, cfg) {
         h('div', { class: 'i-sub' }, a.affectedBy ? `Unavailable because ${a.affectedBy} is down` : (a.message || ''))),
       h('div', { class: 'i-since' }, a.since ? `since ${relTime(a.since).replace(' ago', '')}` : '')));
   }
-  if (att.length > limit) list.append(h('div', { class: 'muted', style: { padding: '4px 14px' } }, `+ ${att.length - limit} more`));
-  body.append(list);
+  const more = h('div', { class: 'wall-more muted' });
+  body.append(list, more);
+  requestAnimationFrame(() => {
+    if (!list.isConnected) return;
+    const bottom = body.getBoundingClientRect().bottom - 24;
+    for (const row of [...list.children].reverse()) if (row.getBoundingClientRect().bottom > bottom) row.remove();
+    const hidden = att.length - list.children.length;
+    more.textContent = hidden ? `+${hidden} more · open Incidents for details` : '';
+  });
 }
 
 function groups(body, doc) {
@@ -259,7 +272,15 @@ function groups(body, doc) {
       h('div', { class: 'g-head' }, statusOrb(gr.status, { size: 'lg' }), h('span', { class: 'g-name' }, gr.name)),
       h('div', { class: 'g-sub' }, parts.join(' · '))));
   }
-  body.append(g);
+  const more = h('div', { class: 'wall-more muted' });
+  body.append(g, more);
+  requestAnimationFrame(() => {
+    if (!g.isConnected) return;
+    const bottom = body.getBoundingClientRect().bottom - 24;
+    for (const tile of [...g.children].reverse()) if (tile.getBoundingClientRect().bottom > bottom) tile.remove();
+    const hidden = list.length - g.children.length;
+    more.textContent = hidden ? `+${hidden} more groups` : '';
+  });
 }
 
 function nodes(body, doc, cfg) {
@@ -295,7 +316,7 @@ function trends(body, doc, cfg, state) {
   }
   const wrap = h('div', { class: 'wall-charts' });
   for (const hs of list) {
-    const host = h('div', null);
+    const host = h('div', { class: 'wall-chart-host' });
     // A ping check that reports loss but no latency is charted as loss: on a
     // wall an empty latency chart says nothing at all.
     const isLoss = hs.checkType === 'ping' && (hs.points || []).every((p) => p.avgMs == null) && (hs.points || []).some((p) => p.lossPct != null);
@@ -306,7 +327,7 @@ function trends(body, doc, cfg, state) {
           ? `avg ${fmtMs(hs.summary.avgMs)} · ${hs.summary.availability?.toFixed?.(2) ?? '—'}%`
           : `${hs.summary?.availability?.toFixed?.(2) ?? '—'}% available`)),
       host));
-    const chart = new LineChart(host, { unit: isLoss ? '%' : 'ms', legend: false, height: 150, minTickPx: 90, ariaLabel: `${hs.checkName} trend`, table: false });
+    const chart = new LineChart(host, { unit: isLoss ? '%' : 'ms', legend: false, height: null, yTicks: 2, minTickPx: 90, ariaLabel: `${hs.checkName} trend`, table: false });
     state.charts.push(chart);
     chart.setData({ series: [toSeries(hs, isLoss ? 'loss' : 'avg', seriesColor(0))], from: hs.from, to: hs.to, bucketSeconds: hs.bucketSeconds || 0 });
   }

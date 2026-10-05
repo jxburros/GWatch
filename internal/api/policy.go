@@ -66,6 +66,7 @@ type routePolicy struct {
 // Anything not listed falls through to admin-only with API keys denied, so a
 // route added without a policy fails closed rather than open.
 var policies = []routePolicy{
+	{"POST", "/api/restart", levelAdmin, keyDeny},
 	// ---- public ----
 	{"GET", "/api/health", levelPublic, keyRead},
 	{"GET", "/api/version", levelPublic, keyRead},
@@ -113,6 +114,12 @@ var policies = []routePolicy{
 	// runs on rather than the network it watches; a viewer in the browser may
 	// read them (ROADMAP 2.1 counts the log as part of the audit trail), an
 	// integration key may not.
+	{"GET", "/api/reports", levelAdmin, keyDeny},
+	{"PUT", "/api/reports", levelAdmin, keyDeny},
+	{"GET", "/api/reports/generate", levelViewer, keyRead},
+	{"GET", "/api/incidents", levelViewer, keyRead},
+	{"GET", "/api/incidents/{id}", levelViewer, keyRead},
+	{"POST", "/api/incidents/{id}/{action}", levelAdmin, keyWrite},
 	{"GET", "/api/logs", levelViewer, keyDeny},
 	{"GET", "/api/export/logs.txt", levelViewer, keyDeny},
 	{"GET", "/api/triggers", levelViewer, keyDeny},

@@ -262,6 +262,10 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	def := model.DefaultSettings()
 	g := &st.General
+	if g.ListenPort < 0 || g.ListenPort > 65535 {
+		writeError(w, http.StatusBadRequest, "listen port must be between 1 and 65535 (or zero for the startup default)")
+		return
+	}
 	if strings.TrimSpace(g.InstanceName) == "" {
 		g.InstanceName = def.General.InstanceName
 	}
@@ -756,15 +760,35 @@ func (s *Server) handleExportConfig(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	cfg.Incidents = nil
+	for i := range cfg.Reports {
+		cfg.Reports[i].Recipients = nil
+		cfg.Reports[i].Enabled = false
+	}
+	cfg.Settings.General.AccessPassword = ""
+	cfg.Users, cfg.APIKeys, cfg.Agents = nil, nil, nil
+	for i := range cfg.Triggers {
+		_ = cfg.Triggers[i].Action.TransformSecrets(blankSecret)
+	}
+	for i := range cfg.Rules {
+		for j := range cfg.Rules[i].Actions {
+			_ = cfg.Rules[i].Actions[j].TransformSecrets(blankSecret)
+		}
+	}
+	for i := range cfg.Endpoints {
+		cfg.Endpoints[i].Token = ""
+		_ = cfg.Endpoints[i].Action.TransformSecrets(blankSecret)
+	}
+	for i := range cfg.Wallboards {
+		cfg.Wallboards[i].Share.Token = ""
+	}
 	cfg.Settings.Alerts.SMTP.Password = ""
 	cfg.Settings.Backups.Password = ""
 	// A configuration export is meant to be readable and shareable, so the
 	// checks' credentials come out empty for the same reason the passwords do.
 	for i := range cfg.Nodes {
 		for j := range cfg.Nodes[i].Checks {
-			for _, field := range checkSecretFields(&cfg.Nodes[i].Checks[j].Config) {
-				*field = ""
-			}
+			_ = cfg.Nodes[i].Checks[j].Config.TransformSecrets(blankSecret)
 		}
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

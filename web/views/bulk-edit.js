@@ -355,13 +355,7 @@ export async function mount(root, ctx) {
   function buildBody() {
     const body = { nodeIds: [...state.nodeIds] };
     const checks = affectedChecks();
-    // Checks of a selected node come with the node, so only the ones that are
-    // not covered that way need naming — and with a type filter on, even those
-    // have to be named, because the server narrows the whole selection alike.
-    const coveredByNode = new Set();
-    for (const n of state.nodes) if (state.nodeIds.has(n.id)) for (const c of checksOf(n)) coveredByNode.add(c.id);
-    const extra = checks.filter((c) => !coveredByNode.has(c.id)).map((c) => c.id);
-    if (extra.length) body.checkIds = extra;
+    body.checkIds = checks.map((c) => c.id);
     if (state.types.size) body.checkFilter = { types: [...state.types] };
     for (const row of state.rows) {
       const f = bulkField(row.key);

@@ -1,7 +1,7 @@
 // Nodes list: searchable, filterable list of everything being monitored.
 
 import { api } from '../api.js';
-import { h, icon, clear, replace, statusSpine, statusWord, checkChip, importanceBadge, tagList, toggle, menuButton, toast, confirmDialog, openModal, emptyState, skeleton } from '../components.js';
+import { h, icon, clear, append, preserveFocus, replace, statusSpine, statusWord, checkChip, importanceBadge, tagList, toggle, menuButton, toast, confirmDialog, openModal, emptyState, skeleton } from '../components.js';
 import { relTime, nodeGroups, inGroup, NODE_SORTS, sortNodes, compareNames } from '../fmt.js';
 import { pairMachine } from './machines.js';
 
@@ -60,20 +60,22 @@ export async function mount(root, ctx) {
   function chipRow(label, items, current, onPick) {
     if (!items.length) return null;
     const row = h('div', { class: 'chip-row', role: 'group', 'aria-label': label }, h('span', { class: 'chip-label' }, label));
-    row.append(h('button', { type: 'button', class: `chip ${!current ? 'active' : ''}`, 'aria-pressed': !current ? 'true' : 'false', onclick: () => onPick('') }, 'All'));
-    for (const it of items) row.append(h('button', { type: 'button', class: `chip ${current === it.value ? 'active' : ''}`, 'aria-pressed': current === it.value ? 'true' : 'false', onclick: () => onPick(current === it.value ? '' : it.value) }, it.label));
+    row.append(h('button', { type: 'button', class: `chip ${!current ? 'active' : ''}`, 'data-focus-key': `${label}:all`, 'aria-pressed': !current ? 'true' : 'false', onclick: () => onPick('') }, 'All'));
+    for (const it of items) row.append(h('button', { type: 'button', class: `chip ${current === it.value ? 'active' : ''}`, 'data-focus-key': `${label}:${it.value}`, 'aria-pressed': current === it.value ? 'true' : 'false', onclick: () => onPick(current === it.value ? '' : it.value) }, it.label));
     return row;
   }
 
   function renderFilters() {
+    const restore = preserveFocus(filters);
     clear(filters);
     const counts = {};
     for (const n of state.nodes) counts[n.status || 'unknown'] = (counts[n.status || 'unknown'] || 0) + 1;
-    filters.append(
+    append(filters, [
       chipRow('Group', state.groups.groups.map((g) => ({ value: g.name, label: `${g.name} (${g.count})` })), state.group, (v) => { state.group = v; renderFilters(); renderList(); }),
       chipRow('Status', STATUS_ORDER.filter((s) => counts[s]).map((s) => ({ value: s, label: `${s[0].toUpperCase()}${s.slice(1)} (${counts[s]})` })), state.status, (v) => { state.status = v; renderFilters(); renderList(); }),
       chipRow('Tag', state.groups.tags.map((t) => ({ value: t.name, label: t.name })), state.tag, (v) => { state.tag = v; renderFilters(); renderList(); }),
-    );
+    ]);
+    restore();
   }
 
   function matches(n) {

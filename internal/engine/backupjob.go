@@ -26,7 +26,11 @@ func (e *Engine) backupDir() string {
 // two stay in sync.
 func (e *Engine) RunBackup(ctx context.Context, dir, password string, includeHistory bool, keep int, reason string) (model.BackupInfo, error) {
 	_ = e.store.Checkpoint(ctx)
-	info, err := backup.Create(ctx, e.store, dir, password, includeHistory, e.opts.Version)
+	create := backup.Create
+	if keep > 0 {
+		create = backup.CreateScheduled
+	}
+	info, err := create(ctx, e.store, dir, password, includeHistory, e.opts.Version)
 	status := e.BackupStatus()
 	now := time.Now()
 	status.LastBackupAt = &now
@@ -43,7 +47,7 @@ func (e *Engine) RunBackup(ctx context.Context, dir, password string, includeHis
 	e.SetBackupStatus(ctx, status)
 	e.RecordEvent(model.Event{Type: model.EventBackup, Title: reason + " created", Detail: fmt.Sprintf("%s (%s%s)", info.FileName, humanBytes(info.SizeBytes), map[bool]string{true: ", with history", false: ", configuration only"}[info.IncludeHistory])})
 	if keep > 0 {
-		if removed, perr := backup.Prune(dir, keep); perr == nil && len(removed) > 0 {
+		if removed, perr := backup.PruneScheduled(dir, keep); perr == nil && len(removed) > 0 {
 			e.RecordEvent(model.Event{Type: model.EventBackup, Title: "Old backups pruned", Detail: fmt.Sprintf("Removed %d archive(s) beyond the configured %d to keep.", len(removed), keep)})
 		}
 	}

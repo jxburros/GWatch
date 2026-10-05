@@ -3,6 +3,7 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,6 +47,7 @@ type Server struct {
 	Updater *Updater
 	// Network reports how the server is bound (optional).
 	Network NetworkFunc
+	Restart func()
 
 	// failLimiter counts failed credential attempts per client IP; apiLimiter
 	// is the general ceiling on API-key traffic from off this machine. Both are
@@ -91,6 +93,7 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "GET /api/health", s.handleHealth)
 	s.route(mux, "GET /api/status", s.handleStatus)
 	s.route(mux, "GET /api/network", s.handleNetwork)
+	s.route(mux, "POST /api/restart", s.handleRestart)
 	s.route(mux, "GET /api/version", s.handleVersion)
 	s.route(mux, "GET /api/overview", s.handleOverview)
 	s.route(mux, "GET /api/wallboard", s.handleWallboard)
@@ -251,6 +254,8 @@ func (s *Server) Handler() http.Handler {
 		writeError(w, http.StatusNotFound, "unknown API endpoint")
 	})
 
+	s.incidentRoutes(mux)
+	s.reportRoutes(mux)
 	if s.Web != nil {
 		mux.Handle("/", s.staticHandler())
 	}
@@ -339,6 +344,22 @@ func (s *Server) staticHandler() http.Handler {
 	fileServer := http.FileServer(files)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := path.Clean(r.URL.Path)
+		asset := strings.TrimPrefix(p, "/")
+		if asset == "" || asset == "index.html" {
+			asset = "index.html"
+		}
+		if p == "/wall" {
+			asset = "wall.html"
+		}
+		if data, err := fs.ReadFile(s.Web, asset); err == nil {
+			tag := fmt.Sprintf(`"%x"`, sha256.Sum256(data))
+			w.Header().Set("ETag", tag)
+			w.Header().Set("Cache-Control", "no-cache")
+			if r.Header.Get("If-None-Match") == tag {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+		}
 		if p == "/" || p == "/index.html" {
 			w.Header().Set("Cache-Control", "no-cache")
 			r.URL.Path = "/"
@@ -356,7 +377,12 @@ func (s *Server) staticHandler() http.Handler {
 			return
 		}
 		if f, err := s.Web.Open(strings.TrimPrefix(p, "/")); err == nil {
+			info, statErr := f.Stat()
 			f.Close()
+			if statErr != nil || info.IsDir() {
+				http.NotFound(w, r)
+				return
+			}
 			fileServer.ServeHTTP(w, r)
 			return
 		}
@@ -386,8 +412,10 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 	case errors.Is(err, backup.ErrBadPassword):
 		writeError(w, http.StatusBadRequest, err.Error())
 	default:
-		s.Log.Errorf("api: %v", err)
-		writeError(w, http.StatusInternalServerError, err.Error())
+		id := fmt.Sprintf("%x", time.Now().UnixNano())
+		s.Log.Errorf("api [%s]: %v", id, err)
+		w.Header().Set("X-Request-ID", id)
+		writeError(w, http.StatusInternalServerError, "internal server error (request "+id+")")
 	}
 }
 
@@ -712,7 +740,7 @@ func (s *Server) denyKeyCodeCheck(w http.ResponseWriter, r *http.Request, checks
 // any viewer and any read-only API key may do — never hands out a community
 // string, an SNMP v3 password or a metrics token.
 func checkSecretFields(cfg *model.CheckConfig) []*string {
-	return []*string{&cfg.MetricsToken, &cfg.SNMPCommunity, &cfg.SNMPAuthPass, &cfg.SNMPPrivPass}
+	return cfg.SecretFields()
 }
 
 // maskNodeChecks returns the node with its checks' credentials replaced by the
@@ -732,11 +760,7 @@ func maskNodeChecks(n model.Node) model.Node {
 }
 
 func maskCheck(c model.Check) model.Check {
-	for _, field := range checkSecretFields(&c.Config) {
-		if *field != "" {
-			*field = passwordMask
-		}
-	}
+	_ = c.Config.TransformSecrets(maskSecret)
 	return c
 }
 
@@ -754,6 +778,8 @@ func restoreCheckSecrets(n *model.Node, existing model.Node) {
 		if !ok {
 			continue
 		}
+		restoreSecretMap(&n.Checks[i].Config.Headers, prev.Headers)
+		restoreSecretMap(&n.Checks[i].Config.Env, prev.Env)
 		before := checkSecretFields(&prev)
 		now := checkSecretFields(&n.Checks[i].Config)
 		for j := range now {
@@ -1308,6 +1334,8 @@ func (s *Server) handleTestCheck(w http.ResponseWriter, r *http.Request) {
 	// and so send that secret to a host it controls (#85).
 	if body.Check.ID != 0 && auth.FromContext(r.Context()).Kind != auth.KindAPIKey {
 		if stored, err := s.Store.GetCheck(r.Context(), body.Check.ID); err == nil {
+			restoreSecretMap(&body.Check.Config.Headers, stored.Config.Headers)
+			restoreSecretMap(&body.Check.Config.Env, stored.Config.Env)
 			before := checkSecretFields(&stored.Config)
 			now := checkSecretFields(&body.Check.Config)
 			for i := range now {

@@ -398,6 +398,7 @@ func validateSystemCheck(cfg model.CheckConfig) error {
 	// list, by converting them first; a negative one is what the conversion
 	// would silently drop, so it is caught before that.
 	for name, v := range map[string]float64{
+		//lint:ignore SA1019 Intentional validation of legacy persisted hardware thresholds.
 		"processor warning": cfg.CPUWarnPct, "processor critical": cfg.CPUCritPct,
 		"memory warning": cfg.MemWarnPct, "memory critical": cfg.MemCritPct,
 		"swap warning": cfg.SwapWarnPct, "disk warning": cfg.DiskWarnPct, "disk critical": cfg.DiskCritPct,

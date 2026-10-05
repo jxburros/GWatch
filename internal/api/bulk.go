@@ -195,9 +195,11 @@ func (s *Server) handleBulkUpdateNodes(w http.ResponseWriter, r *http.Request) {
 		}
 		addCheck(c)
 	}
-	for _, n := range selectedNodes {
-		for _, c := range n.Checks {
-			addCheck(c)
+	if req.CheckIDs == nil {
+		for _, n := range selectedNodes {
+			for _, c := range n.Checks {
+				addCheck(c)
+			}
 		}
 	}
 

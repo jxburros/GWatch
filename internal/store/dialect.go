@@ -123,21 +123,21 @@ func numberPlaceholders(q string) string {
 	var b strings.Builder
 	b.Grow(len(q) + 16)
 	n := 0
-	inQuote := false
-	for i := 0; i < len(q); i++ {
-		c := q[i]
-		switch {
-		case c == '\'':
-			inQuote = !inQuote
-			b.WriteByte(c)
-		case c == '?' && !inQuote:
-			n++
-			b.WriteByte('$')
-			b.WriteString(fmt.Sprint(n))
-		default:
-			b.WriteByte(c)
+	for i := 0; i < len(q); {
+		if end, _ := sqlProtectedEnd(q, i); end > i {
+			b.WriteString(q[i:end])
+			i = end
+			continue
 		}
+		if q[i] == '?' {
+			n++
+			fmt.Fprintf(&b, "$%d", n)
+		} else {
+			b.WriteByte(q[i])
+		}
+		i++
 	}
+
 	out := b.String()
 	rebindCache.Store(q, out)
 	return out
@@ -191,7 +191,7 @@ func lastInsertIDExec(ctx context.Context, ex execer, q string, args ...any) (in
 // a time.
 func schemaStatements() []string {
 	var out []string
-	for _, block := range []string{schema, automationSchema, hostSchema} {
+	for _, block := range []string{schema, automationSchema, hostSchema, incidentSchema} {
 		out = append(out, splitStatements(block)...)
 	}
 	return out
@@ -201,30 +201,32 @@ func schemaStatements() []string {
 // and empty pieces.
 func splitStatements(block string) []string {
 	var out []string
-	for _, stmt := range strings.Split(block, ";") {
-		stmt = strings.TrimSpace(stripSQLComments(stmt))
-		if stmt == "" {
+	var b strings.Builder
+	flush := func() {
+		if s := strings.TrimSpace(b.String()); s != "" {
+			out = append(out, s)
+		}
+		b.Reset()
+	}
+	for i := 0; i < len(block); {
+		if end, comment := sqlProtectedEnd(block, i); end > i {
+			if comment {
+				b.WriteByte(' ')
+			} else {
+				b.WriteString(block[i:end])
+			}
+			i = end
 			continue
 		}
-		out = append(out, stmt)
+		if block[i] == ';' {
+			flush()
+		} else {
+			b.WriteByte(block[i])
+		}
+		i++
 	}
+	flush()
 	return out
-}
-
-// stripSQLComments removes "-- …" comments, whole-line and trailing.
-func stripSQLComments(s string) string {
-	lines := strings.Split(s, "\n")
-	out := lines[:0]
-	for _, l := range lines {
-		if i := strings.Index(l, "--"); i >= 0 {
-			l = l[:i]
-		}
-		if strings.TrimSpace(l) == "" {
-			continue
-		}
-		out = append(out, strings.TrimRight(l, " \t"))
-	}
-	return strings.Join(out, "\n")
 }
 
 // createTable is a CREATE TABLE statement taken apart into the pieces a

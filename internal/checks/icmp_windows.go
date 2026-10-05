@@ -14,5 +14,5 @@ import (
 )
 
 func listenUnprivilegedICMP(ipv6 bool) (net.PacketConn, error) {
-	return nil, errors.New("Windows has no unprivileged ICMP socket")
+	return nil, errors.New("windows has no unprivileged ICMP socket")
 }

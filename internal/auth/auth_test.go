@@ -56,7 +56,7 @@ func TestPrincipalPermissions(t *testing.T) {
 }
 
 func TestContextRoundTrip(t *testing.T) {
-	if FromContext(nil).Authenticated() || FromContext(context.Background()).Authenticated() {
+	if FromContext(context.Background()).Authenticated() {
 		t.Fatal("bare context must be anonymous")
 	}
 	p := Principal{Kind: KindUser, Name: "pat", Role: RoleAdmin, UserID: 7}
@@ -106,7 +106,8 @@ func TestTokens(t *testing.T) {
 	if a == b || len(a) != 64 {
 		t.Fatalf("session tokens: %q %q", a, b)
 	}
-	if HashToken(a) == a || len(HashToken(a)) != 64 || HashToken(a) != HashToken(a) {
+	first, second := HashToken(a), HashToken(a)
+	if first == a || len(first) != 64 || first != second {
 		t.Fatal("HashToken")
 	}
 	key, prefix, err := NewAPIKey()

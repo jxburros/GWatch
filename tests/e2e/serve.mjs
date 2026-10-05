@@ -36,6 +36,7 @@ const TYPES = {
 
 const server = createServer((req, res) => {
   let path = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+  if (path === '/__gwatch_dev__') { res.writeHead(204, { 'X-GWatch-Development': '1' }).end(); return; }
   if (path === '/' || path === '/index.html') path = '/index.html';
   else if (path === '/wall') path = '/wall.html';
   // Resolve inside web/ only: a path that climbs out of it is refused.

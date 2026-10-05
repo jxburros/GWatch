@@ -1,3 +1,4 @@
+import templatesFixture from './mock-templates.js';
 // In-browser mock of the GWatch API. Loaded ONLY when the page is opened with
 // ?mock=1 — it intercepts fetch() for /api/* and fakes the event stream so the
 // interface can be developed and screenshot-tested without the Go service.
@@ -500,7 +501,7 @@
     { id: 'nodes-maintenance', name: 'In maintenance', enabled: true, colour: 'yellow', condition: { kind: 'nodesInStatus', status: 'maintenance', minCount: 1 } },
   ];
   let settings = {
-    general: { instanceName: 'Home monitor', defaultIntervalSeconds: 60, defaultTimeoutSeconds: 10, maxConcurrentChecks: 8, minIntervalSeconds: 10, wallboardRefreshSeconds: 15, latencyWarnMs: 0, packetLossWarnPct: 0, pingMethod: 'auto', theme: 'dark', accentColor: '#43c9c0', remoteAccess: false, accessPassword: '', requireLoginLocally: false, updateRepo: 'jxburros/GWatch' },
+    general: { instanceName: 'Home monitor', defaultIntervalSeconds: 60, defaultTimeoutSeconds: 10, maxConcurrentChecks: 8, minIntervalSeconds: 10, wallboardRefreshSeconds: 15, latencyWarnMs: 0, packetLossWarnPct: 0, pingMethod: 'auto', theme: localStorage.getItem('gw.theme') || 'dark', accentColor: '#43c9c0', remoteAccess: false, accessPassword: '', requireLoginLocally: false, updateRepo: 'jxburros/GWatch' },
     alerts: { enabled: true, recipients: ['jeff@example.com', 'sam@example.com'], failureThreshold: 2, cooldownMinutes: 60, notifyRecovery: true, notifyWarnings: true, certWarnDays: 14, smtp: { host: 'smtp.example.com', port: 587, username: 'gwatch@example.com', password: '********', from: 'GWatch <gwatch@example.com>', security: 'starttls' } },
     retention: { rawDays: 30, fiveMinDays: 180, hourlyDays: 730, dailyDays: 0, eventDays: 730 },
     indicators: clone(DEFAULT_INDICATORS),
@@ -527,31 +528,7 @@
     };
   }
 
-  const templates = [
-    { id: 'website', name: 'Website', description: 'HTTPS page load, certificate expiry, DNS and a keyword.', icon: 'globe', node: { name: 'My website', host: 'https://www.example.com', group: 'Internet', tags: ['public'], importance: 'normal', enabled: true }, checks: [
-      { type: 'http', name: 'HTTPS', enabled: true, intervalSeconds: 300, timeoutSeconds: 10, retries: 1, failureThreshold: 0, config: { expectedStatus: '200-399', followRedirects: true, certCheck: true, certWarnDays: 14 } },
-      { type: 'cert', name: 'Certificate', enabled: true, intervalSeconds: 3600, timeoutSeconds: 10, retries: 0, failureThreshold: 0, config: { port: 443, certWarnDays: 14 } },
-      { type: 'dns', name: 'DNS', enabled: true, intervalSeconds: 900, timeoutSeconds: 5, retries: 1, failureThreshold: 0, config: { recordType: 'A' } },
-      { type: 'keyword', name: 'Page text', enabled: false, intervalSeconds: 600, timeoutSeconds: 10, retries: 1, failureThreshold: 0, config: { keyword: '' } }] },
-    { id: 'home-server', name: 'Home server', description: 'Ping, SSH port and an optional web UI.', icon: 'server', node: { name: 'Home server', host: '192.168.1.10', group: 'Servers', tags: [], importance: 'high', enabled: true }, checks: [
-      { type: 'ping', name: 'Ping', enabled: true, intervalSeconds: 60, timeoutSeconds: 5, retries: 1, failureThreshold: 0, config: { pingCount: 4 } },
-      { type: 'tcp', name: 'SSH (22)', enabled: true, intervalSeconds: 120, timeoutSeconds: 5, retries: 1, failureThreshold: 0, config: { port: 22 } },
-      { type: 'http', name: 'Web UI', enabled: false, intervalSeconds: 300, timeoutSeconds: 10, retries: 1, failureThreshold: 0, config: { expectedStatus: '200-399', certCheck: false } }] },
-    { id: 'router', name: 'Router / gateway', description: 'Ping and DNS through the router; other nodes can depend on it.', icon: 'router', node: { name: 'Router', host: '192.168.1.1', group: 'Home Network', tags: ['critical'], importance: 'critical', enabled: true }, checks: [
-      { type: 'ping', name: 'Ping', enabled: true, intervalSeconds: 30, timeoutSeconds: 3, retries: 2, failureThreshold: 0, config: { pingCount: 4, latencyWarnMs: 50, packetLossWarnPct: 10 } },
-      { type: 'dns', name: 'DNS via router', enabled: true, intervalSeconds: 120, timeoutSeconds: 5, retries: 1, failureThreshold: 0, config: { target: 'example.com', dnsServer: '192.168.1.1' } }] },
-    { id: 'snmp-device', name: 'SNMP device', description: 'A managed switch, router, firewall, access point, printer or UPS that speaks SNMP: its uptime and name, then pick the ports to watch.', icon: 'router', node: { name: 'SNMP device', host: '192.168.1.4', group: 'Network', tags: [], importance: 'normal', enabled: true }, checks: [
-      { type: 'ping', name: 'Reachable (ping)', enabled: true, intervalSeconds: 60, timeoutSeconds: 10, retries: 1, failureThreshold: 2, config: { pingCount: 4 } },
-      { type: 'snmp', name: 'SNMP readings', enabled: true, intervalSeconds: 60, timeoutSeconds: 10, retries: 1, failureThreshold: 2, config: { snmpVersion: '2c', snmpPort: 161, snmpCommunity: 'public', snmpOids: [{ oid: '1.3.6.1.2.1.1.3.0', name: 'Uptime', kind: 'gauge', scale: 0.01, unit: 's' }, { oid: '1.3.6.1.2.1.1.5.0', name: 'Device name', kind: 'gauge', scale: 1 }] } }] },
-    { id: 'api-endpoint', name: 'API endpoint', description: 'HTTP status plus a JSON value assertion.', icon: 'api', node: { name: 'API', host: 'https://api.example.com/health', group: 'Internet', tags: ['api'], importance: 'normal', enabled: true }, checks: [
-      { type: 'http', name: 'HTTP', enabled: true, intervalSeconds: 120, timeoutSeconds: 10, retries: 1, failureThreshold: 0, config: { expectedStatus: '200', certCheck: true } },
-      { type: 'json', name: 'JSON value', enabled: true, intervalSeconds: 300, timeoutSeconds: 10, retries: 1, failureThreshold: 0, config: { jsonPath: 'status', jsonExpected: 'ok' } }] },
-    { id: 'tcp-service', name: 'TCP service', description: 'Just check that a port accepts connections.', icon: 'link', node: { name: 'Service', host: '192.168.1.20', group: '', tags: [], importance: 'normal', enabled: true }, checks: [
-      { type: 'tcp', name: 'Port', enabled: true, intervalSeconds: 60, timeoutSeconds: 5, retries: 1, failureThreshold: 0, config: { port: 443 } }] },
-    { id: 'dns', name: 'DNS server', description: 'Ping a resolver and make sure it answers queries.', icon: 'hash', node: { name: 'DNS server', host: '192.168.1.2', group: 'Home Network', tags: ['dns'], importance: 'high', enabled: true }, checks: [
-      { type: 'ping', name: 'Ping', enabled: true, intervalSeconds: 60, timeoutSeconds: 3, retries: 1, failureThreshold: 0, config: { pingCount: 4 } },
-      { type: 'dns', name: 'Resolves', enabled: true, intervalSeconds: 120, timeoutSeconds: 5, retries: 1, failureThreshold: 0, config: { target: 'example.com', dnsServer: '192.168.1.2' } }] },
-  ];
+  const templates = clone(templatesFixture);
 
   const logLines = (() => {
     const out = [];
@@ -744,12 +721,32 @@
 
   on('GET', /^\/api\/health$/, () => health());
   on('GET', /^\/api\/version$/, () => ({ version: '0.5.0', platform: 'windows/amd64', apiVersion: 1 }));
-  // The mock always plays an administrator on the machine GWatch runs on:
-  // there is nothing to sign in to, so the sign-in screen never appears.
-  on('GET', /^\/api\/me$/, () => ({ kind: 'local', name: 'this computer', role: 'admin', isAdmin: true, canWrite: true, signedIn: false, theme: settings.general.theme, accentColor: settings.general.accentColor, indicators: clone(settings.indicators || []) }));
-  on('GET', /^\/api\/auth\/setup$/, () => ({ usersConfigured: false, loginRequired: false, accessPasswordSet: false, apiVersion: 1 }));
-  on('GET', /^\/api\/users$/, () => []);
-  on('GET', /^\/api\/apikeys$/, () => []);
+  const users = [], keys = [], passwords = new Map();
+  let signedIn = null;
+  const me = () => ({ kind: signedIn ? 'session' : 'local', name: signedIn?.username || 'this computer', role: signedIn?.role || 'admin', isAdmin: !signedIn || signedIn.role === 'admin', canWrite: !signedIn || signedIn.role === 'admin', signedIn: !!signedIn, theme: settings.general.theme, accentColor: settings.general.accentColor, indicators: clone(settings.indicators || []) });
+  on('GET', /^\/api\/me$/, me);
+  on('GET', /^\/api\/auth\/setup$/, () => ({ usersConfigured: users.length > 0, loginRequired: false, accessPasswordSet: false, apiVersion: 1 }));
+  on('GET', /^\/api\/users$/, () => clone(users));
+  on('POST', /^\/api\/users$/, (m, body) => { if (!body.username || body.password?.length < 8) throw err(400, 'User name and password of at least 8 characters required'); const u = { id: Date.now(), username: body.username, role: users.length ? body.role : 'admin', createdAt: iso(Date.now()) }; users.push(u); passwords.set(u.id, body.password); return clone(u); });
+  on('PUT', /^\/api\/users\/(\d+)$/, (m, body) => { const u = users.find((x) => x.id === Number(m[1])); if (!u) throw err(404, 'User not found'); if (body.role) u.role = body.role; if (body.password) passwords.set(u.id, body.password); return clone(u); });
+  on('DELETE', /^\/api\/users\/(\d+)$/, (m) => { const i = users.findIndex((x) => x.id === Number(m[1])); if (i >= 0) users.splice(i, 1); return { ok: true }; });
+  on('POST', /^\/api\/auth\/login$/, (m, body) => { const u = users.find((x) => x.username === body.username); if (!u || passwords.get(u.id) !== body.password) throw err(401, 'Invalid credentials'); signedIn = u; return me(); });
+  on('POST', /^\/api\/auth\/logout$/, () => { signedIn = null; return { ok: true }; });
+  on('POST', /^\/api\/auth\/change-password$/, (m, body) => { if (!signedIn || passwords.get(signedIn.id) !== body.current) throw err(400, 'Invalid password'); passwords.set(signedIn.id, body.new); return { ok: true }; });
+  on('GET', /^\/api\/apikeys$/, () => clone(keys));
+  on('POST', /^\/api\/apikeys$/, (m, body) => { const k = { id: Date.now(), name: body.name, scope: body.scope, prefix: 'gw_demo', createdAt: iso(Date.now()) }; keys.push(k); return { key: 'gw_demo_only_' + k.id, ...clone(k) }; });
+  on('DELETE', /^\/api\/apikeys\/(\d+)$/, (m) => { const k = keys.find((x) => x.id === Number(m[1])); if (k) k.revokedAt = iso(Date.now()); return { ok: true }; });
+  on('POST', /^\/api\/nodes\/(\d+)\/silence$/, (m, body) => { const n = findNode(m[1]); if (!n) throw err(404, 'node not found'); for (const c of n.checks) { if (body.minutes > 0) silences[c.id] = Date.now() + body.minutes * MIN; else delete silences[c.id]; } return { ok: true }; });
+  on('GET', /^\/api\/backups\/([^/]+)\/download$/, () => ({ __csv: 'Demo backup — not a restorable database.' }));
+  on('GET', /^\/api\/update\/releases$/, () => ({ releases: [{ version: '0.5.0', name: 'GWatch 0.5.0', running: true, newer: false, installable: true, url: 'https://github.com/jxburros/GWatch/releases', publishedAt: ago(DAY) }] }));
+  on('POST', /^\/api\/restart$/, () => ({ ok: true }));
+  let reports = [];
+  on('GET', /^\/api\/reports$/, () => clone(reports));
+  on('PUT', /^\/api\/reports$/, (m, body) => { reports = clone(body); return reports; });
+  const incidents = [{ id: 1, nodeId: gateway.id, nodeName: gateway.name, state: 'open', openedAt: ago(23 * MIN), durationSeconds: 23 * 60, checkIds: gateway.checks.map((c) => c.id), notes: [] }];
+  on('GET', /^\/api\/incidents$/, (m, body, u) => clone(incidents.filter((i) => { const state = u.searchParams.get('state') || 'active'; return state === 'all' || (state === 'active' ? i.state !== 'resolved' : i.state === state); })));
+  on('GET', /^\/api\/incidents\/(\d+)$/, (m) => { const i = incidents.find((x) => x.id === Number(m[1])); if (!i) throw err(404, 'Incident not found'); return { incident: clone(i), events: clone(events.filter((e) => e.nodeId === i.nodeId)) }; });
+  on('POST', /^\/api\/incidents\/(\d+)\/(acknowledge|resolve|note)$/, (m, body) => { const i = incidents.find((x) => x.id === Number(m[1])); if (!i) throw err(404, 'Incident not found'); if (m[2] === 'acknowledge') { i.state = 'acknowledged'; i.acknowledgedAt = iso(Date.now()); i.acknowledgedBy = 'local'; i.timeToAcknowledgeSeconds = 23 * 60; } if (m[2] === 'resolve') { i.state = 'resolved'; i.resolvedAt = iso(Date.now()); i.timeToResolveSeconds = 23 * 60; } if (body.note) i.notes.push({ at: iso(Date.now()), actor: 'local', text: body.note }); return clone(i); });
   // Settings › AI & MCP. The fixture has a download of an older skill behind
   // it, so the "updated since" note is exercised. The download itself is a
   // real file the service hands out; the mock only answers the status.
@@ -833,7 +830,7 @@
     for (const id of nodeIds) {
       const n = findNode(id); if (!n) throw err(400, `node ${id} no longer exists`);
       if (!pickedNodes.includes(n)) pickedNodes.push(n);
-      for (const c of n.checks) take(c);
+      if (!Object.hasOwn(body, 'checkIds')) for (const c of n.checks) take(c);
     }
     if (hasNode && !pickedNodes.length) throw err(400, 'the node settings have no nodes to apply to: select some nodes as well as checks');
     if (hasCheck && !picked.length) throw err(400, wanted.size ? 'nothing to change: the selection holds no checks of the chosen type(s)' : 'nothing to change: the selected nodes have no checks');
@@ -1416,7 +1413,7 @@
     ].join(';');
     document.body.prepend(bar);
     // Push the app down by the banner's own height so it is never covered.
-    const push = () => { document.body.style.paddingTop = bar.offsetHeight + 'px'; };
+    const push = () => { document.body.style.paddingTop = bar.offsetHeight + 'px'; document.documentElement.style.setProperty('--mock-banner-height', bar.offsetHeight + 'px'); };
     push();
     window.addEventListener('resize', push);
   }

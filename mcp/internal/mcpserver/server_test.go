@@ -88,17 +88,25 @@ func call(t *testing.T, cs *mcp.ClientSession, name string, args map[string]any)
 }
 
 // jsonPart returns the compact JSON that follows the one-line summary.
+func resultEnvelope(text string) (map[string]any, error) {
+	_, rest, _ := strings.Cut(text, "<gwatch-monitoring-data>\n")
+	body, _, _ := strings.Cut(rest, "\n</gwatch-monitoring-data>")
+	var doc map[string]any
+	err := json.Unmarshal([]byte(body), &doc)
+	return doc, err
+}
+
 func jsonPart(t *testing.T, text string) map[string]any {
 	t.Helper()
-	_, rest, found := strings.Cut(text, "\n")
-	if !found {
-		t.Fatalf("result has no JSON line:\n%s", text)
+	doc, err := resultEnvelope(text)
+	if err != nil {
+		t.Fatalf("untrusted result envelope: %v\n%s", err, text)
 	}
-	var doc map[string]any
-	if err := json.Unmarshal([]byte(rest), &doc); err != nil {
-		t.Fatalf("result JSON is not an object: %v\n%s", err, rest)
+	data, ok := doc["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("result data is not an object: %v", doc)
 	}
-	return doc
+	return data
 }
 
 func has(names []string, want string) bool {
@@ -171,7 +179,7 @@ func TestReadTools(t *testing.T) {
 		if isErr {
 			t.Fatalf("overview failed: %s", text)
 		}
-		if !strings.HasPrefix(text, "1 of 2 checks up; 1 down.") {
+		if !strings.HasPrefix(firstLine(text), "1 of 2 checks up; 1 down.") {
 			t.Errorf("summary line does not lead with the tally: %q", firstLine(text))
 		}
 		doc := jsonPart(t, text)
@@ -389,7 +397,7 @@ func TestWriteToolsWithReadWriteKey(t *testing.T) {
 	if isErr {
 		t.Fatalf("create_node failed: %s", text)
 	}
-	if !strings.HasPrefix(text, "Created node 3 \"NAS\"") {
+	if !strings.HasPrefix(firstLine(text), "Created node 3 \"NAS\"") {
 		t.Errorf("unexpected summary: %q", firstLine(text))
 	}
 	created := jsonPart(t, text)
@@ -510,8 +518,10 @@ func asAPIError(err error, target **gwatch.Error) bool {
 }
 
 func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
+	doc, err := resultEnvelope(s)
+	if err != nil {
+		return s
 	}
-	return s
+	summary, _ := doc["summary"].(string)
+	return summary
 }

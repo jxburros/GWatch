@@ -432,7 +432,11 @@ func (c *Client) Download(ctx context.Context, info model.UpdateInfo, dir string
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	tmp, err := os.CreateTemp(dir, "gwatch-update-*")
+	pattern := "gwatch-update-*"
+	if runtime.GOOS == "windows" {
+		pattern += ".exe"
+	}
+	tmp, err := os.CreateTemp(dir, pattern)
 	if err != nil {
 		return "", err
 	}

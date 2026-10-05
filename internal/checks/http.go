@@ -188,7 +188,6 @@ func runHTTPCheck(ctx context.Context, check model.Check, target string, opts Op
 
 	res := model.Result{}
 	resp, err := client.Do(req)
-	total := time.Since(timing.start)
 	timing.fill(&res.Details)
 	if err != nil {
 		msg := describeNetError(err, timeout)
@@ -208,7 +207,7 @@ func runHTTPCheck(ctx context.Context, check model.Check, target string, opts Op
 	defer resp.Body.Close()
 
 	bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
-	total = time.Since(timing.start)
+	total := time.Since(timing.start)
 	res.LatencyMS = msPtr(total)
 	res.Details.TotalMs = msPtr(total)
 	res.Details.StatusCode = resp.StatusCode

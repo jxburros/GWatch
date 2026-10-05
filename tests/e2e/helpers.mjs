@@ -1,3 +1,4 @@
+import { expect } from '@playwright/test';
 // Shared scaffolding for the browser tests: opening a page of the interface
 // in mock mode with a given theme, and waiting for the view to have drawn.
 
@@ -9,7 +10,7 @@ export const FIRST_NODE = 21;
  *  section, since each is its own page. */
 export const ROUTES = [
   'dashboard', 'nodes', 'nodes/new', 'nodes/bulk', `nodes/${FIRST_NODE}`, `nodes/${FIRST_NODE}/edit`,
-  'charts', 'map', 'incidents', 'audit', 'audit/log', 'audit/exports',
+  'charts', 'map', 'incidents', 'incidents?tab=events', 'incidents?tab=reports', 'audit', 'audit/log', 'audit/exports',
   'settings/general', 'settings/appearance', 'settings/indicators', 'settings/users', 'settings/network', 'settings/alerts',
   'settings/automation', 'settings/rules', 'settings/hardware', 'settings/mcp', 'settings/retention', 'settings/maintenance', 'settings/backups', 'settings/database',
   'settings/updates', 'settings/health', 'settings/about',
@@ -42,6 +43,7 @@ export async function openApp(page, route, { theme = 'dark' } = {}) {
   }, null, { timeout: 15000 });
   // Live widgets and charts fill in after the first paint; give them a beat.
   await page.waitForTimeout(400);
+  await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
 }
 
 /** The projected wallboard page (web/wall.html), served at /wall as the Go
@@ -50,6 +52,7 @@ export async function openWall(page, { theme = 'dark' } = {}) {
   await page.goto(`/wall?mock=1&id=1${theme === 'light' ? '&mode=light' : ''}`);
   await page.waitForSelector('.wall-root .wall-panel', { timeout: 15000 });
   await page.waitForTimeout(400);
+  await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
 }
 
 /** Open a confirm dialog from the running page's own components module. */

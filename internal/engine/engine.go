@@ -69,14 +69,17 @@ type Engine struct {
 	log   *logging.Logger
 	opts  Options
 
-	mu       sync.Mutex
-	settings model.Settings
-	nodes    map[int64]model.Node
-	checks   map[int64]model.Check
-	states   map[int64]*model.CheckState
-	running  map[int64]bool
-	windows  []model.MaintenanceWindow
-	activeMW map[int64]bool
+	mu           sync.Mutex
+	settings     model.Settings
+	nodes        map[int64]model.Node
+	checks       map[int64]model.Check
+	states       map[int64]*model.CheckState
+	mailDone     map[int64]chan struct{}
+	inflight     map[int64]*checkFlight
+	recordResult func(context.Context, model.Result, model.CheckState) (model.Result, error)
+	running      map[int64]bool
+	windows      []model.MaintenanceWindow
+	activeMW     map[int64]bool
 
 	triggers    map[int64][]model.Trigger // by node id
 	triggerLast map[int64]time.Time       // last run per trigger (cooldowns)
@@ -125,15 +128,18 @@ func New(st *store.Store, log *logging.Logger, opts Options) *Engine {
 		opts.ServiceMode = "console"
 	}
 	e := &Engine{
-		store:    st,
-		log:      log,
-		opts:     opts,
-		nodes:    map[int64]model.Node{},
-		checks:   map[int64]model.Check{},
-		states:   map[int64]*model.CheckState{},
-		running:  map[int64]bool{},
-		activeMW: map[int64]bool{},
-		subs:     map[chan Update]struct{}{},
+		store:        st,
+		log:          log,
+		opts:         opts,
+		nodes:        map[int64]model.Node{},
+		checks:       map[int64]model.Check{},
+		states:       map[int64]*model.CheckState{},
+		running:      map[int64]bool{},
+		mailDone:     map[int64]chan struct{}{},
+		inflight:     map[int64]*checkFlight{},
+		recordResult: st.RecordResult,
+		activeMW:     map[int64]bool{},
+		subs:         map[chan Update]struct{}{},
 
 		triggers:    map[int64][]model.Trigger{},
 		triggerLast: map[int64]time.Time{},
@@ -177,11 +183,12 @@ func (e *Engine) Start(parent context.Context) error {
 	e.mu.Lock()
 	e.log.Printf("engine started: %d node(s), %d check(s), max %d concurrent", len(e.nodes), len(e.checks), cap(e.sem))
 	e.mu.Unlock()
-	e.wg.Add(5)
+	e.wg.Add(6)
 	go e.schedulerLoop()
 	go e.maintenanceLoop()
 	go e.retentionLoop()
 	go e.backupLoop()
+	go e.reportLoop()
 	go e.hostSampleLoop()
 	return nil
 }
@@ -374,7 +381,23 @@ func (e *Engine) tick(now time.Time) {
 			due = append(due, c)
 		}
 	}
-	sort.Slice(due, func(i, j int) bool { return due[i].ID < due[j].ID })
+	sort.Slice(due, func(i, j int) bool {
+		a, b := e.states[due[i].ID].NextRunAt, e.states[due[j].ID].NextRunAt
+		if a.Equal(*b) {
+			return due[i].ID < due[j].ID
+		}
+		return a.Before(*b)
+	})
+	expiredSilences := false
+	for _, st := range e.states {
+		if st.SilencedUntil != nil && !st.SilencedUntil.After(now) {
+			st.SilencedUntil = nil
+			expiredSilences = true
+			if err := e.store.SaveState(e.ctx, *st); err != nil {
+				e.log.Errorf("persist expired silence: %v", err)
+			}
+		}
+	}
 	sem := e.sem
 	for _, c := range due {
 		select {
@@ -392,17 +415,38 @@ func (e *Engine) tick(now time.Time) {
 		}
 	}
 	e.mu.Unlock()
+	if expiredSilences {
+		e.evaluateRules(e.ctx, nil)
+		e.broadcast(Update{Kind: "state"})
+	}
+}
+
+type checkFlight struct {
+	done   chan struct{}
+	result model.Result
+	err    error
 }
 
 // runAndProcess executes a check by id and feeds the result through the
 // processor. depth limits recursive dependency probing.
 func (e *Engine) runAndProcess(ctx context.Context, checkID int64, depth int) (model.Result, error) {
 	e.mu.Lock()
+	if active := e.inflight[checkID]; active != nil {
+		e.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return model.Result{}, ctx.Err()
+		case <-active.done:
+			return active.result, active.err
+		}
+	}
 	c, ok := e.checks[checkID]
 	if !ok {
 		e.mu.Unlock()
 		return model.Result{}, fmt.Errorf("check %d not found", checkID)
 	}
+	flight := &checkFlight{done: make(chan struct{})}
+	e.inflight[checkID] = flight
 	n := e.nodes[c.NodeID]
 	st := e.states[checkID]
 	opts := checks.Options{
@@ -432,6 +476,9 @@ func (e *Engine) runAndProcess(ctx context.Context, checkID int64, depth int) (m
 	e.recordScrapedHost(ctx, result)
 	stored, err := e.process(ctx, c, n, result, depth)
 	e.mu.Lock()
+	flight.result, flight.err = stored, err
+	delete(e.inflight, checkID)
+	close(flight.done)
 	delete(e.running, checkID)
 	if st := e.states[checkID]; st != nil {
 		st.Running = false
@@ -484,6 +531,7 @@ func (e *Engine) TestCheck(ctx context.Context, c model.Check, nodeHost string) 
 	e.mu.Lock()
 	opts := checks.Options{
 		NodeHost:          nodeHost,
+		Hosts:             e.hosts,
 		DefaultCertWarn:   e.settings.Alerts.CertWarnDays,
 		LatencyWarnMS:     e.settings.General.LatencyWarnMS,
 		PacketLossWarnPct: e.settings.General.PacketLossWarnPct,

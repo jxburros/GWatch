@@ -1,7 +1,7 @@
 // Package e2e holds a manual end-to-end check against a real GWatch.
 //
 // It is skipped unless both GWATCH_E2E_URL and GWATCH_E2E_KEY are set, so it
-// never runs in CI and never needs a live service to be green. Use it when
+// runs in CI against a disposable real-server fixture. Use it manually when
 // setting an install up, or after changing the client:
 //
 //	GWATCH_E2E_URL=http://127.0.0.1:7230 GWATCH_E2E_KEY=gw_… go test ./internal/e2e -v
@@ -14,6 +14,7 @@ package e2e_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -84,10 +85,41 @@ func TestAgainstRealGWatch(t *testing.T) {
 			t.Errorf("%s returned a tool error: %s", name, text)
 			continue
 		}
-		summary, rest, _ := strings.Cut(text, "\n")
-		t.Logf("%s: %s", name, summary)
-		if rest != "" && !json.Valid([]byte(rest)) {
-			t.Errorf("%s: the data line is not valid JSON", name)
+		_, rest, found := strings.Cut(text, "<gwatch-monitoring-data>\n")
+		body, _, closed := strings.Cut(rest, "\n</gwatch-monitoring-data>")
+		if !found || !closed || !json.Valid([]byte(body)) {
+			t.Errorf("%s: missing valid untrusted-data envelope", name)
 		}
+
+	}
+}
+
+func TestRealServerAPIKeyBoundaries(t *testing.T) {
+	base, readKey, writeKey := os.Getenv("GWATCH_E2E_URL"), os.Getenv("GWATCH_E2E_READ_KEY"), os.Getenv("GWATCH_E2E_WRITE_KEY")
+	if base == "" || readKey == "" || writeKey == "" {
+		t.Skip("requires disposable real-server keys")
+	}
+	ctx := context.Background()
+	read := gwatch.New(base, readKey, "gwatch-mcp/e2e", 10*time.Second)
+	write := gwatch.New(base, writeKey, "gwatch-mcp/e2e", 10*time.Second)
+	check := map[string]any{"type": "custom", "name": "Forbidden", "config": map[string]any{"command": "echo rejected"}}
+	for _, tc := range []struct {
+		name   string
+		client *gwatch.Client
+		path   string
+		body   any
+	}{
+		{"read key cannot write", read, "/nodes", map[string]any{"name": "Rejected", "host": "localhost", "checks": []any{check}}},
+		{"write key cannot create custom", write, "/nodes", map[string]any{"name": "Rejected", "host": "localhost", "checks": []any{check}}},
+		{"write key cannot test custom", write, "/checks/test", map[string]any{"nodeHost": "localhost", "check": check}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out any
+			err := tc.client.Post(ctx, tc.path, tc.body, &out)
+			var apiErr *gwatch.Error
+			if !errors.As(err, &apiErr) || apiErr.Status != 403 {
+				t.Fatalf("want HTTP 403, got %v", err)
+			}
+		})
 	}
 }

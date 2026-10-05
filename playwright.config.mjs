@@ -8,11 +8,14 @@
 
 import { defineConfig, devices } from '@playwright/test';
 
+const real = process.env.GWATCH_REAL === '1';
 const port = Number(process.env.PORT) || 4173;
 
 export default defineConfig({
   testDir: 'tests/e2e',
-  testMatch: /.*\.spec\.mjs$/,
+  testMatch: real ? /real-server\.spec\.mjs$/ : /.*\.spec\.mjs$/,
+  testIgnore: real ? [] : ['**/real-server.spec.mjs'],
+  timeout: 60000,
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
@@ -24,7 +27,8 @@ export default defineConfig({
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
-    command: 'node tests/e2e/serve.mjs',
+    command: real ? 'node tests/e2e/real-server.mjs' : 'node tests/e2e/serve.mjs',
+    timeout: 180000,
     port,
     reuseExistingServer: !process.env.CI,
     env: { PORT: String(port) },

@@ -613,6 +613,7 @@ type CheckState struct {
 	AlertSuppressed     bool       `json:"alertSuppressed"`
 	SuppressReason      string     `json:"suppressReason,omitempty"` // maintenance | dependency | silenced | cooldown | disabled
 	LastAlertAt         *time.Time `json:"lastAlertAt"`
+	LastWarnAt          *time.Time `json:"lastWarnAt"`
 	SilencedUntil       *time.Time `json:"silencedUntil"`
 	AffectedByCheckID   *int64     `json:"affectedByCheckId"` // set when a parent dependency explains this failure
 	AffectedByNodeName  string     `json:"affectedByNodeName,omitempty"`
@@ -868,6 +869,9 @@ func ValidPingMethod(s string) bool {
 
 // GeneralSettings are miscellaneous application settings.
 type GeneralSettings struct {
+	ListenPort int `json:"listenPort,omitempty"` // zero uses the CLI/environment default
+
+	BehindHTTPSProxy     bool    `json:"behindHTTPSProxy"`
 	InstanceName         string  `json:"instanceName"`
 	DefaultIntervalSecs  int     `json:"defaultIntervalSeconds"` // default 60
 	DefaultTimeoutSecs   int     `json:"defaultTimeoutSeconds"`  // default 10
@@ -1248,35 +1252,37 @@ type RetentionStatus struct {
 
 // Health is the self-observability document.
 type Health struct {
-	Version          string          `json:"version"`
-	ServiceMode      string          `json:"serviceMode"` // "service" | "console"
-	ServiceRunning   bool            `json:"serviceRunning"`
-	StartedAt        time.Time       `json:"startedAt"`
-	UptimeSeconds    int64           `json:"uptimeSeconds"`
-	Now              time.Time       `json:"now"`
-	SchedulerRunning bool            `json:"schedulerRunning"`
-	LastCheckAt      *time.Time      `json:"lastCheckAt"`
-	LastSuccessAt    *time.Time      `json:"lastSuccessAt"`
-	NextCheckAt      *time.Time      `json:"nextCheckAt"`
-	ChecksTotal      int             `json:"checksTotal"`
-	ChecksEnabled    int             `json:"checksEnabled"`
-	ChecksRunning    int             `json:"checksRunning"`
-	LastGap          *GapInfo        `json:"lastGap"`
-	DatabasePath     string          `json:"databasePath"`
-	DatabaseBytes    int64           `json:"databaseBytes"`
-	DatabaseDriver   string          `json:"databaseDriver"` // which SQLite driver this build was compiled with
-	DataDir          string          `json:"dataDir"`
-	KeyPath          string          `json:"keyPath"`
-	BackupDir        string          `json:"backupDir"`
-	Retention        RetentionStatus `json:"retention"`
-	Backup           BackupStatus    `json:"backup"`
-	RecentErrors     []Event         `json:"recentErrors"`
-	AlertsEnabled    bool            `json:"alertsEnabled"`
-	SMTPConfigured   bool            `json:"smtpConfigured"`
-	LastAlertAt      *time.Time      `json:"lastAlertAt"`
-	LastAlertError   string          `json:"lastAlertError,omitempty"`
-	ListenAddress    string          `json:"listenAddress"`
-	Platform         string          `json:"platform"`
+	OverdueChecks        int             `json:"overdueChecks"`
+	OldestOverdueSeconds int64           `json:"oldestOverdueSeconds"`
+	Version              string          `json:"version"`
+	ServiceMode          string          `json:"serviceMode"` // "service" | "console"
+	ServiceRunning       bool            `json:"serviceRunning"`
+	StartedAt            time.Time       `json:"startedAt"`
+	UptimeSeconds        int64           `json:"uptimeSeconds"`
+	Now                  time.Time       `json:"now"`
+	SchedulerRunning     bool            `json:"schedulerRunning"`
+	LastCheckAt          *time.Time      `json:"lastCheckAt"`
+	LastSuccessAt        *time.Time      `json:"lastSuccessAt"`
+	NextCheckAt          *time.Time      `json:"nextCheckAt"`
+	ChecksTotal          int             `json:"checksTotal"`
+	ChecksEnabled        int             `json:"checksEnabled"`
+	ChecksRunning        int             `json:"checksRunning"`
+	LastGap              *GapInfo        `json:"lastGap"`
+	DatabasePath         string          `json:"databasePath"`
+	DatabaseBytes        int64           `json:"databaseBytes"`
+	DatabaseDriver       string          `json:"databaseDriver"` // which SQLite driver this build was compiled with
+	DataDir              string          `json:"dataDir"`
+	KeyPath              string          `json:"keyPath"`
+	BackupDir            string          `json:"backupDir"`
+	Retention            RetentionStatus `json:"retention"`
+	Backup               BackupStatus    `json:"backup"`
+	RecentErrors         []Event         `json:"recentErrors"`
+	AlertsEnabled        bool            `json:"alertsEnabled"`
+	SMTPConfigured       bool            `json:"smtpConfigured"`
+	LastAlertAt          *time.Time      `json:"lastAlertAt"`
+	LastAlertError       string          `json:"lastAlertError,omitempty"`
+	ListenAddress        string          `json:"listenAddress"`
+	Platform             string          `json:"platform"`
 }
 
 // GapInfo records a detected period where the scheduler did not run
@@ -1614,6 +1620,8 @@ type UpdateStatus struct {
 
 // NetworkInfo tells the UI how the interface is reachable.
 type NetworkInfo struct {
+	FirewallCommand string `json:"firewallCommand,omitempty"`
+
 	ListenAddress string   `json:"listenAddress"` // effective bind address
 	RemoteAccess  bool     `json:"remoteAccess"`  // reachable from other devices
 	PasswordSet   bool     `json:"passwordSet"`   // basic auth is required from other devices

@@ -114,6 +114,11 @@ func (s *Server) handleListTriggers(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	if !auth.FromContext(r.Context()).IsAdmin() {
+		for i := range list {
+			_ = list[i].Action.TransformSecrets(maskSecret)
+		}
+	}
 	writeJSON(w, http.StatusOK, list)
 }
 
@@ -264,6 +269,7 @@ func endpointDocs(list []model.Endpoint, redact bool) []endpointDoc {
 		d := endpointDoc{Endpoint: e, HasToken: e.Token != ""}
 		if redact {
 			d.Token = ""
+			_ = d.Action.TransformSecrets(maskSecret)
 		}
 		out = append(out, d)
 	}
@@ -585,10 +591,11 @@ func LANAddresses() []string {
 
 // Updater performs release checks and applies updates.
 type Updater struct {
-	Client  *update.Client
-	Version string
-	Restart func() // asked to restart the process after a successful swap
-	Log     interface{ Printf(string, ...any) }
+	PackagedBy string
+	Client     *update.Client
+	Version    string
+	Restart    func() // asked to restart the process after a successful swap
+	Log        interface{ Printf(string, ...any) }
 
 	// Prefs and Repo report the current update settings and the repository to
 	// check. They are functions rather than values because settings change
@@ -685,6 +692,9 @@ func (u *Updater) Check(ctx context.Context, repo string) (model.UpdateInfo, err
 // anything — deliberately, since a GWatch that had been got into must not
 // become a way onto every machine that reports to it.
 func (u *Updater) AgentLatest(ctx context.Context) model.AgentRelease {
+	if u.Prefs != nil && !u.Prefs().CheckAutomatically {
+		return model.AgentRelease{}
+	}
 	u.agentMu.Lock()
 	if !u.agentFetched.IsZero() {
 		ttl := agentCacheFor
@@ -866,6 +876,9 @@ func (u *Updater) target(ctx context.Context, repo, version string) (model.Updat
 // lists for that release, and it is verified against the pinned signing keys
 // like any other.
 func (u *Updater) Apply(ctx context.Context, repo, version string) (model.UpdateInfo, error) {
+	if u.PackagedBy != "" {
+		return model.UpdateInfo{}, fmt.Errorf("installed by %s; update through that package manager instead of replacing its executable", u.PackagedBy)
+	}
 	u.mu.Lock()
 	if u.status.Applying {
 		u.mu.Unlock()
@@ -898,7 +911,7 @@ func (u *Updater) Apply(ctx context.Context, repo, version string) (model.Update
 		return info, err
 	}
 	if !update.DirWritable(exe) {
-		err := fmt.Errorf("the executable directory is not writable (%s); run the update as an administrator or update by re-running the installer", exe)
+		err := fmt.Errorf("the executable directory is not writable (%s); update with administrator/root permissions or through your package manager", exe)
 		done(err)
 		return info, err
 	}
@@ -1072,4 +1085,13 @@ func parseTimeParam(v string) (time.Time, error) {
 		}
 	}
 	return time.Time{}, fmt.Errorf("bad time %q", v)
+}
+
+func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
+	if s.Restart == nil {
+		writeError(w, http.StatusServiceUnavailable, "restart is unavailable")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]bool{"restarting": true})
+	go func() { time.Sleep(time.Second); s.Restart() }()
 }

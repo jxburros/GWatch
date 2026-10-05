@@ -34,6 +34,15 @@ type downDecision struct {
 func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r model.Result, depth int) (model.Result, error) {
 	now := r.Timestamp
 	e.mu.Lock()
+	if pending := e.mailDone[c.ID]; pending != nil {
+		e.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return r, ctx.Err()
+		case <-pending:
+		}
+		e.mu.Lock()
+	}
 	st, ok := e.states[c.ID]
 	if !ok {
 		e.mu.Unlock()
@@ -46,6 +55,14 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 	if nn, ok := e.nodes[c.NodeID]; ok {
 		n = nn
 	}
+	if !c.Enabled || !n.Enabled {
+		e.mu.Unlock()
+		return r, nil
+	}
+	// Stage transitions separately; a failed transaction must remain retryable.
+	live := st
+	staged := *st
+	st = &staged
 	settings := e.settings
 	var events []model.Event
 	var mails []mailTask
@@ -122,13 +139,7 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 		// Certificate warnings (tracked separately so the timeline shows begin/clear).
 		certWarn := false
 		if r.Details.Cert != nil {
-			warnDays := c.Config.CertWarnDays
-			if warnDays <= 0 {
-				warnDays = settings.Alerts.CertWarnDays
-			}
-			if warnDays <= 0 {
-				warnDays = 14
-			}
+			warnDays := effectiveCertWarnDays(c, settings)
 			certWarn = r.Details.Cert.DaysRemaining <= warnDays || !r.Details.Cert.Valid
 		}
 		if certWarn && !st.CertWarningActive {
@@ -258,6 +269,11 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 			e.mu.Unlock()
 			e.probeParent(ctx, n, depth)
 			e.mu.Lock()
+			if current := e.states[c.ID]; current != live || !e.checks[c.ID].Enabled || !e.nodes[c.NodeID].Enabled {
+				e.mu.Unlock()
+				return r, nil
+			}
+			st.SilencedUntil = live.SilencedUntil
 			d = e.evaluateDownLocked(c, n, st, settings, now, false)
 		}
 		if d.send {
@@ -288,9 +304,11 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 	}
 
 	snapshot := *st
+	stored, err := e.recordResult(ctx, r, snapshot)
+	if err == nil {
+		*live = snapshot
+	}
 	e.mu.Unlock()
-
-	stored, err := e.store.RecordResult(ctx, r, snapshot)
 	if err != nil {
 		e.log.Errorf("record result for check %d: %v", c.ID, err)
 		return r, err
@@ -390,6 +408,9 @@ func suppressDetail(d downDecision, st *model.CheckState, s model.Settings) stri
 
 // evaluateDownLocked decides whether a down notification should be sent.
 func (e *Engine) evaluateDownLocked(c model.Check, n model.Node, st *model.CheckState, s model.Settings, now time.Time, allowProbe bool) downDecision {
+	if acknowledged, err := e.store.NodeIncidentAcknowledged(context.Background(), n.ID); err == nil && acknowledged {
+		return downDecision{reason: "acknowledged"}
+	}
 	if !s.Alerts.Enabled || (c.Alerts != nil && c.Alerts.Enabled != nil && !*c.Alerts.Enabled) {
 		return downDecision{reason: "disabled"}
 	}
@@ -437,10 +458,10 @@ func (e *Engine) canWarn(c model.Check, n model.Node, st *model.CheckState, s mo
 	if c.Alerts != nil && c.Alerts.CooldownMinutes != nil {
 		cooldown = *c.Alerts.CooldownMinutes
 	}
-	if cooldown > 0 && st.LastAlertAt != nil && now.Sub(*st.LastAlertAt) < time.Duration(cooldown)*time.Minute {
+	if cooldown > 0 && st.LastWarnAt != nil && now.Sub(*st.LastWarnAt) < time.Duration(cooldown)*time.Minute {
 		return false
 	}
-	st.LastAlertAt = ptrTime(now)
+	st.LastWarnAt = ptrTime(now)
 	return true
 }
 
@@ -466,7 +487,7 @@ func (e *Engine) parentDownLocked(n model.Node) (*model.Check, *model.Node) {
 		}
 		visited[p.ID] = true
 		for _, pc := range p.Checks {
-			if !pc.Enabled {
+			if !p.Enabled || !pc.Enabled || (pc.Type != model.CheckPing && pc.Type != model.CheckTCP) {
 				continue
 			}
 			// A parent that is down, or that is currently failing (its own
@@ -486,12 +507,14 @@ func (e *Engine) parentDownLocked(n model.Node) (*model.Check, *model.Node) {
 // probeParent runs the parent's checks right now so a dependency outage is
 // known before the child alert is decided.
 func (e *Engine) probeParent(ctx context.Context, n model.Node, depth int) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
 	e.mu.Lock()
 	var ids []int64
 	if n.DependsOnNode != nil {
 		if p, ok := e.nodes[*n.DependsOnNode]; ok && p.Enabled {
 			for _, pc := range p.Checks {
-				if pc.Enabled && !e.running[pc.ID] {
+				if pc.Enabled && (pc.Type == model.CheckPing || pc.Type == model.CheckTCP) {
 					ids = append(ids, pc.ID)
 				}
 			}
@@ -591,15 +614,21 @@ func (e *Engine) sendMail(m mailTask) {
 	s := e.settings
 	e.mu.Unlock()
 	if len(m.to) == 0 {
+		e.failedMail(m)
 		e.recordEvent(model.Event{Type: model.EventAlertFailed, NodeID: ptrInt64(m.node.ID), CheckID: ptrInt64(m.check.ID), NodeName: m.node.Name, CheckName: m.check.Name,
 			Title: "Alert not sent: no recipients configured", Detail: "Add recipient addresses under Settings › Alerts."})
 		return
 	}
 	msg := mailer.BuildAlertEmail(m.kind, s.General.InstanceName, m.node.Name, m.check.Name, m.status, m.message, m.details, time.Now())
 	msg.To = m.to
+	e.mu.Lock()
+	done := make(chan struct{})
+	e.mailDone[m.check.ID] = done
+	e.mu.Unlock()
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
+		defer func() { e.mu.Lock(); delete(e.mailDone, m.check.ID); close(done); e.mu.Unlock() }()
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		err := e.opts.Send(ctx, s.Alerts.SMTP, msg)
@@ -616,6 +645,7 @@ func (e *Engine) sendMail(m mailTask) {
 			label = "Alert"
 		}
 		if err != nil {
+			e.failedMail(m)
 			e.log.Errorf("send %s email for %s/%s: %v", m.kind, m.node.Name, m.check.Name, err)
 			e.recordEvent(model.Event{Type: model.EventAlertFailed, NodeID: ptrInt64(m.node.ID), CheckID: ptrInt64(m.check.ID), NodeName: m.node.Name, CheckName: m.check.Name,
 				Title: label + " email failed", Detail: err.Error()})
@@ -662,6 +692,9 @@ func (e *Engine) Silence(ctx context.Context, checkID int64, d time.Duration) (m
 		e.mu.Unlock()
 		return model.CheckState{}, fmt.Errorf("check %d not found", checkID)
 	}
+	live := st
+	staged := *st
+	st = &staged
 	c := e.checks[checkID]
 	n := e.nodes[c.NodeID]
 	var evt model.Event
@@ -674,15 +707,46 @@ func (e *Engine) Silence(ctx context.Context, checkID int64, d time.Duration) (m
 		evt = model.Event{Type: model.EventSilenced, Title: "Silenced for " + humanDuration(d), Detail: "No email alerts until " + until.Format("2006-01-02 15:04") + ". Results are still recorded."}
 	}
 	snapshot := *st
+	if err := e.store.SaveState(ctx, snapshot); err != nil {
+		original := *live
+		e.mu.Unlock()
+		return original, err
+	}
+	*live = snapshot
 	e.mu.Unlock()
 	evt.NodeID, evt.CheckID, evt.NodeName, evt.CheckName = ptrInt64(n.ID), ptrInt64(c.ID), n.Name, c.Name
-	if err := e.store.SaveState(ctx, snapshot); err != nil {
-		return snapshot, err
-	}
 	e.recordEvent(evt)
 	e.broadcast(Update{Kind: "state", CheckID: c.ID, NodeID: n.ID})
 	// A silenced check stops counting towards the notification rules that
 	// look at it, and counts again once the silence is lifted.
 	e.evaluateRules(ctx, ptrInt64(c.ID))
 	return snapshot, nil
+}
+
+func effectiveCertWarnDays(c model.Check, s model.Settings) int {
+	if c.Config.CertWarnDays > 0 {
+		return c.Config.CertWarnDays
+	}
+	if s.Alerts.CertWarnDays > 0 {
+		return s.Alerts.CertWarnDays
+	}
+	return 14
+}
+
+// A failed down delivery must not consume the outage or its cooldown. Results
+// wait for the preceding delivery before applying recovery, so this state cannot
+// be mistaken for an alert the recipient actually received.
+func (e *Engine) failedMail(m mailTask) {
+	if m.kind != "down" {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if st := e.states[m.check.ID]; st != nil && st.Status == model.StatusDown {
+		st.AlertActive = false
+		st.LastAlertAt = nil
+		if err := e.store.SaveState(context.Background(), *st); err != nil {
+			e.log.Errorf("save failed alert state: %v", err)
+		}
+	}
 }

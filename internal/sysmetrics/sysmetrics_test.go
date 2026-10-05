@@ -3,6 +3,7 @@ package sysmetrics
 import (
 	"context"
 	"math"
+	"runtime"
 	"testing"
 	"time"
 
@@ -152,6 +153,9 @@ func TestCollectorPrimesRatesOnFirstCall(t *testing.T) {
 	c := NewCollector("")
 	m, err := c.Collect(context.Background())
 	if err != nil {
+		if runtime.GOOS == "windows" || runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+			t.Fatalf("hardware collection failed: %v", err)
+		}
 		t.Skipf("no hardware readings on this platform: %v", err)
 	}
 	if m.Key != model.HostKeyLocal {

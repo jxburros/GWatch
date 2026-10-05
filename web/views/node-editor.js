@@ -1,7 +1,7 @@
 // Node editor: create / edit a node and its checks, with inline check testing.
 
 import { api } from '../api.js';
-import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, promptDialog, openModal, emptyState, skeleton, CHECK_TYPES, checkTypeLabel, uid, busy } from '../components.js';
+import { scrollBehavior, h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, promptDialog, openModal, emptyState, skeleton, CHECK_TYPES, checkTypeLabel, uid, busy } from '../components.js';
 import { nodeGroups, duration } from '../fmt.js';
 import { resultInspector } from './inspector.js';
 // The interval choices, the three states of an alert override, the importance
@@ -374,7 +374,7 @@ export async function mount(root, ctx) {
   function addCheck() {
     const picker = h('div', { class: 'type-picker', role: 'list' });
     const m = openModal({ title: 'Add a check', wide: true, body: [h('p', null, 'What do you want to know about this node?'), picker] });
-    for (const t of CHECK_TYPES) picker.append(h('button', { type: 'button', role: 'listitem', onclick: () => { d.checks.push(defaultCheck(t.value, state.settings)); m.close(); renderChecks(); setTimeout(() => { const cards = checksList.querySelectorAll('.editor-check'); const last = cards[cards.length - 1]; last?.scrollIntoView({ behavior: 'smooth', block: 'start' }); last?.querySelector('input')?.focus(); }, 30); } }, h('b', null, t.label), h('span', null, t.desc)));
+    for (const t of CHECK_TYPES) picker.append(h('button', { type: 'button', role: 'listitem', onclick: () => { d.checks.push(defaultCheck(t.value, state.settings)); m.close(); renderChecks(); setTimeout(() => { const cards = checksList.querySelectorAll('.editor-check'); const last = cards[cards.length - 1]; last?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' }); last?.querySelector('input')?.focus(); }, 30); } }, h('b', null, t.label), h('span', null, t.desc)));
   }
 
   function checkCard(c, index) {
@@ -388,7 +388,7 @@ export async function mount(root, ctx) {
       toggle({ label: 'Enabled', checked: c.enabled !== false, onChange: (v) => { c.enabled = v; } }),
       h('div', { class: 'head-actions' },
         h('button', { class: 'btn btn-sm', type: 'button', onclick: (e) => testCheck(c, e.currentTarget, card) }, icon('play'), 'Test this check'),
-        h('button', { class: 'btn btn-sm icon-btn', type: 'button', 'aria-label': 'Duplicate check', title: 'Duplicate', onclick: () => { const copy = { ...c, _key: uid('c'), id: undefined, name: `${c.name} (copy)`, config: { ...c.config }, alerts: c.alerts ? { ...c.alerts } : null }; d.checks.splice(index + 1, 0, copy); renderChecks(); } }, icon('copy')),
+        h('button', { class: 'btn btn-sm icon-btn', type: 'button', 'aria-label': 'Duplicate check', title: 'Duplicate', onclick: () => { const copy = { ...c, _key: uid('c'), id: undefined, name: `${c.name} (copy)`, config: JSON.parse(JSON.stringify(c.config), (key, value) => value === '********' ? '' : value), alerts: c.alerts ? { ...c.alerts } : null }; d.checks.splice(index + 1, 0, copy); renderChecks(); } }, icon('copy')),
         h('button', { class: 'btn btn-sm icon-btn btn-danger', type: 'button', 'aria-label': 'Remove check', title: 'Remove', onclick: async () => { if (c.id) { const ok = await confirmDialog({ title: `Remove "${c.name}"?`, message: 'Its history will be deleted when you save.', confirmLabel: 'Remove', danger: true }); if (!ok) return; } d.checks.splice(index, 1); renderChecks(); } }, icon('trash')),
       ));
     card.append(head);
@@ -627,13 +627,13 @@ export async function mount(root, ctx) {
     // and the mask stays in the draft, so leaving the box alone keeps what is
     // stored and typing in it replaces that.
     const secretInput = (key) => {
-      const stored = !!cfg[key];
+      const stored = cfg[key] === '********';
       const input = textInput({
-        type: 'password', value: '', autocomplete: 'off',
+        type: 'password', value: stored ? '' : (cfg[key] || ''), autocomplete: 'off',
         placeholder: stored ? 'Leave blank to keep the stored value' : '',
         oninput: () => { cfg[key] = input.value; },
       });
-      return { input, help: stored ? 'A value is stored — leave this blank to keep it.' : 'Nothing stored yet.' };
+      return { input, help: stored ? 'A value is stored — leave this blank to keep it.' : cfg[key] ? 'This value will be saved with the node.' : 'Nothing stored yet.' };
     };
 
     const community = secretInput('snmpCommunity');
@@ -1235,7 +1235,7 @@ export async function mount(root, ctx) {
     if (state.saving) return;
     const n = validate();
     renderChecks();
-    if (n) { toast(`Please fix ${n} problem${n === 1 ? '' : 's'} before saving.`, { kind: 'error' }); root.querySelector('.has-error input, .error')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
+    if (n) { toast(`Please fix ${n} problem${n === 1 ? '' : 's'} before saving.`, { kind: 'error' }); root.querySelector('.has-error input, .error')?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' }); return; }
     if (!d.checks.length) { const ok = await confirmDialog({ title: 'Save without checks?', message: 'This node will not be monitored until you add a check.', confirmLabel: 'Save anyway' }); if (!ok) return; }
     state.saving = true;
     const groups = nodeGroups(d).map((g) => g.trim()).filter(Boolean);

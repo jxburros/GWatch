@@ -62,6 +62,7 @@ func TestStatusMatches(t *testing.T) {
 func TestValidate(t *testing.T) {
 	bad := []model.Action{
 		{Type: "nope"},
+		{Type: model.ActionHTTP, URL: "{{query.url}}"},
 		{Type: model.ActionHTTP},
 		{Type: model.ActionHTTP, URL: "ftp://x"},
 		{Type: model.ActionGit, Repo: "/tmp"},
@@ -79,7 +80,6 @@ func TestValidate(t *testing.T) {
 	id := int64(1)
 	good := []model.Action{
 		{Type: model.ActionHTTP, URL: "https://example.com/{{node.name}}"},
-		{Type: model.ActionHTTP, URL: "{{query.url}}"},
 		{Type: model.ActionGit, Repo: ".", GitArgs: "status"},
 		{Type: model.ActionScript, Code: "echo hi"},
 		{Type: model.ActionScript, Interpreter: "custom", Command: "cat", Code: "hi"},

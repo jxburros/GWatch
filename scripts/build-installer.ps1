@@ -14,6 +14,7 @@
 [CmdletBinding()]
 param(
     [string]$Version,
+    [string]$AgentVersion,
     [ValidateSet("Monitor", "Agent", "Both")]
     [string]$Which = "Both",
     [string]$Iscc
@@ -21,6 +22,7 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $Version) { $Version = (Get-Content (Join-Path $root "VERSION") -Raw).Trim() }
+if (-not $AgentVersion) { $AgentVersion = (Get-Content (Join-Path $root "cmd/gwatch-agent/VERSION") -Raw).Trim() }
 $installer = Join-Path $PSScriptRoot "installer"
 $dist = Join-Path $root "dist"
 
@@ -42,16 +44,16 @@ function Resolve-Iscc {
     throw "Inno Setup 6 not found. Install it with 'winget install JRSoftware.InnoSetup' or pass -Iscc <path to ISCC.exe>."
 }
 
-function Build-Exe([string]$Package, [string]$Output) {
-    Write-Host "Building $Output (version $Version)..."
+function Build-Exe([string]$Package, [string]$Output, [string]$BuildVersion) {
+    Write-Host "Building $Output (version $BuildVersion)..."
     $env:CGO_ENABLED = "0"; $env:GOOS = "windows"; $env:GOARCH = "amd64"
-    & go build -trimpath -ldflags "-s -w -X main.version=$Version" -o $Output $Package
+    & go build -trimpath -ldflags "-s -w -X main.version=$BuildVersion" -o $Output $Package
     if ($LASTEXITCODE -ne 0) { throw "go build failed for $Package" }
 }
 
-function Build-Setup([string]$Script, [string]$Exe) {
+function Build-Setup([string]$Script, [string]$Exe, [string]$BuildVersion) {
     Write-Host "Compiling $Script..."
-    & $isccPath "/DAppVersion=$Version" "/DExePath=$Exe" (Join-Path $installer $Script)
+    & $isccPath "/DAppVersion=$BuildVersion" "/DExePath=$Exe" (Join-Path $installer $Script)
     if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed for $Script" }
 }
 
@@ -63,13 +65,13 @@ try {
 
     if ($Which -in @("Monitor", "Both")) {
         $exe = Join-Path $dist "gwatch.exe"
-        Build-Exe "." $exe
-        Build-Setup "gwatch.iss" $exe
+        Build-Exe "." $exe $Version
+        Build-Setup "gwatch.iss" $exe $Version
     }
     if ($Which -in @("Agent", "Both")) {
         $exe = Join-Path $dist "gwatch-agent.exe"
-        Build-Exe "./cmd/gwatch-agent" $exe
-        Build-Setup "gwatch-agent.iss" $exe
+        Build-Exe "./cmd/gwatch-agent" $exe $AgentVersion
+        Build-Setup "gwatch-agent.iss" $exe $AgentVersion
     }
 
     Copy-Item (Join-Path $installer "Output\*.exe") $dist -Force

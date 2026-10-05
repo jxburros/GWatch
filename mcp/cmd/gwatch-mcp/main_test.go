@@ -144,3 +144,16 @@ func TestEnvDefaults(t *testing.T) {
 		t.Errorf("an unparseable timeout should fall back to the default, got %v", got)
 	}
 }
+
+func TestPlainHTTPWarnings(t *testing.T) {
+	for _, tc := range []struct {
+		url  string
+		warn bool
+	}{{"http://router.lan:7230", true}, {"http://192.168.1.10:7230", true}, {"https://router.lan", false}, {"http://localhost:7230", false}, {"http://127.0.0.1:7230", false}, {"http://[::1]:7230", false}} {
+		var out bytes.Buffer
+		warnInsecureURL(&out, tc.url)
+		if (out.Len() > 0) != tc.warn {
+			t.Errorf("%s warning=%q", tc.url, out.String())
+		}
+	}
+}

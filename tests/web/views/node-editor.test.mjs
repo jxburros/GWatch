@@ -222,3 +222,22 @@ test('node editor converts a hardware check\'s legacy flat thresholds to the lis
   assert.match(metricThresholdErrors([{ metric: 'net:eth0', warn: 10, crit: 50, below: true }]), /at or below its warning/);
   assert.equal(metricThresholdErrors([{ metric: 'net:eth0.rx', warn: 100, crit: 10, below: true }]), null);
 });
+
+test('SNMP template displays its default and duplicated masks must be re-entered', async (t) => {
+  const { root } = await mountView(nodeEditorView, { params: {}, query: new URLSearchParams('template=snmp-device') }, t);
+  const fieldFor = (el, label) => [...el.querySelectorAll('.field')].find((f) => f.textContent.includes(label));
+  const community = fieldFor(root, 'Community string')?.querySelector('input');
+  assert.ok(community);
+  assert.equal(community.value, 'public', 'a template default is real input, not a saved credential');
+});
+
+test('duplicating an existing SNMP check blanks masked credentials', async (t) => {
+  const node = window.__gwatchMock.nodes.find((n) => n.checks.some((c) => c.type === 'snmp'));
+  const { root } = await mountView(nodeEditorView, { params: { id: String(node.id) } }, t);
+  const card = [...root.querySelectorAll('.editor-check')].find((el) => el.textContent.includes('Community string'));
+  card.querySelector('[aria-label="Duplicate check"]').click();
+  const cards = [...root.querySelectorAll('.editor-check')].filter((el) => el.textContent.includes('Community string'));
+  assert.equal(cards.length, 2);
+  assert.match(cards[0].textContent, /A value is stored/);
+  assert.match(cards[1].textContent, /Nothing stored yet/);
+});

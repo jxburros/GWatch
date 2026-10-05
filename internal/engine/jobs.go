@@ -182,6 +182,12 @@ func (e *Engine) runRetention(ctx context.Context, backfill, cleanup bool) error
 			runErr = fmt.Errorf("daily rollup: %w", err)
 		}
 	}
+	if runErr == nil {
+		// Fine buckets align local midnight in half/quarter-hour time zones.
+		if _, err := st.RollupUp(ctx, store.Bucket5m, store.Bucket1d, from1d, now); err != nil {
+			runErr = fmt.Errorf("daily fine rollup: %w", err)
+		}
+	}
 	if runErr == nil && cleanup {
 		del := func(n int64, err error) {
 			if err != nil && runErr == nil {
@@ -206,6 +212,9 @@ func (e *Engine) runRetention(ctx context.Context, backfill, cleanup bool) error
 		}
 		if s.HostDays > 0 {
 			del(st.PruneHostSamples(ctx, now.AddDate(0, 0, -s.HostDays)))
+		}
+		if err := st.PruneExpiredPairings(now); err != nil && runErr == nil {
+			runErr = err
 		}
 		if deleted > 0 {
 			_ = st.Checkpoint(ctx)
@@ -338,6 +347,12 @@ func (e *Engine) Health(ctx context.Context) model.Health {
 			h.ChecksRunning++
 		}
 		if st := e.states[id]; st != nil && st.NextRunAt != nil && c.Enabled && n.Enabled {
+			if !e.running[id] && now.Sub(*st.NextRunAt) >= time.Second {
+				h.OverdueChecks++
+				if late := int64(now.Sub(*st.NextRunAt).Seconds()); late > h.OldestOverdueSeconds {
+					h.OldestOverdueSeconds = late
+				}
+			}
 			if h.NextCheckAt == nil || st.NextRunAt.Before(*h.NextCheckAt) {
 				h.NextCheckAt = st.NextRunAt
 			}
@@ -492,10 +507,7 @@ func (e *Engine) Overview(ctx context.Context) (Overview, error) {
 				rc := r
 				cv.LastResult = &rc
 				if rc.Details.Cert != nil && c.Enabled && n.Enabled {
-					warnDays := c.Config.CertWarnDays
-					if warnDays <= 0 {
-						warnDays = e.settings.Alerts.CertWarnDays
-					}
+					warnDays := effectiveCertWarnDays(c, e.settings)
 					if rc.Details.Cert.DaysRemaining <= warnDays || !rc.Details.Cert.Valid {
 						ov.CertWarnings = append(ov.CertWarnings, CertWarning{NodeID: n.ID, NodeName: n.Name, CheckID: c.ID, CheckName: c.Name, DaysRemaining: rc.Details.Cert.DaysRemaining, NotAfter: rc.Details.Cert.NotAfter, Subject: rc.Details.Cert.Subject, Valid: rc.Details.Cert.Valid, Error: rc.Details.Cert.Error})
 					}

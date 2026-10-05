@@ -14,6 +14,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"runtime"
@@ -98,6 +100,7 @@ func run(argv []string, stdout, stderr io.Writer) error {
 	if strings.TrimSpace(opt.apiKey) == "" {
 		return fmt.Errorf("no API key.\n\n%s", howToGetAKey)
 	}
+	warnInsecureURL(stderr, opt.url)
 	client := gwatch.New(opt.url, opt.apiKey, "gwatch-mcp/"+version, opt.timeout)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -248,4 +251,19 @@ func orDash(s string) string {
 		return "—"
 	}
 	return s
+}
+
+func warnInsecureURL(out io.Writer, raw string) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "http" {
+		return
+	}
+	host := u.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return
+	}
+	fmt.Fprintln(out, "Warning: this non-loopback HTTP connection sends the API key without encryption. Use HTTPS for remote GWatch connections.")
 }

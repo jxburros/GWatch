@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/jxburros/GWatch/internal/auth"
 	"github.com/jxburros/GWatch/internal/model"
 )
 
@@ -98,6 +99,13 @@ func (s *Server) handleListRules(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	if !auth.FromContext(r.Context()).IsAdmin() {
+		for i := range list {
+			for j := range list[i].Actions {
+				_ = list[i].Actions[j].TransformSecrets(maskSecret)
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, s.ruleDocs(list))
 }
 
@@ -111,6 +119,11 @@ func (s *Server) handleGetRule(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.fail(w, err)
 		return
+	}
+	if !auth.FromContext(r.Context()).IsAdmin() {
+		for i := range rule.Actions {
+			_ = rule.Actions[i].TransformSecrets(maskSecret)
+		}
 	}
 	writeJSON(w, http.StatusOK, s.ruleDocs([]model.Rule{rule})[0])
 }

@@ -58,6 +58,7 @@ export async function mount(root, ctx) {
     requestAnimationFrame(() => t.el.scrollIntoView({ behavior: scrollBehavior(), block: 'start' }));
   };
 
+  root.append(h('p', { class: 'note' }, h('a', { href: `${REPO_URL}/blob/main/docs/INSTALL-LINUX.md`, target: '_blank', rel: 'noopener' }, 'Linux installation and troubleshooting')));
   root.append(
     h('div', { class: 'filter-bar help-search' },
       h('div', { class: 'toolbar' },

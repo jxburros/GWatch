@@ -241,7 +241,7 @@ func (s *Set) listNodes(ctx context.Context, args json.RawMessage) (Result, erro
 			down++
 		}
 	}
-	line := fmt.Sprintf("%s", plural(len(out), "node", "nodes"))
+	line := plural(len(out), "node", "nodes")
 	if f := describeFilters(in.Group, in.Tag, in.Status, in.Q); f != "" {
 		line += " " + f
 	}

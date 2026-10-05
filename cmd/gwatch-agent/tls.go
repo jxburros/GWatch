@@ -1,16 +1,26 @@
 package main
 
-import "crypto/tls"
+import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"crypto/tls"
+	"encoding/hex"
+	"fmt"
+)
 
-// insecureTLS is what --insecure turns on: the agent still uses TLS, it just
-// stops verifying the certificate chain. It is here in its own file, called
-// from one place, so that the one deliberate exception to certificate
-// verification is easy to find and to audit.
-//
-// It exists because a GWatch on a home network is often behind a self-signed
-// certificate. Turning it on means anyone able to intercept the connection can
-// read the readings and feed the server false ones — nothing more, since the
-// token grants nothing else.
+// insecureTLS is used only for explicit first-contact trust during pairing.
 func insecureTLS() *tls.Config {
-	return &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12} //nolint:gosec // user opt-in, documented above
+	return &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}
+}
+func pinnedTLS(pin string) *tls.Config {
+	return &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12, VerifyConnection: func(cs tls.ConnectionState) error {
+		if len(cs.PeerCertificates) == 0 {
+			return fmt.Errorf("server did not present a certificate")
+		}
+		sum := sha256.Sum256(cs.PeerCertificates[0].RawSubjectPublicKeyInfo)
+		if subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(pin)) != 1 {
+			return fmt.Errorf("server certificate key changed; pair again after verifying its identity")
+		}
+		return nil
+	}}
 }

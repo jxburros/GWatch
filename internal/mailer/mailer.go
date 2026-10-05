@@ -24,10 +24,11 @@ import (
 
 // Message is one outgoing email.
 type Message struct {
-	To       []string
-	Subject  string
-	TextBody string
-	HTMLBody string
+	To             []string
+	Subject        string
+	TextBody       string
+	HTMLBody       string
+	HTMLAttachment string
 }
 
 const sendTimeout = 20 * time.Second
@@ -292,6 +293,21 @@ func cleanRecipients(to []string) ([]string, error) {
 // Build renders the RFC 5322 message (headers and body) that Send writes to
 // the DATA command. It is exported so tests and previews can inspect it.
 func Build(from *mail.Address, recipients []string, msg Message, now time.Time) []byte {
+	if msg.HTMLAttachment != "" {
+		attachment := msg.HTMLAttachment
+		msg.HTMLAttachment = ""
+		base := Build(from, recipients, msg, now)
+		i := bytes.Index(base, []byte("\r\nContent-Type:"))
+		boundary := "gwatch-mixed-" + randomHex(12)
+		var out bytes.Buffer
+		out.Write(base[:i+2])
+		fmt.Fprintf(&out, "Content-Type: multipart/mixed; boundary=%q\r\n\r\n--%s\r\n", boundary, boundary)
+		out.Write(base[i+2:])
+		fmt.Fprintf(&out, "\r\n--%s\r\nContent-Type: text/html; charset=utf-8\r\nContent-Disposition: attachment; filename=\"gwatch-report.html\"\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n", boundary)
+		out.Write(qp(attachment))
+		fmt.Fprintf(&out, "\r\n--%s--\r\n", boundary)
+		return out.Bytes()
+	}
 	var b bytes.Buffer
 	writeHeader := func(k, v string) {
 		b.WriteString(k)

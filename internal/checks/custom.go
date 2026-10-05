@@ -12,7 +12,6 @@ package checks
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -24,6 +23,7 @@ import (
 	"time"
 
 	"github.com/jxburros/GWatch/internal/model"
+	"github.com/jxburros/GWatch/internal/subprocess"
 )
 
 // maxCustomOutput caps the diagnostic output kept on the result.
@@ -170,12 +170,8 @@ func runCustomCheck(ctx context.Context, check model.Check, target string) model
 	}
 	cmd.Env = env
 
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-
 	start := time.Now()
-	runErr := cmd.Run()
+	output, runErr := subprocess.Run(cmd)
 	elapsed := time.Since(start)
 
 	res := model.Result{}
@@ -185,7 +181,7 @@ func runCustomCheck(ctx context.Context, check model.Check, target string) model
 		res.Success = false
 		res.Message = msg
 		res.Error = msg
-		out, rest := parseCustomOutput(buf.String())
+		out, rest := parseCustomOutput(output)
 		_ = out
 		res.Details.Output = truncateOutput(rest)
 		return res
@@ -202,7 +198,7 @@ func runCustomCheck(ctx context.Context, check model.Check, target string) model
 		}
 	}
 
-	parsed, rest := parseCustomOutput(buf.String())
+	parsed, rest := parseCustomOutput(output)
 	res.Details.Output = truncateOutput(rest)
 
 	if !started {

@@ -1184,3 +1184,35 @@ See [`RESTORE.md`](RESTORE.md) for the end-to-end restore-to-a-new-machine proce
 
 - `GET /api/stream` (text/event-stream) emits `event: update` with `data: {"kind":"result"|"state"|"event"|"config"|"health"|"host"|"maintenance"|"trigger"|"endpoint"|"discovery"|"rule","checkId":..,"nodeId":..}` whenever something changes. The UI uses it to refresh without polling; falling back to polling every 15s is fine. A `"host"` update means a new hardware reading arrived, and a `"rule"` update that a notification rule changed or fired; neither carries a `checkId` or `nodeId`.
 - A `"discovery"` update carries the sweep's counters instead of a check or node, a few times a second while one is running and once more when it stops: `{"kind":"discovery","discovery":{"id":"6f1c…","state":"running","scanned":118,"total":254,"responders":9}}`. The results themselves are read from `GET /api/discovery/{id}`.
+
+
+## Incidents and availability reports (0.6)
+
+- `GET /api/incidents?state=active|all|open|acknowledged|resolved` returns grouped node
+  incidents (default active). `GET /api/incidents/{id}` returns `{incident, events}`.
+- `POST /api/incidents/{id}/acknowledge`, `/resolve`, or `/note` takes `{ "note": "..." }`.
+  Admins and read-write keys may update; viewers/read keys may read. Notes are limited
+  to 8,000 bytes. Incidents expose `openedAt`, acknowledgment/resolution times and actors,
+  `checkIds`, notes, `durationSeconds`, and acknowledgment/resolution elapsed seconds.
+- `GET /api/reports` and `PUT /api/reports` are administrator-only. PUT replaces the list
+  of definitions: `id` (unique string), `name`, `enabled`, `groups`, `tags`, `period`
+  (`weekly` or `monthly`), `recipients`, and `targetAvailability` (0 disables the target).
+  Calendar periods follow the service time zone. Schedules begin with the next complete
+  period after creation and retry failed delivery no more often than hourly.
+- `GET /api/reports/generate?from=<RFC3339>&to=<RFC3339>&groups=<comma-separated>&tags=<comma-separated>&target=99.9`
+  downloads self-contained printable HTML for up to 366 days. Viewers/read keys may
+  generate a report. Node availability aggregates observed samples across its checks.
+- `GET /api/agents/latest` returns an empty release without network access when
+  automatic update checks are disabled. When enabled it caches the agent release lookup.
+
+Check secrets have one shared model definition for masking and encryption. Headers and
+custom environment values are masked by key; returning `********` preserves a stored
+value. Blank map values explicitly clear that value. Scalar credentials retain the
+existing blank-means-keep convention. Action credentials are hidden from viewers.
+Shareable config exports omit passwords, accounts, key/agent records, tokens, check and
+action credentials, incident history and report recipient lists. Use an encrypted backup
+for a complete recoverable copy.
+
+Explicit `checkIds`, including `[]`, are authoritative for bulk check edits. `nodeIds`
+expand to all checks only when `checkIds` is absent. This prevents unticked checks from
+being silently changed while node-level settings are edited.
