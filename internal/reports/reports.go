@@ -100,7 +100,7 @@ func Generate(ctx context.Context, st *store.Store, d model.ReportDefinition, fr
 	if err != nil {
 		return "", err
 	}
-	incs, err := st.ListIncidents(ctx, "all")
+	incs, err := st.ExportIncidents(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -129,12 +129,7 @@ func Generate(ctx context.Context, st *store.Store, d model.ReportDefinition, fr
 			fail += sum.Failures
 			if sum.Count > 0 {
 				r.Availability = fmt.Sprintf("%.3f%%", sum.Availability)
-				if d.TargetAvailability > 0 {
-					r.Target = "Met"
-					if sum.Availability < d.TargetAvailability {
-						r.Target = "Below target"
-					}
-				}
+				r.Target = targetStatus(sum.Availability, d.TargetAvailability)
 			}
 			if sum.AvgMS != nil {
 				r.Latency = fmt.Sprintf("%.2f ms", *sum.AvgMS)
@@ -151,7 +146,9 @@ func Generate(ctx context.Context, st *store.Store, d model.ReportDefinition, fr
 		}
 		r := row{Node: n.Name, Availability: "—", Samples: count}
 		if count > 0 {
-			r.Availability = fmt.Sprintf("%.3f%%", 100*float64(count-fail)/float64(count))
+			availability := 100 * float64(count-fail) / float64(count)
+			r.Availability = fmt.Sprintf("%.3f%%", availability)
+			r.Target = targetStatus(availability, d.TargetAvailability)
 		}
 		out.Nodes = append(out.Nodes, r)
 	}
@@ -183,4 +180,14 @@ func Generate(ctx context.Context, st *store.Store, d model.ReportDefinition, fr
 	return b.String(), err
 }
 
-var reportTemplate = template.Must(template.New("report").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><title>{{.Name}}</title><style>body{font:16px system-ui,sans-serif;color:#17212b;max-width:1100px;margin:32px auto;padding:16px}table{border-collapse:collapse;width:100%;margin:16px 0 32px}th,td{text-align:left;padding:10px;border-bottom:1px solid #ccd3db}h1,h2{color:#102d48}small{color:#465868}@media print{body{margin:0;max-width:none}tr{break-inside:avoid}h2{break-after:avoid}}</style><h1>{{.Name}}</h1><p>{{.From}} – {{.To}}</p><small>Observed-sample availability; missing samples are not counted as successful. Node totals are weighted across check samples. Retained whole buckets are used where raw data has expired. Calendar boundaries use {{.Zone}}. Use your browser's Print → Save as PDF to save this report.</small><h2>Nodes</h2><table><tr><th>Node</th><th>Availability</th><th>Samples</th></tr>{{range .Nodes}}<tr><td>{{.Node}}</td><td>{{.Availability}}</td><td>{{.Samples}}</td></tr>{{else}}<tr><td>No nodes in this scope.</td></tr>{{end}}</table><h2>Checks</h2><table><tr><th>Node / check</th><th>Availability</th><th>Samples</th><th>Average latency</th><th>Target</th></tr>{{range .Rows}}<tr><td>{{.Node}} / {{.Check}}</td><td>{{.Availability}}</td><td>{{.Samples}}</td><td>{{.Latency}}</td><td>{{.Target}}</td></tr>{{end}}</table><h2>Incidents</h2><table><tr><th>Node</th><th>State</th><th>Opened</th><th>Duration (seconds)</th></tr>{{range .Incidents}}<tr><td>{{.NodeName}}</td><td>{{.State}}</td><td>{{.OpenedAt}}</td><td>{{printf "%.0f" .DurationSeconds}}</td></tr>{{else}}<tr><td>No recorded incidents overlap this range.</td></tr>{{end}}</table><h2>Slowest checks</h2><table>{{range .Slow}}<tr><td>{{.Node}} / {{.Check}}</td><td>{{.Latency}}</td></tr>{{else}}<tr><td>No latency samples.</td></tr>{{end}}</table><h2>Certificates expiring within 30 days (latest reading)</h2><table>{{range .Certs}}<tr><td>{{.Node}} / {{.Check}}</td><td>{{.Days}} days</td><td>{{.Expires}}</td></tr>{{else}}<tr><td>No expiring certificates in the latest readings.</td></tr>{{end}}</table>{{if .Charts}}<h2>Group latency</h2><p>Daily averages from retained local-calendar rollups, weighted by successful samples.</p>{{range .Charts}}<h3>{{.Name}}</h3><p>0 to {{.Maximum}}</p><svg xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Daily average latency" viewBox="0 0 700 180" style="width:100%;max-height:240px"><path d="M20 20V160H680" fill="none" stroke="#718096"/><polyline points="{{.Points}}" fill="none" stroke="#075985" stroke-width="3"/></svg>{{end}}{{end}}</html>`))
+func targetStatus(availability, target float64) string {
+	if target <= 0 {
+		return ""
+	}
+	if availability < target {
+		return "Below target"
+	}
+	return "Met"
+}
+
+var reportTemplate = template.Must(template.New("report").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><title>{{.Name}}</title><style>body{font:16px system-ui,sans-serif;color:#17212b;max-width:1100px;margin:32px auto;padding:16px}table{border-collapse:collapse;width:100%;margin:16px 0 32px}th,td{text-align:left;padding:10px;border-bottom:1px solid #ccd3db}h1,h2{color:#102d48}small{color:#465868}@media print{body{margin:0;max-width:none}tr{break-inside:avoid}h2{break-after:avoid}}</style><h1>{{.Name}}</h1><p>{{.From}} – {{.To}}</p><small>Observed-sample availability; missing samples are not counted as successful. Node totals are weighted across check samples. Retained whole buckets are used where raw data has expired. Calendar boundaries use {{.Zone}}. Use your browser's Print → Save as PDF to save this report.</small><h2>Nodes</h2><table><tr><th>Node</th><th>Availability</th><th>Samples</th><th>Target</th></tr>{{range .Nodes}}<tr><td>{{.Node}}</td><td>{{.Availability}}</td><td>{{.Samples}}</td><td>{{.Target}}</td></tr>{{else}}<tr><td>No nodes in this scope.</td></tr>{{end}}</table><h2>Checks</h2><table><tr><th>Node / check</th><th>Availability</th><th>Samples</th><th>Average latency</th><th>Target</th></tr>{{range .Rows}}<tr><td>{{.Node}} / {{.Check}}</td><td>{{.Availability}}</td><td>{{.Samples}}</td><td>{{.Latency}}</td><td>{{.Target}}</td></tr>{{end}}</table><h2>Incidents</h2><table><tr><th>Node</th><th>State</th><th>Opened</th><th>Duration (seconds)</th></tr>{{range .Incidents}}<tr><td>{{.NodeName}}</td><td>{{.State}}</td><td>{{.OpenedAt}}</td><td>{{printf "%.0f" .DurationSeconds}}</td></tr>{{else}}<tr><td>No recorded incidents overlap this range.</td></tr>{{end}}</table><h2>Slowest checks</h2><table>{{range .Slow}}<tr><td>{{.Node}} / {{.Check}}</td><td>{{.Latency}}</td></tr>{{else}}<tr><td>No latency samples.</td></tr>{{end}}</table><h2>Certificates expiring within 30 days (latest reading)</h2><table>{{range .Certs}}<tr><td>{{.Node}} / {{.Check}}</td><td>{{.Days}} days</td><td>{{.Expires}}</td></tr>{{else}}<tr><td>No expiring certificates in the latest readings.</td></tr>{{end}}</table>{{if .Charts}}<h2>Group latency</h2><p>Daily averages from retained local-calendar rollups, weighted by successful samples.</p>{{range .Charts}}<h3>{{.Name}}</h3><p>0 to {{.Maximum}}</p><svg xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Daily average latency" viewBox="0 0 700 180" style="width:100%;max-height:240px"><path d="M20 20V160H680" fill="none" stroke="#718096"/><polyline points="{{.Points}}" fill="none" stroke="#075985" stroke-width="3"/></svg>{{end}}{{end}}</html>`))

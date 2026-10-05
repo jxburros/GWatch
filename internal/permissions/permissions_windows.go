@@ -25,7 +25,19 @@ func protectDir(path string) error {
 	if err != nil {
 		return err
 	}
-	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, acl, nil)
+	flags := windows.SECURITY_INFORMATION(windows.DACL_SECURITY_INFORMATION | windows.PROTECTED_DACL_SECURITY_INFORMATION)
+	var owner *windows.SID
+	if token.IsElevated() {
+		// Files created by an elevated interactive account can still be owned by
+		// that account. Transfer ownership as well as protecting the DACL so the
+		// SYSTEM service can trust them after installation.
+		owner, err = windows.StringToSid("S-1-5-32-544")
+		if err != nil {
+			return err
+		}
+		flags |= windows.OWNER_SECURITY_INFORMATION
+	}
+	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, flags, owner, nil, acl, nil)
 }
 func ValidateConfigOwner(path string) error {
 	info, err := os.Lstat(path)
@@ -54,11 +66,17 @@ func validateOwner(path string) error {
 	if err != nil {
 		return err
 	}
-	sid := owner.String()
-	if sid != "S-1-5-18" && sid != "S-1-5-32-544" && (sid != user.User.Sid.String() || windows.GetCurrentProcessToken().IsElevated()) {
+	if !trustedOwnerSID(owner.String(), user.User.Sid.String()) {
 		return fmt.Errorf("untrusted configuration owner: %s", path)
 	}
 	return nil
+}
+
+func trustedOwnerSID(owner, currentUser string) bool {
+	// Elevation does not change a process's user identity. In particular,
+	// accepting an interactive administrator's own files must not mean a
+	// SYSTEM service accepts files owned by that administrator's user SID.
+	return owner == "S-1-5-18" || owner == "S-1-5-32-544" || owner == currentUser
 }
 
 func protectFile(path string) error { return protectDir(path) }

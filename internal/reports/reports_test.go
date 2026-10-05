@@ -45,7 +45,7 @@ func TestReportAvailabilityScopeAndEscaping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(html, "50.000%") || !strings.Contains(html, "Below target") || strings.Contains(html, "<script>") || !strings.Contains(html, "&lt;script&gt;") {
+	if !strings.Contains(html, "50.000%") || strings.Count(html, "Below target") != 2 || strings.Contains(html, "<script>") || !strings.Contains(html, "&lt;script&gt;") {
 		t.Fatal("wrong availability or unescaped node name")
 	}
 	html, err = Generate(ctx, s, model.ReportDefinition{Groups: []string{"Elsewhere"}}, now.Add(-time.Hour), now)
@@ -75,5 +75,58 @@ func TestOptionalGroupLatencyCharts(t *testing.T) {
 	html, err = Generate(ctx, s, model.ReportDefinition{}, day, now)
 	if err != nil || strings.Contains(html, "<svg") {
 		t.Fatal("chart option ignored")
+	}
+}
+
+func TestReportIncidentsBeyondDisplayLimit(t *testing.T) {
+	s := storetest.Open(t)
+	ctx := context.Background()
+	n, err := s.CreateNode(ctx, model.Node{Name: "history", Host: "localhost"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	from := time.Now().Add(-72 * time.Hour).Truncate(time.Second)
+	to := from.Add(24 * time.Hour)
+	opened := from.Add(time.Hour)
+	resolved := opened.Add(time.Hour)
+	incidents := []model.Incident{{NodeID: n.ID, State: "resolved", OpenedAt: opened, ResolvedAt: &resolved}}
+	later := to.Add(time.Hour)
+	for i := 0; i < 5000; i++ {
+		incidents = append(incidents, model.Incident{NodeID: n.ID, State: "resolved", OpenedAt: later, ResolvedAt: &later})
+	}
+	if err := s.RestoreIncidents(ctx, incidents); err != nil {
+		t.Fatal(err)
+	}
+	html, err := Generate(ctx, s, model.ReportDefinition{}, from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(html, "No recorded incidents overlap this range") || !strings.Contains(html, "3600</td>") {
+		t.Fatal("report omitted the incident older than the display limit")
+	}
+}
+
+func TestReportNodeTarget(t *testing.T) {
+	s := storetest.Open(t)
+	ctx := context.Background()
+	n, err := s.CreateNode(ctx, model.Node{Name: "router", Checks: []model.Check{{Name: "ping", Type: model.CheckPing}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().Add(-time.Minute)
+	if _, err := s.RecordResult(ctx, model.Result{CheckID: n.Checks[0].ID, Timestamp: at, Status: model.StatusUp, Success: true}, model.CheckState{CheckID: n.Checks[0].ID, Status: model.StatusUp}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		target float64
+		count  int
+	}{{99.9, 2}, {0, 0}} {
+		html, err := Generate(ctx, s, model.ReportDefinition{TargetAvailability: tc.target}, at.Add(-time.Minute), at.Add(time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Count(html, "<td>Met</td>") != tc.count {
+			t.Fatalf("target %v was not applied to node and check", tc.target)
+		}
 	}
 }
