@@ -3,7 +3,6 @@
 set -eu
 umask 077
 version=
-listen=127.0.0.1:7230
 server=
 code=
 no_start=false
@@ -11,7 +10,6 @@ uninstall=false
 while [ "$#" -gt 0 ]; do
  case "$1" in
  --version) version=$2; shift 2 ;;
- --listen) listen=$2; shift 2 ;;
  --server) server=$2; shift 2 ;;
  --code) code=$2; shift 2 ;;
  --no-start) no_start=true; shift ;;
@@ -26,6 +24,10 @@ if "$uninstall"; then
  "/usr/local/libexec/$product/$product" uninstall
  echo "Service removed; data and executable retained."
  exit 0
+fi
+if [ -z "$server" ] || [ -z "$code" ]; then
+ echo '--server and --code are required' >&2
+ exit 2
 fi
 for tool in curl openssl jq; do command -v "$tool" >/dev/null || { echo "$tool is required (OpenSSL 3 for Ed25519)." >&2; exit 1; }; done
 case $(uname -s) in Linux) os=linux ;; Darwin) os=darwin ;; *) echo 'Unsupported operating system' >&2; exit 1 ;; esac
@@ -52,9 +54,7 @@ printf '%s' 'OzN/mY/5zRszwN7DxuhrC718w+3TjL36FuZHbYV/qkk=' | openssl base64 -d -
 openssl dgst -sha256 -binary "$tmp/binary" > "$tmp/digest"
 openssl pkeyutl -verify -pubin -keyform DER -inkey "$tmp/key.der" -rawin -in "$tmp/digest" -sigfile "$tmp/signature" >/dev/null || { echo 'Release signature verification failed' >&2; exit 1; }
 chmod 700 "$tmp/binary"
-[ -n "$server" ] && [ -n "$code" ] || { echo '--server and --code are required' >&2; exit 2; }
 set -- install --server "$server" --code "$code"
 if "$no_start"; then set -- "$@" --no-start; fi
 "$tmp/binary" "$@"
 echo 'Agent installed; check Hardware in GWatch.'
-

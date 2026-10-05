@@ -7,6 +7,8 @@ trap 'rm -rf "$fixture"' 0 HUP INT TERM
 export fixture
 mkdir "$fixture/bin"
 printf '#!/bin/sh\nexit 0\n' > "$fixture/bin/jq"
+# Expand positional arguments when the generated stub runs, not here.
+# shellcheck disable=SC2016
 printf '#!/bin/sh\ncase $1 in -s) echo Linux ;; *) echo x86_64 ;; esac\n' > "$fixture/bin/uname"
 printf '#!/bin/sh\necho 0\n' > "$fixture/bin/id"
 cat > "$fixture/bin/curl" <<'EOF'
@@ -27,6 +29,8 @@ chmod +x "$fixture/bin/id" "$fixture/bin/curl" "$fixture/bin/jq" "$fixture/bin/u
 openssl genpkey -algorithm ED25519 -out "$fixture/private.pem"
 openssl pkey -in "$fixture/private.pem" -pubout -outform DER -out "$fixture/public.der"
 key=$(tail -c 32 "$fixture/public.der" | openssl base64 -A)
+# The generated executable reads the exported fixture path when it runs.
+# shellcheck disable=SC2016
 printf '#!/bin/sh\nprintf verified > "$fixture/executed"\n' > "$fixture/binary"
 openssl dgst -sha256 -binary "$fixture/binary" > "$fixture/digest"
 openssl pkeyutl -sign -inkey "$fixture/private.pem" -rawin -in "$fixture/digest" -out "$fixture/signature"
@@ -36,15 +40,21 @@ printf '\n' >> "$fixture/binary.sig"
 openssl dgst -sha256 "$fixture/binary" | awk '{print $NF}' > "$fixture/binary.sha256"
 cp "$fixture/binary" "$fixture/original"
 for script in scripts/install.sh scripts/install-agent.sh; do
+ set -- --version 1.0.0 --no-start
+ if [ "$script" = scripts/install-agent.sh ]; then
+  set -- "$@" --server https://example.invalid --code TEST-CODE
+ else
+  set -- "$@" --listen 127.0.0.1:7230
+ fi
  cp "$fixture/original" "$fixture/binary"
  openssl dgst -sha256 "$fixture/binary" | awk '{print $NF}' > "$fixture/binary.sha256"
  sed "s|OzN/mY/5zRszwN7DxuhrC718w+3TjL36FuZHbYV/qkk=|$key|" "$script" > "$fixture/install.sh"
- PATH="$fixture/bin:$PATH" sh "$fixture/install.sh" --version 1.0.0 --server https://example.invalid --code TEST-CODE --no-start
+ PATH="$fixture/bin:$PATH" sh "$fixture/install.sh" "$@"
  test -f "$fixture/executed"
  rm "$fixture/executed"
  printf '\n# tampered\n' >> "$fixture/binary"
  openssl dgst -sha256 "$fixture/binary" | awk '{print $NF}' > "$fixture/binary.sha256"
- if PATH="$fixture/bin:$PATH" sh "$fixture/install.sh" --version 1.0.0 --server https://example.invalid --code TEST-CODE --no-start; then
+ if PATH="$fixture/bin:$PATH" sh "$fixture/install.sh" "$@"; then
   echo 'forged release unexpectedly accepted' >&2
   exit 1
  fi

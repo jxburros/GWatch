@@ -179,7 +179,7 @@ jobs:
         run: |
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=ci-${GITHUB_SHA::7}" -o dist/gwatch-agent-windows-amd64.exe ./cmd/gwatch-agent
       - name: Install Inno Setup
-        run: choco install innosetup --version=6.4.3 --allow-downgrade --no-progress -y
+        run: choco install innosetup --version=6.7.1 --allow-downgrade --no-progress -y
         shell: pwsh
       # Runs under pwsh: Git Bash rewrites /D... arguments as Windows paths
       # (MSYS path conversion), which ISCC then reads as extra script names.
@@ -708,7 +708,7 @@ jobs:
       # invisible to the in-app updater by design, and it isn't
       # Authenticode-signed.
       - name: Install Inno Setup
-        run: choco install innosetup --version=6.4.3 --allow-downgrade --no-progress -y
+        run: choco install innosetup --version=6.7.1 --allow-downgrade --no-progress -y
         shell: pwsh
       - name: Build Windows installers
         shell: pwsh
@@ -822,7 +822,7 @@ jobs:
           ls -lh dist
 
       - name: Install Inno Setup
-        run: choco install innosetup --version=6.4.3 --allow-downgrade --no-progress -y
+        run: choco install innosetup --version=6.7.1 --allow-downgrade --no-progress -y
         shell: pwsh
       - name: Build the agent installer
         shell: pwsh
@@ -1023,7 +1023,7 @@ jobs:
       - name: Build the packaged agent
         run: sh packaging/build-agent.sh winget "$AGENT_VERSION" dist/packaged windows/amd64
       - name: Install Inno Setup
-        run: choco install innosetup --version=6.4.3 --allow-downgrade --no-progress -y
+        run: choco install innosetup --version=6.7.1 --allow-downgrade --no-progress -y
         shell: pwsh
       # /F gives the setup program its own name; everything else is the
       # ordinary agent installer (scripts/installer/gwatch-agent.iss).

@@ -94,8 +94,10 @@ func (s *Store) RollupUp(ctx context.Context, srcBucket, dstBucket int, from, to
 			return 0, err
 		}
 		var total int64
-		for day := localDay(time.Unix(first.Int64, 0)); !day.After(time.Unix(last.Int64, 0)); day = day.AddDate(0, 0, 1) {
-			n, err := s.rollupRange(ctx, srcBucket, dstBucket, day.Unix(), day.AddDate(0, 0, 1).Unix(), s.d.castInt("?"), day.Unix())
+		rebuildFrom := localDay(time.Unix(first.Int64, 0))
+		rebuildTo := localDay(time.Unix(last.Int64, 0)).AddDate(0, 0, 1)
+		for day := rebuildFrom; day.Before(rebuildTo); day = day.AddDate(0, 0, 1) {
+			n, err := s.rollupRange(ctx, srcBucket, dstBucket, day.Unix(), day.AddDate(0, 0, 1).Unix(), s.d.castInt("?"), day.Unix(), rebuildFrom.Unix(), rebuildTo.Unix())
 			total += n
 			if err != nil {
 				return total, err
@@ -105,10 +107,18 @@ func (s *Store) RollupUp(ctx context.Context, srcBucket, dstBucket int, from, to
 	}
 	fromB := from.Unix() - from.Unix()%int64(dstBucket)
 	toB := to.Unix() - to.Unix()%int64(dstBucket) + int64(dstBucket)
-	return s.rollupRange(ctx, srcBucket, dstBucket, fromB, toB, "bucket_start - (bucket_start % "+s.d.castInt("?")+")", int64(dstBucket))
+	return s.rollupRange(ctx, srcBucket, dstBucket, fromB, toB, "bucket_start - (bucket_start % "+s.d.castInt("?")+")", int64(dstBucket), fromB, toB)
 }
 
-func (s *Store) rollupRange(ctx context.Context, srcBucket, dstBucket int, fromB, toB int64, bucketExpr string, bucketArg int64) (int64, error) {
+func (s *Store) rollupRange(ctx context.Context, srcBucket, dstBucket int, fromB, toB int64, bucketExpr string, bucketArg, rebuildFrom, rebuildTo int64) (int64, error) {
+	// A legacy UTC day can overlap two new local days. Keep it when the
+	// retained source no longer contains all of its samples, and exclude its
+	// covered source from the new buckets so those samples are not counted twice.
+	legacyComplete := `(SELECT COALESCE(SUM(retained.count), 0) FROM rollups AS retained WHERE retained.bucket_seconds = ? AND retained.check_id = legacy.check_id AND retained.bucket_start >= legacy.bucket_start AND retained.bucket_start < legacy.bucket_start + 86400 AND retained.bucket_start >= ? AND retained.bucket_start < ?) >= legacy.count`
+	sourceFilter := ""
+	if dstBucket == Bucket1d {
+		sourceFilter = ` AND NOT EXISTS (SELECT 1 FROM rollups AS legacy WHERE legacy.bucket_seconds = 86400 AND legacy.bucket_start % 86400 = 0 AND legacy.bucket_start <> ? AND legacy.check_id = source_rollups.check_id AND source_rollups.bucket_start >= legacy.bucket_start AND source_rollups.bucket_start < legacy.bucket_start + 86400 AND NOT (` + legacyComplete + `))`
+	}
 	query := `
 		INSERT INTO rollups(` + rollupCols + `)
 		SELECT check_id, ` + s.d.castInt("?") + `, ` + bucketExpr + ` AS b,
@@ -121,10 +131,13 @@ func (s *Store) rollupRange(ctx context.Context, srcBucket, dstBucket int, fromB
 		       CASE WHEN SUM(CASE WHEN avg_loss_pct IS NOT NULL THEN count ELSE 0 END) > 0
 		            THEN SUM(avg_loss_pct * count) / SUM(CASE WHEN avg_loss_pct IS NOT NULL THEN count ELSE 0 END) END,
 		       100.0 * SUM(success_count) / SUM(count)
-		FROM rollups AS source_rollups WHERE bucket_seconds = ? AND bucket_start >= ? AND bucket_start < ?
+		FROM rollups AS source_rollups WHERE bucket_seconds = ? AND bucket_start >= ? AND bucket_start < ?` + sourceFilter + `
 		GROUP BY check_id, b
 		` + s.rollupUpsertClause()
 	args := []any{dstBucket, bucketArg, srcBucket, fromB, toB}
+	if dstBucket == Bucket1d {
+		args = append(args, bucketArg, srcBucket, rebuildFrom, rebuildTo)
+	}
 	var res sql.Result
 	var err error
 	if dstBucket == Bucket1d {
@@ -134,9 +147,10 @@ func (s *Store) rollupRange(ctx context.Context, srcBucket, dstBucket int, fromB
 			if writeErr != nil {
 				return writeErr
 			}
-			// Replace legacy UTC buckets only where source data can rebuild the day.
-			// Older daily-only history stays intact because its detail is irrecoverable.
-			_, writeErr = tx.exec(ctx, `DELETE FROM rollups WHERE bucket_seconds = ? AND bucket_start >= ? AND bucket_start < ? AND bucket_start <> ? AND check_id IN (SELECT check_id FROM (SELECT DISTINCT check_id FROM rollups WHERE bucket_seconds = ? AND bucket_start >= ? AND bucket_start < ?) AS source_checks)`, Bucket1d, fromB, toB, bucketArg, srcBucket, fromB, toB)
+			// Delete a legacy bucket only when every archived sample can be
+			// rebuilt from this source tier. The derived table also permits this
+			// self-referencing delete on MySQL.
+			_, writeErr = tx.exec(ctx, `DELETE FROM rollups WHERE bucket_seconds = ? AND (check_id, bucket_start) IN (SELECT check_id, bucket_start FROM (SELECT DISTINCT legacy.check_id, legacy.bucket_start FROM rollups AS legacy WHERE legacy.bucket_seconds = ? AND legacy.bucket_start % 86400 = 0 AND legacy.bucket_start + 86400 > ? AND legacy.bucket_start < ? AND legacy.bucket_start <> ? AND `+legacyComplete+`) AS rebuilt_legacy)`, Bucket1d, Bucket1d, fromB, toB, bucketArg, srcBucket, rebuildFrom, rebuildTo)
 			return writeErr
 		})
 	} else {

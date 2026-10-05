@@ -4,16 +4,12 @@ set -eu
 umask 077
 version=
 listen=127.0.0.1:7230
-server=
-code=
 no_start=false
 uninstall=false
 while [ "$#" -gt 0 ]; do
  case "$1" in
  --version) version=$2; shift 2 ;;
  --listen) listen=$2; shift 2 ;;
- --server) server=$2; shift 2 ;;
- --code) code=$2; shift 2 ;;
  --no-start) no_start=true; shift ;;
  --uninstall) uninstall=true; shift ;;
  *) echo "unknown option: $1" >&2; exit 2 ;;
@@ -57,4 +53,3 @@ if "$no_start"; then set -- "$@" --no-start; fi
 "$tmp/binary" "$@"
 echo "GWatch installed. Open http://$listen (or use an SSH tunnel)."
 echo 'First administrator: ssh -L 7230:127.0.0.1:7230 user@server, then open http://127.0.0.1:7230 and Settings > Accounts.'
-
