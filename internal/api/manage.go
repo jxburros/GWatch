@@ -827,14 +827,17 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "streaming not supported")
 		return
 	}
+	// Subscribe before saying hello: a client that acts on "hello" (reloads,
+	// saves something) must not miss the update its own action broadcasts in
+	// the gap before the subscription exists.
+	ch := s.Engine.Subscribe()
+	defer s.Engine.Unsubscribe(ch)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "event: hello\ndata: {}\n\n")
 	flusher.Flush()
-	ch := s.Engine.Subscribe()
-	defer s.Engine.Unsubscribe(ch)
 	keepalive := time.NewTicker(25 * time.Second)
 	defer keepalive.Stop()
 	for {

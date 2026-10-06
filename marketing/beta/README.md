@@ -81,7 +81,6 @@ Every piece runs `vixl check` before export, and none has an open `fix` finding.
 
 ## A GWatch bug found while making this
 
-GWatch 0.6.0's `web/app.js` contains double-encoded UTF-8, so the header indicators read
-`Nodes down â€" 2` instead of `Nodes down — 2`, and the page title has the same problem.
-`screenshots.mjs` corrects it in the browser only, so the images show the intended text. The
-source still needs fixing before the beta announcement goes out.
+GWatch 0.6.0's `web/app.js` contained double-encoded UTF-8, so the header indicators read
+`Nodes down â€" 2` instead of `Nodes down — 2`. It is fixed on main (#179); `screenshots.mjs`
+also corrects it in the browser, so shots taken from 0.6.0 show the intended text.
