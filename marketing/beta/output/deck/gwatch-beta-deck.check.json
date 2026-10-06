@@ -1,0 +1,473 @@
+{
+  "issues": [
+    {
+      "check": "bounds",
+      "severity": "info",
+      "action": "informational",
+      "layer": null,
+      "message": "'t-glow' bleeds off the canvas edge (marked as an intentional crop)"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'t-badge-label' on page 'title' is 15.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "bounds",
+      "severity": "info",
+      "action": "informational",
+      "layer": null,
+      "message": "'wh-shot-base' bleeds off the canvas edge (marked as an intentional crop)"
+    },
+    {
+      "check": "bounds",
+      "severity": "info",
+      "action": "informational",
+      "layer": null,
+      "message": "'wh-shot-win' bleeds off the canvas edge (marked as an intentional crop)"
+    },
+    {
+      "check": "bounds",
+      "severity": "info",
+      "action": "informational",
+      "layer": null,
+      "message": "'wh-shot-img' bleeds off the canvas edge (marked as an intentional crop)"
+    },
+    {
+      "check": "bounds",
+      "severity": "info",
+      "action": "informational",
+      "layer": null,
+      "message": "'wh-shot' bleeds off the canvas edge (marked as an intentional crop)"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'wh-kicker' on page 'what' is 13.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'wh-chk-0-label' on page 'what' is 12.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'wh-chk-1-label' on page 'what' is 12.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'wh-chk-2-label' on page 'what' is 12.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'wh-chk-3-label' on page 'what' is 12.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'wh-chk-4-label' on page 'what' is 12.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'wh-chk-5-label' on page 'what' is 12.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'wh-chk-6-label' on page 'what' is 12.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'wh-chk-7-label' on page 'what' is 12.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'wh-chk-8-label' on page 'what' is 12.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'wh-chk-9-label' on page 'what' is 12.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "bounds",
+      "severity": "info",
+      "action": "informational",
+      "layer": null,
+      "message": "'to-shot-base' bleeds off the canvas edge (marked as an intentional crop)"
+    },
+    {
+      "check": "bounds",
+      "severity": "info",
+      "action": "informational",
+      "layer": null,
+      "message": "'to-shot-win' bleeds off the canvas edge (marked as an intentional crop)"
+    },
+    {
+      "check": "bounds",
+      "severity": "info",
+      "action": "informational",
+      "layer": null,
+      "message": "'to-shot-img' bleeds off the canvas edge (marked as an intentional crop)"
+    },
+    {
+      "check": "bounds",
+      "severity": "info",
+      "action": "informational",
+      "layer": null,
+      "message": "'to-shot' bleeds off the canvas edge (marked as an intentional crop)"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'to-kicker' on page 'tour' is 13.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'ma-kicker' on page 'map' is 13.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'ma-d0' on page 'map' is 14.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'ma-d1' on page 'map' is 14.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'ma-d2' on page 'map' is 14.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "words",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "Page 'features' carries 116 words (more than 60); move detail to the speaker notes or split the page"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'fe-kicker' on page 'features' is 13.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'fe-d0' on page 'features' is 12.5 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'fe-d1' on page 'features' is 12.5 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'fe-d2' on page 'features' is 12.5 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'fe-d3' on page 'features' is 12.5 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'fe-d4' on page 'features' is 12.5 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'fe-d5' on page 'features' is 12.5 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'an-kicker' on page 'anywhere' is 13.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'an-d0' on page 'anywhere' is 14.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'an-d1' on page 'anywhere' is 14.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'an-d2' on page 'anywhere' is 14.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'an-d3' on page 'anywhere' is 14.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "words",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "Page 'beta' carries 67 words (more than 60); move detail to the speaker notes or split the page"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'be-kicker' on page 'beta' is 13.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'be-d0' on page 'beta' is 15.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'be-d1' on page 'beta' is 15.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'be-d2' on page 'beta' is 15.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'be-note' on page 'beta' is 15.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "words",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "Page 'join' carries 68 words (more than 60); move detail to the speaker notes or split the page"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'jo-kicker' on page 'join' is 13.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'jo-d0' on page 'join' is 15.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'jo-d1' on page 'join' is 15.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'jo-d2' on page 'join' is 15.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'jo-url1' on page 'join' is 16.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "min_font",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "'jo-url2' on page 'join' is 16.0 pt when projected (below 18 pt); use at least 36 px on this canvas"
+    },
+    {
+      "check": "bounds",
+      "severity": "info",
+      "action": "informational",
+      "layer": null,
+      "message": "'th-glow' bleeds off the canvas edge (marked as an intentional crop)"
+    },
+    {
+      "check": "title_position",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "The title on page 'thanks' sits at x 960 where the other titles sit at 140"
+    },
+    {
+      "check": "title_position",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "The title on page 'thanks' sits at y 540 where the other titles sit at 380"
+    },
+    {
+      "check": "type_scale",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "Text sizes 24 and 25 px are almost the same; use one of them (the 24 px text is rarer)"
+    },
+    {
+      "check": "type_scale",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "Text sizes 25 and 26 px are almost the same; use one of them (the 26 px text is rarer)"
+    },
+    {
+      "check": "type_scale",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "Text sizes 26 and 28 px are almost the same; use one of them (the 26 px text is rarer)"
+    },
+    {
+      "check": "type_scale",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "Text sizes 28 and 30 px are almost the same; use one of them (the 28 px text is rarer)"
+    },
+    {
+      "check": "type_scale",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "Text sizes 30 and 32 px are almost the same; use one of them (the 32 px text is rarer)"
+    },
+    {
+      "check": "type_scale",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "Text sizes 36 and 38 px are almost the same; use one of them (the 38 px text is rarer)"
+    },
+    {
+      "check": "type_scale",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "Text sizes 38 and 40 px are almost the same; use one of them (the 40 px text is rarer)"
+    },
+    {
+      "check": "type_scale",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "Text sizes 40 and 42 px are almost the same; use one of them (the 40 px text is rarer)"
+    },
+    {
+      "check": "type_scale",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "Text sizes 42 and 44 px are almost the same; use one of them (the 44 px text is rarer)"
+    },
+    {
+      "check": "type_scale",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "Text sizes 44 and 46 px are almost the same; use one of them (the 44 px text is rarer)"
+    },
+    {
+      "check": "type_scale",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "Text sizes 112 and 120 px are almost the same; use one of them (the 120 px text is rarer)"
+    },
+    {
+      "check": "type_scale",
+      "severity": "warning",
+      "action": "review",
+      "layer": null,
+      "message": "The deck uses 18 text sizes (24, 25, 26, 28, 30, 32, 36, 38, 40, 42, 44, 46, 52, 80, 88, 112, 120, 150 px); five or six steps of one scale read as a system"
+    }
+  ]
+}
