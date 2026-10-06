@@ -1,0 +1,11 @@
+{
+  "issues": [
+    {
+      "check": "bounds",
+      "severity": "info",
+      "action": "informational",
+      "layer": null,
+      "message": "'glow' bleeds off the canvas edge (marked as an intentional crop)"
+    }
+  ]
+}

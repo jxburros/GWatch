@@ -1,0 +1,74 @@
+{
+  "issues": [
+    {
+      "check": "bounds",
+      "severity": "info",
+      "action": "informational",
+      "layer": null,
+      "message": "'glow' bleeds off the canvas edge (marked as an intentional crop)"
+    },
+    {
+      "check": "safe_area",
+      "severity": "info",
+      "action": "informational",
+      "layer": null,
+      "message": "'glow' extends outside the safe area (marked as an intentional crop)"
+    },
+    {
+      "check": "safe_area",
+      "severity": "info",
+      "action": "informational",
+      "layer": null,
+      "message": "'field-d10' extends outside the safe area (marked as an intentional crop)"
+    },
+    {
+      "check": "safe_area",
+      "severity": "info",
+      "action": "informational",
+      "layer": null,
+      "message": "'field-d11' extends outside the safe area (marked as an intentional crop)"
+    },
+    {
+      "check": "safe_area",
+      "severity": "info",
+      "action": "informational",
+      "layer": null,
+      "message": "'field-d12' extends outside the safe area (marked as an intentional crop)"
+    },
+    {
+      "check": "safe_area",
+      "severity": "info",
+      "action": "informational",
+      "layer": null,
+      "message": "'field-d19' extends outside the safe area (marked as an intentional crop)"
+    },
+    {
+      "check": "safe_area",
+      "severity": "info",
+      "action": "informational",
+      "layer": null,
+      "message": "'shot-base' extends outside the safe area (marked as an intentional crop)"
+    },
+    {
+      "check": "safe_area",
+      "severity": "info",
+      "action": "informational",
+      "layer": null,
+      "message": "'shot-win' extends outside the safe area (marked as an intentional crop)"
+    },
+    {
+      "check": "safe_area",
+      "severity": "info",
+      "action": "informational",
+      "layer": null,
+      "message": "'shot-img' extends outside the safe area (marked as an intentional crop)"
+    },
+    {
+      "check": "safe_area",
+      "severity": "info",
+      "action": "informational",
+      "layer": null,
+      "message": "'shot' extends outside the safe area (marked as an intentional crop)"
+    }
+  ]
+}
