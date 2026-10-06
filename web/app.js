@@ -153,7 +153,7 @@ const ctxBase = {
       titleEl.classList.add('title-enter');
     }
     titleEl.textContent = title;
-    document.title = title === 'Dashboard' ? 'GWatch' : `${title} â€” GWatch`;
+    document.title = title === 'Dashboard' ? 'GWatch' : `${title} — GWatch`;
     clear(actionsEl);
     if (actions) replace(actionsEl, actions);
     syncPageBar();
@@ -238,7 +238,7 @@ function enterView() {
  *  above is not enough on its own: an update arriving inside that window would
  *  hand freshly built elements to `.view-enter`, and they would fade in from
  *  nothing under content that was already on screen. So a refresh ends the
- *  animation first â€” anything it renders is then simply there. */
+ *  animation first — anything it renders is then simply there. */
 function endEnterAnimation() {
   clearTimeout(enterTimer);
   enterTimer = 0;
@@ -296,13 +296,13 @@ function renderHealth() {
   healthLink.className = `nav-link service-health ${issues.length ? 'issue' : 'ok'}`;
   const text = issues.length ? 'Service issue' : 'Service healthy';
   if (healthLink.querySelector('.health-text').textContent !== text) healthLink.querySelector('.health-text').textContent = text;
-  healthLink.title = issues.length ? issues.join(', ') : `Service healthy Â· last check ${relTime(hl.lastCheckAt)}`;
+  healthLink.title = issues.length ? issues.join(', ') : `Service healthy · last check ${relTime(hl.lastCheckAt)}`;
 }
 export function getHealth() { return lastHealth; }
 
 /* ---------- Header indicators ---------- */
 /** The orbs under the page name. Which ones appear is decided by rules the
- *  administrator configures in Settings â€º Indicators; because a viewer may not
+ *  administrator configures in Settings › Indicators; because a viewer may not
  *  read settings, the effective list arrives with the identity from /api/me,
  *  exactly as the theme does, so every account evaluates the same rules.
  *
@@ -331,7 +331,7 @@ function indicatorCount(st, cond) {
 /** Whether there is anything for the header to report on at all: a node that
  *  exists, is being watched, and has produced at least one result. A fresh
  *  install, one whose nodes are all paused, and one where the first round of
- *  checks has not finished yet all answer no â€” and all three are honestly
+ *  checks has not finished yet all answer no — and all three are honestly
  *  described by the blue orb rather than by a green "all clear" nobody has
  *  earned or a yellow warning about something that is merely young. */
 function anythingConnected(st) {
@@ -382,7 +382,7 @@ function renderIndicators(st) {
       const detail = f.rule.condition?.kind === 'serviceHealth' ? (st.serviceIssues || []).join(', ') : `${f.count}`;
       dotsEl.append(indicatorOrb({
         colour: INDICATOR_RANK[f.rule.colour] != null ? f.rule.colour : 'yellow',
-        label: detail ? `${f.rule.name} â€” ${detail}` : f.rule.name,
+        label: detail ? `${f.rule.name} — ${detail}` : f.rule.name,
         href: indicatorHref(f.rule.condition || {}),
         count: f.count,
       }));
@@ -390,11 +390,11 @@ function renderIndicators(st) {
   } else if (!connected) {
     dotsEl.append(indicatorOrb({
       colour: 'idle',
-      label: st.total ? 'Nothing connected yet â€” waiting for the first results' : 'No nodes yet â€” add one to start monitoring',
+      label: st.total ? 'Nothing connected yet — waiting for the first results' : 'No nodes yet — add one to start monitoring',
       href: st.total ? '#/nodes' : '#/nodes/new',
     }));
   } else {
-    dotsEl.append(indicatorOrb({ colour: 'ok', label: `All clear â€” ${st.up} of ${st.total} nodes healthy`, href: '#/dashboard' }));
+    dotsEl.append(indicatorOrb({ colour: 'ok', label: `All clear — ${st.up} of ${st.total} nodes healthy`, href: '#/dashboard' }));
   }
 }
 
@@ -414,8 +414,8 @@ function setIndicatorRules(rules) {
 
 /* ---------- Application updates ---------- */
 /** The badge in the header is the only place an update announces itself
- *  outside Settings. It appears for an administrator â€” nobody else can install
- *  one â€” and leads to Settings â€º Updates, where the version is chosen. */
+ *  outside Settings. It appears for an administrator — nobody else can install
+ *  one — and leads to Settings › Updates, where the version is chosen. */
 const updateBadge = document.getElementById('update-badge');
 const updateBadgeLabel = document.getElementById('update-badge-label');
 let updateStatus = null;
@@ -435,7 +435,7 @@ function renderUpdateBadge() {
   updateBadge.hidden = !available;
   if (!available) return;
   updateBadgeLabel.textContent = last.latestVersion || 'Update';
-  updateBadge.title = `GWatch ${last.latestVersion} is available${last.prerelease ? ' (pre-release)' : ''} â€” you are running ${last.currentVersion}`;
+  updateBadge.title = `GWatch ${last.latestVersion} is available${last.prerelease ? ' (pre-release)' : ''} — you are running ${last.currentVersion}`;
 }
 
 /** Offer the update when GWatch is opened. "Not now" and "Skip this version" both dismiss this version, so the next
@@ -458,7 +458,7 @@ function promptForUpdate() {
   const m = openModal({
     title: `GWatch ${last.latestVersion} is available`,
     body: [
-      h('p', null, `You are running ${last.currentVersion}. ${last.prerelease ? 'This is a pre-release, published for testing and not finished work. ' : ''}Installing downloads the release, checks its signature, replaces this copy and restarts the service â€” monitoring pauses for a few seconds.`),
+      h('p', null, `You are running ${last.currentVersion}. ${last.prerelease ? 'This is a pre-release, published for testing and not finished work. ' : ''}Installing downloads the release, checks its signature, replaces this copy and restarts the service — monitoring pauses for a few seconds.`),
       last.releaseNotes ? h('details', { class: 'collapsible' }, h('summary', null, 'Release notes'), h('div', { class: 'update-notes' }, last.releaseNotes)) : null,
     ],
     footer: [
@@ -546,8 +546,8 @@ onDenied((message) => toast(message, { kind: 'error', timeout: 8000 }));
 // is open: an administrator changes the account's role, the session ends, or
 // the answer at start-up simply failed. api.js reports every change it sees
 // (a refusal, a reconnect and the checks below all ask), and the page follows
-// it: the shell restyles, and the view on screen â€” which decided what to
-// offer from ctx.me when it was built â€” is built again for the new standing.
+// it: the shell restyles, and the view on screen — which decided what to
+// offer from ctx.me when it was built — is built again for the new standing.
 onIdentity((next) => {
   applyIdentity(next);
   authSetup = null; // whether a sign-in is needed may have changed with it
@@ -600,7 +600,7 @@ window.addEventListener('unhandledrejection', (e) => {
 // and skipping or finishing the tour sets the flag that stops this happening
 // a second time.
 // Returns true when it took over, in which case the hashchange it just caused
-// does the routing â€” calling route() as well would mount the tour twice.
+// does the routing — calling route() as well would mount the tour twice.
 function firstRunRedirect() {
   if (onboardingDone()) return false;
   if (parseHash().path !== '/dashboard') return false;
