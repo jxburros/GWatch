@@ -7,51 +7,39 @@
     "fps": 30,
     "shots": [
       {
-        "source": "scenes/01-hook.vixl",
-        "duration": 5000
-      },
-      {
-        "source": "scenes/02-logo.vixl",
+        "source": "scenes/01-night.vixl",
         "duration": 4000
       },
       {
-        "source": "scenes/03-checks.vixl",
-        "duration": 5000
+        "source": "scenes/02-outage.vixl",
+        "duration": 13000
       },
       {
-        "source": "scenes/04-dashboard.vixl",
-        "duration": 5000
-      },
-      {
-        "source": "scenes/05-outage.vixl",
-        "duration": 9000
-      },
-      {
-        "source": "scenes/06-map.vixl",
+        "source": "scenes/03-title.vixl",
         "duration": 4000
       },
       {
-        "source": "scenes/07-discover.vixl",
-        "duration": 5000
-      },
-      {
-        "source": "scenes/08-history.vixl",
-        "duration": 4000
-      },
-      {
-        "source": "scenes/09-automate.vixl",
+        "source": "scenes/04-checks.vixl",
         "duration": 6000
       },
       {
-        "source": "scenes/10-uses.vixl",
+        "source": "scenes/05-tour.vixl",
+        "duration": 12000
+      },
+      {
+        "source": "scenes/06-automate.vixl",
+        "duration": 6000
+      },
+      {
+        "source": "scenes/07-for.vixl",
+        "duration": 6000
+      },
+      {
+        "source": "scenes/08-home.vixl",
         "duration": 5000
       },
       {
-        "source": "scenes/11-trust.vixl",
-        "duration": 4000
-      },
-      {
-        "source": "scenes/12-end.vixl",
+        "source": "scenes/09-end.vixl",
         "duration": 4000
       }
     ],

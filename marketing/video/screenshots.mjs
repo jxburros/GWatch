@@ -1,10 +1,10 @@
-// Extra screenshots of the real GWatch interface for the 60-second video.
+// The discovery screenshot for the 60-second video, from the real GWatch interface.
 //
 //   npm ci                                   # once, from the repository root
 //   node marketing/video/screenshots.mjs     # writes marketing/video/screens/*.png
 //
-// Like marketing/beta/screenshots.mjs (whose dashboard, map, node, charts and wallboard
-// shots the video also uses), it serves web/ and opens each page with ?mock=1, the
+// Like marketing/beta/screenshots.mjs (whose dashboard, map and wallboard shots the
+// video also uses), it serves web/ and opens each page with ?mock=1, the
 // interface's built-in demo network, then removes the "Mock data" banner.
 import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
@@ -20,7 +20,6 @@ const base = `http://127.0.0.1:${port}`;
 
 // [file, route, action run before the shot]
 const PAGES = [
-  ['automation', 'settings/automation', null],
   ['discovery', 'nodes', async (page) => {
     await page.getByRole('button', { name: 'Discover', exact: true }).first().click();
     await page.waitForTimeout(800);

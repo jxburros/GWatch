@@ -11,6 +11,8 @@ from pathlib import Path
 
 import numpy as np
 
+from scenes import hms, scene_at
+
 SR = 48000
 BPM = 120
 BEAT = 60 / BPM
@@ -200,73 +202,93 @@ def alarm():
 # --------------------------------------------------------------------------------- score
 # I-V-vi-IV in C, one chord per bar: settled and warm, the "calm" in the tagline.
 CHORDS = [(48, [48, 52, 55]), (55, [55, 59, 62]), (57, [57, 60, 64]), (53, [53, 57, 60])]
-GRID = 5.0  # the beat grid starts on the logo; the cold open before it has no pulse
 
 
 def music(total, cue):
-    """``cue`` maps a scene name to its start in seconds; the outage is cut into the arrangement."""
+    """``cue`` maps a scene name to its start in seconds. The arrangement follows the night: a ticking
+    cold open, a held breath through the outage, a resolve when the gateway is back, and the groove
+    from the title card on."""
     drums, low, keys = Bus(total + 3), Bus(total + 3), Bus(total + 3)
     duck = np.ones(len(drums.buf))
-    t_down = cue["05-outage"] + 1.9
-    t_up = cue["05-outage"] + 5.6
-    t_end = cue["12-end"]
-    # Cold open: an uneasy A minor drone with a clock ticking on the beat.
-    keys.add(0, pad([57, 60, 64, 69], GRID + 0.6, 900), 0.8)
-    low.add(0, pad([33, 45], GRID + 0.4, 300), 0.9)
-    for k in range(int(GRID / BEAT)):
-        drums.add(k * BEAT, tick(100 if k % 2 == 0 else 96), 0.4, pan=0.2 if k % 2 else -0.2)
-    keys.add(GRID - 3.0, riser(3.0), 0.25)
-    drums.add(GRID, impact(), 0.7)
-    bars = int(np.ceil((t_end - GRID) / BAR))
-    for bar in range(bars):
-        t0 = GRID + bar * BAR
-        root, chord = CHORDS[bar % 4]
-        early = t0 < cue["03-checks"]
-        light = t0 < cue["06-map"]
-        outage = t_down - BAR / 2 <= t0 < t_up - 0.01
-        if outage:
-            # The network drops out, and so does the band: one held minor chord until the recovery.
-            keys.add(t0, pad([57 + 12, 60 + 12, 64 + 12], BAR + 0.3, 700), 0.55)
-            low.add(t0, bass(33, BAR * 0.95), 0.6)
-            continue
-        keys.add(t0, pad([n + 12 for n in chord], BAR + 0.4, 1300 if light else 1700), 0.75)
-        pattern = [0, 1, 2, 1, 2, 3, 2, 1] * 2
-        tones = chord + [chord[0] + 12]
-        for s, idx in enumerate(pattern):
-            if early and s % 2:
-                continue
-            t = t0 + s * BEAT / 4
-            if t >= t_end:
+    t_console = cue["02-outage"]
+    t_up = cue["02-outage"] + 7.2
+    t_title = cue["03-title"]
+    t_full = cue["05-tour"]
+    t_end = cue["09-end"]
+    # Cold open: a clock ticks on the beat over a low A minor drone.
+    keys.add(0, pad([57, 60, 64], t_console + 0.6, 800), 0.65)
+    low.add(0, pad([33, 45], t_console + 0.4, 260), 0.8)
+    for k in range(int(t_console / BEAT)):
+        drums.add(k * BEAT, tick(100 if k % 2 == 0 else 95), 0.35, pan=0.2 if k % 2 else -0.2)
+    # The outage: a heartbeat and a pulsing low A, alternating A minor and F, until the gateway is back.
+    t = t_console
+    i = 0
+    while t < t_up - 0.01:
+        chord = [57, 60, 64] if i % 2 == 0 else [53, 57, 60]
+        keys.add(t, pad([n + 12 for n in chord], min(BAR, t_up - t) + 0.4, 650), 0.5)
+        for b in range(4):
+            bt = t + b * BEAT
+            if bt >= t_up:
                 break
-            keys.add(t, pluck(tones[idx] + 12, 0.3, 1.0 if light else 1.3), 0.55, pan=0.35 if s % 2 else -0.35)
-        if early:
-            continue
+            if b in (0, 2):
+                drums.add(bt, kick(0.55), 0.55)
+            for e in range(2):
+                et = bt + e * BEAT / 2
+                if et < t_up:
+                    low.add(et, bass(33, BEAT / 2 * 0.9), 0.55)
+        t += BAR
+        i += 1
+    # Recovery: the first major chord of the film, then arpeggios with no drums.
+    keys.add(t_up, bell(84, 2.5), 0.45)
+    t = t_up
+    bar = 0
+    while t < t_title - 0.01:
+        root, chord = CHORDS[bar % 4]
+        keys.add(t, pad([n + 12 for n in chord], BAR + 0.4, 1300), 0.75)
+        for s, idx in enumerate([0, 1, 2, 1, 2, 3, 2, 1]):
+            st = t + s * BEAT / 2
+            if st < t_title:
+                tones = chord + [chord[0] + 12]
+                keys.add(st, pluck(tones[idx] + 12, 0.3, 1.0), 0.5, pan=0.35 if s % 2 else -0.35)
+        t += BAR
+        bar += 1
+    keys.add(t_title - 2.5, riser(2.5), 0.25)
+    drums.add(t_title, impact(), 0.7)
+    # The groove, from the title card to the end card.
+    bars = int(np.ceil((t_end - t_title) / BAR))
+    for bar in range(bars):
+        t0 = t_title + bar * BAR
+        root, chord = CHORDS[bar % 4]
+        light = t0 < t_full
+        keys.add(t0, pad([n + 12 for n in chord], BAR + 0.4, 1300 if light else 1700), 0.72)
+        tones = chord + [chord[0] + 12]
+        for s, idx in enumerate([0, 1, 2, 1, 2, 3, 2, 1] * 2):
+            st = t0 + s * BEAT / 4
+            if st < t_end:
+                keys.add(st, pluck(tones[idx] + 12, 0.3, 1.0 if light else 1.3), 0.52, pan=0.35 if s % 2 else -0.35)
         for e in range(8):
-            t = t0 + e * BEAT / 2
-            if t < t_end and not (t_down <= t < t_up):
-                low.add(t, bass(root - 12 + (12 if e % 4 == 3 else 0), BEAT / 2 * 0.95), 0.85)
+            et = t0 + e * BEAT / 2
+            if et < t_end:
+                low.add(et, bass(root - 12 + (12 if e % 4 == 3 else 0), BEAT / 2 * 0.95), 0.85)
         for b in range(4):
             bt = t0 + b * BEAT
-            if bt >= t_end or t_down <= bt < t_up:
+            if bt >= t_end:
                 continue
             if b in (0, 2) or not light:
                 drums.add(bt, kick(0.85 if light else 1.0), 0.9)
-                i = int(bt * SR)
+                j = int(bt * SR)
                 n = int(0.22 * SR)
-                duck[i:i + n] = np.minimum(duck[i:i + n], 0.5 + 0.5 * np.linspace(0, 1, n) ** 0.7)
+                duck[j:j + n] = np.minimum(duck[j:j + n], 0.5 + 0.5 * np.linspace(0, 1, n) ** 0.7)
             if b in (1, 3) and not light:
                 drums.add(bt, clap(), 0.5, pan=0.05)
             drums.add(bt + BEAT / 2, hat(), 0.45, pan=0.25)
             if not light:
                 drums.add(bt + BEAT / 4, hat(), 0.18, pan=-0.25)
                 drums.add(bt + 3 * BEAT / 4, hat(), 0.18, pan=-0.25)
-    # Out of the outage: a lift back into the groove.
-    keys.add(t_up - 1.5, riser(1.5), 0.22)
-    drums.add(t_up, impact(), 0.45)
-    # End card.
-    keys.add(t_end - 2.5, riser(2.5), 0.25)
-    drums.add(t_end, impact(), 0.75)
-    keys.add(t_end, pad([48, 55, 60, 64, 67, 72], 4.0, 1800), 0.9)
+    # End card: morning.
+    keys.add(t_end - 2.5, riser(2.5), 0.22)
+    drums.add(t_end, impact(), 0.6)
+    keys.add(t_end, pad([48, 55, 60, 64, 67, 72], 4.0, 1800), 0.95)
     low.add(t_end, bass(36, 2.5), 0.7)
     for i, n in enumerate((72, 76, 79, 84)):
         keys.add(t_end + i * 0.12, bell(n, 3.0), 0.5, pan=-0.4 + i * 0.27)
@@ -281,32 +303,32 @@ def effects(total, cue):
         return cue[scene] + ms / 1000
 
     for name, start in sorted(cue.items(), key=lambda kv: kv[1])[1:]:
-        fx.add(start - 0.3, whoosh(0.5), 0.7)
-    for i in range(6):  # hook: devices slide in, then answer one by one
-        fx.add(at("01-hook", 500 + i * 160), tick(98), 0.35)
-        fx.add(at("01-hook", 3100 + i * 80), pop(60 if i == 0 else 79), 0.55 if i == 0 else 0.35)
-    fx.add(at("02-logo", 0), chime((79, 84, 88)), 0.6)
-    for i in range(10):  # each check card, then its dot turning green
-        fx.add(at("03-checks", 500 + i * 140), pop(72 + (i % 5) * 2), 0.4, pan=-0.4 + 0.2 * (i % 5))
-        fx.add(at("03-checks", 1200 + i * 140), tick(100), 0.25)
+        if name != "03-title":
+            fx.add(start - 0.3, whoosh(0.5), 0.6)
+    fx.add(at("01-night", 1520), alarm(), 0.9)
+    for i in range(8):  # the console assembles
+        fx.add(at("02-outage", 250 + i * 60), tick(98 + i % 3), 0.25, pan=-0.4 + 0.1 * i)
+    for i in range(11):  # each failing check, as quiet ticks
+        t = max(scene_at(hms(23, 42, 3) + i * 3), 900)  # the same clock as shot 2
+        fx.add(at("02-outage", t), tick(88), 0.22)
+    fx.add(at("02-outage", 1508), pop(84), 0.6)  # the one email
+    fx.add(at("02-outage", 7200), chime((84, 88, 91)), 0.7)
+    fx.add(at("02-outage", 7600), pop(88), 0.5)
+    fx.add(at("03-title", 900), chime((79, 84, 88)), 0.5)
+    for i in range(10):
+        fx.add(at("04-checks", 300 + i * 160), tick(96 + (i % 4)), 0.3, pan=-0.3 + 0.06 * i)
+    for t in (300, 2200, 4300, 6200, 8300, 10200):  # the reticle locks on
+        fx.add(at("05-tour", t + 650), tick(102), 0.45)
+        fx.add(at("05-tour", t + 700), tick(96), 0.3)
     for i in range(3):
-        fx.add(at("04-dashboard", 900 + i * 700), tick(96), 0.5)
+        fx.add(at("06-automate", 600 + i * 1000), pop(74 + 3 * i), 0.45)
+        fx.add(at("06-automate", 1400 + i * 1000), tick(100), 0.4)
     for i in range(8):
-        fx.add(at("05-outage", 300 + i * 90), pop(74 + i), 0.3)
-    fx.add(at("05-outage", 1900), alarm(), 0.9)
-    fx.add(at("05-outage", 2900), pop(84), 0.6)
-    fx.add(at("05-outage", 5600), chime((84, 88, 91)), 0.7)
-    fx.add(at("05-outage", 6200), pop(88), 0.5)
-    for i in range(3):
-        fx.add(at("07-discover", 800 + i * 650), tick(94 + 2 * i), 0.5)
-    for i in range(3):
-        fx.add(at("09-automate", 950 + i * 900), pop(76 + 3 * i), 0.5)
+        fx.add(at("06-automate", 3400 + i * 110), tick(96 + (i % 4)), 0.3, pan=-0.4 + 0.1 * i)
+    for i in range(5):
+        fx.add(at("07-for", 250 + i * 900), pop(70 + 3 * i), 0.35)
     for i in range(8):
-        fx.add(at("09-automate", 3400 + i * 150), tick(96 + (i % 4)), 0.35, pan=-0.4 + 0.1 * i)
-    for i in range(6):
-        fx.add(at("10-uses", 400 + i * 220), pop(70 + 2 * i), 0.4, pan=-0.3 + 0.12 * i)
-    for i in range(4):
-        fx.add(at("11-trust", 300 + i * 300), pop(67 + 5 * i), 0.45)
+        fx.add(at("08-home", 400 + i * 330), tick(98), 0.28)
     return fx.buf
 
 
