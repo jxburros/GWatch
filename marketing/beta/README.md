@@ -6,6 +6,8 @@ is mostly about **what GWatch is and why it's good**. The beta invitation comes 
 
 ![Kit overview](output/kit-overview.png)
 
+A one-minute video made the same way is in [`../video/`](../video/README.md).
+
 Ready-to-paste text (taglines, the announcement post, social captions, the email invitation and a
 beta FAQ) is in **[COPY.md](COPY.md)**.
 
