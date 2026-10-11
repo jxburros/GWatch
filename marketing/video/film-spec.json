@@ -1,0 +1,71 @@
+{
+  "output": "gwatch-in-60-seconds.mp4",
+  "spec": {
+    "version": 1,
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "shots": [
+      {
+        "source": "scenes/01-hook.vixl",
+        "duration": 5000
+      },
+      {
+        "source": "scenes/02-logo.vixl",
+        "duration": 4000
+      },
+      {
+        "source": "scenes/03-checks.vixl",
+        "duration": 5000
+      },
+      {
+        "source": "scenes/04-dashboard.vixl",
+        "duration": 5000
+      },
+      {
+        "source": "scenes/05-outage.vixl",
+        "duration": 9000
+      },
+      {
+        "source": "scenes/06-map.vixl",
+        "duration": 4000
+      },
+      {
+        "source": "scenes/07-discover.vixl",
+        "duration": 5000
+      },
+      {
+        "source": "scenes/08-history.vixl",
+        "duration": 4000
+      },
+      {
+        "source": "scenes/09-automate.vixl",
+        "duration": 6000
+      },
+      {
+        "source": "scenes/10-uses.vixl",
+        "duration": 5000
+      },
+      {
+        "source": "scenes/11-trust.vixl",
+        "duration": 4000
+      },
+      {
+        "source": "scenes/12-end.vixl",
+        "duration": 4000
+      }
+    ],
+    "audio": [
+      {
+        "source": "audio/music.wav",
+        "start": 0,
+        "volume": 0.7
+      },
+      {
+        "source": "audio/effects.wav",
+        "start": 0,
+        "volume": 0.4
+      }
+    ]
+  }
+}

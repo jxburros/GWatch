@@ -1,0 +1,5 @@
+# Rebuilt by build/make_video.py
+audio/
+.vixl-cache/
+.vixl-cache.*
+__pycache__/
