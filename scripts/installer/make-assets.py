@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerates the installers' wizard artwork and the agent's icon.
+"""Regenerates the installers' wizard artwork and both programs' icons.
 
     python3 scripts/installer/make-assets.py
 
@@ -11,12 +11,14 @@ same Pillow, it writes the same bytes.
 What it makes, from the two master logos in assets/:
 
   logo-master.png        (GWatch)  -> wizard-large.bmp, wizard-large-2x.bmp
+                                      wizard-small.bmp, wizard-small-2x.bmp
+                                      gwatch.ico
   agent-logo-master.png  (Agent)   -> agent-wizard-large.bmp, agent-wizard-large-2x.bmp
                                       agent-wizard-small.bmp, agent-wizard-small-2x.bmp
                                       gwatch-agent.ico
 
-GWatch's own small badge (wizard-small*.bmp) and its icon (gwatch.ico) predate
-this script and are left alone; see README.md.
+The two masters are the color marks from the logo kits in brand/
+(brand/gwatch/PNG/mark-color-2000.png and brand/gwatch-agent/PNG/mark-color-2000.png).
 
 Both installers are light-only (issue #66), so every panel is drawn in the
 application's LIGHT theme tokens from web/app.css. The large panel is the
@@ -211,7 +213,9 @@ def main():
 
     save_pair(large_panel(gwatch), LARGE_2X, "wizard-large")
     save_pair(large_panel(agent), LARGE_2X, "agent-wizard-large")
+    save_pair(small_badge(gwatch), SMALL_2X, "wizard-small")
     save_pair(small_badge(agent), SMALL_2X, "agent-wizard-small")
+    save_ico(gwatch, "gwatch.ico")
     save_ico(agent, "gwatch-agent.ico")
 
 

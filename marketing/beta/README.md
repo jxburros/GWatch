@@ -46,10 +46,10 @@ are embedded in each master. The MP4 needs `ffmpeg`.
 
 - **The brand is the product's own.** Colours come from `web/app.css` (background `#0F1114`,
   accent teal `#43C9C0`, the up/degraded/down status colours) and the logo's gold `#D3A32E` and
-  navy `#061B3B`. The type is Barlow and Kode Mono, as in the interface. The mark is rebuilt as
-  editable Vixl vector paths from the geometry in `web/logo.svg` and `web/logo-dark.svg` (Vixl
-  cannot place an SVG file directly), and the background topology is drawn from
-  `web/signal-field.svg`.
+  navy `#061A3A`. The type is Barlow and Kode Mono, as in the interface. The mark is drawn as
+  editable Vixl vector paths by the logo kit in [`brand/`](../../brand/README.md) (its color
+  version on light pieces, its reverse version on dark ones), and the background topology is
+  drawn from `web/signal-field.svg`.
 - **The screenshots are the real interface.** [`screenshots.mjs`](screenshots.mjs) serves `web/`
   and opens each page with `?mock=1`, GWatch's built-in demo network, so the dashboard, map and
   wallboard show realistic data without exposing anyone's network. It removes the orange "Mock
