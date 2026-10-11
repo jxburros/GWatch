@@ -250,11 +250,10 @@ to build them locally. Three things to keep in mind:
   they can verify.
 
 The wizard artwork under `scripts/installer/assets/` is committed, not generated at
-release time, so a release needs no image tooling on the runner. If the mark ever
-changes, `web/logo.svg` and those assets have to be updated together; if the
-agent's mark changes, `web/agent-logo.png` and
-`scripts/installer/assets/agent-logo-master.png` go together, then
-`python3 scripts/installer/make-assets.py` and `make rsrc` (see
+release time, so a release needs no image tooling on the runner. Both marks come
+from the logo kits in [`brand/`](../brand/README.md); if one changes, rebuild the
+kit, copy its files into `web/` and the masters into `scripts/installer/assets/`,
+then run `python3 scripts/installer/make-assets.py` and `make rsrc` (see
 [`scripts/installer/README.md`](../scripts/installer/README.md#branding-assets)).
 Both installers are light-themed only.
 
