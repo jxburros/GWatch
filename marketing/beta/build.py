@@ -8,8 +8,8 @@ Run from anywhere, with Vixl 0.19+ installed (pip install 'vixl[pdf]' or a Vixl 
     python marketing/beta/build.py og deck     # build only some pieces
 
 Every piece is written to marketing/beta/output/<folder>/ as an editable .vixl master, the
-`vixl check` findings it shipped with (.check.json) and its exports. The GWatch mark is rebuilt
-as editable vector paths from web/logo.svg and web/logo-dark.svg, and the background topology
+`vixl check` findings it shipped with (.check.json) and its exports. The GWatch mark is drawn
+as editable vector paths by the logo kit in brand/ (brand/build.py), and the background topology
 comes from web/signal-field.svg, so the kit uses the product's own artwork.
 """
 
@@ -29,7 +29,7 @@ from vixl import Project  # noqa: E402
 from vixl.render import resolve_layout  # noqa: E402
 from vixl.typefaces import install_font  # noqa: E402
 
-# Brand, from web/app.css and web/logo*.svg ---------------------------------------------------
+# Brand, from web/app.css and brand/ -------------------------------------------------------------
 BG = "#0F1114"
 CARD = "#16181D"
 ELEV = "#22262D"
@@ -38,7 +38,7 @@ TEXT = "#F2F4F6"
 MUTED = "#9EA7AF"
 TEAL = "#43C9C0"
 GOLD = "#D3A32E"
-NAVY = "#061B3B"
+NAVY = "#061A3A"
 UP = "#35E07F"
 WARN = "#FFC542"
 DOWN = "#FF5C5C"
@@ -204,36 +204,25 @@ def sheet(p, path, **options):
     print("  wrote", Path(path).relative_to(REPO_ROOT))
 
 
-# The GWatch mark, as editable paths -----------------------------------------------------------
-MARK_COLOURS = {  # sclera, iris, pupil, glint, ring: web/logo.svg and web/logo-dark.svg
-    "light": ("#FDFDFD", GOLD, NAVY, "#FFFFFF", NAVY),
-    "dark": ("#1B1E24", GOLD, TEXT, BG, TEXT),
-    "teal": ("#FDFDFD", GOLD, NAVY, "#FFFFFF", TEAL),
-}
+# The GWatch mark, as editable paths, from the logo kit in brand/ ------------------------------
+def _brand_kit():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("gwatch_brand_kit", REPO_ROOT / "brand" / "build.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def _circle(cx, cy, r, k):
-    a, b, rr, yy = (cx - r) * k, (cx + r) * k, r * k, cy * k
-    return f"M{a:.2f} {yy:.2f} A{rr:.2f} {rr:.2f} 0 1 0 {b:.2f} {yy:.2f} A{rr:.2f} {rr:.2f} 0 1 0 {a:.2f} {yy:.2f} Z"
+BRAND = _brand_kit()
+MARK_VARIANTS = {"light": "color", "dark": "reverse"}  # brand/README.md: colour versions
 
 
 def mark(prefix, x, y, size, variant="dark"):
-    """The magnifier-G with its eye, scaled from the logo's 128-unit view box."""
-    sclera, iris, pupil, glint, ring = MARK_COLOURS[variant]
-    k = size / 128
-    ops = []
-    for i, (cx, cy, r, c) in enumerate([(55.8, 55.8, 39.5, sclera), (56.8, 56.4, 22.9, iris),
-                                        (56.9, 56.9, 12.7, pupil), (62.8, 51.6, 3.6, glint)]):
-        ops.append({"type": "shape", "shape": "path", "name": f"{prefix}-c{i}", "x": round(x), "y": round(y),
-                    "width": round(size), "height": round(size), "path": _circle(cx, cy, r, k), "fill": c})
-    arc = 45.46 * k
-    strokes = [(f"M{101.2 * k:.2f} {53.42 * k:.2f} A{arc:.2f} {arc:.2f} 0 1 1 {95.17 * k:.2f} {33.07 * k:.2f}", 12.37),
-               (f"M{88.9 * k:.2f} {58.81 * k:.2f} L{101.6 * k:.2f} {58.81 * k:.2f}", 11.44),
-               (f"M{94.46 * k:.2f} {94.62 * k:.2f} L{115.57 * k:.2f} {115.88 * k:.2f}", 16.24)]
-    for i, (d, w) in enumerate(strokes):
-        ops.append({"type": "shape", "shape": "path", "name": f"{prefix}-s{i}", "x": round(x), "y": round(y),
-                    "width": round(size), "height": round(size), "path": d, "fill": "#00000000", "stroke": ring,
-                    "stroke_width": max(1, round(w * k)), "line_cap": "round"})
+    """The magnifier-G with its eye, fitted into a size x size box at (x, y)."""
+    ops = BRAND.mark_ops("gwatch", MARK_VARIANTS[variant], *BRAND.place("gwatch", x, y, size, size))
+    for op in ops:
+        op["name"] = f"{prefix}-{op['name']}"
     ops.append({"type": "group", "name": prefix, "targets": [o["name"] for o in ops]})
     return ops
 
