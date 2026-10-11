@@ -21,7 +21,7 @@ timeline, the interface shots are the real GWatch web interface, and the soundtr
 | 0:28 | `06-map` | **Network map.** The same tree in the real interface |
 | 0:32 | `07-discover` | **Set up in minutes.** *Scan. Tick. Watched.* Discovery finds three devices on 192.168.1.0/24, with SNMP port picking and agent pairing |
 | 0:37 | `08-history` | **History.** Timestacked charts, incidents, availability reports, years of rolled-up history |
-| 0:41 | `09-automation` | **It acts.** Three recipes (restart Plex with `docker restart`, a 2-of-3 DNS rule to ntfy and Pushover, a router-reboot webhook) and the eight ways it notifies or acts |
+| 0:41 | `09-automate` | **It acts.** Three recipes (restart Plex with `docker restart`, a 2-of-3 DNS rule to ntfy and Pushover, a router-reboot webhook) and the eight ways it notifies or acts |
 | 0:47 | `10-uses` | **Made for** homelabs, smart homes, websites and APIs, every PC (the agent), small offices and a spare screen (the wallboard) |
 | 0:52 | `11-trust` | **Stays home.** No cloud account, signed updates, encrypted backups, accessible; runs on Windows, Linux, macOS, Docker and Raspberry Pi; SQLite, PostgreSQL or MySQL |
 | 0:56 | `12-end` | Lockup, tagline, *Free to use · Beta 0.6.0*, github.com/jxburros/GWatch |
