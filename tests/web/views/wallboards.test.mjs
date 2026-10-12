@@ -42,3 +42,18 @@ test('wallboard tabs are real tabs: one panel, roving tabindex, arrow keys selec
   assert.equal(tabs[0].getAttribute('aria-selected'), 'true', 'Home goes back to the first');
   assert.equal(document.activeElement, tabs[0]);
 });
+
+test('live refresh preserves unsaved layout values and the focused input', async (t) => {
+  const { root, instance } = await mountView(wallboardsView, undefined, t);
+  const input = root.querySelector('[aria-label="Layout"] input');
+  input.focus();
+  input.value = '19';
+  input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await instance.refresh();
+  assert.equal(root.querySelector('[aria-label="Layout"] input'), input);
+  assert.equal(input.value, '19');
+  assert.equal(document.activeElement, input);
+  input.blur();
+  await instance.refresh();
+  assert.equal(root.querySelector('[aria-label="Layout"] input').value, '19');
+});

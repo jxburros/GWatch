@@ -264,3 +264,20 @@ test('CSV links export a named metric’s own values', () => {
   assert.match(items[1].href, /checkId=21.*metric=net%3Aeth0\.rx/);
   assert.equal(items[1].label, 'Export CSV — NAS › Hardware health — Network eth0 received');
 });
+
+test('live refresh retains the chart canvas and keyboard focus', async (t) => {
+  for (const timestack of [null, { period: '24h', layers: 2 }]) {
+    const root = freshRoot();
+    const view = renderConfiguredChart(root, { series: [{ checkId: 22, metric: 'avg' }], timestack }, { fetch: fakeFetch() });
+    t.after(() => view.destroy());
+    await settle(); await settle();
+    const canvas = root.querySelector('canvas');
+    assert.ok(canvas);
+    canvas.focus();
+    const chart = view.charts[0];
+    await view.refresh();
+    assert.equal(root.querySelector('canvas'), canvas);
+    assert.equal(view.charts[0], chart);
+    assert.equal(document.activeElement, canvas);
+  }
+});

@@ -855,7 +855,7 @@ export async function mount(root, ctx) {
       render(list || []);
     };
     const scopeLabel = (w) => w.nodeId ? (nodes.find((n) => n.id === w.nodeId)?.name || `node ${w.nodeId}`) : w.group ? `group ${w.group}` : 'all nodes';
-    const whenLabel = (w) => w.weekdays?.length ? `Weekly on ${w.weekdays.map(weekdayShort).join(', ')} at ${timeShort(w.startAt)} for ${duration((w.durationMinutes || 60) * 60)}` : `${dateTime(w.startAt, { seconds: false })} → ${dateTime(w.endAt, { seconds: false })}`;
+    const whenLabel = (w) => w.weekdays?.length ? `Weekly on ${w.weekdays.map(weekdayShort).join(', ')} at ${w.startTime || timeShort(w.startAt)} (${w.timeZone || 'server local time — legacy'}) for ${duration((w.durationMinutes || 60) * 60)}` : `${dateTime(w.startAt, { seconds: false })} → ${dateTime(w.endAt, { seconds: false })}`;
     const render = (list) => {
       clear(wrap);
       wrap.append(h('div', { class: 'card-head' }, h('h2', null, 'Maintenance windows'), h('button', { class: 'btn btn-primary', type: 'button', onclick: () => edit(null) }, icon('plus'), 'New window')),
@@ -883,12 +883,13 @@ export async function mount(root, ctx) {
       const kind = selectInput({ options: [{ value: 'once', label: 'One-off (start and end)' }, { value: 'weekly', label: 'Weekly recurring' }], value: w.weekdays?.length ? 'weekly' : 'once' });
       const start = h('input', { type: 'datetime-local', value: toLocalInput(w.startAt) });
       const end = h('input', { type: 'datetime-local', value: toLocalInput(w.endAt) });
-      const startTime = h('input', { type: 'time', value: toLocalInput(w.startAt).slice(11, 16) || '03:00' });
+      const startTime = h('input', { type: 'time', value: w.startTime || toLocalInput(w.startAt).slice(11, 16) || '03:00' });
+      const timeZone = textInput({ value: w.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', placeholder: 'e.g. America/Chicago' });
       const durationIn = numberInput({ value: w.durationMinutes || 60, min: 5 });
       const days = h('div', { class: 'weekdays', role: 'group', 'aria-label': 'Weekdays' });
       [1, 2, 3, 4, 5, 6, 0].forEach((dIdx) => days.append(h('label', null, h('input', { type: 'checkbox', value: dIdx, checked: w.weekdays.includes(dIdx) }), weekdayShort(dIdx))));
       const onceFields = h('div', { class: 'form-grid' }, field({ label: 'Starts', input: start }), field({ label: 'Ends', input: end }));
-      const weeklyFields = h('div', { class: 'stack-sm' }, field({ label: 'Days', input: days }), h('div', { class: 'form-grid' }, field({ label: 'Start time', input: startTime }), field({ label: 'Duration', input: unit(durationIn, 'minutes') })));
+      const weeklyFields = h('div', { class: 'stack-sm' }, field({ label: 'Days', input: days }), h('div', { class: 'form-grid' }, field({ label: 'Start time', input: startTime }), field({ label: 'Time zone', input: timeZone, help: 'IANA zone. The weekly time stays in this zone when daylight saving time changes.' }), field({ label: 'Duration', input: unit(durationIn, 'minutes') })));
       const syncKind = () => { onceFields.hidden = kind.value !== 'once'; weeklyFields.hidden = kind.value !== 'weekly'; };
       kind.addEventListener('change', syncKind); syncKind();
       const notes = textarea({ value: w.notes || '', rows: 2, placeholder: 'Optional' });
@@ -902,13 +903,14 @@ export async function mount(root, ctx) {
         if (!name.value.trim()) { name.focus(); toast('Give the window a name', { kind: 'error' }); return; }
         const payload = { ...w, name: name.value.trim(), nodeId: scope.value === 'node' ? Number(nodeSel.value) : null, group: scope.value === 'group' ? groupSel.value : '', notes: notes.value, enabled: enabledT.input.checked };
         if (kind.value === 'once') {
-          payload.weekdays = []; payload.durationMinutes = 0;
+          payload.weekdays = []; payload.durationMinutes = 0; payload.startTime = ''; payload.timeZone = '';
           payload.startAt = fromLocalInput(start.value); payload.endAt = fromLocalInput(end.value);
           if (!payload.startAt || !payload.endAt || new Date(payload.endAt) <= new Date(payload.startAt)) { toast('The end must be after the start', { kind: 'error' }); return; }
         } else {
           payload.weekdays = [...days.querySelectorAll('input:checked')].map((i) => Number(i.value));
           if (!payload.weekdays.length) { toast('Pick at least one weekday', { kind: 'error' }); return; }
-          const [hh, mm] = (startTime.value || '03:00').split(':').map(Number);
+          payload.startTime = startTime.value || '03:00'; payload.timeZone = timeZone.value.trim();
+          const [hh, mm] = payload.startTime.split(':').map(Number);
           const sd = new Date(); sd.setHours(hh, mm, 0, 0);
           payload.startAt = sd.toISOString(); payload.durationMinutes = Number(durationIn.value) || 60;
           payload.endAt = new Date(sd.getTime() + payload.durationMinutes * 60e3).toISOString();

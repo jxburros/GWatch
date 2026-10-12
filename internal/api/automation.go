@@ -96,6 +96,9 @@ func (s *Server) normalizeTrigger(ctx context.Context, t *model.Trigger) error {
 	if t.CooldownMinutes < 0 {
 		t.CooldownMinutes = 0
 	}
+	if t.Action.Type == model.ActionRunNode && t.CooldownMinutes < 1 {
+		t.CooldownMinutes = 1
+	}
 	if t.LatencyOverMS < 0 {
 		t.LatencyOverMS = 0
 	}

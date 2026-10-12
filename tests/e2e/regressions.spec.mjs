@@ -32,3 +32,26 @@ test('SSE refresh retains dashboard link keyboard focus', async ({ page }) => {
   await page.waitForTimeout(1800);
   expect(await page.evaluate(() => document.activeElement.getAttribute('href'))).toBe(href);
 });
+
+test('wallboard layout survives a live refresh', async ({ page }) => {
+  await openApp(page, 'wallboards');
+  const columns = page.getByLabel('Columns', { exact: true });
+  await columns.fill('19');
+  await page.evaluate(async () => { const { api } = await import('/api.js'); const n = window.__gwatchMock.nodes[0]; await api.put(`/api/nodes/${n.id}`, n); });
+  await page.waitForTimeout(1800);
+  await expect(columns).toHaveValue('19');
+  await expect(columns).toBeFocused();
+  await page.getByRole('button', { name: 'Save layout', exact: true }).click();
+  await expect.poll(() => page.evaluate(async () => { const { api } = await import('/api.js'); return (await api.get('/api/wallboards'))[0].layout.columns; })).toBe(19);
+});
+
+test('chart canvas keeps keyboard focus through refresh', async ({ page }) => {
+  await openApp(page, 'charts');
+  const canvas = page.locator('canvas').first();
+  await expect(canvas).toBeVisible();
+  await canvas.focus();
+  await page.keyboard.press('ArrowRight');
+  await page.evaluate(async () => { const { api } = await import('/api.js'); const n = window.__gwatchMock.nodes[0]; await api.put(`/api/nodes/${n.id}`, n); });
+  await page.waitForTimeout(1800);
+  await expect(canvas).toBeFocused();
+});

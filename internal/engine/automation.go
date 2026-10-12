@@ -259,6 +259,10 @@ func (e *Engine) fireTriggers(tc triggerContext) {
 		return
 	}
 	now := time.Now()
+	if e.inMaintenanceLocked(tc.node, now) || (tc.state.SilencedUntil != nil && tc.state.SilencedUntil.After(now)) {
+		e.mu.Unlock()
+		return
+	}
 	instance := e.settings.General.InstanceName
 	var due []struct {
 		t    model.Trigger
@@ -272,8 +276,13 @@ func (e *Engine) fireTriggers(tc triggerContext) {
 		if len(met) == 0 {
 			continue
 		}
-		if t.CooldownMinutes > 0 {
-			if last, ok := e.triggerLast[t.ID]; ok && now.Sub(last) < time.Duration(t.CooldownMinutes)*time.Minute {
+		cooldown := t.CooldownMinutes
+		// Also cover saved triggers from before the API enforced this floor.
+		if t.Action.Type == model.ActionRunNode && cooldown < 1 {
+			cooldown = 1
+		}
+		if cooldown > 0 {
+			if last, ok := e.triggerLast[t.ID]; ok && now.Sub(last) < time.Duration(cooldown)*time.Minute {
 				continue
 			}
 		}

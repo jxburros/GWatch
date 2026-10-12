@@ -570,15 +570,17 @@ export function renderConfiguredChart(host, cfg, { title = 'Chart', fetch: fetch
   clear(host);
   host.append(body);
   let destroyed = false;
+  let generation = 0;
+  let renderKey = '';
+  const resetCharts = () => { charts.forEach((ch) => ch.destroy()); charts.length = 0; clear(body); renderKey = ''; };
   const load = async () => {
-    if (c.timestack) { await loadStack(); return; }
+    const ticket = ++generation;
+    if (c.timestack) { await loadStack(ticket); return; }
     let entries;
-    try { entries = await loadChartSeries(c, fetchFn || historyFetch); } catch (e) { replace(body, h('div', { class: 'note' }, 'Could not load history: ' + e.message)); return; }
-    if (destroyed) return;
-    if (!entries.length) { replace(body, emptyState({ icon: 'activity', title: 'Nothing to chart yet', text: c.series.length ? 'None of the ticked metrics has any history in this range yet.' : 'Pick checks with history, or add a node with a ping or HTTP check.', compact: true })); return; }
+    try { entries = await loadChartSeries(c, fetchFn || historyFetch); } catch (e) { if (!destroyed && ticket === generation) { resetCharts(); body.append(h('div', { class: 'note' }, 'Could not load history: ' + e.message)); } return; }
+    if (destroyed || ticket !== generation) return;
+    if (!entries.length) { resetCharts(); replace(body, emptyState({ icon: 'activity', title: 'Nothing to chart yet', text: c.series.length ? 'None of the ticked metrics has any history in this range yet.' : 'Pick checks with history, or add a node with a ping or HTTP check.', compact: true })); return; }
     onData && onData(entries.map((e) => e.hs), entries);
-    clear(body);
-    charts.forEach((ch) => ch.destroy()); charts.length = 0;
     const palette = seriesColors();
     const from = entries[0].hs.from, to = entries[0].hs.to;
     // Raw named-metric points and bucketed latency points on one chart: the
@@ -620,6 +622,11 @@ export function renderConfiguredChart(host, cfg, { title = 'Chart', fetch: fetch
       for (const id of ids) byCheck.push(all.filter((s) => Number(s.entry.hs.checkId) === id));
     } else byCheck.push(all);
     const plan = byCheck.flatMap((list) => groupByUnits(list, primaryUnit).map((g) => ({ ...g, check: c.split ? list[0].entry.hs : null })));
+    const key = JSON.stringify(plan.map((g) => [g.units, g.series.map((s) => [seriesKey(s.entry.spec), s.name])]));
+    const reuse = key === renderKey && charts.length === plan.length && body.querySelectorAll('.chart-host').length === plan.length;
+    if (!reuse) resetCharts();
+    else for (const child of [...body.children]) if (!child.classList.contains('chart-host')) child.remove();
+    renderKey = key;
     const unitCount = new Set(all.map((s) => s.unit)).size;
     if (plan.length > byCheck.length) {
       body.append(h('p', { class: 'note chart-split-note' }, c.split
@@ -627,15 +634,18 @@ export function renderConfiguredChart(host, cfg, { title = 'Chart', fetch: fetch
         : `These metrics are in ${unitCount} different units and a chart has two axes, so they are drawn as ${plan.length} charts.`));
     }
     plan.forEach((group, gi) => {
-      const hostEl = h('div', { class: 'chart-host', style: fill ? { flex: '1', minHeight: '0', display: 'flex', flexDirection: 'column' } : { marginBottom: plan.length > 1 ? '12px' : '0' } });
-      if (group.check && (gi === 0 || plan[gi - 1].check !== group.check)) hostEl.append(h('div', { class: 'section-title', style: { marginBottom: '4px' } }, `${group.check.nodeName || ''} › ${group.check.checkName}`));
-      body.append(hostEl);
-      // A legend whenever a line needs naming: more than one on the chart, or
-      // one of several charts that the units split apart. A chart of its own
-      // per check is named by its heading instead, unless it mixes metrics.
-      const named = group.series.length > 1 || (!c.split && plan.length > 1) || (c.split && mixedMetrics);
-      const chart = new LineChart(hostEl, opts(group, named));
-      charts.push(chart);
+      let chart = reuse ? charts[gi] : null;
+      if (!chart) {
+        const hostEl = h('div', { class: 'chart-host', style: fill ? { flex: '1', minHeight: '0', display: 'flex', flexDirection: 'column' } : { marginBottom: plan.length > 1 ? '12px' : '0' } });
+        if (group.check && (gi === 0 || plan[gi - 1].check !== group.check)) hostEl.append(h('div', { class: 'section-title', style: { marginBottom: '4px' } }, `${group.check.nodeName || ''} › ${group.check.checkName}`));
+        body.append(hostEl);
+        // A legend whenever a line needs naming: more than one on the chart, or
+        // one of several charts that the units split apart. A chart of its own
+        // per check is named by its heading instead, unless it mixes metrics.
+        const named = group.series.length > 1 || (!c.split && plan.length > 1) || (c.split && mixedMetrics);
+        chart = new LineChart(hostEl, opts(group, named));
+        charts.push(chart);
+      }
       chart.setData({ series: group.series.map(({ entry, ...s }) => s), from, to, bucketSeconds: bucket });
     });
     if (c.uptime) {
@@ -668,17 +678,20 @@ export function renderConfiguredChart(host, cfg, { title = 'Chart', fetch: fetch
   };
   // A timestacked chart: one LineChart, one line per layer, every layer's
   // points moved forward onto the current window so they share its time axis.
-  const loadStack = async () => {
+  const loadStack = async (ticket) => {
     let layers;
-    try { layers = await loadTimestackSeries(c, fetchFn || historyFetch); } catch (e) { replace(body, h('div', { class: 'note' }, 'Could not load history: ' + e.message)); return; }
-    if (destroyed) return;
+    try { layers = await loadTimestackSeries(c, fetchFn || historyFetch); } catch (e) { if (!destroyed && ticket === generation) { resetCharts(); body.append(h('div', { class: 'note' }, 'Could not load history: ' + e.message)); } return; }
+    if (destroyed || ticket !== generation) return;
     if (!layers.length || !layers.some((l) => (l.hs.points || []).length)) {
+      resetCharts();
       replace(body, emptyState({ icon: 'activity', title: 'Nothing to stack yet', text: 'This metric has no history in these periods yet.', compact: true }));
       return;
     }
     onData && onData(layers.map((l) => l.hs), layers);
-    clear(body);
-    charts.forEach((ch) => ch.destroy()); charts.length = 0;
+    const reuse = renderKey === 'stack' && charts.length === 1 && body.querySelector('.chart-host');
+    if (!reuse) resetCharts();
+    else for (const child of [...body.children]) if (!child.classList.contains('chart-host')) child.remove();
+    renderKey = 'stack';
     const ts = c.timestack;
     const spec = layers.spec;
     const palette = seriesColors();
@@ -696,17 +709,20 @@ export function renderConfiguredChart(host, cfg, { title = 'Chart', fetch: fetch
     const from = +new Date(base.from), to = +new Date(base.to);
     const buckets = [...new Set(layers.map((l) => l.hs.bucketSeconds || 0))];
     const full = isBuiltinMetric(spec) && (spec.metric === 'loss' || spec.metric === 'availability');
-    body.append(h('div', { class: 'section-title timestack-title' }, `${what} · ${ts.layers} × ${rangeLabel(ts.period)}`));
-    const hostEl = h('div', { class: 'chart-host', style: fill ? { flex: '1', minHeight: '0', display: 'flex', flexDirection: 'column' } : null });
-    body.append(hostEl);
-    const chart = new LineChart(hostEl, {
-      unit, yMin: c.yMin != null ? c.yMin : full ? 0 : null, yMax: c.yMax != null ? c.yMax : full ? 100 : null, threshold: c.threshold,
-      // Failure shading would mix the layers' outages into one band; the
-      // lines themselves break where a check failed.
-      style: c.style, smooth: c.smooth, points: c.points, lineWidth: c.lineWidth, shadeFailures: false, legend: c.legend, alwaysLegend: true, grid: c.grid,
-      height: fill ? null : c.height, title, ariaLabel: `${title} timestacked chart: ${what}, ${ts.layers} periods of ${rangeLabel(ts.period)}`,
-    });
-    charts.push(chart);
+    body.prepend(h('div', { class: 'section-title timestack-title' }, `${what} · ${ts.layers} × ${rangeLabel(ts.period)}`));
+    let chart = reuse ? charts[0] : null;
+    if (!chart) {
+      const hostEl = h('div', { class: 'chart-host', style: fill ? { flex: '1', minHeight: '0', display: 'flex', flexDirection: 'column' } : null });
+      body.append(hostEl);
+      chart = new LineChart(hostEl, {
+        unit, yMin: c.yMin != null ? c.yMin : full ? 0 : null, yMax: c.yMax != null ? c.yMax : full ? 100 : null, threshold: c.threshold,
+        // Failure shading would mix the layers' outages into one band; the
+        // lines themselves break where a check failed.
+        style: c.style, smooth: c.smooth, points: c.points, lineWidth: c.lineWidth, shadeFailures: false, legend: c.legend, alwaysLegend: true, grid: c.grid,
+        height: fill ? null : c.height, title, ariaLabel: `${title} timestacked chart: ${what}, ${ts.layers} periods of ${rangeLabel(ts.period)}`,
+      });
+      charts.push(chart);
+    }
     chart.setData({ series, from, to, bucketSeconds: buckets.length === 1 ? buckets[0] : 0 });
     if (layers.length < ts.layers) body.append(h('p', { class: 'note' }, `${plural(ts.layers - layers.length, 'earlier period')} could not be read.`));
     if (!fill) {

@@ -151,6 +151,12 @@ deliberately does and does not do on a machine.
 | [`CHANGELOG.md`](CHANGELOG.md) | What shipped in each release |
 | [`ROADMAP.md`](ROADMAP.md) | What's planned and roughly when |
 
+Local access trusts all users and processes on the server as administrators by
+default; on Windows, automation normally runs as LocalSystem. On shared machines,
+create an account and turn on **Require sign-in on this computer too**. See the
+[local administrator trust model](docs/DISCLAIMER.md#how-gwatch-ships), including
+why the default is retained and how to use a less-privileged service account.
+
 ## License, trademarks and credits
 
 GWatch is source-available under the [GWatch Community License](LICENSE): free to use,

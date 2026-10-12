@@ -391,7 +391,10 @@ func runHTTPCheck(ctx context.Context, check model.Check, target string, opts Op
 			what = fmt.Sprintf("json %q", cfg.JSONPath)
 		}
 		res.Details.ContentValue = value
-		if opts.PreviousValue != "" && opts.PreviousValue != value {
+		// A nonempty digest records that even an empty value has been observed.
+		sum := sha256.Sum256([]byte(value))
+		res.Details.ContentHash = hex.EncodeToString(sum[:])
+		if (opts.PreviousHash != "" || opts.PreviousValue != "") && opts.PreviousValue != value {
 			res.Details.ContentChanged = true
 			res.Warnings = append(res.Warnings, fmt.Sprintf("Response content changed: %s is now %s (was %s)", what, quoteIfNeeded(value), quoteIfNeeded(opts.PreviousValue)))
 		}

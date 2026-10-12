@@ -201,7 +201,7 @@ func (c *Client) Releases(ctx context.Context, repo, current string) ([]model.Re
 			Version:    version,
 			Tag:        rel.TagName,
 			Name:       rel.Name,
-			Prerelease: rel.Prerelease,
+			Prerelease: rel.Prerelease || strings.Contains(strings.SplitN(version, "+", 2)[0], "-"),
 			Notes:      rel.Body,
 			URL:        rel.HTMLURL,
 		}
