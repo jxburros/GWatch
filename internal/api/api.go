@@ -52,6 +52,7 @@ type Server struct {
 	// failLimiter counts failed credential attempts per client IP; apiLimiter
 	// is the general ceiling on API-key traffic from off this machine. Both are
 	// created by Handler().
+	loginSlots  chan struct{} // at most two concurrent 64 MiB password checks
 	failLimiter *auth.Limiter
 	apiLimiter  *auth.Limiter
 
@@ -82,6 +83,9 @@ type Server struct {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	s.routes = nil
+	if s.loginSlots == nil {
+		s.loginSlots = make(chan struct{}, 2)
+	}
 	if s.failLimiter == nil {
 		s.failLimiter = auth.NewLimiter(failureLimit, failureWindow)
 	}

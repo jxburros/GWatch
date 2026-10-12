@@ -651,9 +651,10 @@ func (s *Store) RecentResults(ctx context.Context, checkID int64, limit int) ([]
 	return out, rows.Err()
 }
 
-// LastResults returns the latest result for every check.
+// LastResults returns the latest inserted result for every check using one
+// indexed seek per check, regardless of the amount of retained history.
 func (s *Store) LastResults(ctx context.Context) (map[int64]model.Result, error) {
-	rows, err := s.query(ctx, "SELECT "+resultCols+" FROM results WHERE id IN (SELECT MAX(id) FROM results GROUP BY check_id)")
+	rows, err := s.query(ctx, "SELECT "+resultCols+" FROM results WHERE id IN (SELECT (SELECT id FROM results WHERE check_id = checks.id ORDER BY id DESC LIMIT 1) FROM checks)")
 	if err != nil {
 		return nil, err
 	}
@@ -804,14 +805,14 @@ func (s *Store) ListEvents(ctx context.Context, f EventFilter) ([]model.Event, e
 
 // ---- maintenance windows ----
 
-const mwCols = `id, name, node_id, group_name, enabled, start_at, end_at, weekdays, duration_minutes, notes, created_at`
+const mwCols = `id, name, node_id, group_name, enabled, start_at, end_at, weekdays, duration_minutes, notes, created_at, start_time, time_zone`
 
 func scanMW(sc interface{ Scan(...any) error }) (model.MaintenanceWindow, error) {
 	var m model.MaintenanceWindow
 	var node sql.NullInt64
 	var enabled int
 	var start, end, weekdays, created string
-	if err := sc.Scan(&m.ID, &m.Name, &node, &m.Group, &enabled, &start, &end, &weekdays, &m.DurationMinutes, &m.Notes, &created); err != nil {
+	if err := sc.Scan(&m.ID, &m.Name, &node, &m.Group, &enabled, &start, &end, &weekdays, &m.DurationMinutes, &m.Notes, &created, &m.StartTime, &m.TimeZone); err != nil {
 		return m, err
 	}
 	m.NodeID = int64Ptr(node)
@@ -849,16 +850,16 @@ func (s *Store) SaveMaintenance(ctx context.Context, m model.MaintenanceWindow) 
 	}
 	if m.ID == 0 {
 		m.CreatedAt = time.Now()
-		newID, err := s.insertID(ctx, `INSERT INTO maintenance_windows(name, node_id, group_name, enabled, start_at, end_at, weekdays, duration_minutes, notes, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-			m.Name, nullInt64(m.NodeID), m.Group, boolInt(m.Enabled), fmtTime(m.StartAt), fmtTime(m.EndAt), jsonString(m.Weekdays), m.DurationMinutes, m.Notes, fmtTime(m.CreatedAt))
+		newID, err := s.insertID(ctx, `INSERT INTO maintenance_windows(name, node_id, group_name, enabled, start_at, end_at, weekdays, duration_minutes, notes, created_at, start_time, time_zone) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+			m.Name, nullInt64(m.NodeID), m.Group, boolInt(m.Enabled), fmtTime(m.StartAt), fmtTime(m.EndAt), jsonString(m.Weekdays), m.DurationMinutes, m.Notes, fmtTime(m.CreatedAt), m.StartTime, m.TimeZone)
 		if err != nil {
 			return m, err
 		}
 		m.ID = newID
 		return m, nil
 	}
-	res, err := s.exec(ctx, `UPDATE maintenance_windows SET name=?, node_id=?, group_name=?, enabled=?, start_at=?, end_at=?, weekdays=?, duration_minutes=?, notes=? WHERE id=?`,
-		m.Name, nullInt64(m.NodeID), m.Group, boolInt(m.Enabled), fmtTime(m.StartAt), fmtTime(m.EndAt), jsonString(m.Weekdays), m.DurationMinutes, m.Notes, m.ID)
+	res, err := s.exec(ctx, `UPDATE maintenance_windows SET name=?, node_id=?, group_name=?, enabled=?, start_at=?, end_at=?, weekdays=?, duration_minutes=?, notes=?, start_time=?, time_zone=? WHERE id=?`,
+		m.Name, nullInt64(m.NodeID), m.Group, boolInt(m.Enabled), fmtTime(m.StartAt), fmtTime(m.EndAt), jsonString(m.Weekdays), m.DurationMinutes, m.Notes, m.StartTime, m.TimeZone, m.ID)
 	if err != nil {
 		return m, err
 	}

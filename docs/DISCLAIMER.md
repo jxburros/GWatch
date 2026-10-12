@@ -14,8 +14,27 @@ either of us.
 **There is no password by default.** A fresh install is usable immediately: a
 browser on the computer GWatch runs on is treated as an administrator without
 signing in. That is deliberate — the default install listens on `127.0.0.1`,
-where the only thing that can reach it is something already running on that
-machine, and demanding a password to protect yourself from yourself is theatre.
+where clients are processes already running on that machine. This trusts every
+local user and process, including less-privileged accounts; loopback is not an
+account boundary. On Windows the default service account is **LocalSystem**.
+A local client can therefore use GWatch automation to run commands as LocalSystem.
+
+Create an administrator account and enable **Settings › Users & access › Require
+sign-in on this computer too** on shared machines or machines running untrusted
+software. Creating an account alone does not turn off the local bypass.
+
+**Default decision (0.6.1):** keep `RequireLoginLocally` off for compatibility with
+existing single-owner installations and unattended local integrations. Upgrades
+do not silently change authentication. On shared systems, enabling local sign-in
+is part of setup. While no accounts exist, the local setup path remains available
+so the first administrator can be created.
+
+For a Windows service with less privilege, use Services (`services.msc`) to set
+GWatch's **Log On** account to a dedicated service account. Grant it access to the
+GWatch data directory and any configured scripts; executable-directory write
+access is needed for self-updates. Test your checks afterward: raw ICMP, protected
+files and some hardware counters may need additional permissions. System ping or
+TCP checks may be preferable where raw ICMP is unavailable.
 
 **It speaks plain HTTP.** GWatch terminates no TLS of its own. On loopback that
 does not matter; anywhere else it means passwords, session cookies and API keys

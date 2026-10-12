@@ -211,6 +211,7 @@ CREATE TABLE IF NOT EXISTS results (
   warnings TEXT NOT NULL DEFAULT '[]',
   metrics TEXT NOT NULL DEFAULT ''
 );
+CREATE INDEX IF NOT EXISTS idx_results_check_id ON results(check_id, id);
 CREATE INDEX IF NOT EXISTS idx_results_check_ts ON results(check_id, ts);
 CREATE INDEX IF NOT EXISTS idx_results_ts ON results(ts);
 
@@ -331,6 +332,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
 // of schema_version: it predates the version-tracked mechanism and a step may
 // depend on a column it adds existing.
 var addedColumns = []struct{ table, column, ddl string }{
+	{"maintenance_windows", "start_time", "ALTER TABLE maintenance_windows ADD COLUMN start_time TEXT NOT NULL DEFAULT ''"},
+	{"maintenance_windows", "time_zone", "ALTER TABLE maintenance_windows ADD COLUMN time_zone TEXT NOT NULL DEFAULT ''"},
 	{"check_state", "last_warn_at", "ALTER TABLE check_state ADD COLUMN last_warn_at TEXT"},
 	{"endpoints", "allow_no_token", "ALTER TABLE endpoints ADD COLUMN allow_no_token INTEGER NOT NULL DEFAULT 0"},
 	{"events", "actor", "ALTER TABLE events ADD COLUMN actor TEXT NOT NULL DEFAULT ''"},

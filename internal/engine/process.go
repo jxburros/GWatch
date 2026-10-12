@@ -171,7 +171,7 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 		if r.Details.ContentHash != "" {
 			st.LastContentHash = r.Details.ContentHash
 		}
-		if r.Details.ContentValue != "" {
+		if r.Details.ContentHash != "" || r.Details.ContentValue != "" {
 			st.LastContentValue = r.Details.ContentValue
 		}
 		// Generic degraded warnings (latency, packet loss ...). A check that

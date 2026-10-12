@@ -66,7 +66,9 @@ test('node editor renders the SNMP settings of an snmp check', async (t) => {
   // v3 user fields.
   const selects = [...card.querySelectorAll('select')].map((s) => s.value);
   assert.ok(selects.includes('2c'), 'the version select shows 2c');
-  assert.ok([...card.querySelectorAll('input[type="password"]')].length >= 1, 'a community field is shown');
+  const community = [...card.querySelectorAll('.field')].find((f) => f.textContent.startsWith('Community string')).querySelector('input');
+  assert.equal(community.type, 'text', 'community entry is readable');
+  assert.match(community.placeholder, /stored value/);
 
   // One table row per configured OID, with the OID and its name filled in.
   const rows = card.querySelectorAll('table.table tbody tr');

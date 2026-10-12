@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	_ "time/tzdata" // weekly schedules also work on Windows and minimal containers
 )
 
 // CheckType identifies which runner executes a check.
@@ -743,8 +744,10 @@ type MaintenanceWindow struct {
 	StartAt time.Time `json:"startAt"`
 	EndAt   time.Time `json:"endAt"`
 	// Recurring weekly windows: when Weekdays is non-empty the window repeats
-	// on those days (0 = Sunday) at StartAt's local time-of-day for
-	// DurationMinutes.
+	// on those days (0 = Sunday) at StartTime in TimeZone for DurationMinutes.
+	// Without those fields, use StartAt's server-local time (legacy behavior).
+	StartTime       string    `json:"startTime,omitempty"` // HH:MM in TimeZone
+	TimeZone        string    `json:"timeZone,omitempty"`  // IANA zone; empty preserves legacy server-local schedules
 	Weekdays        []int     `json:"weekdays,omitempty"`
 	DurationMinutes int       `json:"durationMinutes,omitempty"`
 	Notes           string    `json:"notes"`
@@ -759,14 +762,32 @@ func (m MaintenanceWindow) Active(t time.Time) bool {
 	if len(m.Weekdays) == 0 {
 		return !t.Before(m.StartAt) && t.Before(m.EndAt)
 	}
-	// Recurring weekly: compare local time of day.
-	start := m.StartAt.In(t.Location())
+	// Legacy windows keep server-local semantics. New windows have their own
+	// IANA zone and wall-clock time, independent of the viewer and server zones.
+	loc := time.Local
+	if m.TimeZone != "" {
+		var err error
+		loc, err = time.LoadLocation(m.TimeZone)
+		if err != nil {
+			return false
+		}
+	}
+	t = t.In(loc)
+	start := m.StartAt.In(loc)
+	if m.StartTime != "" {
+		var err error
+		start, err = time.Parse("15:04", m.StartTime)
+		if err != nil {
+			return false
+		}
+	}
 	dur := time.Duration(m.DurationMinutes) * time.Minute
 	if dur <= 0 {
 		dur = time.Hour
 	}
-	// Check today and yesterday (a window can cross midnight).
-	for back := 0; back <= 1; back++ {
+	// Include multi-day windows and a DST margin. The most recent weekly
+	// occurrence is always within eight local dates, even for long windows.
+	for back := 0; back <= min(8, int(dur/(24*time.Hour))+2); back++ {
 		day := t.AddDate(0, 0, -back)
 		if !containsInt(m.Weekdays, int(day.Weekday())) {
 			continue

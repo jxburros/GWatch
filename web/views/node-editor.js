@@ -626,17 +626,17 @@ export async function mount(root, ctx) {
     // the same mask the settings screen uses. The box therefore starts empty
     // and the mask stays in the draft, so leaving the box alone keeps what is
     // stored and typing in it replaces that.
-    const secretInput = (key) => {
+    const secretInput = (key, type = 'password') => {
       const stored = cfg[key] === '********';
       const input = textInput({
-        type: 'password', value: stored ? '' : (cfg[key] || ''), autocomplete: 'off',
+        type, value: stored ? '' : (cfg[key] || ''), autocomplete: 'off',
         placeholder: stored ? 'Leave blank to keep the stored value' : '',
         oninput: () => { cfg[key] = input.value; },
       });
       return { input, help: stored ? 'A value is stored — leave this blank to keep it.' : cfg[key] ? 'This value will be saved with the node.' : 'Nothing stored yet.' };
     };
 
-    const community = secretInput('snmpCommunity');
+    const community = secretInput('snmpCommunity', 'text');
     const communityRow = h('div', { class: 'form-grid' },
       field({ label: 'Community string', input: community.input, error: err.snmpCommunity, help: `${community.help} Most devices ship with "public", which is read-only.` }));
 

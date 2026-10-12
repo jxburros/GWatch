@@ -187,6 +187,13 @@ make sign KEY=release.key      # writes dist/<asset>.sig
 make verify-release            # checks them against release_keys.txt
 ```
 
+### Release candidates
+
+Tags with a prerelease suffix (for example `v0.7.0-rc.1` or
+`agent-v0.7.0-rc.1`) publish GitHub prereleases and do not move Docker's `latest`
+tag. The updater also recognizes the suffix independently of GitHub's flag,
+so stable-channel clients skip accidentally unflagged release candidates.
+
 ## Signature format
 
 Each asset gets a sibling `<asset>.sig`:

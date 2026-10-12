@@ -835,6 +835,18 @@ every other event.
 - `POST /api/maintenance` body MaintenanceWindow → created.
 - `PUT /api/maintenance/{id}` → updated. `DELETE /api/maintenance/{id}` → `{ok:true}`.
 
+Weekly maintenance windows accept `weekdays` (0 = Sunday), `startTime` (`HH:MM`),
+`timeZone` (an explicit IANA name such as `America/New_York`) and
+`durationMinutes`. The recurrence follows that zone's daylight saving rules,
+regardless of the server or browser zone. Existing windows without these fields
+retain server-local scheduling until edited; verify their day/time when updating.
+Multi-day durations remain active across all covered dates.
+
+Automatic triggers respect maintenance windows and silences. A `runNode` action
+has a minimum cooldown of one minute, including older saved triggers with zero
+cooldown, to stop self-triggering and mutually-triggering loops. Explicit manual
+trigger runs remain available.
+
 ## Dashboards
 
 - `GET /api/dashboards` → `[Dashboard]`. `GET /api/dashboards/{id}` → one `Dashboard`.

@@ -69,6 +69,7 @@ type Engine struct {
 	log   *logging.Logger
 	opts  Options
 
+	reloadMu     sync.Mutex
 	mu           sync.Mutex
 	settings     model.Settings
 	nodes        map[int64]model.Node
@@ -225,6 +226,12 @@ func (e *Engine) Settings() model.Settings {
 // ReloadConfig re-reads nodes, checks, settings and maintenance windows from
 // the store, keeping in-memory states for checks that still exist.
 func (e *Engine) ReloadConfig(ctx context.Context) error {
+	// A committed save must reach the scheduler even if its HTTP client leaves.
+	// Serialize the reads as well as the application so older snapshots cannot win.
+	e.reloadMu.Lock()
+	defer e.reloadMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
 	settings, err := e.store.LoadSettings(ctx)
 	if err != nil {
 		return err

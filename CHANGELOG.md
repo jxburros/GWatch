@@ -9,6 +9,47 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## 0.6.1 — 2026-10-11
+
+### Fixed
+
+- Weekly maintenance windows carry an explicit IANA time zone and local start
+  time, follow daylight saving changes, and remain active across multi-day
+  durations (#156; multi-day portion of #161). Existing windows keep their
+  server-local schedule until edited; confirm their weekday and time when editing.
+- Automatic triggers respect maintenance and silences. Run-node actions have a
+  one-minute minimum cooldown, including previously saved triggers, preventing
+  immediate self-triggering and mutual loops (#98).
+- Configuration reloads are serialized and finish after a saving browser
+  disconnects. Empty watched HTTP headers/JSON values become a persisted
+  baseline, so a disappearance produces one content-change event (#101, #147).
+- Latest-result reads use an index lookup per check instead of scanning retained
+  history on every dashboard or overview request (#108).
+- Wallboard layout inputs and chart canvases survive live refreshes, preserving
+  unsaved edits and keyboard focus, including timestacked charts (#158).
+- SNMP community entry is readable text. Saved credentials remain protected,
+  clearly marked as stored, and preserved when left unchanged (#177).
+- Session writes check the Origin header even without Fetch Metadata. Sign-in
+  password checks have a shared concurrency limit to bound Argon2 memory use
+  across clients (#90, #91).
+- Node script placeholders escape template-literal interpolation and backticks
+  so a monitored value cannot turn into executable JavaScript (#144).
+- Server and agent prereleases are flagged in GitHub, cannot move Docker's
+  `latest` tag, and are excluded from stable updates even if GitHub's prerelease
+  flag is missing (#152).
+- The local-administrator trust model, Windows LocalSystem implications,
+  less-privileged service setup and decision to retain the local-login default
+  are documented (#18).
+
+### Versions and validation
+
+- GWatch and GWatch Agent are **0.6.1**. The agent receives the shared updater's
+  prerelease filtering safeguard; this release does not claim to resolve the
+  reported Windows recovery issue (#170).
+- Confirmed existing DNS-rebinding and retention-fragment regression coverage
+  for #86 and #150. Both fixes were already present before this release.
+- Added Go, browser-DOM and Chromium regression coverage for the fixes above.
+
 ## 0.6.0 — 2026-10-05
 
 ### Added and fixed

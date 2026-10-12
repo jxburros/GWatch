@@ -122,7 +122,8 @@ func expandScriptCode(code string, vars Vars, interp string) string {
 			if err != nil {
 				return `""`
 			}
-			return string(b)
+			// JSON quoting alone does not protect template or single-quoted literals.
+			return strings.NewReplacer("$", `\u0024`, "`", `\u0060`, "'", `\u0027`).Replace(string(b))
 		}
 		return val
 	})

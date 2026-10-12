@@ -14,7 +14,7 @@ import {
 import { PANEL_TYPES, panelMeta, WALL_THEMES } from '../wall-render.js';
 
 export async function mount(root, ctx) {
-  const state = { boards: [], nodes: [], groups: { groups: [], tags: [] }, id: Number(ctx.params.id) || null, destroyed: false, dirty: false };
+  const state = { boards: [], nodes: [], groups: { groups: [], tags: [] }, id: Number(ctx.params.id) || null, destroyed: false, dirty: false, layoutId: null };
 
   // Switching board here changes what the page shows without changing its
   // address, so these are real tabs: one panel, the selected tab in the tab
@@ -85,6 +85,16 @@ export async function mount(root, ctx) {
     }
     if (board) bodyEl.setAttribute('aria-labelledby', `${panelId}-tab-${board.id}`); else bodyEl.removeAttribute('aria-labelledby');
 
+    if (board && state.layoutId === board.id) {
+      const layout = bodyEl.querySelector('[aria-label="Layout"]');
+      if (layout && (state.dirty || layout.contains(document.activeElement))) {
+        bodyEl.querySelector('[aria-label="Panels"]').replaceWith(panelsCard(board));
+        bodyEl.querySelector('[aria-label="Projection"]').replaceWith(shareCard(board));
+        return;
+      }
+    }
+    state.dirty = false;
+    state.layoutId = board?.id ?? null;
     clear(bodyEl);
     if (!board) {
       bodyEl.append(h('div', { class: 'card' }, emptyState({
@@ -186,15 +196,19 @@ export async function mount(root, ctx) {
         field({ label: 'Footer strip', input: chrome, help: 'The service-health line along the bottom.' })),
       h('div', { class: 'card-actions admin-only', style: { marginTop: '12px' } },
         h('button', { class: 'btn btn-primary', type: 'button', onclick: () => {
-          board.layout = {
+          const latest = state.boards.find((b) => b.id === board.id);
+          if (!latest) return;
+          latest.layout = {
             columns: Number(columns.value) || 12,
             theme: theme.value,
             scale: Number(scale.value) || 1,
             refreshSeconds: Number(refresh.value) || 20,
             hideChrome: !chrome.input.checked,
           };
-          save(board);
+          save(latest, true);
         } }, 'Save layout')));
+    card.addEventListener('input', () => { state.dirty = true; });
+    card.addEventListener('change', () => { state.dirty = true; });
     return card;
   }
 
@@ -263,13 +277,14 @@ export async function mount(root, ctx) {
 
   /* ---------- saving ---------- */
 
-  async function save(board) {
+  async function save(board, layoutSaved = false) {
     try {
       const saved = await api.put(`/api/wallboards/${board.id}`, {
         name: board.name, sortOrder: board.sortOrder, layout: board.layout, panels: board.panels,
       });
       state.boards = state.boards.map((b) => (b.id === saved.id ? saved : b));
       state.id = saved.id;
+      if (layoutSaved) { state.dirty = false; state.layoutId = null; }
       render();
     } catch (e) { toast(e.message, { kind: 'error' }); await load(); }
   }

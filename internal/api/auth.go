@@ -383,19 +383,10 @@ func (s *Server) accessControl(next http.Handler) http.Handler {
 			return
 		}
 
-		// Two kinds of principal are granted by something the browser supplies
-		// on its own, so a page the person merely visits could make their
-		// browser change things on their behalf. A local client is an
-		// administrator without presenting anything at all, and the legacy LAN
-		// access password travels in HTTP basic auth, which a browser attaches
-		// from its own cache to cross-origin requests once it has been asked
-		// for it. A session cookie is not in this company: it is SameSite=Lax,
-		// so the browser withholds it from a cross-site write. Neither is an
-		// API key, which a cross-site page has no way to obtain — and a key
-		// may well arrive through a proxy that rewrites Host, where this check
-		// would misfire. So it is applied exactly where it is both needed and
-		// safe.
-		if r.Method != http.MethodGet && r.Method != http.MethodHead && ((p.Kind == auth.KindLocal || p.Kind == auth.KindPassword) && crossSite(r) || r.Header.Get("Sec-Fetch-Site") == "cross-site" || r.Header.Get("Sec-Fetch-Site") == "same-site" || r.Header.Get("Origin") == "null") {
+		// Cookies and cached basic auth accompany same-site requests from sibling
+		// ports, so session users need the same Origin check as local clients.
+		// API keys are explicit credentials and may cross a rewriting proxy.
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && ((p.Kind == auth.KindLocal || p.Kind == auth.KindPassword || p.Kind == auth.KindUser) && crossSite(r) || r.Header.Get("Sec-Fetch-Site") == "cross-site" || r.Header.Get("Sec-Fetch-Site") == "same-site" || r.Header.Get("Origin") == "null") {
 			s.deny(w, r, http.StatusForbidden, "this request came from another website; open GWatch directly to make changes", true)
 			return
 		}
@@ -594,6 +585,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if ok, wait := s.failLimiter.Allow(limiterKey(limiterLogin, ip)); !ok {
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds()+0.999)))
 		writeError(w, http.StatusTooManyRequests, "too many sign-in attempts; try again shortly")
+		return
+	}
+	// Bound Argon2 memory across all clients, including unknown usernames.
+	select {
+	case s.loginSlots <- struct{}{}:
+		defer func() { <-s.loginSlots }()
+	default:
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusTooManyRequests, "sign-in is busy; try again shortly")
 		return
 	}
 	username := strings.TrimSpace(body.Username)

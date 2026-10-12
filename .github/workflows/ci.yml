@@ -728,6 +728,7 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
 
   # The hardware agent's own release, cut by tagging agent-v<version>.
   #
@@ -779,6 +780,7 @@ jobs:
             echo "::error::tag ${GITHUB_REF_NAME} does not match cmd/gwatch-agent/VERSION (${file}). Update the file, commit, and re-tag."
             exit 1
           fi
+          echo "RELEASE_VERSION=$file" >> "$GITHUB_ENV"
           echo "releasing agent ${file}"
 
       - name: Signing key
@@ -844,6 +846,7 @@ jobs:
             dist/gwatch-agent-*
             dist/install-agent.sh
           generate_release_notes: true
+          prerelease: ${{ contains(env.RELEASE_VERSION, '-') }}
           name: Agent ${{ github.ref_name }}
           body: |
             The GWatch hardware agent, released on its own (see docs/RELEASING.md).
@@ -1107,7 +1110,7 @@ jobs:
           tags: |
             type=match,pattern=agent-v(\d+\.\d+\.\d+.*),group=1
             type=match,pattern=agent-v(\d+\.\d+)\.\d+$,group=1
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ !contains(steps.tag.outputs.version, '-') }}
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
@@ -1169,7 +1172,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .

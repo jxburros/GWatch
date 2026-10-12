@@ -69,6 +69,24 @@ func (s *Server) handleSaveMaintenance(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
+		if m.StartTime != "" || m.TimeZone != "" {
+			if len(m.StartTime) != 5 {
+				writeError(w, http.StatusBadRequest, "startTime must be HH:MM")
+				return
+			}
+			if _, err := time.Parse("15:04", m.StartTime); err != nil {
+				writeError(w, http.StatusBadRequest, "startTime must be HH:MM")
+				return
+			}
+			if m.TimeZone == "" || m.TimeZone == "Local" {
+				writeError(w, http.StatusBadRequest, "timeZone must be an explicit IANA time zone")
+				return
+			}
+			if _, err := time.LoadLocation(m.TimeZone); err != nil {
+				writeError(w, http.StatusBadRequest, "unknown timeZone")
+				return
+			}
+		}
 		for _, d := range m.Weekdays {
 			if d < 0 || d > 6 {
 				writeError(w, http.StatusBadRequest, "weekdays must be 0 (Sunday) to 6 (Saturday)")
