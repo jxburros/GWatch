@@ -9,6 +9,24 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## 0.6.2 — 2026-10-13
+
+### Fixed
+
+- Configuration-only restores preserve results and rollups for matching check
+  IDs, incidents for matching nodes, and the event timeline (#140). Restores
+  update nodes and checks in place; IDs absent from the archive are removed
+  along with their associated history. Both confirmation dialogs explain this.
+- Restoring a backup no longer disconnects existing agents from nodes retained
+  in the restored configuration. Unsupported archive formats are refused before
+  any database changes (the agent-link and format-validation parts of #148).
+
+### Versions and scope
+
+- GWatch is **0.6.2**. GWatch Agent remains **0.6.1**.
+- Whole-restore atomicity, automatic safety backups, and deleted-account/agent
+  resurrection remain tracked in #148; this patch does not resolve those items.
+
 ## 0.6.1 — 2026-10-11
 
 ### Fixed

@@ -393,7 +393,7 @@ var migrations = []migration{
 
 // migrateBackfillCheckState gives every check a check_state row. Every
 // current code path that inserts a check inserts its state alongside it
-// (CreateNode, UpdateNode, CreateNodeWithID), but that has not always been
+// (CreateNode, UpdateNode, RestoreNodes), but that has not always been
 // true, and a check without a state row makes GetState and anything that
 // joins on it misbehave. This also serves as the migration mechanism's proof
 // of life: it is real, it is idempotent, and it is safe to run on any

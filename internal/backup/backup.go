@@ -382,6 +382,9 @@ func Inspect(path, password string) (Manifest, error) {
 	if err := readJSON(&zr.Reader, "manifest.json", &m); err != nil {
 		return m, err
 	}
+	if m.Format < 1 || m.Format > Format {
+		return m, fmt.Errorf("unsupported backup format %d (supported: 1–%d)", m.Format, Format)
+	}
 	return m, nil
 }
 
@@ -421,6 +424,9 @@ func Restore(ctx context.Context, st *store.Store, path, password string, includ
 	if err := readJSON(&zr.Reader, "manifest.json", &sum.Manifest); err != nil {
 		return sum, err
 	}
+	if sum.Manifest.Format < 1 || sum.Manifest.Format > Format {
+		return sum, fmt.Errorf("unsupported backup format %d (supported: 1–%d)", sum.Manifest.Format, Format)
+	}
 	var cfg Config
 	if err := readJSON(&zr.Reader, "config.json", &cfg); err != nil {
 		return sum, err
@@ -428,10 +434,7 @@ func Restore(ctx context.Context, st *store.Store, path, password string, includ
 	includeHistory = includeHistory && sum.Manifest.IncludeHistory && hasFile(&zr.Reader, "results.jsonl")
 	sum.History = includeHistory
 
-	if err := st.ClearAll(ctx, true); err != nil {
-		return sum, err
-	}
-	if err := restoreConfig(ctx, st, cfg, &sum); err != nil {
+	if err := restoreConfig(ctx, st, cfg, &sum, includeHistory); err != nil {
 		return sum, err
 	}
 	if includeHistory {
@@ -495,7 +498,7 @@ func Restore(ctx context.Context, st *store.Store, path, password string, includ
 const batchSize = 2000
 
 // restoreConfig writes the configuration part of an archive into a store
-// that has just been cleared (Restore) or is empty (Copy). Node and check
+// by updating matching nodes/checks in place and removing absent IDs. Node and check
 // ids are kept; everything else gets fresh ids except wallboards, whose ids
 // are in projected addresses, and accounts, keys and agents, which keep
 // theirs when free.
@@ -507,7 +510,10 @@ const batchSize = 2000
 // Wallboards are present in the archive as a whole or not at all, so they
 // are replaced when the archive has them and untouched otherwise (a
 // format-1 archive).
-func restoreConfig(ctx context.Context, st *store.Store, cfg Config, sum *Summary) error {
+func restoreConfig(ctx context.Context, st *store.Store, cfg Config, sum *Summary, includeHistory bool) error {
+	if err := st.RestoreNodes(ctx, cfg.Nodes, includeHistory); err != nil {
+		return err
+	}
 	if err := st.SaveSettings(ctx, cfg.Settings); err != nil {
 		return err
 	}
@@ -516,14 +522,13 @@ func restoreConfig(ctx context.Context, st *store.Store, cfg Config, sum *Summar
 		if n.DependsOnNode != nil {
 			deps[n.ID] = *n.DependsOnNode
 		}
-		if err := st.CreateNodeWithID(ctx, n); err != nil {
-			return fmt.Errorf("restore node %q: %w", n.Name, err)
-		}
 		sum.Nodes++
 		sum.Checks += len(n.Checks)
 	}
-	if err := st.RestoreIncidents(ctx, cfg.Incidents); err != nil {
-		return err
+	if includeHistory {
+		if err := st.RestoreIncidents(ctx, cfg.Incidents); err != nil {
+			return err
+		}
 	}
 	if err := st.PutSetting(ctx, "reports", cfg.Reports); err != nil {
 		return err
@@ -624,7 +629,7 @@ func Copy(ctx context.Context, src, dst *store.Store, progress func(stage string
 	if err != nil {
 		return sum, fmt.Errorf("read configuration: %w", err)
 	}
-	if err := restoreConfig(ctx, dst, cfg, &sum); err != nil {
+	if err := restoreConfig(ctx, dst, cfg, &sum, true); err != nil {
 		return sum, fmt.Errorf("write configuration: %w", err)
 	}
 	report("configuration", sum.Nodes)
