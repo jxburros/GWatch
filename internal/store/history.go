@@ -575,42 +575,96 @@ func (s *Store) ClearHistory(ctx context.Context) error {
 	})
 }
 
-// CreateNodeWithID inserts a node keeping its original id (restore).
-func (s *Store) CreateNodeWithID(ctx context.Context, n model.Node) error {
-	n.SyncGroups()
-	if n.Tags == nil {
-		n.Tags = []string{}
-	}
+// RestoreNodes replaces the configuration's node/check set without deleting rows
+// whose IDs survive. In particular, an upsert must never use SQL REPLACE, which
+// would cascade away history and clear agent links. Nodes are all written before
+// checks so even a check moved between nodes keeps its history.
+func (s *Store) RestoreNodes(ctx context.Context, nodes []model.Node, includeHistory bool) error {
 	return s.writeTx(ctx, func(tx *wtx) error {
-		if _, err := tx.exec(ctx, `INSERT INTO nodes(id, name, host, group_name, "groups", tags, notes, importance, enabled, depends_on_node_id, template, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			n.ID, n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nil, n.Template, fmtTime(n.CreatedAt), fmtTime(n.UpdatedAt)); err != nil {
-			return err
+		tables := []string{"rule_state", "rules", "triggers", "endpoints", "maintenance_windows", "dashboards", "check_state", "settings"}
+		if includeHistory {
+			tables = append([]string{"results", "rollups", "events", "incidents"}, tables...)
 		}
-		for _, c := range n.Checks {
-			var alerts any
-			if c.Alerts != nil {
-				alerts = jsonString(c.Alerts)
-			}
-			// A backup holds the secrets in the clear (it is encrypted as a
-			// whole, or it is not), so a restore seals them again on the way
-			// back in like any other write.
-			stored := c.Config
-			if err := s.sealCheckConfig(&stored); err != nil {
-				return err
-			}
-			if _, err := tx.exec(ctx, `INSERT INTO checks(id, node_id, type, name, enabled, interval_seconds, timeout_seconds, retries, failure_threshold, config, alerts, sort_order, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-				c.ID, n.ID, string(c.Type), c.Name, boolInt(c.Enabled), c.IntervalSeconds, c.TimeoutSeconds, c.Retries, c.FailureThreshold, jsonString(stored), alerts, c.SortOrder, fmtTime(c.CreatedAt), fmtTime(c.UpdatedAt)); err != nil {
-				return err
-			}
-			if _, err := tx.exec(ctx, s.d.insertIgnore("check_state", []string{"check_id", "status"}), c.ID, "unknown"); err != nil {
+		for _, table := range tables {
+			if _, err := tx.exec(ctx, "DELETE FROM "+table); err != nil {
 				return err
 			}
 		}
-		// The rows above carried their own ids; make sure the next generated
-		// one lands after them.
-		for _, table := range []string{"nodes", "checks"} {
-			if err := s.d.syncSequence(ctx, tx, table); err != nil {
-				return fmt.Errorf("sync %s ids: %w", table, err)
+		nodeColumns := []string{"id", "name", "host", "group_name", "\"groups\"", "tags", "notes", "importance", "enabled", "depends_on_node_id", "template", "created_at", "updated_at"}
+		checkColumns := []string{"id", "node_id", "type", "name", "enabled", "interval_seconds", "timeout_seconds", "retries", "failure_threshold", "config", "alerts", "sort_order", "created_at", "updated_at"}
+		keepNodes, keepChecks := map[int64]bool{}, map[int64]bool{}
+		for _, n := range nodes {
+			if n.ID <= 0 || keepNodes[n.ID] {
+				return fmt.Errorf("invalid or duplicate node id %d", n.ID)
+			}
+			keepNodes[n.ID] = true
+			n.SyncGroups()
+			if n.Tags == nil {
+				n.Tags = []string{}
+			}
+			if _, err := tx.exec(ctx, insertValues("nodes", nodeColumns)+" "+s.d.upsertClause([]string{"id"}, nodeColumns),
+				n.ID, n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nil, n.Template, fmtTime(n.CreatedAt), fmtTime(n.UpdatedAt)); err != nil {
+				return err
+			}
+		}
+		for _, n := range nodes {
+			for _, c := range n.Checks {
+				if c.ID <= 0 || keepChecks[c.ID] {
+					return fmt.Errorf("invalid or duplicate check id %d", c.ID)
+				}
+				keepChecks[c.ID] = true
+				var alerts any
+				if c.Alerts != nil {
+					alerts = jsonString(c.Alerts)
+				}
+				// A backup holds the secrets in the clear (it is encrypted as a
+				// whole, or it is not), so a restore seals them again on the way
+				// back in like any other write.
+				stored := c.Config
+				if err := s.sealCheckConfig(&stored); err != nil {
+					return err
+				}
+				if _, err := tx.exec(ctx, insertValues("checks", checkColumns)+" "+s.d.upsertClause([]string{"id"}, checkColumns),
+					c.ID, n.ID, string(c.Type), c.Name, boolInt(c.Enabled), c.IntervalSeconds, c.TimeoutSeconds, c.Retries, c.FailureThreshold, jsonString(stored), alerts, c.SortOrder, fmtTime(c.CreatedAt), fmtTime(c.UpdatedAt)); err != nil {
+					return err
+				}
+				if _, err := tx.exec(ctx, s.d.insertIgnore("check_state", []string{"check_id", "status"}), c.ID, "unknown"); err != nil {
+					return err
+				}
+			}
+		}
+		// Prune after upserting, in child-first order. History for checks absent
+		// from the restored configuration is removed by the foreign-key cascade.
+		for _, item := range []struct {
+			table string
+			keep  map[int64]bool
+		}{{"checks", keepChecks}, {"nodes", keepNodes}} {
+			rows, err := tx.query(ctx, "SELECT id FROM "+item.table)
+			if err != nil {
+				return err
+			}
+			var remove []int64
+			for rows.Next() {
+				var id int64
+				if err := rows.Scan(&id); err != nil {
+					rows.Close()
+					return err
+				}
+				if !item.keep[id] {
+					remove = append(remove, id)
+				}
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			for _, id := range remove {
+				if _, err := tx.exec(ctx, "DELETE FROM "+item.table+" WHERE id = ?", id); err != nil {
+					return err
+				}
+			}
+			if err := s.d.syncSequence(ctx, tx, item.table); err != nil {
+				return err
 			}
 		}
 		return nil

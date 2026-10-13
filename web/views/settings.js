@@ -980,7 +980,7 @@ export async function mount(root, ctx) {
     const restoreBtn = h('button', { class: 'btn btn-danger', type: 'button', onclick: async () => {
       if (!file.files?.[0]) { toast('Choose a backup file first', { kind: 'error' }); return; }
       if (!rpw.value) { toast('Enter the backup password', { kind: 'error' }); rpw.focus(); return; }
-      const ok = await confirmDialog({ title: 'Restore from file?', message: 'This replaces the current configuration (nodes, checks, dashboards, maintenance windows, automation and settings) with the contents of the backup. History is replaced too if you chose to include it.', confirmLabel: 'Restore', danger: true });
+      const ok = await confirmDialog({ title: 'Restore from file?', message: 'This replaces the current configuration (nodes, checks, dashboards, maintenance windows, automation and settings) with the contents of the backup. History is replaced if selected and present in the backup. Otherwise, history for matching checks and the event timeline are kept. Checks absent from the backup and their history are removed.', confirmLabel: 'Restore', danger: true });
       if (!ok) return;
       const fd = new FormData(); fd.append('file', file.files[0]); fd.append('password', rpw.value); fd.append('includeHistory', rHist.input.checked ? 'true' : 'false');
       const done = busy(restoreBtn, 'Restoring…');
@@ -994,7 +994,7 @@ export async function mount(root, ctx) {
     async function restoreExisting(b) {
       const pwIn = h('input', { type: 'password', autocomplete: 'off', placeholder: 'Backup password' });
       const hist = checkbox({ label: 'Also restore history and events', checked: b.includeHistory, disabled: !b.includeHistory });
-      const ok = await confirmDialog({ title: `Restore ${b.fileName}?`, confirmLabel: 'Restore', danger: true, body: h('div', { class: 'stack-sm' }, banner('warn', 'This replaces the current configuration. Nodes, checks, dashboards, maintenance windows, automation and settings will be overwritten.'), field({ label: 'Password', input: pwIn }), hist) });
+      const ok = await confirmDialog({ title: `Restore ${b.fileName}?`, confirmLabel: 'Restore', danger: true, body: h('div', { class: 'stack-sm' }, banner('warn', 'This replaces the current configuration. Nodes, checks, dashboards, maintenance windows, automation and settings will be overwritten. History is replaced if selected and present in the backup. Otherwise, history for matching checks and the event timeline are kept. Checks absent from the backup and their history are removed.'), field({ label: 'Password', input: pwIn }), hist) });
       if (!ok) return;
       if (!pwIn.value) { toast('The backup password is required', { kind: 'error' }); return; }
       try { const r = await api.post('/api/backups/restore-existing', { fileName: b.fileName, password: pwIn.value, includeHistory: hist.input.checked }); toast(`Restored ${plural(r.nodes ?? 0, 'node')} and ${plural(r.checks ?? 0, 'check')}`, { kind: 'success' }); load(); }

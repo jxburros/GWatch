@@ -70,7 +70,7 @@ new machine's remote-access password is set and you are not calling from
   addresses, so a display already showing a board keeps working).
 - **Maintenance windows**, **triggers** and **custom endpoints** (automation).
 - **User accounts** (with their password hashes), **API keys** and **hardware agents**,
-  from archives made by this version or newer (backup format 2). These are *merged*:
+  from supported backup format 2 archives. These are *merged*:
   an account, key or agent already on the new machine is left exactly as it is, so a
   restore never overwrites the password of the administrator doing the restoring, and
   never resurrects a key that was deliberately revoked here. An archive from an older
@@ -80,7 +80,12 @@ new machine's remote-access password is set and you are not calling from
   policy, network access, appearance, and the automatic-backup schedule.
 - Optionally, **history**: raw results, rollups (5-minute/hourly/daily) and the
   event/incident timeline, when the archive included it and you chose to
-  restore it.
+  restore it. When history is not restored (including configuration-only
+  archives), existing results and rollups for matching check IDs, incidents for
+  matching nodes, and the event timeline are kept. Nodes and checks absent from
+  the archive are removed, together with their associated history. Existing
+  agents keep their links to nodes that remain in the restored configuration.
+  Unsupported archive formats are rejected before any database changes.
 
 ## What a restore does not bring over
 
