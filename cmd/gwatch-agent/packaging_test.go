@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -309,22 +308,20 @@ func TestPairOnAPackageStartsItsService(t *testing.T) {
 	}
 
 	// What the unit's `gwatch-agent run`, given no arguments, will end up with.
-	s, err := readStoredSettings()
-	if err != nil {
-		t.Fatalf("stored settings: %v", err)
+	svc, problems, _ := baseConfig()
+	if len(problems) > 0 {
+		t.Fatalf("settings file: %v", problems)
 	}
-	var svc config
-	svc.applyStored(s, false)
 	if svc.server != srv.URL || !svc.insecure || svc.name != "nas" {
 		t.Errorf("the service would run with server=%q insecure=%v name=%q", svc.server, svc.insecure, svc.name)
 	}
 	if runtime.GOOS != "windows" {
-		info, err := os.Stat(settingsFile())
+		info, err := os.Stat(configFile())
 		if err != nil {
 			t.Fatal(err)
 		}
 		if mode := info.Mode().Perm(); mode != 0o600 {
-			t.Errorf("settings file mode = %04o, want 0600 like the token beside it", mode)
+			t.Errorf("config file mode = %04o, want 0600 like the token in it", mode)
 		}
 	}
 }
@@ -357,32 +354,5 @@ func TestPairOnAPackageRefusesBeforeSpendingTheCode(t *testing.T) {
 	}
 	if asked.Load() {
 		t.Error("the code was sent to GWatch before finding out the token could not be kept")
-	}
-}
-
-// TestStoredSettingsFillOnlyWhatWasNotSaid: what pairing stored is a default,
-// never an override.
-func TestStoredSettingsFillOnlyWhatWasNotSaid(t *testing.T) {
-	s := storedSettings{Server: "https://gwatch.lan:7230", Insecure: true, Name: "stored"}
-
-	c := config{name: "given"}
-	c.applyStored(s, true) // --insecure=false given explicitly
-	if c.insecure {
-		t.Error("an explicit --insecure=false was overridden by the stored setting")
-	}
-	if c.name != "given" {
-		t.Errorf("name = %q; a given --name must win", c.name)
-	}
-	if c.server != s.Server {
-		t.Errorf("server = %q", c.server)
-	}
-
-	// A settings file with no server is no settings file.
-	dir := t.TempDir()
-	t.Setenv("GWATCH_AGENT_TOKEN_FILE", filepath.Join(dir, "agent-token"))
-	b, _ := json.Marshal(storedSettings{Name: "x"})
-	os.WriteFile(filepath.Join(dir, "agent-settings.json"), b, 0o600)
-	if _, err := readStoredSettings(); err == nil {
-		t.Error("stored settings without a server were accepted")
 	}
 }

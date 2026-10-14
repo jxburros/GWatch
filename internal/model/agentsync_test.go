@@ -11,7 +11,7 @@ func TestCollectSelectionNormalizeDropsBlanksAndDuplicates(t *testing.T) {
 	if !reflect.DeepEqual(got.Interfaces, []string{"eth0", "eth1"}) {
 		t.Errorf("interfaces: %v", got.Interfaces)
 	}
-	if got.Mounts != nil || !CollectSelection{Mounts: []string{" "}}.Normalize().IsZero() {
+	if blank := (CollectSelection{Mounts: []string{" "}}).Normalize(); got.Mounts != nil || !blank.IsZero() {
 		t.Errorf("a list of blanks should be no list at all, got %#v", got.Mounts)
 	}
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -83,12 +84,14 @@ func TestPairStoresTokenAndReports(t *testing.T) {
 		t.Errorf("stored token = %q, want gwa_secret", stored)
 	}
 	if runtime.GOOS != "windows" {
-		info, err := os.Stat(tokenPath)
+		// The token lives in the configuration file, beside where the old
+		// token file used to be, and is as private as a credential should be.
+		info, err := os.Stat(filepath.Join(filepath.Dir(tokenPath), "agent.json"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if mode := info.Mode().Perm(); mode != 0o600 {
-			t.Errorf("token file mode = %04o, want 0600: it is a credential", mode)
+			t.Errorf("config file mode = %04o, want 0600: it holds a credential", mode)
 		}
 	}
 }
@@ -177,7 +180,7 @@ func TestSendReportsRejectionsUsefully(t *testing.T) {
 		status int
 		want   string
 	}{
-		{http.StatusUnauthorized, "register the machine again"},
+		{http.StatusUnauthorized, "pair it again"},
 		{http.StatusInternalServerError, "the server answered HTTP 500"},
 	} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -189,6 +192,12 @@ func TestSendReportsRejectionsUsefully(t *testing.T) {
 		srv.Close()
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("HTTP %d gave %v, want something containing %q", tc.status, err, tc.want)
+		}
+		// Both can mend (a token fixed in GWatch, a server back up), so a held
+		// reading is kept for them.
+		var sf *sendFailure
+		if !errors.As(err, &sf) || !sf.retry {
+			t.Errorf("HTTP %d should be worth retrying later", tc.status)
 		}
 	}
 }
@@ -261,42 +270,87 @@ func TestValidateExplainsWhatIsMissing(t *testing.T) {
 	}
 }
 
-// TestServiceArgsCarryEverySetting is the test for the failure mode where a
-// machine is set up carefully by hand and then the installed service quietly
-// runs with different settings, because the command line it was registered
-// with dropped one.
-func TestServiceArgsCarryEverySetting(t *testing.T) {
+// TestServiceIsRegisteredWithNothingToEdit: the installed service is given no
+// settings on its command line. They are in the configuration file, so that
+// changing one is an edit and a restart, and so the token is not left in a
+// process list or a service definition anyone on the machine can read.
+func TestServiceIsRegisteredWithNothingToEdit(t *testing.T) {
+	old := configPathOverride
+	t.Cleanup(func() { configPathOverride = old })
+	configPathOverride = ""
+
 	cfg := config{
 		server: "https://gwatch.lan:7230", token: "gwa_x", interval: 30 * time.Second,
 		insecure: true, name: "nas", autoUpdate: false, repo: "someone/fork",
 	}
-	args := strings.Join(cfg.serviceArgs("install"), " ")
-	for _, want := range []string{
-		"run", "--token gwa_x", "--server https://gwatch.lan:7230", "--interval 30s",
-		"--insecure", "--name nas", "--auto-update=false", "--repo someone/fork",
-	} {
-		if !strings.Contains(args, want) {
-			t.Errorf("service arguments %q are missing %q", args, want)
+	if got := strings.Join(cfg.serviceArgs("install"), " "); got != "run" {
+		t.Errorf("service arguments = %q, want just the mode", got)
+	}
+	if got := strings.Join(cfg.serviceArgs("serve"), " "); got != "serve" {
+		t.Errorf("serve arguments = %q", got)
+	}
+	// The one thing that has to travel is an unusual location for the file.
+	configPathOverride = "/etc/gwatch/custom-agent.json"
+	if got := strings.Join(cfg.serviceArgs("install"), " "); got != "run --config /etc/gwatch/custom-agent.json" {
+		t.Errorf("service arguments = %q, want the file's location", got)
+	}
+}
+
+// TestInstallWritesEverySettingToTheFile is the test for the failure mode where
+// a machine is set up carefully by hand and then the installed service quietly
+// runs with different settings. The settings now travel in the file, so the
+// file is what must carry every one of them.
+func TestInstallWritesEverySettingToTheFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GWATCH_AGENT_TOKEN_FILE", filepath.Join(dir, "agent-token"))
+	old := configPathOverride
+	t.Cleanup(func() { configPathOverride = old })
+	configPathOverride = ""
+
+	cfg := defaultConfig()
+	cfg.server, cfg.token, cfg.interval = "gwatch.lan:7230", "gwa_x", 30*time.Second
+	cfg.insecure, cfg.name, cfg.autoUpdate, cfg.repo = true, "nas", false, "someone/fork"
+	cfg.certPin = "abc123"
+	for _, k := range []string{"server", "token", "interval", "insecure", "name", "autoUpdate", "repo", "certPin"} {
+		cfg.sources[k] = srcFlag
+	}
+	if err := persistConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	base, problems, warnings := baseConfig()
+	if len(problems) > 0 || len(warnings) > 0 {
+		t.Fatalf("a file the agent wrote should read back clean: %v %v", problems, warnings)
+	}
+	if base.server != "https://gwatch.lan:7230" || base.token != "gwa_x" || base.interval != 30*time.Second ||
+		!base.insecure || base.name != "nas" || base.autoUpdate || base.repo != "someone/fork" || base.certPin != "abc123" {
+		t.Errorf("settings did not survive the file: %+v", base)
+	}
+	if base.sources["token"] != srcFile || base.sources["interval"] != srcFile {
+		t.Errorf("sources = %v; everything came from the file", base.sources)
+	}
+	// All the editable settings are in a fresh file, defaults included, so
+	// whoever opens it can see what there is to change.
+	raw, _ := os.ReadFile(filepath.Join(dir, "agent.json"))
+	for _, key := range []string{`"checkIn"`, `"buffer"`, `"collect"`, `"autoUpdate"`} {
+		if !strings.Contains(string(raw), key) {
+			t.Errorf("a new configuration file should show %s; got:\n%s", key, raw)
+		}
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(filepath.Join(dir, "agent.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := info.Mode().Perm(); mode != 0o600 {
+			t.Errorf("config file mode = %04o, want 0600: it holds the token", mode)
 		}
 	}
 
-	// The defaults are the other half: an agent left on automatic updates must
-	// not have that written onto its command line as though it were a choice,
-	// and the stock repository is not worth repeating.
-	plain := config{server: "https://x", token: "t", interval: time.Minute, autoUpdate: true, repo: defaultRepo}
-	pargs := strings.Join(plain.serviceArgs("install"), " ")
-	if strings.Contains(pargs, "auto-update") || strings.Contains(pargs, "--repo") {
-		t.Errorf("default service arguments should stay quiet, got %q", pargs)
-	}
-
-	// serve mode listens rather than reports, so it must not be registered
-	// with a server and an interval it does not use.
-	serveArgs := strings.Join(config{listen: "0.0.0.0:9713", token: "t", server: "https://x"}.serviceArgs("serve"), " ")
-	if !strings.Contains(serveArgs, "serve") || !strings.Contains(serveArgs, "--listen 0.0.0.0:9713") {
-		t.Errorf("serve arguments = %q", serveArgs)
-	}
-	if strings.Contains(serveArgs, "--server") {
-		t.Errorf("serve arguments should not carry a server: %q", serveArgs)
+	// Defaults are the other half: a service left on its defaults must not have
+	// them ... in the file as overrides of anything, but equal to the defaults.
+	if base.checkIn != defaultCheckIn || base.buffer != defaultBuffer {
+		t.Errorf("check-in %s / buffer %s should be the defaults", base.checkIn, base.buffer)
 	}
 }
 
