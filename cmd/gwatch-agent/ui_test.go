@@ -5,12 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/jxburros/GWatch/internal/model"
@@ -296,15 +299,57 @@ func TestOnlyLoopbackAddressesAreServed(t *testing.T) {
 	}
 }
 
-func TestAReadOnlyFileSaysSo(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root can write anywhere")
+// What the panel says when this account may not change the file or the service
+// does not depend on the platform's file modes, so it is tested with the error
+// each platform gives rather than by revoking permissions the platform may not
+// enforce.
+func TestARefusedChangeSaysHowToGetAccess(t *testing.T) {
+	denials := map[string]error{
+		"unix":    &fs.PathError{Op: "open", Path: "/etc/gwatch-agent/agent.json", Err: syscall.EACCES},
+		"wrapped": fmt.Errorf("create /etc/gwatch-agent: %w", os.ErrPermission),
+		"windows": errors.New("open C:\\ProgramData\\GWatch\\agent.json: Access is denied."),
+	}
+	for name, denial := range denials {
+		t.Run(name, func(t *testing.T) {
+			p := newPanel(t)
+			p.ui.save = func(*configDoc) error { return denial }
+			resp, b := p.do("PUT", "/api/settings", map[string]any{"name": "x"}, opts{cookie: true, header: true})
+			if resp.StatusCode != 403 || !strings.Contains(string(b), "sudo") {
+				t.Errorf("saving: %d %s", resp.StatusCode, b)
+			}
+			p.ui.control = func(string) error { return denial }
+			resp, b = p.do("POST", "/api/service/restart", nil, opts{cookie: true, header: true})
+			if resp.StatusCode != 403 || !strings.Contains(string(b), "sudo") {
+				t.Errorf("service control: %d %s", resp.StatusCode, b)
+			}
+		})
 	}
 	p := newPanel(t)
-	if err := os.Chmod(p.dir, 0o500); err != nil {
+	p.ui.save = func(*configDoc) error { return errors.New("disk full") }
+	resp, b := p.do("PUT", "/api/settings", map[string]any{"name": "x"}, opts{cookie: true, header: true})
+	if resp.StatusCode != 500 || strings.Contains(string(b), "sudo") {
+		t.Errorf("a failure that is not about permission should not suggest sudo: %d %s", resp.StatusCode, b)
+	}
+}
+
+// The same thing against the real file system, where the platform enforces file
+// modes. A directory the owner has made read-only does not do: saving puts its
+// own directory right, as the owner may. What the account cannot do is create a
+// directory inside one it may not write to, which is the position of a person
+// opening the panel over a configuration that belongs to someone else. Root,
+// Windows and some other platforms are not stopped by file modes, and then there
+// is nothing here to observe.
+func TestAnUnwritableLocationSaysSo(t *testing.T) {
+	p := newPanel(t)
+	locked := filepath.Join(p.dir, "locked")
+	if err := os.Mkdir(locked, 0o500); err != nil {
 		t.Skip(err)
 	}
-	t.Cleanup(func() { os.Chmod(p.dir, 0o700) })
+	t.Cleanup(func() { os.Chmod(locked, 0o700) })
+	if err := os.Mkdir(filepath.Join(locked, "probe"), 0o700); err == nil {
+		t.Skip("this account can write into a read-only directory here")
+	}
+	p.ui.cfg.configPath = filepath.Join(locked, "agent-dir", "agent.json")
 	resp, b := p.do("PUT", "/api/settings", map[string]any{"name": "x"}, opts{cookie: true, header: true})
 	if resp.StatusCode != 403 || !strings.Contains(string(b), "sudo") {
 		t.Errorf("%d %s", resp.StatusCode, b)
@@ -336,9 +381,6 @@ func TestTheEditorNeverNeedsToSeeTheToken(t *testing.T) {
 }
 
 func TestAPanelOverAFileItCannotReadSaysHowToGetAccess(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root can read anything")
-	}
 	dir := isolate(t)
 	path := filepath.Join(dir, "agent.json")
 	writeFile(t, path, `{"server":"https://s:7230"}`)
@@ -346,6 +388,10 @@ func TestAPanelOverAFileItCannotReadSaysHowToGetAccess(t *testing.T) {
 		t.Skip(err)
 	}
 	t.Cleanup(func() { os.Chmod(path, 0o600) })
+	if f, err := os.Open(path); err == nil {
+		f.Close()
+		t.Skip("this account can read a file with no permissions here (root, or a platform that does not enforce modes)")
+	}
 	cfg := defaultConfig()
 	cfg.configPath = path
 	err := runUI(cfg, "127.0.0.1:0", false)

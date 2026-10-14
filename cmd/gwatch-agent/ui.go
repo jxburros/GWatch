@@ -187,6 +187,9 @@ type uiServer struct {
 	// Seams for tests: how the service is controlled and asked after.
 	control func(action string) error
 	state   func() serviceState
+	// save writes the configuration file; a test makes it fail the way a file
+	// this account may not touch does, on platforms whose file modes cannot.
+	save func(d *configDoc) error
 	// Reading and updates, so a test need not reach the network.
 	testReading func(ctx context.Context, c config) error
 	checkUpdate func(ctx context.Context, c config) (model.UpdateInfo, error)
@@ -206,6 +209,7 @@ func newUIServer(cfg config, addr, secret string) *uiServer {
 	s := &uiServer{cfg: cfg, addr: addr, secret: secret}
 	s.lastUsed.Store(time.Now().Unix())
 	s.control = s.controlService
+	s.save = (*configDoc).save
 	s.state = s.serviceState
 	s.testReading = func(ctx context.Context, c config) error {
 		c2 := c
@@ -502,7 +506,7 @@ func (s *uiServer) persist(w http.ResponseWriter, doc *configDoc) bool {
 			return false
 		}
 	}
-	if err := doc.save(); err != nil {
+	if err := s.save(doc); err != nil {
 		if isPermissionError(err) {
 			writeUIError(w, http.StatusForbidden, elevateHint)
 			return false
