@@ -464,6 +464,30 @@ func scanPairingWithHash(sc interface{ Scan(...any) error }) (model.PairingCode,
 	return p, hash, nil
 }
 
+// SetPairingCollect keeps the readings an administrator chose while adding a
+// machine, so that the agent starts with them when the code is redeemed.
+func (s *Store) SetPairingCollect(ctx context.Context, id int64, sel model.CollectSelection) error {
+	_, err := s.exec(ctx, `UPDATE agent_pairings SET collect = ? WHERE id = ?`, collectColumn(sel), id)
+	return err
+}
+
+// PairingCollect returns what SetPairingCollect kept; zero means nothing chosen.
+func (s *Store) PairingCollect(ctx context.Context, id int64) (model.CollectSelection, error) {
+	var raw string
+	err := s.queryRow(ctx, `SELECT collect FROM agent_pairings WHERE id = ?`, id).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.CollectSelection{}, ErrNotFound
+	}
+	if err != nil {
+		return model.CollectSelection{}, err
+	}
+	var sel model.CollectSelection
+	if raw != "" {
+		_ = json.Unmarshal([]byte(raw), &sel)
+	}
+	return sel, nil
+}
+
 // CreatePairingCode records an invitation to enrol one machine. Only the hash
 // of the code is stored, exactly as an agent token's is: the code is shown
 // once, when it is minted, and a lost one is replaced rather than recovered.

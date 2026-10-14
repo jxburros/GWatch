@@ -446,7 +446,7 @@ const maxPairBody = 4 << 10
 // that a code exists but has run out, which is most of the way to knowing the
 // shape of the codes GWatch mints — so the person who mistyped theirs and the
 // person fishing for one get the same sentence.
-const pairingRejected = "that pairing code is not valid; ask for a fresh one in GWatch under Hardware"
+const pairingRejected = "that pairing code is not valid; ask for a fresh one in GWatch (Nodes › Add node › GWatch agent)"
 
 // handleAgentLatest reports the newest published agent release, so the
 // interface can mark machines whose agent is behind.
@@ -486,6 +486,9 @@ func (s *Server) handleCreatePairing(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name   string `json:"name"`
 		NodeID *int64 `json:"nodeId"`
+		// Collect is the readings chosen while adding the machine; the agent
+		// starts with them once the code is redeemed.
+		Collect model.CollectSelection `json:"collect"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeDecodeError(w, err)
@@ -498,6 +501,11 @@ func (s *Server) handleCreatePairing(w http.ResponseWriter, r *http.Request) {
 		return
 	case len(name) > 100:
 		writeError(w, http.StatusBadRequest, "the name is too long")
+		return
+	}
+	body.Collect = body.Collect.Normalize()
+	if err := body.Collect.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if body.NodeID != nil {
@@ -527,6 +535,11 @@ func (s *Server) handleCreatePairing(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.fail(w, err)
 		return
+	}
+	if !body.Collect.IsZero() {
+		if err := s.Store.SetPairingCollect(ctx, created.ID, body.Collect); err != nil {
+			s.Log.Errorf("keep the chosen readings with pairing code %d: %v", created.ID, err)
+		}
 	}
 	s.auditAuth(ctx, "Pairing code created for "+created.Name,
 		fmt.Sprintf("Whoever types it within %s enrols one machine, which may then submit that machine's hardware readings and nothing else.",
@@ -676,6 +689,12 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.keepAgentToken(ctx, created.ID, token)
+	if sel, err := s.Store.PairingCollect(ctx, pairing.ID); err == nil && !sel.IsZero() {
+		if err := s.Store.SetAgentCollect(ctx, created.ID, sel); err != nil {
+			s.Log.Errorf("apply the chosen readings to agent %d: %v", created.ID, err)
+		}
+		created.Collect = sel
+	}
 	if err := s.Store.AttachPairingAgent(ctx, pairing.ID, created.ID); err != nil {
 		s.Log.Errorf("attach pairing agent: %v", err)
 	}

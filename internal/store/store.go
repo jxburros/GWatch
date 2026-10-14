@@ -365,6 +365,9 @@ var addedColumns = []struct{ table, column, ddl string }{
 	{"agents", "collect", "ALTER TABLE agents ADD COLUMN collect TEXT NOT NULL DEFAULT ''"},
 	{"agents", "inventory", "ALTER TABLE agents ADD COLUMN inventory TEXT NOT NULL DEFAULT ''"},
 	{"agents", "checked_in_at", "ALTER TABLE agents ADD COLUMN checked_in_at TEXT"},
+	// The readings chosen while a machine was being added, kept with the pairing
+	// code until the machine redeems it and becomes an agent.
+	{"agent_pairings", "collect", "ALTER TABLE agent_pairings ADD COLUMN collect TEXT NOT NULL DEFAULT ''"},
 }
 
 // currentSchemaVersion is the schema_version this build expects. Every

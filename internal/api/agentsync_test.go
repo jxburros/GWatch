@@ -358,3 +358,32 @@ func TestRevokedMachineCannotCheckInOrBeRotated(t *testing.T) {
 		t.Errorf("rotating a revoked machine should be refused, got %d", code)
 	}
 }
+
+// What is chosen while adding a machine rides with its pairing code and is the
+// agent's selection from the moment it exists.
+func TestChoicesMadeWhileAddingAMachineReachTheAgent(t *testing.T) {
+	ts, _ := newTestServer(t)
+	var minted struct {
+		Code string `json:"code"`
+	}
+	sel := model.CollectSelection{Metrics: []string{"cpu", "memory", "disk"}}
+	if status := call(t, ts, "POST", "/api/agents/pairings", map[string]any{"name": "nas", "collect": sel}, &minted); status != 201 {
+		t.Fatalf("mint: %d", status)
+	}
+	status, body := redeem(t, ts, minted.Code)
+	if status != 201 {
+		t.Fatalf("redeem: %d %s", status, body)
+	}
+	var out registered
+	_ = json.Unmarshal([]byte(body), &out)
+	if len(out.Agent.Collect.Metrics) != 3 {
+		t.Errorf("the redeemed agent should carry the choice: %+v", out.Agent.Collect)
+	}
+	_, settings := checkIn(t, ts, out.Token, nil)
+	if len(settings.Collect.Metrics) != 3 {
+		t.Errorf("the first check-in should deliver it: %+v", settings.Collect)
+	}
+	if status := call(t, ts, "POST", "/api/agents/pairings", map[string]any{"name": "x", "collect": map[string]any{"metrics": []string{"gpu"}}}, nil); status != 400 {
+		t.Errorf("nonsense should be refused when the code is minted, got %d", status)
+	}
+}
