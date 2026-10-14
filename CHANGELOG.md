@@ -9,6 +9,52 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## Unreleased
+
+### Added
+
+- **Network map: clusters, and lines you can style.**
+  - **Clusters layout.** The *Radial* layout, which put every node on rings
+    round one centre and read as one giant circle, is replaced by **Clusters**:
+    a node with things plugged into it sits in the middle of a ring of them, a
+    switch among its machines, the switches that hang off a router in a ring
+    round the router, circles around circles. One line joins each node to its
+    parent. Rings are sized from the leaves up so that nothing overlaps and a
+    line is always there to see; children go round in name order, and a node
+    with a single child puts it straight out beyond itself so a chain does not
+    balloon. Several trees ring the biggest one; nodes with no dependency are
+    kept in rows underneath. A map saved as *radial* keeps working and now
+    draws as clusters. The top-to-bottom and left-to-right layouts are
+    unchanged.
+  - **Line colour, thickness and style.** **Customise** gains **Line style**
+    (colour, thickness 1–8, solid, dashed, dotted or dash-and-dot) for every line
+    on the map, in the page and in a dashboard's *Network map* widget alike.
+  - **Per-link style.** Choose a node on the map and **Link to *its parent***
+    sets that one line's colour, thickness and style (with **Reset**); the node
+    editor has the same **Link style** group beside **Depends on**, and
+    `PATCH /api/nodes/bulk` takes a `linkStyle`. A link's own style beats the
+    map's, which beats the theme's. It is kept on the node at the lower end of
+    the link (`Node.linkStyle`, in a new `nodes.link_style` column added to older
+    databases when they are opened), so every map shows it, and it travels with
+    the node in backups, restores, the database copy and the configuration
+    export.
+  - **An outage still shows.** Lines out of a node that is down stay red whatever
+    colour was chosen — though they take the chosen thickness and dashes — and
+    the legend says in words what red means, so neither colour nor dash style is
+    the only cue. **Export as SVG** carries each line's colour, thickness and
+    dashes.
+  - Colours are `#rgb`, `#rrggbb` or `#rrggbbaa` and nothing else, checked in
+    the service (a bad colour or style is a 400; a width is clamped) and again
+    in the page before anything is drawn; a restored backup or an older database
+    cannot carry anything else in either.
+
+### Changed
+
+- The *Radial* layout is now called **Clusters (radial)** in the layout list.
+- A link's style is dropped when the node stops depending on anything and when
+  its parent is deleted, so a colour chosen for one link does not turn up on
+  another.
+
 ## 0.6.2 — 2026-10-13
 
 ### Fixed

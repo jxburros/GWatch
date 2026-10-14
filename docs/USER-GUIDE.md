@@ -187,7 +187,10 @@ Each node carries:
   nodes are listed first on a wallboard.
 - **Depends on** — a parent node. While the parent is down, alerts for this
   node are suppressed and recorded as "affected by" instead. This is the single
-  most useful field on the page and the one most often left empty.
+  most useful field on the page and the one most often left empty. Once a
+  parent is chosen, a **Link style** group beside it sets the colour,
+  thickness and dash style of the line between the two on the
+  [network map](#the-network-map).
 - **Notes** — free text, for the thing you will not remember in six months.
 - **Enabled** — a disabled node keeps its configuration and its history and
   stops being checked.
@@ -565,16 +568,56 @@ set apart in a block of their own.
 Choose a node to see what is upstream of it and what depends on it, and to
 change what it **depends on** without opening the editor (a node cannot be
 made to depend on anything below it, which would be a loop). **Customise**
-lays the map out top to bottom, left to right or radially; shows names, names
-and addresses, or just status dots; makes nodes smaller or larger; draws lines
-curved, straight or right-angled; narrows the map to a group or a tag (the
-nodes a filtered node depends on stay on the map, faded); and can hide nodes
-with no dependency. Those choices are remembered in this browser.
+lays the map out top to bottom, left to right or as **clusters**; shows names,
+names and addresses, or just status dots; makes nodes smaller or larger; draws
+lines curved, straight or right-angled; narrows the map to a group or a tag
+(the nodes a filtered node depends on stay on the map, faded); and can hide
+nodes with no dependency. Those choices are remembered in this browser.
+
+**Clusters** (this replaces the layout that was called *Radial*; a map saved
+that way keeps working and now draws as clusters) draws a node with things plugged into it in the middle of a
+ring of them. A switch sits in the centre of a circle of the machines plugged
+into it; a line joins the switch to the router it is plugged into; and the
+switches that hang off the router sit in a circle round the router — circles
+around circles, to as many levels as there are. A node with a single node
+under it puts that one straight out beyond itself, so a chain of switches
+reads as a chain. Where there are several separate trees, the biggest is drawn
+as above and the others sit on a ring round it; nodes with no dependency are
+kept in rows underneath, since a ring would suggest they hang off something.
+Rings are made big enough that nothing overlaps, so a switch with a great many
+nodes on it makes a large circle — zoom in, or press **0** to fit it all.
+In this layout a line is straight, or gently curved if **Line shape** is
+*Curved*; right-angled lines belong to the tree layouts and are drawn straight.
+
+**How a line looks.** Every line can have its own **colour**, **thickness**
+(1 to 8) and **style** — solid, dashed, dotted, or dash and dot — and there are
+two places to say so:
+
+- **Line style** under **Customise** sets the look of every line on the map
+  (and in the *Network map* widget's editor on a dashboard). *Default* puts the
+  colour back to the theme's; **Reset the lines** puts all three back.
+- A single link has its own look, kept on the node at its lower end (the one
+  that **depends on** the other). Choose that node on the map and use **Link to
+  *its parent*** under **Depends on** — or the **Link style** group beside
+  **Depends on** in the node editor. Anything left at "like the map" follows the
+  map; **Reset** gives the whole link back to it. Because it is kept on the
+  node, every map shows it — the page, a dashboard widget, an exported picture —
+  and it is included in backups and configuration exports. It goes when the node
+  stops depending on anything, and when its parent is deleted; pointing the node
+  at a different parent keeps it.
+
+A link's own style beats the map's, and the map's beats the theme's. The one
+thing no colour overrides is an outage: the lines out of a node that is down
+are always drawn red, so a map with a green house style still shows how far a
+failure reaches — though they take the thickness and dashes chosen for them,
+and are dashed by default. The legend says what red means in words, since a
+colour or a dash style is never the only cue. Colours are hex values
+(`#3b82f6`); the service refuses anything else.
 
 Scroll or use **+** and **−** to zoom, drag to pan, press **0** to fit. **Pin to
 a dashboard** adds the map, as customised, as a *Network map* widget; **Export
-as SVG** saves the drawing. "View as list" under the map gives the same tree as
-text.
+as SVG** saves the drawing, with every line's colour, thickness and dashes.
+"View as list" under the map gives the same tree as text.
 
 ---
 
