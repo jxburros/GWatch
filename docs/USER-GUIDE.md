@@ -1003,7 +1003,7 @@ grows without limit. `0` means keep forever.
 | Keep hourly summaries for | 730 days |
 | Keep daily summaries for | forever |
 | Keep events for | 730 days |
-| Keep hardware readings for | 90 days |
+| Keep hardware check results for | 90 days |
 
 The tab writes out in plain words what your numbers actually mean, shows the
 current row counts, and has **Run retention now**. It also shows **where your
@@ -1109,7 +1109,7 @@ machine work at all.
 Restoring onto a fresh install is the supported way to move GWatch to another
 computer or come back from a reinstall. The archive carries nodes, checks,
 dashboards, wallboards, maintenance windows, triggers, endpoints, accounts, API
-keys, registered agents and hardware readings. Step by step, with what does and
+keys and registered agents. Step by step, with what does and
 does not come across: [`RESTORE.md`](RESTORE.md).
 
 ### Updates

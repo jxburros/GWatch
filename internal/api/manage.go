@@ -399,7 +399,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if rt.HostDays < 1 || rt.HostDays > 3650 {
-		writeError(w, http.StatusBadRequest, "hardware readings must be kept between 1 and 3650 days")
+		writeError(w, http.StatusBadRequest, "hardware check results must be kept between 1 and 3650 days")
 		return
 	}
 	for _, v := range []int{rt.FiveMinDays, rt.HourlyDays, rt.DailyDays, rt.EventDays} {

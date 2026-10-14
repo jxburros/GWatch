@@ -86,16 +86,18 @@ func TestAgentLifecycle(t *testing.T) {
 	}
 }
 
-// Deleting a machine must take its readings with it: they are the record of
-// what that machine was doing and have no meaning without it.
-func TestDeleteAgentRemovesItsReadings(t *testing.T) {
+// A machine's readings are its hardware check's results, which belong to the
+// node. Deleting the agent removes the registration (its token and how it was
+// enrolled) and leaves the node and its history, which go with the node.
+func TestDeleteAgentKeepsTheNodesHistory(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
-	a, err := s.CreateAgent(ctx, "nas", nil, "p", "hash", "")
+	node, check := hardwareNode(t, s, model.HostSourceAgent, 0)
+	a, err := s.CreateAgent(ctx, "nas", &node.ID, "p", "hash", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SaveHostSample(ctx, sampleAt(a.HostKey(), time.Now(), 10)); err != nil {
+	if _, err := s.InsertResult(ctx, hardwareResult(check.ID, time.Now(), 10)); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DeleteAgent(ctx, a.ID); err != nil {
@@ -104,136 +106,219 @@ func TestDeleteAgentRemovesItsReadings(t *testing.T) {
 	if _, err := s.GetAgent(ctx, a.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("agent should be gone, got %v", err)
 	}
-	if _, err := s.LatestHostSample(ctx, a.HostKey()); !errors.Is(err, ErrNotFound) {
-		t.Errorf("readings should be gone, got %v", err)
+	if got, _ := s.RecentResults(ctx, check.ID, 10); len(got) != 1 {
+		t.Errorf("the node's history should stay with the node, got %d results", len(got))
 	}
 	if err := s.DeleteAgent(ctx, a.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("want ErrNotFound deleting twice, got %v", err)
 	}
 }
 
-func sampleAt(key string, ts time.Time, cpu float64) model.HostSample {
-	return model.HostSample{
-		Key:       key,
-		Timestamp: ts,
-		CPUPct:    &cpu,
-		Metrics: model.HostMetrics{
-			Key: key, Hostname: "nas.local", Timestamp: ts,
-			CPU:    model.HostCPU{Cores: 4, UsagePct: &cpu},
-			Memory: model.HostMemory{TotalBytes: 100, UsedBytes: 40, UsedPct: 40},
+// hardwareNode makes a node with one hardware check.
+func hardwareNode(t *testing.T, s *Store, source model.HostSource, agentID int64) (model.Node, model.Check) {
+	t.Helper()
+	cfg := model.SystemDefaults()
+	cfg.HostSource, cfg.AgentID = source, agentID
+	node, err := s.CreateNode(context.Background(), model.Node{Name: "nas", Enabled: true, Checks: []model.Check{{
+		Type: model.CheckSystem, Name: "Hardware health", Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 10,
+		Retries: 1, FailureThreshold: 2, Config: cfg,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return node, node.Checks[0]
+}
+
+// hardwareResult is what a hardware check records for one reading: the metrics
+// by key, and the whole snapshot in its details.
+func hardwareResult(checkID int64, ts time.Time, cpu float64) model.Result {
+	m := model.HostMetrics{
+		Key: "agent:1", Hostname: "nas.local", Timestamp: ts,
+		CPU:    model.HostCPU{Cores: 4, UsagePct: &cpu},
+		Memory: model.HostMemory{TotalBytes: 100, UsedBytes: 40, UsedPct: 40},
+	}
+	return model.Result{
+		CheckID: checkID, Timestamp: ts, Success: true, Status: model.StatusUp, Attempts: 1,
+		Metrics: map[string]float64{
+			"cpu": cpu, "memory": 40, "swap": 5, "load": 0.5,
+			"disk:/": 60, "disk:/data": 85,
+			"net:eth0.rx": 100, "net:eth0.tx": 10, "net:wlan0.rx": 50, "net:wlan0.tx": 5,
+			"diskio:sda.read": 7, "diskio:sda.write": 3, "diskio:sda.busy": 90,
 		},
+		Details: model.ResultDetails{Host: &m},
 	}
 }
 
-func TestHostSamplesRoundTrip(t *testing.T) {
+func TestHostSeriesIsBuiltFromTheChecksResults(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
-	base := time.Now().Truncate(time.Second)
-
+	_, check := hardwareNode(t, s, model.HostSourceAgent, 1)
+	base := time.Now().Add(-10 * time.Minute).Truncate(time.Second)
 	for i, cpu := range []float64{10, 20, 30} {
-		if err := s.SaveHostSample(ctx, sampleAt("local", base.Add(time.Duration(i)*time.Minute), cpu)); err != nil {
+		if _, err := s.InsertResult(ctx, hardwareResult(check.ID, base.Add(time.Duration(i)*time.Minute), cpu)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := s.SaveHostSample(ctx, sampleAt("agent:1", base, 99)); err != nil {
+	// A failed run has no metrics and no snapshot; it is a gap, not a zero.
+	if _, err := s.InsertResult(ctx, model.Result{CheckID: check.ID, Timestamp: base.Add(5 * time.Minute), Status: model.StatusDown, Attempts: 1}); err != nil {
 		t.Fatal(err)
 	}
 
-	latest, err := s.LatestHostSample(ctx, "local")
+	series, err := s.HostSeries(ctx, []int64{check.ID}, base.Add(-time.Minute), base.Add(10*time.Minute), 600)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if latest.CPUPct == nil || *latest.CPUPct != 30 {
-		t.Fatalf("latest reading: %+v", latest)
+	if len(series) != 3 {
+		t.Fatalf("want one point per successful run, got %d: %+v", len(series), series)
 	}
-	// The full snapshot comes back with the newest reading, because that is
-	// what the inspector shows.
-	if latest.Metrics.Hostname != "nas.local" || latest.Metrics.CPU.Cores != 4 {
-		t.Errorf("snapshot not preserved: %+v", latest.Metrics)
+	if *series[0].CPUPct != 10 || *series[2].CPUPct != 30 || !series[0].Timestamp.Before(series[1].Timestamp) {
+		t.Errorf("series out of order or wrong: %+v", series)
 	}
-
-	all, err := s.LatestHostSamples(ctx)
-	if err != nil {
-		t.Fatal(err)
+	p := series[0]
+	// The charts draw the fullest disk and the totals of throughput, derived
+	// from the per-instance metrics the check keeps.
+	if p.DiskPct == nil || *p.DiskPct != 85 {
+		t.Errorf("disk should be the fullest filesystem: %v", p.DiskPct)
 	}
-	if len(all) != 2 || *all["local"].CPUPct != 30 || *all["agent:1"].CPUPct != 99 {
-		t.Fatalf("latest per machine: %+v", all)
+	if *p.NetRxBytesSec != 150 || *p.NetTxBytesSec != 15 || *p.DiskReadBytes != 7 || *p.DiskWriteBytes != 3 {
+		t.Errorf("throughput totals: rx=%v tx=%v read=%v write=%v", *p.NetRxBytesSec, *p.NetTxBytesSec, *p.DiskReadBytes, *p.DiskWriteBytes)
 	}
-
-	series, err := s.HostSamples(ctx, "local", base, base.Add(90*time.Second), 0)
-	if err != nil {
-		t.Fatal(err)
+	if *p.MemPct != 40 || *p.SwapPct != 5 || *p.LoadPerCore != 0.5 {
+		t.Errorf("single-instance metrics: %+v", p)
 	}
-	if len(series) != 2 {
-		t.Fatalf("want the two readings inside the window, got %d", len(series))
-	}
-	if *series[0].CPUPct != 10 || *series[1].CPUPct != 20 {
-		t.Errorf("series is not in time order: %+v", series)
-	}
-	// A chart wants the numbers, not several thousand decoded snapshots.
-	if series[0].Metrics.Hostname != "" {
+	// A chart wants numbers, not snapshots.
+	if p.Metrics.Hostname != "" {
 		t.Error("the series should not carry full snapshots")
 	}
-
-	keys, err := s.HostKeys(ctx)
-	if err != nil || len(keys) != 2 || keys[0] != "agent:1" || keys[1] != "local" {
-		t.Fatalf("host keys: %v %v", keys, err)
-	}
 }
 
-// An agent that retries a push must not leave two points where there was one.
-func TestSaveHostSampleReplacesSameTimestamp(t *testing.T) {
+func TestHostSeriesAveragesIntoBucketsAndKeepsMissingMissing(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
-	ts := time.Now().Truncate(time.Millisecond)
-
-	if err := s.SaveHostSample(ctx, sampleAt("local", ts, 10)); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SaveHostSample(ctx, sampleAt("local", ts, 55)); err != nil {
-		t.Fatal(err)
-	}
-	series, err := s.HostSamples(ctx, "local", ts.Add(-time.Minute), ts.Add(time.Minute), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(series) != 1 {
-		t.Fatalf("want one reading, got %d", len(series))
-	}
-	if *series[0].CPUPct != 55 {
-		t.Errorf("the retry should have replaced the reading, got %v", *series[0].CPUPct)
-	}
-}
-
-func TestPruneAndDeleteHostSamples(t *testing.T) {
-	s := openTest(t)
-	ctx := context.Background()
-	now := time.Now()
-
-	for _, age := range []time.Duration{0, 24 * time.Hour, 72 * time.Hour} {
-		if err := s.SaveHostSample(ctx, sampleAt("local", now.Add(-age), 10)); err != nil {
+	_, check := hardwareNode(t, s, model.HostSourceAgent, 1)
+	base := time.Now().Add(-time.Hour).Truncate(time.Second)
+	for i := 0; i < 60; i++ {
+		r := hardwareResult(check.ID, base.Add(time.Duration(i)*time.Minute), float64(i))
+		if i%2 == 1 {
+			delete(r.Metrics, "swap") // half the readings have no swap figure
+		}
+		if _, err := s.InsertResult(ctx, r); err != nil {
 			t.Fatal(err)
 		}
 	}
-	n, err := s.PruneHostSamples(ctx, now.Add(-48*time.Hour))
+	series, err := s.HostSeries(ctx, []int64{check.ID}, base.Add(-time.Second), base.Add(time.Hour), 6)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Fatalf("want 1 reading pruned, got %d", n)
+	if len(series) != 6 {
+		t.Fatalf("sixty readings in six buckets: got %d points", len(series))
 	}
-	if err := s.DeleteHostSamples(ctx, "local"); err != nil {
-		t.Fatal(err)
+	// Averaging keeps a spike visible; a bucket's CPU is the mean of its ten.
+	total := 0.0
+	for _, p := range series {
+		total += *p.CPUPct
 	}
-	if keys, _ := s.HostKeys(ctx); len(keys) != 0 {
-		t.Fatalf("want no readings left, got %v", keys)
+	if total/6 < 28 || total/6 > 31 {
+		t.Errorf("mean of bucket means = %v, want about 29.5", total/6)
+	}
+	for _, p := range series {
+		if p.SwapPct == nil || *p.SwapPct != 5 {
+			t.Errorf("a metric missing from some readings is averaged over the ones that have it, not over zero: %v", p.SwapPct)
+		}
 	}
 }
 
-func TestSaveHostSampleRequiresAKey(t *testing.T) {
+func TestLatestHostFromResultsSkipsRunsWithNoSnapshot(t *testing.T) {
 	s := openTest(t)
-	if err := s.SaveHostSample(context.Background(), model.HostSample{}); err == nil {
-		t.Fatal("a reading with no host key should be refused")
+	ctx := context.Background()
+	_, check := hardwareNode(t, s, model.HostSourceAgent, 1)
+	_, other := hardwareNode(t, s, model.HostSourceAgent, 2)
+	now := time.Now()
+	for _, r := range []model.Result{
+		hardwareResult(check.ID, now.Add(-30*time.Minute), 10),
+		hardwareResult(check.ID, now.Add(-20*time.Minute), 77),
+		// The machine went quiet: the check has been failing since, with nothing
+		// to say about what the machine looked like.
+		{CheckID: check.ID, Timestamp: now.Add(-10 * time.Minute), Status: model.StatusDown, Attempts: 1},
+		{CheckID: check.ID, Timestamp: now.Add(-5 * time.Minute), Status: model.StatusDown, Attempts: 1},
+	} {
+		if _, err := s.InsertResult(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m, ok, err := s.LatestHostFromResults(ctx, []int64{check.ID, other.ID})
+	if err != nil || !ok {
+		t.Fatalf("got %v %v", ok, err)
+	}
+	if m.CPU.UsagePct == nil || *m.CPU.UsagePct != 77 || m.Hostname != "nas.local" {
+		t.Errorf("the newest reading that has a snapshot: %+v", m)
+	}
+	if _, ok, _ := s.LatestHostFromResults(ctx, []int64{other.ID}); ok {
+		t.Error("a check that recorded nothing has no reading")
+	}
+}
+
+// A hardware result is a whole snapshot, so hardware checks keep theirs for the
+// "hardware readings" retention and every other check keeps its own for the raw
+// one.
+func TestHardwareResultsHaveARetentionOfTheirOwn(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	_, hw := hardwareNode(t, s, model.HostSourceAgent, 1)
+	pingNode, err := s.CreateNode(ctx, model.Node{Name: "router", Host: "192.168.1.1", Enabled: true, Checks: []model.Check{{
+		Type: model.CheckPing, Name: "Ping", Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5, Retries: 1, FailureThreshold: 2}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ping := pingNode.Checks[0]
+	old := time.Now().Add(-50 * 24 * time.Hour)
+	for _, id := range []int64{hw.ID, ping.ID} {
+		if _, err := s.InsertResult(ctx, model.Result{CheckID: id, Timestamp: old, Success: true, Status: model.StatusUp, Attempts: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cutoff := time.Now().Add(-30 * 24 * time.Hour)
+	if n, err := s.DeleteResultsBeforeByKind(ctx, cutoff, false); err != nil || n != 1 {
+		t.Fatalf("pruning ordinary checks at 30 days: %d %v", n, err)
+	}
+	if got, _ := s.RecentResults(ctx, hw.ID, 5); len(got) != 1 {
+		t.Error("the hardware result is kept: its retention is not the ordinary one")
+	}
+	if got, _ := s.RecentResults(ctx, ping.ID, 5); len(got) != 0 {
+		t.Error("the ordinary result should have been pruned")
+	}
+	if n, err := s.DeleteResultsBeforeByKind(ctx, cutoff, true); err != nil || n != 1 {
+		t.Fatalf("pruning hardware at 30 days: %d %v", n, err)
+	}
+}
+
+func TestCountResultsNear(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	_, check := hardwareNode(t, s, model.HostSourceAgent, 1)
+	at := time.Now().Add(-time.Hour).Truncate(time.Second)
+	if _, err := s.InsertResult(ctx, hardwareResult(check.ID, at, 10)); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := s.CountResultsNear(ctx, check.ID, at.Add(40*time.Second), 48*time.Second); n != 1 {
+		t.Errorf("within the window: %d", n)
+	}
+	if n, _ := s.CountResultsNear(ctx, check.ID, at.Add(5*time.Minute), 48*time.Second); n != 0 {
+		t.Errorf("outside the window: %d", n)
+	}
+}
+
+// The table readings used to live in is gone, and the migration that drops it
+// is safe on a database that never had one.
+func TestHostSamplesTableIsRetired(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	var n int
+	if err := s.queryRow(ctx, "SELECT COUNT(*) FROM host_samples").Scan(&n); err == nil {
+		t.Fatal("host_samples should not exist: a machine's readings are its check's results")
+	}
+	if err := s.writeTx(ctx, func(tx *wtx) error { return migrateRetireHostSamples(ctx, tx) }); err != nil {
+		t.Fatalf("dropping a table that is not there should be fine: %v", err)
 	}
 }
 

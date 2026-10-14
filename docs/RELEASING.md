@@ -80,7 +80,7 @@ Pushing a tag such as `v0.1.0` additionally runs the `release` job (below) and t
 | `internal/auth` | Roles, principals, password hashing, sessions and API-key digests |
 | `internal/secrets` | The envelope that seals individual configuration values with the machine-local `gwatch.key` |
 | `internal/discovery` | Subnet sweeps: what answers, what it is called, which ports are open |
-| `internal/hostmon` | Hardware readings: samples this machine, accepts agent pushes, answers the hardware API |
+| `internal/hostmon` | The newest hardware reading of each machine, in memory: samples this machine, accepts agent pushes (the engine then has the machine's check judge them) |
 | `internal/sysmetrics` | The platform-tagged collectors behind `hostmon` (`collect_linux.go`, `collect_darwin.go`, `collect_windows.go`) |
 | `internal/update` | GitHub release check, download, checksum, signature verification and executable swap |
 | `internal/mailer` | SMTP delivery and alert email rendering |

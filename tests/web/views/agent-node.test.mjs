@@ -132,7 +132,7 @@ test('revoking asks first and leaves the card saying so', async (t) => {
   const modal = await waitFor(() => [...document.querySelectorAll('.modal')].find((m) => /Revoke Living room NAS/.test(m.textContent)));
   button(modal, 'Revoke token').click();
   await waitFor(() => /has been revoked/.test(root.querySelector('.agent-card')?.textContent || ''), { timeout: 5000 });
-  assert.ok(button(root.querySelector('.agent-card'), 'Delete agent and readings'));
+  assert.ok(button(root.querySelector('.agent-card'), 'Delete agent'));
   // Put the mock back for the tests that follow.
   window.__gwatchMock.agents[0].revokedAt = null;
 });

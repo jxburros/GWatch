@@ -664,7 +664,7 @@ export async function mount(root, ctx) {
         summary,
         h('div', { class: 'form-grid-3', style: { marginTop: '14px' } },
           f('rawDays', 'Keep every result for'), f('fiveMinDays', 'Keep 5-minute summaries for'), f('hourlyDays', 'Keep hourly summaries for'), f('dailyDays', 'Keep daily summaries for'), f('eventDays', 'Keep events for'),
-          f('hostDays', 'Keep hardware readings for', 'Each reading is a whole snapshot of a machine rather than a single number, so these are kept for less time than check results.')),
+          f('hostDays', 'Keep hardware check results for', 'A hardware check\u2019s result is a whole snapshot of a machine rather than a single number, so these have a retention of their own; every other check follows the setting for individual results above.')),
         h('hr', { class: 'divider' }), saveBar()),
       h('section', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', null, 'Current storage'), runBtn), statusBox, h('hr', { class: 'divider' }), pathsBox));
   }

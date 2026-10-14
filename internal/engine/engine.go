@@ -148,6 +148,7 @@ func New(st *store.Store, log *logging.Logger, opts Options) *Engine {
 	e.hosts = hostmon.New(st)
 	e.hosts.OnSample = func(key string) { e.broadcast(Update{Kind: "host"}) }
 	e.hosts.OnError = func(err error) { e.RecordError("hardware readings", err) }
+	e.hosts.Restore = e.restoreHost
 	return e
 }
 
@@ -385,6 +386,15 @@ func (e *Engine) tick(now time.Time) {
 			continue
 		}
 		if !st.NextRunAt.After(now) {
+			// A machine that pushes its readings has them judged as they arrive
+			// (IngestHostReading). While they keep arriving the schedule has
+			// nothing to add — a run would only judge the same reading again —
+			// so it moves on; it matters only once readings have stopped.
+			if checks.PushesReadings(c) && e.hostReadingFreshLocked(c, now) {
+				next := now.Add(time.Duration(c.IntervalSeconds) * time.Second)
+				st.NextRunAt = &next
+				continue
+			}
 			due = append(due, c)
 		}
 	}
@@ -480,7 +490,6 @@ func (e *Engine) runAndProcess(ctx context.Context, checkID int64, depth int) (m
 	if result.Timestamp.IsZero() {
 		result.Timestamp = time.Now()
 	}
-	e.recordScrapedHost(ctx, result)
 	stored, err := e.process(ctx, c, n, result, depth)
 	e.mu.Lock()
 	flight.result, flight.err = stored, err

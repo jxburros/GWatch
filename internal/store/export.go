@@ -225,55 +225,11 @@ func (s *Store) insertWithID(ctx context.Context, table string, id int64, cols [
 	})
 }
 
-// AllHostSamples streams every hardware reading to fn, oldest first per
-// machine.
-func (s *Store) AllHostSamples(ctx context.Context, fn func(model.HostSample) error) error {
-	rows, err := s.query(ctx, "SELECT "+hostSampleCols+" FROM host_samples ORDER BY host_key, ts")
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		sample, err := scanHostSample(rows)
-		if err != nil {
-			return err
-		}
-		if err := fn(sample); err != nil {
-			return err
-		}
-	}
-	return rows.Err()
-}
-
-// InsertHostSamplesBatch writes readings in one transaction, replacing any
-// with the same machine and timestamp.
-func (s *Store) InsertHostSamplesBatch(ctx context.Context, samples []model.HostSample) error {
-	q := insertValues("host_samples", hostSampleColList) + " " + s.d.upsertClause([]string{"host_key", "ts"}, hostSampleColList)
-	return s.writeTx(ctx, func(tx *wtx) error {
-		for _, sample := range samples {
-			if sample.Key == "" {
-				continue
-			}
-			sample.Metrics.Key = sample.Key
-			blob, err := json.Marshal(sample.Metrics)
-			if err != nil {
-				return err
-			}
-			if _, err := tx.exec(ctx, q, sample.Key, sample.Timestamp.UnixMilli(),
-				sample.CPUPct, sample.MemPct, sample.SwapPct, sample.DiskPct, sample.LoadPerCore,
-				sample.NetRxBytesSec, sample.NetTxBytesSec, sample.DiskReadBytes, sample.DiskWriteBytes, string(blob)); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
 // IsEmpty reports whether the database holds no GWatch data at all: no
 // nodes, settings, accounts, keys, agents, boards, events or results. It is
 // what "gwatch migrate-db" checks before copying into a target.
 func (s *Store) IsEmpty(ctx context.Context) (bool, error) {
-	for _, table := range []string{"nodes", "settings", "users", "api_keys", "agents", "wallboards", "dashboards", "events", "results", "host_samples"} {
+	for _, table := range []string{"nodes", "settings", "users", "api_keys", "agents", "wallboards", "dashboards", "events", "results"} {
 		var n int
 		if err := s.queryRow(ctx, "SELECT COUNT(*) FROM "+table).Scan(&n); err != nil {
 			return false, fmt.Errorf("count %s: %w", table, err)
@@ -287,14 +243,14 @@ func (s *Store) IsEmpty(ctx context.Context) (bool, error) {
 
 // ClearEverything empties every table except schema_version, for
 // "gwatch migrate-db --replace". Unlike ClearAll, which a restore uses and
-// which leaves accounts, keys, agents and readings alone, this leaves
+// which leaves accounts, keys and agents alone, this leaves
 // nothing behind.
 func (s *Store) ClearEverything(ctx context.Context) error {
 	return s.writeTx(ctx, func(tx *wtx) error {
 		// Children before parents: MySQL will not delete a row another one
 		// still points at unless the constraint cascades, and not every one
 		// of these does.
-		for _, t := range []string{"results", "rollups", "events", "host_samples", "agent_pairings", "agents", "sessions", "api_keys", "users",
+		for _, t := range []string{"results", "rollups", "events", "agent_pairings", "agents", "sessions", "api_keys", "users",
 			"rule_state", "rules", "triggers", "endpoints", "maintenance_windows", "dashboards", "wallboards", "check_state", "checks", "nodes", "settings"} {
 			if _, err := tx.exec(ctx, "DELETE FROM "+t); err != nil {
 				return fmt.Errorf("clear %s: %w", t, err)

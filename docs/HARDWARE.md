@@ -20,20 +20,28 @@ of this document explains why.
 
 ## This computer
 
-Nothing to set up. GWatch reads the machine it runs on every minute and keeps
-the readings alongside everything else, so there is a history whether or not you
-ever add a check.
+Nothing to install. GWatch can read the machine it runs on by itself.
 
 A machine is not a separate kind of thing in GWatch: it is a node with a
-hardware check, and its readings are shown on that node. That is why there is no
-hardware section in the sidebar — the machines of your network are in **Nodes**,
-with everything else you watch.
+hardware check, and what the check measures is recorded like what any other
+check measures — one result per run, in the same place, with the same charts,
+retention and backups as a ping or a website. That is why there is no hardware
+section in the sidebar or in Settings: the machines of your network are in
+**Nodes**, with everything else you watch.
 
-To be *told* when something is wrong, add a check: **Nodes › Add node**, pick
-the **This computer** template, or add a **Hardware health** check to any node
-you already have. The thresholds it starts with are 90% processor, 90/97%
-memory, 85/95% disk and 50% swap; change them to whatever "wrong" means for
-this machine.
+So there is a history of this computer once something is watching it. Add a
+check: **Nodes › Add node**, pick the **This computer** template, or add a
+**Hardware health** check to any node you already have. The thresholds it
+starts with are 90% processor, 90/97% memory, 85/95% disk and 50% swap; change
+them to whatever "wrong" means for this machine. (GWatch keeps this computer's
+newest reading in memory so that a check always has something fresh to judge,
+but nothing is stored until a check records it. Machines whose readings no check
+watches have only that newest reading.)
+
+How long the results are kept is **Settings › Retention › Keep hardware check
+results for** (90 days by default). A hardware result is a whole snapshot of the
+machine, so it has a retention of its own; every other check follows the
+setting for individual results.
 
 ## Another machine, with the agent
 

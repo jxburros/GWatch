@@ -30,7 +30,7 @@ func reading(hostname string, cpu float64, ts time.Time) model.HostMetrics {
 // A token names one machine, so a reading is filed under that machine whatever
 // the payload says. Otherwise a stolen token could rewrite another machine's
 // history.
-func TestIngestIgnoresTheClaimedKey(t *testing.T) {
+func TestAcceptIgnoresTheClaimedKey(t *testing.T) {
 	m, st := newTest(t)
 	ctx := context.Background()
 	agent, err := st.CreateAgent(ctx, "nas", nil, "p", "hash", "")
@@ -39,23 +39,20 @@ func TestIngestIgnoresTheClaimedKey(t *testing.T) {
 	}
 
 	claimed := reading("nas.local", 40, time.Now())
-	claimed.Key = "local" // try to overwrite this computer's history
-	stored, err := m.Ingest(ctx, agent, claimed, "10.0.0.5:1234")
+	claimed.Key = "local" // try to overwrite this computer's reading
+	stored, err := m.Accept(ctx, agent, claimed, "10.0.0.5:1234")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if stored.Key != agent.HostKey() {
 		t.Fatalf("want the reading filed under %q, got %q", agent.HostKey(), stored.Key)
 	}
-	if _, err := st.LatestHostSample(ctx, model.HostKeyLocal); !errors.Is(err, store.ErrNotFound) {
-		t.Error("the agent wrote into this computer's history")
+	if _, ok := m.Latest(model.HostKeyLocal); ok {
+		t.Error("the agent wrote into this computer's reading")
 	}
-	sample, err := st.LatestHostSample(ctx, agent.HostKey())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sample.Metrics.Hostname != "nas.local" {
-		t.Errorf("reading not stored: %+v", sample.Metrics)
+	got, ok := m.Latest(agent.HostKey())
+	if !ok || got.Hostname != "nas.local" {
+		t.Errorf("reading not held: %+v", got)
 	}
 
 	// Reporting in records what the machine says it is.
@@ -67,7 +64,7 @@ func TestIngestIgnoresTheClaimedKey(t *testing.T) {
 
 // A reporting machine's clock must not park a reading outside the window a
 // chart can draw.
-func TestIngestSettlesImplausibleTimestamps(t *testing.T) {
+func TestAcceptSettlesImplausibleTimestamps(t *testing.T) {
 	m, st := newTest(t)
 	ctx := context.Background()
 	agent, _ := st.CreateAgent(ctx, "nas", nil, "p", "hash", "")
@@ -86,7 +83,7 @@ func TestIngestSettlesImplausibleTimestamps(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stored, err := m.Ingest(ctx, agent, reading("nas", 10, tt.ts), "")
+			stored, err := m.Accept(ctx, agent, reading("nas", 10, tt.ts), "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -105,7 +102,7 @@ func TestIngestSettlesImplausibleTimestamps(t *testing.T) {
 
 // Everything an agent sends is stored and later displayed, so nothing arrives
 // unbounded.
-func TestIngestBoundsWhatTheAgentSends(t *testing.T) {
+func TestAcceptBoundsWhatTheAgentSends(t *testing.T) {
 	m, st := newTest(t)
 	ctx := context.Background()
 	agent, _ := st.CreateAgent(ctx, "nas", nil, "p", "hash", "")
@@ -116,7 +113,7 @@ func TestIngestBoundsWhatTheAgentSends(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		huge.Warnings = append(huge.Warnings, strings.Repeat("w", 5000))
 	}
-	stored, err := m.Ingest(ctx, agent, huge, "")
+	stored, err := m.Accept(ctx, agent, huge, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +131,25 @@ func TestIngestBoundsWhatTheAgentSends(t *testing.T) {
 	}
 }
 
-func TestAgentHostFallsBackToTheDatabase(t *testing.T) {
+// Accepting a reading holds it as the machine's newest and does not store it:
+// what is kept is the result of the machine's check judging it.
+func TestAcceptKeepsNothingOfItsOwn(t *testing.T) {
+	m, st := newTest(t)
+	ctx := context.Background()
+	agent, _ := st.CreateAgent(ctx, "nas", nil, "p", "hash", "")
+	if _, err := m.Accept(ctx, agent, reading("nas.local", 10, time.Now()), ""); err != nil {
+		t.Fatal(err)
+	}
+	// A new Monitor over the same database has no reading and no way to find
+	// one: there is nowhere in the database a reading lives apart from results.
+	if _, err := New(st).AgentHost(ctx, agent.ID); !errors.Is(err, ErrNoReading) {
+		t.Fatalf("a restart finds nothing without a Restore hook, got %v", err)
+	}
+}
+
+// After a restart the newest reading comes back from what the machine's check
+// recorded, so a restart does not make every check report its machine down.
+func TestAgentHostRestoresFromWhatTheCheckRecorded(t *testing.T) {
 	m, st := newTest(t)
 	ctx := context.Background()
 	agent, _ := st.CreateAgent(ctx, "nas", nil, "p", "hash", "")
@@ -142,19 +157,45 @@ func TestAgentHostFallsBackToTheDatabase(t *testing.T) {
 	if _, err := m.AgentHost(ctx, agent.ID); !errors.Is(err, ErrNoReading) {
 		t.Fatalf("want ErrNoReading before the machine reports, got %v", err)
 	}
-	if _, err := m.Ingest(ctx, agent, reading("nas.local", 10, time.Now()), ""); err != nil {
+	if _, err := m.Accept(ctx, agent, reading("nas.local", 10, time.Now()), ""); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := m.AgentHost(ctx, agent.ID); err != nil || got.Hostname != "nas.local" {
 		t.Fatalf("from memory: %+v %v", got, err)
 	}
 
-	// A fresh Monitor has nothing cached — a restart must not lose the
-	// machine's last reading, or every check would report it down.
 	restarted := New(st)
+	asked := ""
+	restarted.Restore = func(_ context.Context, key string) (model.HostMetrics, bool) {
+		asked = key
+		return reading("restored.local", 5, time.Now()), true
+	}
 	got, err := restarted.AgentHost(ctx, agent.ID)
-	if err != nil || got.Hostname != "nas.local" {
-		t.Fatalf("after a restart: %+v %v", got, err)
+	if err != nil || got.Hostname != "restored.local" || asked != agent.HostKey() {
+		t.Fatalf("after a restart: %+v %v (asked %q)", got, err, asked)
+	}
+	// It is remembered, so the next look does not ask again.
+	asked = ""
+	if _, err := restarted.AgentHost(ctx, agent.ID); err != nil || asked != "" {
+		t.Errorf("a restored reading should be held: %v asked=%q", err, asked)
+	}
+}
+
+// Readings a machine held back through an outage arrive after the ones taken
+// since, and must not push its newest reading backwards.
+func TestAnOlderReadingNeverReplacesANewerOne(t *testing.T) {
+	m, st := newTest(t)
+	ctx := context.Background()
+	agent, _ := st.CreateAgent(ctx, "nas", nil, "p", "hash", "")
+	now := time.Now()
+	if _, err := m.Accept(ctx, agent, reading("new", 10, now), ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Accept(ctx, agent, reading("old", 10, now.Add(-time.Hour)), ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := m.Latest(agent.HostKey()); got.Hostname != "new" {
+		t.Errorf("the newest reading was replaced by an older one: %s", got.Hostname)
 	}
 }
 
@@ -164,7 +205,7 @@ func TestForgetDropsTheCachedReading(t *testing.T) {
 	m, st := newTest(t)
 	ctx := context.Background()
 	agent, _ := st.CreateAgent(ctx, "nas", nil, "p", "hash", "")
-	if _, err := m.Ingest(ctx, agent, reading("nas.local", 10, time.Now()), ""); err != nil {
+	if _, err := m.Accept(ctx, agent, reading("nas.local", 10, time.Now()), ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := m.Latest(agent.HostKey()); !ok {
@@ -173,13 +214,6 @@ func TestForgetDropsTheCachedReading(t *testing.T) {
 	m.Forget(agent.HostKey())
 	if _, ok := m.Latest(agent.HostKey()); ok {
 		t.Error("reading should have been dropped")
-	}
-}
-
-func TestRecordRequiresAKey(t *testing.T) {
-	m, _ := newTest(t)
-	if err := m.Record(context.Background(), model.HostMetrics{}); err == nil {
-		t.Fatal("a reading with no host key should be refused")
 	}
 }
 
@@ -219,8 +253,8 @@ func TestLocalHostReadsOnDemand(t *testing.T) {
 	}
 }
 
-func TestRunStoresAndNotifies(t *testing.T) {
-	m, st := newTest(t)
+func TestRunSamplesAndNotifies(t *testing.T) {
+	m, _ := newTest(t)
 	notified := make(chan string, 4)
 	m.Interval = time.Hour // only the immediate first sample matters here
 	m.OnSample = func(key string) {
@@ -246,7 +280,7 @@ func TestRunStoresAndNotifies(t *testing.T) {
 	cancel()
 	<-done
 
-	if _, err := st.LatestHostSample(context.Background(), model.HostKeyLocal); err != nil {
-		t.Fatalf("the sample was not stored: %v", err)
+	if got, ok := m.Latest(model.HostKeyLocal); !ok || got.Hostname == "" {
+		t.Fatalf("the sample was not held: %+v", got)
 	}
 }

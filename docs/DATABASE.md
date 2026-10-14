@@ -185,8 +185,7 @@ the SQLite file into the server once:
      results            48210
      rollups            9130
      events             1456
-     hardware readings  20115
-   Done: 12 nodes, 31 checks, 48210 results, 9130 rollups, 1456 events, 20115 hardware readings, 2 wallboards, 3 users, 1 API keys, 2 agents.
+   Done: 12 nodes, 31 checks, 48210 results, 9130 rollups, 1456 events, 2 wallboards, 3 users, 1 API keys, 2 agents.
    Saved the connection to C:\ProgramData\GWatch\database.json.
    ```
 
@@ -200,8 +199,8 @@ What comes across is exactly what a full backup restored onto the server would b
 settings, nodes and checks (with their ids, so history lines up), dependencies,
 dashboards, saved charts, maintenance windows, triggers and endpoints, wallboards (with
 their projection addresses), user accounts (with their password hashes — everyone can
-sign in as before), API keys, hardware agents (with their ids, so their readings still
-belong to them) and, as history, raw results, rollups, events and hardware readings.
+sign in as before), API keys, hardware agents (with their ids, so their node bindings
+survive) and, as history, raw results (which carry hardware checks' readings), rollups and events.
 Browser sessions are not copied: everyone signs in once more. Pairing codes are not
 copied: they are short-lived invitations.
 
@@ -218,7 +217,7 @@ other way round, which is also how you would move *from* a server back to the fi
 between servers: back up, point GWatch at the new database, restart, restore.
 
 Archives made by this version (format 2) additionally carry wallboards, user accounts,
-API keys, hardware agents and hardware readings. Restoring one **merges** the accounts,
+API keys and hardware agents. Restoring one **merges** the accounts,
 keys and agents — one already present is left alone, so restoring never overwrites the
 password of the administrator doing it and never resurrects a key that was deliberately
 revoked — and replaces the wallboards. An older archive (format 1) restores as it always

@@ -381,7 +381,7 @@ var addedColumns = []struct{ table, column, ddl string }{
 // instead); migrate() takes care of backing up the file first, running the
 // step in its own transaction, and recording the new version once it
 // commits.
-const currentSchemaVersion = 3
+const currentSchemaVersion = 4
 
 // migration is one numbered step that brings the database from version-1 to
 // version. Steps run in order, oldest first, each in its own transaction.
@@ -405,6 +405,29 @@ var migrations = []migration{
 		name:    "backfill node groups from group_name",
 		run:     migrateBackfillNodeGroups,
 	},
+	{
+		version: 4,
+		name:    "retire the host_samples table",
+		run:     migrateRetireHostSamples,
+	},
+}
+
+// migrateRetireHostSamples drops the table hardware readings used to be kept in.
+// A machine is a node with a hardware check, and what that check measures is
+// recorded in results like everything else's: every run of the check already
+// stored its metrics and the whole snapshot, so for any machine a check watched
+// the table was a second copy of the same history at the same resolution, and
+// nothing is lost by dropping it. What it also held, and this does lose, is the
+// readings of a machine no hardware check was pointed at — an agent registered
+// onto a node that never had one, or this computer's own readings when no "This
+// computer" check exists. Those have nowhere to live in a model where a machine
+// is something GWatch checks.
+//
+// SQLite databases are copied aside before any numbered migration runs
+// (migrate), so the table can be got back from there.
+func migrateRetireHostSamples(ctx context.Context, tx *wtx) error {
+	_, err := tx.exec(ctx, "DROP TABLE IF EXISTS host_samples")
+	return err
 }
 
 // migrateBackfillCheckState gives every check a check_state row. Every

@@ -703,7 +703,7 @@ routes — an administrator in the browser, never an API key:
   sha256 digest is stored, so it cannot be shown again.
 - `PUT /api/agents/{id}` body `{ "name": …, "nodeId": …, "enabled": bool }` → `Agent`.
 - `DELETE /api/agents/{id}` → 204. Revokes the token and keeps the machine's past
-  readings. `?purge=1` deletes the machine and every reading it ever sent.
+  readings. `?purge=1` deletes the registration (token, how it was enrolled); the node, and the history its hardware check recorded, stay with the node.
 - `POST /api/agents/{id}/token` → `{ "agent": Agent, "token": "gwa_…", "pending": "gwa_…"|"", "viewable": bool }`.
   Reads the agent's token back, so it can be compared with the one in the machine's
   `agent.json`. A token minted by this version is also kept sealed with the server's own key
@@ -1164,7 +1164,7 @@ assistant up, not for the assistant: both are admin-only and refuse every API ke
 | `hourlyDays` | `730` | the hourly rollups |
 | `dailyDays` | `0` | the daily rollups |
 | `eventDays` | `730` | the incident/event timeline |
-| `hostDays` | `90` | hardware readings, which are whole snapshots rather than one number |
+| `hostDays` | `90` | the results of hardware checks, which are whole snapshots of a machine rather than one number (`rawDays` bounds every other check's) |
 
 ### Database
 

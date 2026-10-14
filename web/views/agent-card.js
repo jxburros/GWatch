@@ -41,8 +41,8 @@ export function agentCard(agent, { latest = null, releaseURL = '', onChange = ()
 
   body.append(identity(agent, latest, releaseURL));
   if (revoked) {
-    body.append(h('p', { class: 'note' }, 'This agent has been revoked: its token no longer works. Its past readings are kept; delete it to remove them too.'),
-      h('div', { class: 'btn-group' }, h('button', { class: 'btn btn-danger', type: 'button', onclick: () => purge(agent, onChange) }, icon('trash'), 'Delete agent and readings')));
+    body.append(h('p', { class: 'note' }, 'This agent has been revoked: its token no longer works. Its registration is kept; delete it to remove that too. The node, and the history its hardware check recorded, stay with the node either way.'),
+      h('div', { class: 'btn-group' }, h('button', { class: 'btn btn-danger', type: 'button', onclick: () => purge(agent, onChange) }, icon('trash'), 'Delete agent')));
     return el;
   }
   body.append(tokenSection(agent, onChange), collectSection(agent, onChange), dangerSection(agent, onChange));
@@ -192,14 +192,14 @@ function summaryOf(agent) { return describeSelection(agent.collect || {}); }
 function dangerSection(agent, onChange) {
   return h('div', { class: 'stack-sm', 'data-section': 'danger' },
     h('div', { class: 'section-title' }, 'Stop accepting this agent'),
-    h('p', { class: 'note' }, 'Revoking makes the token stop working at once. Past readings are kept, and you can delete them separately afterwards.'),
+    h('p', { class: 'note' }, 'Revoking makes the token stop working at once. What the machine\u2019s hardware check recorded stays on this node.'),
     h('div', { class: 'btn-group' }, h('button', { class: 'btn', type: 'button', onclick: () => revoke(agent, onChange) }, 'Revoke token')));
 }
 
 async function revoke(agent, onChange) {
   const ok = await confirmDialog({
     title: `Revoke ${agent.name}?`,
-    message: 'The agent on that machine stops being accepted immediately. Its past readings are kept, and you can delete them separately afterwards.',
+    message: 'The agent on that machine stops being accepted immediately. What its hardware check recorded stays on the node.',
     confirmLabel: 'Revoke token', danger: true,
   });
   if (!ok) return;
@@ -208,9 +208,9 @@ async function revoke(agent, onChange) {
 
 async function purge(agent, onChange) {
   const ok = await confirmDialog({
-    title: `Delete ${agent.name} and its readings?`,
-    message: 'Every hardware reading this machine sent is deleted with it. This cannot be undone.',
-    confirmLabel: 'Delete agent and readings', danger: true,
+    title: `Delete the agent for ${agent.name}?`,
+    message: 'The agent\u2019s registration is removed. The node and the history its hardware check recorded are not; delete the node to remove those.',
+    confirmLabel: 'Delete agent', danger: true,
   });
   if (!ok) return;
   try { await api.del(`/api/agents/${agent.id}?purge=1`); toast('Agent deleted', { kind: 'success' }); onChange(); } catch (e) { toast(e.message, { kind: 'error' }); }

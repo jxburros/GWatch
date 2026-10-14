@@ -29,9 +29,9 @@ const maxIngestBody = 256 << 10
 // machine has its own, configurable, staleness limit.
 const agentStaleAfter = 5 * time.Minute
 
-// maxHostChartPoints bounds a history response. Readings are stored as taken,
-// which over a year is far more points than a chart can draw, so the handler
-// averages them into buckets rather than sending everything.
+// maxHostChartPoints bounds a history response. A machine's results over a year
+// are far more points than a chart can draw, so they are averaged into buckets
+// as they are read rather than sent as they are.
 const maxHostChartPoints = 600
 
 // ---- reading hardware ----
@@ -65,6 +65,11 @@ func (s *Server) handleGetHost(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleHostHistory returns the numeric series for one machine over a range.
+//
+// The series is read from the results of the hardware check that watches the
+// machine — the same results every other view of that check reads — and not
+// from a store of readings of its own. A machine no hardware check watches has
+// no history, only its newest reading.
 func (s *Server) handleHostHistory(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	key := r.PathValue("key")
@@ -75,28 +80,43 @@ func (s *Server) handleHostHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	from := now.Add(-rng.Duration)
-	samples, err := s.Store.HostSamples(ctx, key, from, now, 0)
+	samples, err := s.Store.HostSeries(ctx, s.Engine.HostChecks(key), from, now, maxHostChartPoints)
 	if err != nil {
 		s.fail(w, err)
 		return
+	}
+	for i := range samples {
+		samples[i].Key = key
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"key":     key,
 		"range":   rng.Name,
 		"from":    from,
 		"to":      now,
-		"samples": downsampleHostSamples(samples, maxHostChartPoints),
+		"samples": samples,
 	})
+}
+
+// latestReadings is every machine's newest reading: what is held in memory,
+// and for a machine with none (the first look after a restart) what its check
+// last recorded.
+func (s *Server) latestReadings(ctx context.Context, keys []string) map[string]model.HostMetrics {
+	latest := s.Engine.Hosts().All()
+	for _, key := range keys {
+		if _, ok := latest[key]; ok {
+			continue
+		}
+		if m, ok := s.Engine.RestoreHost(ctx, key); ok {
+			latest[key] = m
+		}
+	}
+	return latest
 }
 
 // hostSummaries builds the hardware list: this computer first, then every
 // registered machine, each with its newest reading.
 func (s *Server) hostSummaries(r *http.Request) ([]model.HostSummary, error) {
 	ctx := r.Context()
-	latest, err := s.Store.LatestHostSamples(ctx)
-	if err != nil {
-		return nil, err
-	}
 	agents, err := s.Store.ListAgents(ctx)
 	if err != nil {
 		return nil, err
@@ -105,6 +125,11 @@ func (s *Server) hostSummaries(r *http.Request) ([]model.HostSummary, error) {
 	if err != nil {
 		return nil, err
 	}
+	keys := []string{model.HostKeyLocal}
+	for _, a := range agents {
+		keys = append(keys, a.HostKey())
+	}
+	latest := s.latestReadings(ctx, keys)
 
 	out := make([]model.HostSummary, 0, len(agents)+1)
 	out = append(out, hostSummary(model.HostSummary{
@@ -131,33 +156,30 @@ func (s *Server) hostSummaries(r *http.Request) ([]model.HostSummary, error) {
 	// Machines that only exist as a scraped endpoint have readings but no
 	// agent row. They are listed under the check that fetched them.
 	scraped := make([]model.HostSummary, 0)
-	for key, sample := range latest {
+	for key, m := range latest {
 		if key == model.HostKeyLocal || strings.HasPrefix(key, "agent:") {
 			continue
 		}
-		name := sample.Metrics.Hostname
+		name := m.Hostname
 		if name == "" {
 			name = key
 		}
-		scraped = append(scraped, hostSummary(model.HostSummary{
-			Key: key, Name: name, Source: model.HostSourceURL,
-		}, sample))
+		scraped = append(scraped, hostSummary(model.HostSummary{Key: key, Name: name, Source: model.HostSourceURL}, m))
 	}
 	sort.Slice(scraped, func(i, j int) bool { return scraped[i].Name < scraped[j].Name })
 	return append(out, scraped...), nil
 }
 
 // hostSummary fills in the reading and the derived status for one machine.
-func hostSummary(summary model.HostSummary, sample model.HostSample) model.HostSummary {
+func hostSummary(summary model.HostSummary, metrics model.HostMetrics) model.HostSummary {
 	if summary.Agent != nil && (summary.Agent.Revoked() || !summary.Agent.Enabled) {
 		summary.Status = model.StatusPaused
 	} else {
 		summary.Status = model.StatusUnknown
 	}
-	if sample.Timestamp.IsZero() {
+	if metrics.Timestamp.IsZero() {
 		return summary
 	}
-	metrics := sample.Metrics
 	summary.Metrics = &metrics
 	summary.Warnings = metrics.Warnings
 	if summary.Status == model.StatusPaused {
@@ -166,7 +188,7 @@ func hostSummary(summary model.HostSummary, sample model.HostSample) model.HostS
 	// The list's own idea of health is only "is this machine still talking to
 	// us". What counts as too hot or too full is a check's business, because
 	// only a check knows the thresholds someone chose.
-	summary.Stale = time.Since(sample.Timestamp) > agentStaleAfter
+	summary.Stale = time.Since(metrics.Timestamp) > agentStaleAfter
 	if summary.Stale {
 		summary.Status = model.StatusDown
 	} else {
@@ -177,9 +199,9 @@ func hostSummary(summary model.HostSummary, sample model.HostSample) model.HostS
 
 // localHostName names this computer from its newest reading, falling back to
 // the instance name so the row is never blank on a fresh install.
-func (s *Server) localHostName(ctx context.Context, latest map[string]model.HostSample) string {
-	if sample, ok := latest[model.HostKeyLocal]; ok && sample.Metrics.Hostname != "" {
-		return sample.Metrics.Hostname
+func (s *Server) localHostName(ctx context.Context, latest map[string]model.HostMetrics) string {
+	if m, ok := latest[model.HostKeyLocal]; ok && m.Hostname != "" {
+		return m.Hostname
 	}
 	if st, err := s.Store.LoadSettings(ctx); err == nil && st.General.InstanceName != "" {
 		return st.General.InstanceName
@@ -197,69 +219,6 @@ func (s *Server) nodeNames(r *http.Request) (map[int64]string, error) {
 		out[n.ID] = n.Name
 	}
 	return out, nil
-}
-
-// downsampleHostSamples averages readings into at most limit buckets. A year
-// of minute-by-minute readings is half a million points; a chart can draw a
-// few hundred, and averaging is what keeps a spike visible rather than
-// dropping whichever readings happen to fall between the points kept.
-func downsampleHostSamples(samples []model.HostSample, limit int) []model.HostSample {
-	if limit <= 0 || len(samples) <= limit {
-		return samples
-	}
-	out := make([]model.HostSample, 0, limit)
-	per := float64(len(samples)) / float64(limit)
-	for i := 0; i < limit; i++ {
-		start := int(float64(i) * per)
-		end := int(float64(i+1) * per)
-		if end > len(samples) {
-			end = len(samples)
-		}
-		if start >= end {
-			continue
-		}
-		out = append(out, averageHostSamples(samples[start:end]))
-	}
-	return out
-}
-
-// averageHostSamples reduces a bucket to one point, timestamped at the middle
-// of the bucket. A metric missing from every reading in the bucket stays
-// missing rather than being averaged into a zero.
-func averageHostSamples(bucket []model.HostSample) model.HostSample {
-	out := model.HostSample{
-		Key:       bucket[0].Key,
-		Timestamp: bucket[len(bucket)/2].Timestamp,
-	}
-	fields := []struct {
-		in  func(model.HostSample) *float64
-		out **float64
-	}{
-		{func(s model.HostSample) *float64 { return s.CPUPct }, &out.CPUPct},
-		{func(s model.HostSample) *float64 { return s.MemPct }, &out.MemPct},
-		{func(s model.HostSample) *float64 { return s.SwapPct }, &out.SwapPct},
-		{func(s model.HostSample) *float64 { return s.DiskPct }, &out.DiskPct},
-		{func(s model.HostSample) *float64 { return s.LoadPerCore }, &out.LoadPerCore},
-		{func(s model.HostSample) *float64 { return s.NetRxBytesSec }, &out.NetRxBytesSec},
-		{func(s model.HostSample) *float64 { return s.NetTxBytesSec }, &out.NetTxBytesSec},
-		{func(s model.HostSample) *float64 { return s.DiskReadBytes }, &out.DiskReadBytes},
-		{func(s model.HostSample) *float64 { return s.DiskWriteBytes }, &out.DiskWriteBytes},
-	}
-	for _, f := range fields {
-		var sum float64
-		var n int
-		for _, sample := range bucket {
-			if v := f.in(sample); v != nil {
-				sum += *v
-				n++
-			}
-		}
-		if n > 0 {
-			avg := sum / float64(n)
-			*f.out = &avg
-		}
-	}
-	return out
 }
 
 // ---- registered machines ----
@@ -890,7 +849,7 @@ func (s *Server) handleIngestMetrics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "the body is not a GWatch hardware reading")
 		return
 	}
-	stored, err := s.Engine.Hosts().Ingest(ctx, agent, metrics, s.remoteAddr(r))
+	stored, err := s.Engine.IngestHostReading(ctx, agent, metrics, s.remoteAddr(r))
 	if err != nil {
 		s.fail(w, err)
 		return

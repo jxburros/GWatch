@@ -75,7 +75,7 @@ new machine's remote-access password is set and you are not calling from
   restore never overwrites the password of the administrator doing the restoring, and
   never resurrects a key that was deliberately revoked here. An archive from an older
   version has none of these and leaves them untouched.
-- Optionally, **hardware readings**, along with the rest of the history.
+- Optionally, the **history**, which includes what each hardware check recorded: a machine's readings are its check's results, kept like any other check's. (An archive from before that carries a separate list of hardware readings; it is not read, because every reading in it was also a result of a hardware check.)
 - **Settings**: general, alerts (including SMTP configuration), retention
   policy, network access, appearance, and the automatic-backup schedule.
 - Optionally, **history**: raw results, rollups (5-minute/hourly/daily) and the

@@ -5,7 +5,7 @@ and several of them close off options that look obvious from the outside — so
 they are written down, with the reasoning, rather than left to be rediscovered
 or quietly reversed.
 
-Dated 2026-09-21; entries 10 and 11 added 2026-09-27; entries 12 to 14 and the update to 6 added 2026-10-14. Each entry says what was
+Dated 2026-09-21; entries 10 and 11 added 2026-09-27; entries 12 to 15 and the update to 6 added 2026-10-14. Each entry says what was
 decided, what was rejected, and what would have to change for the decision to
 be worth revisiting.
 
@@ -430,6 +430,77 @@ The selection is applied to a finished reading rather than steering the platform
 collectors, because rates are derived from consecutive readings: a collector that
 skipped an interface for a while would hand back a nonsense rate when it was
 switched back on.
+
+## 15. A machine's readings are its check's results, not a table of their own.
+
+**Decided** (2026-10-14). A machine is a node with a hardware check, and what
+that check measures is stored the way any check's measurements are: a row in
+`results`, with its metrics by key and the whole snapshot in its details. The
+separate `host_samples` table is gone.
+
+**What was wrong.** Hardware was stored twice. Every run of a hardware check
+already recorded a result carrying every metric and the full snapshot; the
+agent's reading was *also* written, again in full, to a table keyed by machine
+rather than by check, with its own retention, its own API, its own export and
+restore code and its own charts. A second copy of the same history at the same
+resolution, in a shape nothing else shares — the opposite of "a machine is just
+a check".
+
+**How it works now.**
+
+- An agent's reading is judged **when it arrives** (`Engine.IngestHostReading`).
+  A current reading goes through the check's whole machinery — state, incidents,
+  alerts — as if the check had run and taken it. A reading the agent held back
+  through an outage (entry 13) is added to the check's history at the time it
+  was taken and does nothing else: the machine being back is the news, and an
+  alert for a disk that was full yesterday is noise.
+- The check's **schedule** is kept for one job: noticing that readings have
+  stopped. While a fresh reading exists, a due run would only judge the same
+  reading twice, so it is skipped; once readings stop, the run happens and
+  fails with "no hardware reading for …", exactly as before.
+- Results are recorded at about the check's interval (80% of it, to tolerate
+  jitter), whatever the machine's own: one that reports every ten seconds does
+  not turn a once-a-minute check into six results a minute.
+- GWatch's newest reading of each machine is held in memory. After a restart it
+  is read back out of the check's latest result that carries a snapshot.
+- Retention: hardware checks keep their results for the **hardware** setting
+  (`hostDays`, 90 days) and every other check for `rawDays`. A hardware result
+  is a whole snapshot, which is why it has a retention of its own.
+- The charts on a node read the series back out of those results, averaged into
+  buckets as they are streamed so a year of them is never held in memory.
+
+**What this costs, accepted.**
+
+- **A machine no hardware check watches keeps only its newest reading, in
+  memory.** An agent registered onto a node that never had a hardware check, or
+  this computer's own readings when no "This computer" check exists, used to
+  leave a history in the readings table. Now there is nowhere for it to go, and
+  those readings are dropped by the migration. Adding a machine from Add node
+  makes its check, and attaching one to an existing node adds one if there is
+  none.
+- **Deleting an agent no longer deletes readings**, because they are not the
+  agent's: they are the node's history and go with the node.
+- **A named metric is only as old as raw results.** A year-long chart of a
+  hardware metric reaches back as far as `hostDays`, not a year; per-metric
+  rollups would fix that for every named metric (SNMP and JSON included) and
+  are the right next step, not a part of this one.
+- **Old archives** carry a `hostsamples.jsonl`. It is not read: every reading in
+  it was also a hardware check's result, which `results.jsonl` has.
+
+**The migration** (schema version 4) is a `DROP TABLE`. SQLite databases are
+copied aside before any numbered migration runs; for PostgreSQL and MySQL, take
+the server-side backup `docs/DATABASE.md` already asks for.
+
+**Rejected: keeping the table as a cache.** It would be the same second copy
+under a kinder name, and the question to answer is "where is this machine's
+history", which should have one answer.
+
+**Rejected: running the check on its schedule *and* on arrival.** Two results a
+minute for the same reading, or a rule for choosing between them.
+
+**Rejected: judging only on the schedule** (the smallest change). A reading the
+agent held back would never reach the history, which would make the held-back
+readings of entry 13 a feature that keeps them in memory for nothing.
 
 ---
 
