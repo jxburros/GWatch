@@ -64,12 +64,17 @@ type bulkNodePatch struct {
 	// DependsOn stays raw so that an absent field, an explicit null (clear the
 	// dependency) and a node id can be told apart.
 	DependsOn json.RawMessage `json:"dependsOnNodeId"`
+
+	// LinkStyle is raw for the same reason: an object sets the style of the
+	// line to the node's parent, an explicit null clears it, and an absent
+	// field leaves it as it is.
+	LinkStyle json.RawMessage `json:"linkStyle"`
 }
 
 func (p *bulkNodePatch) empty() bool {
 	return p == nil || (p.Groups == nil && len(p.AddGroups) == 0 && len(p.RemoveGroups) == 0 &&
 		p.Tags == nil && len(p.AddTags) == 0 && len(p.RemoveTags) == 0 &&
-		p.Importance == nil && p.Enabled == nil && len(p.DependsOn) == 0)
+		p.Importance == nil && p.Enabled == nil && len(p.DependsOn) == 0 && len(p.LinkStyle) == 0)
 }
 
 // bulkCheckPatch is the set of check fields a bulk edit may change. The check
@@ -391,6 +396,23 @@ func (s *Server) applyNodePatch(ctx context.Context, p *bulkNodePatch, n *model.
 		}
 		n.DependsOnNode = dep
 	}
+
+	if len(p.LinkStyle) > 0 {
+		var ls *model.LinkStyle
+		if string(bytes.TrimSpace(p.LinkStyle)) != "null" {
+			ls = &model.LinkStyle{}
+			if err := json.Unmarshal(p.LinkStyle, ls); err != nil {
+				return fmt.Errorf("linkStyle: %v", err)
+			}
+		}
+		n.LinkStyle = ls
+	}
+	// Last, so a patch that clears the dependency takes the style of that
+	// link with it, and one that sets a style is held to the same rules as a
+	// node saved whole.
+	if err := n.CleanLinkStyle(); err != nil {
+		return fmt.Errorf("%s: %v", n.Name, err)
+	}
 	return nil
 }
 
@@ -566,6 +588,13 @@ func describeNodePatch(p *bulkNodePatch, byNode map[int64]model.Node) []bulkChan
 			add("depends on → " + byNode[*dep].Name)
 		default:
 			add(fmt.Sprintf("depends on → node %d", *dep))
+		}
+	}
+	if len(p.LinkStyle) > 0 {
+		if string(bytes.TrimSpace(p.LinkStyle)) == "null" {
+			add("link style reset")
+		} else {
+			add("link style changed")
 		}
 	}
 	return out
