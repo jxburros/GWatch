@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -9,11 +11,16 @@ import (
 	"github.com/jxburros/GWatch/internal/store"
 )
 
+// machines numbers the agents a test registers. Their token digests must differ,
+// and the clock cannot be trusted to: on Windows two reads a moment apart return
+// the same instant.
+var machines atomic.Int64
+
 // pushedMachine is a node with one hardware check reading a registered agent.
 func pushedMachine(t *testing.T, st *store.Store, threshold int) (model.Node, model.Check, model.Agent) {
 	t.Helper()
 	ctx := context.Background()
-	agent, err := st.CreateAgent(ctx, "nas", nil, "gwa_x", "hash"+time.Now().String(), "test")
+	agent, err := st.CreateAgent(ctx, "nas", nil, "gwa_x", fmt.Sprintf("hash-%d", machines.Add(1)), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
