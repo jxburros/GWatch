@@ -387,3 +387,55 @@ func TestChoicesMadeWhileAddingAMachineReachTheAgent(t *testing.T) {
 		t.Errorf("nonsense should be refused when the code is minted, got %d", status)
 	}
 }
+
+// Choosing "add the machine to this node" has to end with the node watching the
+// machine, even though an existing node has no waiting hardware check.
+func TestPairingToAnExistingNodeAddsItsHardwareCheck(t *testing.T) {
+	ts, _ := newTestServer(t)
+	var node model.Node
+	if status := call(t, ts, "POST", "/api/nodes", model.Node{Name: "Existing NAS", Host: "192.168.1.9", Enabled: true,
+		Checks: []model.Check{{Type: model.CheckPing, Name: "Ping", Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5, Retries: 1, FailureThreshold: 2}}}, &node); status != 201 {
+		t.Fatalf("create node: %d", status)
+	}
+	var minted struct {
+		Code string `json:"code"`
+	}
+	if status := call(t, ts, "POST", "/api/agents/pairings", map[string]any{"name": "nas", "nodeId": node.ID}, &minted); status != 201 {
+		t.Fatalf("mint: %d", status)
+	}
+	status, body := redeem(t, ts, minted.Code)
+	if status != 201 {
+		t.Fatalf("redeem: %d %s", status, body)
+	}
+	var out registered
+	_ = json.Unmarshal([]byte(body), &out)
+
+	var after model.Node
+	call(t, ts, "GET", "/api/nodes/"+itoa(node.ID), nil, &after)
+	var hw []model.Check
+	for _, c := range after.Checks {
+		if c.Type == model.CheckSystem {
+			hw = append(hw, c)
+		}
+	}
+	if len(after.Checks) != 2 || len(hw) != 1 || !hw[0].Enabled || hw[0].Config.AgentID != out.Agent.ID || hw[0].Config.HostSource != model.HostSourceAgent {
+		t.Fatalf("the node should keep its ping and gain a hardware check reading the machine: %+v", after.Checks)
+	}
+
+	// Pairing a second machine to the same node adds a second check rather than
+	// stealing the first one's.
+	call(t, ts, "POST", "/api/agents/pairings", map[string]any{"name": "nas2", "nodeId": node.ID}, &minted)
+	if status, _ := redeem(t, ts, minted.Code); status != 201 {
+		t.Fatal("second redeem failed")
+	}
+	call(t, ts, "GET", "/api/nodes/"+itoa(node.ID), nil, &after)
+	n := 0
+	for _, c := range after.Checks {
+		if c.Type == model.CheckSystem {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("each machine gets its own hardware check, got %d", n)
+	}
+}

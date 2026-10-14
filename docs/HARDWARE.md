@@ -40,34 +40,207 @@ this machine.
 `gwatch-agent` is a single file with no dependencies. It reads the machine it
 runs on and posts the reading to GWatch every minute.
 
-1. In GWatch: **Nodes › Pair a machine**. Give it a name. GWatch creates the
-   node the machine will be watched as, carrying a hardware check that is
-   completed and switched on the moment the machine actually pairs. (**Settings
-   › Hardware › Register a machine** does the same thing with a token instead of
-   a code, for a rollout you are scripting.)
-2. Copy the install command it shows you. It already has this server's address
-   and the new code or token in it.
-3. Run it on the machine you want to watch:
+1. In GWatch: **Nodes › Add node › A machine with the GWatch agent**. Give it a
+   name, and untick any kind of reading you do not want (everything is on to
+   begin with, and it can be changed later). GWatch creates the node the machine
+   will be watched as, carrying a hardware check that is completed and switched
+   on the moment the machine actually pairs, and shows an eight-character
+   **pairing code** with the command to run.
+2. Install the agent on the machine you want to watch (below, or the Windows
+   installer) and run the command GWatch showed:
 
    ```
-   gwatch-agent install --server https://gwatch.lan:7230 --token gwa_…
+   gwatch-agent install --server https://gwatch.lan:7230 --code XXXX-XXXX
    ```
 
-   On Windows, from an Administrator prompt. The agent installs itself as a
-   background service and starts reporting immediately.
-
-4. Its readings appear on its node within a minute, and the hardware check
+   On Windows, from an Administrator prompt. The agent swaps the code for its
+   own token, installs itself as a background service and starts reporting.
+   The dialog in GWatch tells you when the machine has paired and again when its
+   first reading has arrived.
+3. Its readings appear on its node within a minute, and the hardware check
    there starts alerting on the thresholds it was created with. Change them to
    whatever "wrong" means for that machine.
 
+A machine is not a separate thing in GWatch: it is a node, and everything about
+its agent — the token, what it collects, whether it is up to date — is on that
+node, in the **GWatch agent** card (administrators only). There is no hardware
+section under Settings.
+
 Before installing anything, `gwatch-agent print` shows exactly what would be
-sent, and contacts nothing. `gwatch-agent once --server … --token …` sends a
-single reading and exits, which is the quickest way to prove a token works.
+sent, and contacts nothing. `gwatch-agent once` sends a single reading and
+exits, which is the quickest way to prove the settings work.
 
 `gwatch-agent pair --server … --code …` on its own (without `install`) keeps
 the token *and* the server address on the machine, so afterwards
 `gwatch-agent run` needs no arguments at all. That is how the packages below
-run it.
+run it. (For a rollout you are scripting, `POST /api/agents` registers a machine
+with a token instead of a code — see [`API.md`](API.md#agents).)
+
+### The agent's configuration file
+
+Everything about how a machine talks to GWatch is in one plain-text file,
+`agent.json`, that you can open and edit:
+
+| Where | Path |
+| --- | --- |
+| Windows | `%ProgramData%\GWatch\agent.json` |
+| Linux, macOS | `~/.local/share/gwatch/agent.json` (`$XDG_DATA_HOME/gwatch/agent.json`) |
+| `.deb`, `.rpm` and the container | `/var/lib/gwatch-agent/agent.json` |
+
+`gwatch-agent config path` prints it. It is created when the machine is paired
+or the service installed, with every setting in it so you can see what there is
+to change:
+
+```json
+{
+  "server": "https://gwatch.lan:7230",
+  "token": "gwa_…",
+  "name": "Living room NAS",
+  "interval": "1m",
+  "checkIn": "15m",
+  "buffer": "6h",
+  "autoUpdate": true,
+  "insecure": false,
+  "collect": {}
+}
+```
+
+| Setting | Meaning |
+| --- | --- |
+| `server` | The address of your GWatch, with the port. |
+| `token` | This machine's credential. It must match the one GWatch shows on the node. |
+| `name` | What the machine calls itself in GWatch. Empty uses the computer's own name. |
+| `interval` | How often a reading is sent (at least `10s`). |
+| `checkIn` | How often the agent asks GWatch for its settings (see below). `1m` to `24h`. |
+| `buffer` | How long readings are held in memory while GWatch cannot be reached, then sent oldest first. `0s` keeps nothing; at most `48h`. |
+| `autoUpdate` | Whether the agent installs new signed releases by itself. |
+| `insecure`, `certPin` | Accept a self-signed certificate, or pin the server's public key. These are about the server named above, and are dropped if the agent is pointed at a different one for a run. |
+| `collect` | The machine's own limit on what it will report (below). |
+| `listen`, `repo`, `hostRoot` | Serve mode's address, the repository updates are taken from, and the container host mount. Rarely needed. |
+
+Change a value, then restart the agent (`gwatch-agent restart`, or restart the
+machine) and it applies. Durations are written like `"90s"`, `"15m"`, `"6h"`.
+
+**Precedence**, lowest to highest: built-in defaults, this file, environment
+variables (`GWATCH_SERVER`, `GWATCH_AGENT_TOKEN`, …), command-line flags. Run
+`gwatch-agent config show` to see every setting with the layer that decided it —
+the answer to "I edited the file and nothing changed" — and
+`gwatch-agent config validate` to check the file: a misspelt key is named, a bad
+value is explained, and a JSON mistake is reported with its line. An agent
+refuses to run on a file it cannot read rather than guess. The file holds the
+token, so it is readable only by the account that paired the machine.
+
+The installed service is registered with *no* settings of its own — just `run` —
+so changing a setting is an edit and a restart, never a reinstall, and the token
+is not left in a service definition any user of the machine can read. (A service
+installed by an older agent still carries its settings on its command line, and
+those still win over the file; `config show` says so. Run `gwatch-agent
+uninstall` then `install` to move onto the file.)
+
+Agents paired by an older version are migrated: the first time one starts it
+writes `agent.json` from the old `agent-token` and `agent-settings.json`, which
+are left where they were so a rollback still finds them.
+
+### The token
+
+The token is what ties a machine to its node. It is shown on the node
+(**Show token**) so you can compare it with the `token` in the machine's
+`agent.json`; GWatch keeps a copy sealed with its own key (`gwatch.key`) the same
+way it keeps every other secret. An agent registered before that, or restored
+from a backup, only has a digest in GWatch and its token cannot be shown until
+it is rotated.
+
+**Rotating** a token is on the same card, in two forms that answer two
+different worries:
+
+- **Rotate** — GWatch makes a new token and the old one keeps working until the
+  new one is first used. The agent collects the new token the next time it asks
+  for its settings, writes it into `agent.json` and switches over; its first
+  request with the new token retires the old one. Nothing to copy and no gap in
+  readings. It only works for an agent whose token lives in `agent.json`: one
+  whose token comes from an environment variable or a flag would be given the old
+  token back at its next restart, so it leaves the file alone and logs that you
+  need to update it where the token comes from.
+- **Replace now** — for a token that may have leaked. The old token stops
+  working at once and nothing is sent to the machine; you put the new token in
+  `agent.json` yourself and restart the agent. (The ordinary rotation hands the
+  new token to whoever holds the old one, which is exactly what you do not want
+  if the old one is in the wrong hands.)
+
+### What an agent collects
+
+A machine has far more to report than anyone wants to read — every bridge,
+tunnel and container interface sits beside the one network card that matters.
+What leaves a machine is chosen in two places, and the machine's owner always has
+the last word:
+
+- **On the machine**, `collect` in `agent.json` (or the control panel) is a
+  *limit*: `{ "metrics": ["cpu", "memory", "disk", "net"], "interfaces": ["eth0"], "disks": [], "mounts": ["/", "/data"] }`.
+  A list that is empty means "no limit". `metrics` are the kinds of reading
+  (`cpu`, `load`, `memory`, `swap`, `disk`, `inodes`, `net`, `diskio`).
+- **In GWatch**, the **What it collects** section of the node's agent card
+  chooses *within* that limit, from checkboxes for the interfaces, disks and
+  filesystems the machine says it has. It can narrow what a machine reports and
+  never widen it. The choice reaches the agent the next time it asks for its
+  settings, and the same choices can be made while adding a machine.
+
+Where both sides name something, only what both allow is sent; where only one
+does, that is used; where neither does it is automatic. Automatic means every
+kind of reading, every disk and filesystem, and every interface that is not
+obviously virtual — bridges, container veth pairs, tunnels, Windows pseudo
+adapters and the like are left out until someone ticks them. A reading that is
+not collected is not sent, so it disappears from the checks, charts and alerts
+built on it. (Filesystem space and inodes travel together: choosing inodes keeps
+the whole filesystem entry.)
+
+### Asking GWatch for settings
+
+The agent only ever dials out, and that has not changed. Every so often
+(`checkIn`, 15 minutes by default) it also asks GWatch a small, fixed set of
+questions and applies the answers itself: which readings you chose, when to ask
+again, the newest agent release (a hint only — releases are still fetched and
+verified from the release feed), and a replacement token while you are rotating
+this one. It sends back an inventory of what it could collect, which is what the
+checkboxes are drawn from. GWatch's answer has no field for a URL, a command, a
+file or a version to install, so it cannot make the machine do anything it did
+not choose to; the full list is in [`API.md`](API.md#asking-for-settings) and the
+reasoning in [`AGENT-DECISIONS.md`](AGENT-DECISIONS.md#12-an-agent-asks-gwatch-for-a-small-fixed-set-of-things).
+
+### When GWatch is unreachable
+
+The agent keeps nothing on the machine beyond its configuration — but it does not
+throw away the last few hours because the network was down for them. A reading
+that cannot be delivered is held in memory (up to `buffer`, six hours by
+default) and sent, oldest first, as soon as GWatch answers. History therefore
+has a gap no longer than the outage, and often none. Held readings are not
+written to disk: a restart during an outage loses them.
+
+### The control panel
+
+`gwatch-agent ui` opens a small page in your browser, in GWatch's own style, for
+someone who would rather not edit a file: whether the agent is reporting and when
+it last spoke to GWatch, every setting above in a form, the collection limit as
+checkboxes for the interfaces and drives this machine actually has, the token
+(**Show**, to compare it with the node), a test reading, an update check, and
+start / stop / restart for the service. The file itself is there too, as an
+editor that refuses a file the agent could not run with.
+
+It is not part of the service. The service runs as root or SYSTEM, and a page it
+hosted would let any user on the machine change what a root process does. The
+panel is a short-lived process that runs as *you*, only on this machine's
+loopback address, and closes itself after half an hour of not being used: it can
+edit the configuration only if you could edit it yourself, and control the
+service only if the operating system lets you. Where the files belong to root
+(the Linux packages, the Windows service), run it as `sudo gwatch-agent ui` or
+from an Administrator terminal; otherwise it opens read-only and says so.
+
+What protects it: it listens on a loopback address and refuses any other host
+name in the request, so a web page cannot reach it by rebinding a DNS name; it is
+opened with a random secret in the address that becomes a cookie and is then
+dropped from the address bar; anything that changes something needs a header a
+page on another origin cannot set and a matching `Origin`; the token is never in
+the page until you press **Show**. The service writes a small status file for it
+to read, which holds no token and no readings.
 
 ### Installing from a package manager
 
@@ -199,13 +372,14 @@ The agent connects outwards and hangs up. Specifically:
 - **A reading is filed under the machine that sent it**, whatever the payload
   claims. A token cannot write another machine's history.
 - **Losing a token is small.** Someone holding it could send made-up readings
-  for that one machine. Revoke it in **Settings › Hardware** and it stops
-  working on the next request; past readings are kept so the record still says
-  where they came from.
+  for that one machine. Revoke it on the machine's node, or **Replace now** to
+  give it a new one, and the old one stops working on the next request; past
+  readings are kept so the record still says where they came from.
 
-The install command contains the token, so it ends up in the service
-registration on that machine and in your shell history. That is the same
-exposure as the token itself, which is why the token is worth so little.
+The token lives in `agent.json`, readable only by the account that paired the
+machine. It is no longer left on the service's command line, where any user of
+the machine could read it from the service manager. A pairing code, which is what
+you type, is worth almost nothing once used.
 
 ### Over the internet
 

@@ -763,8 +763,6 @@ func describeMachine(hostname, os, arch, version string) string {
 // disabled rather than failing every minute against an agent that may never
 // arrive.
 func (s *Server) createMachineNode(ctx context.Context, name string) (model.Node, error) {
-	cfg := model.SystemDefaults()
-	cfg.HostSource = model.HostSourceAgent
 	node := model.Node{
 		Name:       name,
 		Group:      machineGroup,
@@ -772,16 +770,7 @@ func (s *Server) createMachineNode(ctx context.Context, name string) (model.Node
 		Importance: model.ImportanceNormal,
 		Enabled:    true,
 		Template:   "agent-machine",
-		Checks: []model.Check{{
-			Type:             model.CheckSystem,
-			Name:             "Hardware health",
-			Enabled:          false,
-			IntervalSeconds:  60,
-			TimeoutSeconds:   10,
-			Retries:          1,
-			FailureThreshold: 2,
-			Config:           cfg,
-		}},
+		Checks:     []model.Check{machineCheck(false)},
 	}
 	created, err := s.Store.CreateNode(ctx, node)
 	if err != nil {
@@ -792,24 +781,39 @@ func (s *Server) createMachineNode(ctx context.Context, name string) (model.Node
 }
 
 // bindMachineCheck points the node's hardware check at the agent that has just
-// been enrolled, and switches it on. A node the administrator chose themselves
-// may already have a hardware check for this machine, or none at all; both are
-// left as they are, since only a check that is waiting for an agent is ours to
-// complete.
+// been enrolled, and switches it on. A check that is waiting for an agent (the
+// one made with the node, or one left unbound) is completed. A node an
+// administrator chose themselves usually has no such check, so one is added:
+// choosing "add the machine to this node" has to end with the node watching the
+// machine. A check that already reads this agent, or one that reads somewhere
+// else, is left as it is.
 func (s *Server) bindMachineCheck(ctx context.Context, nodeID int64, agent model.Agent) error {
 	node, err := s.Store.GetNode(ctx, nodeID)
 	if err != nil {
 		return err
 	}
 	changed := false
+	reads := false
 	for i, c := range node.Checks {
-		if c.Type != model.CheckSystem || c.Config.HostSource != model.HostSourceAgent || c.Config.AgentID != 0 {
+		if c.Type != model.CheckSystem || c.Config.HostSource != model.HostSourceAgent {
+			continue
+		}
+		if c.Config.AgentID == agent.ID {
+			reads = true
+			continue
+		}
+		if c.Config.AgentID != 0 || changed {
 			continue
 		}
 		node.Checks[i].Config.AgentID = agent.ID
 		node.Checks[i].Enabled = true
 		changed = true
-		break
+	}
+	if !changed && !reads {
+		check := machineCheck(true)
+		check.Config.AgentID = agent.ID
+		node.Checks = append(node.Checks, check)
+		changed = true
 	}
 	if !changed {
 		return nil
@@ -820,6 +824,23 @@ func (s *Server) bindMachineCheck(ctx context.Context, nodeID int64, agent model
 	}
 	s.configChanged(ctx, &updated, "Machine "+agent.Name+" attached to node "+updated.Name, "Its hardware check now reads the readings this machine sends.")
 	return nil
+}
+
+// machineCheck is the hardware check a machine is watched by. It starts
+// switched off when there is no machine to read yet.
+func machineCheck(enabled bool) model.Check {
+	cfg := model.SystemDefaults()
+	cfg.HostSource = model.HostSourceAgent
+	return model.Check{
+		Type:             model.CheckSystem,
+		Name:             "Hardware health",
+		Enabled:          enabled,
+		IntervalSeconds:  60,
+		TimeoutSeconds:   10,
+		Retries:          1,
+		FailureThreshold: 2,
+		Config:           cfg,
+	}
 }
 
 // machineGroup is the group a node created for a paired machine lands in, so

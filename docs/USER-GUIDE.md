@@ -862,8 +862,9 @@ against they are simply absent, which is not the same as zero.
 
 ### Pairing a machine
 
-The friendly path: **Nodes › Add node** with the *Machine with an agent*
-template, or **Settings › Hardware › Pair a machine**. GWatch shows a short
+The friendly path: **Nodes › Add node › A machine with the GWatch agent**.
+Give the machine a name and, if you like, untick the kinds of reading you do not
+want. GWatch shows a short
 **pairing code** — deliberately short enough to type off the screen, good for
 one machine for a few minutes. On the other machine:
 

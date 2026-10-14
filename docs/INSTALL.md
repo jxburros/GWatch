@@ -89,8 +89,9 @@ version does not follow GWatch's. See [`HARDWARE.md`](HARDWARE.md#keeping-agents
 
 Before you start, get a pairing code:
 
-1. In GWatch, open **Hardware** and choose **Pair a machine**.
-2. Give the machine a name. GWatch shows an eight-character code like `ABCD-2345`.
+1. In GWatch, open **Nodes**, choose **Add node**, then **A machine with the GWatch agent**.
+2. Give the machine a name (and untick anything you do not want monitored). GWatch shows
+   an eight-character code like `ABCD-2345`.
 3. The code is good for that one machine and expires after about fifteen minutes. If it
    lapses, generate another — they are free.
 
