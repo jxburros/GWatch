@@ -618,7 +618,7 @@ func (s *Store) RestoreNodes(ctx context.Context, nodes []model.Node, includeHis
 				return err
 			}
 		}
-		nodeColumns := []string{"id", "name", "host", "group_name", "\"groups\"", "tags", "notes", "importance", "enabled", "depends_on_node_id", "template", "created_at", "updated_at"}
+		nodeColumns := []string{"id", "name", "host", "group_name", "\"groups\"", "tags", "notes", "importance", "enabled", "depends_on_node_id", "link_style", "template", "created_at", "updated_at"}
 		checkColumns := []string{"id", "node_id", "type", "name", "enabled", "interval_seconds", "timeout_seconds", "retries", "failure_threshold", "config", "alerts", "sort_order", "created_at", "updated_at"}
 		keepNodes, keepChecks := map[int64]bool{}, map[int64]bool{}
 		for _, n := range nodes {
@@ -631,7 +631,7 @@ func (s *Store) RestoreNodes(ctx context.Context, nodes []model.Node, includeHis
 				n.Tags = []string{}
 			}
 			if _, err := tx.exec(ctx, insertValues("nodes", nodeColumns)+" "+s.d.upsertClause([]string{"id"}, nodeColumns),
-				n.ID, n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nil, n.Template, fmtTime(n.CreatedAt), fmtTime(n.UpdatedAt)); err != nil {
+				n.ID, n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nil, linkStyleJSON(n.LinkStyle), n.Template, fmtTime(n.CreatedAt), fmtTime(n.UpdatedAt)); err != nil {
 				return err
 			}
 		}

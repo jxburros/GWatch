@@ -4,6 +4,7 @@ import { api } from '../api.js';
 import { scrollBehavior, h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, promptDialog, openModal, emptyState, skeleton, CHECK_TYPES, checkTypeLabel, uid, busy } from '../components.js';
 import { nodeGroups, duration } from '../fmt.js';
 import { resultInspector } from './inspector.js';
+import { linkStyleEditor } from '../netmap.js';
 // The interval choices, the three states of an alert override, the importance
 // levels and the ping methods are shared with the bulk editor, so both screens
 // offer the same words and the same values. See web/views/node-fields.js.
@@ -340,7 +341,18 @@ export async function mount(root, ctx) {
   const importanceSel = selectInput({ options: IMPORTANCE_OPTIONS, value: d.importance || 'normal', onchange: () => { d.importance = importanceSel.value; } });
   const notesInput = textarea({ value: d.notes || '', placeholder: 'Anything useful: where it lives, how to reboot it, who owns it…', oninput: () => { d.notes = notesInput.value; } });
   const enabledToggle = toggle({ label: 'Enabled — run its checks on schedule', checked: d.enabled !== false, onChange: (v) => { d.enabled = v; } });
-  const dependsSel = selectInput({ options: [{ value: '', label: 'None' }, ...state.nodes.filter((n) => String(n.id) !== String(d.id)).map((n) => ({ value: n.id, label: `${n.name} (${n.host})` }))], value: d.dependsOnNodeId ?? '', onchange: () => { d.dependsOnNodeId = dependsSel.value ? Number(dependsSel.value) : null; } });
+  const dependsSel = selectInput({ options: [{ value: '', label: 'None' }, ...state.nodes.filter((n) => String(n.id) !== String(d.id)).map((n) => ({ value: n.id, label: `${n.name} (${n.host})` }))], value: d.dependsOnNodeId ?? '', onchange: () => { d.dependsOnNodeId = dependsSel.value ? Number(dependsSel.value) : null; syncLinkStyle(); } });
+  // How the line to that parent looks on the network maps. It is the style of
+  // the link, so it is only there while there is one.
+  const linkStyle = linkStyleEditor({ value: d.linkStyle, onChange: (v) => { d.linkStyle = v; } });
+  const linkStyleField = h('div', { class: 'span-2' }, linkStyle);
+  function syncLinkStyle() {
+    const parent = state.nodes.find((n) => String(n.id) === String(d.dependsOnNodeId));
+    linkStyleField.hidden = !parent;
+    if (!parent) d.linkStyle = null;
+    linkStyle.setParentName(parent?.name || '');
+  }
+  syncLinkStyle();
 
   const nameField = field({ label: 'Name', input: nameInput });
   const hostField = field({ label: 'Host / target', input: hostInput, help: 'Hostname, IP address or URL. Individual checks can override it.' });
@@ -352,6 +364,7 @@ export async function mount(root, ctx) {
       field({ label: 'Tags', input: tagsInput }),
       field({ label: 'Importance', input: importanceSel, help: 'Critical and high nodes are listed first on the wallboard.' }),
       field({ label: 'Depends on', input: dependsSel, help: 'Alerts for this node are suppressed while the parent is down, and its failures are shown as "affected by" the parent.' }),
+      linkStyleField,
       field({ label: 'Notes', input: notesInput, cls: 'span-2' }),
       h('div', { class: 'span-2' }, enabledToggle),
     ));

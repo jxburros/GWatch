@@ -8,20 +8,29 @@
 // map page and the dashboard's network map widget, so one configured on the
 // page can be pinned to a dashboard unchanged.
 //
-// The layout is a plain tidy tree, worked out here with no library: leaves
-// take consecutive slots, each parent sits centred over its children, and the
-// depth is the distance from the root. Nodes with no dependency either way
-// are set apart in a block of their own, so a long row of unrelated devices
-// does not stretch the trees out of shape. The arithmetic is pure and
-// exported (buildForest, layoutMap) so it can be tested without a browser.
+// The layouts are worked out here with no library. The tree ones are a plain
+// tidy tree: leaves take consecutive slots, each parent sits centred over its
+// children, and the depth is the distance from the root. The clusters one
+// (stored as "radial", which older saved maps already say) draws a node with
+// things plugged into it at the centre of a ring of them, and a ring that
+// holds a node with a ring of its own as one more circle around a circle.
+// Nodes with no dependency either way are set apart in a block of their own,
+// so a long row of unrelated devices does not stretch the trees out of shape.
+// The arithmetic is pure and exported (buildForest, layoutMap) so it can be
+// tested without a browser.
+//
+// How a line looks — its colour, thickness and dashes — is decided in one
+// place, edgeLook: the link's own style (kept on the node at its lower end),
+// else the map's, else the theme's. Both sets of values are validated here
+// before they reach the drawing, whatever sent them.
 
-import { h, icon, statusMeta, field, selectInput, checkbox } from './components.js';
+import { h, icon, statusMeta, field, selectInput, checkbox, numberInput } from './components.js';
 import { compareNames, inGroup, plural } from './fmt.js';
 
 export const MAP_ORIENTATIONS = [
   { value: 'down', label: 'Top to bottom' },
   { value: 'right', label: 'Left to right' },
-  { value: 'radial', label: 'Radial' },
+  { value: 'radial', label: 'Clusters (radial)' },
 ];
 export const MAP_LABELS = [
   { value: 'name', label: 'Name' },
@@ -38,6 +47,99 @@ export const MAP_EDGES = [
   { value: 'straight', label: 'Straight' },
   { value: 'elbow', label: 'Right-angled' },
 ];
+export const MAP_LINE_STYLES = [
+  { value: 'solid', label: 'Solid' },
+  { value: 'dashed', label: 'Dashed' },
+  { value: 'dotted', label: 'Dotted' },
+  { value: 'dash-dot', label: 'Dash and dot' },
+];
+/** The thickness a line may take, in drawing units; 1.5 is what it always was. */
+export const LINE_WIDTH = { min: 1, max: 8, step: 0.5, default: 1.5 };
+
+/* ---------- Line styles ---------- */
+
+// The only colour forms a line may have. A colour ends up in an SVG style
+// attribute, so it is matched against this exact shape and never "cleaned":
+// a name, a function or a url() is not a colour here. The service applies the
+// same rule to a link's colour (model.NormalizeLinkColor).
+const HEX_COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+
+/** The colour in lower case, or '' when it is not #rgb, #rrggbb or #rrggbbaa. */
+export function normalizeLineColor(v) {
+  const s = typeof v === 'string' ? v.trim() : '';
+  return HEX_COLOR.test(s) ? s.toLowerCase() : '';
+}
+
+/** A thickness pulled into range and rounded to a tenth; `fallback` when it is not a positive number. */
+export function normalizeLineWidth(v, fallback = 0) {
+  if (v == null || typeof v === 'boolean' || (typeof v === 'string' && !v.trim())) return fallback;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.round(Math.min(LINE_WIDTH.max, Math.max(LINE_WIDTH.min, n)) * 10) / 10;
+}
+
+/** One of the line styles, or '' for anything else. */
+export function normalizeLineDash(v) {
+  const s = typeof v === 'string' ? v.trim().toLowerCase() : '';
+  return MAP_LINE_STYLES.some((o) => o.value === s) ? s : '';
+}
+
+/**
+ * A link's own style — { color, width, dash } — checked field by field: what
+ * is not valid is dropped, so an unset field (colour '', width 0, dash '')
+ * follows the map. null when it sets nothing at all.
+ */
+export function normalizeLinkStyle(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const color = normalizeLineColor(raw.color), width = normalizeLineWidth(raw.width, 0), dash = normalizeLineDash(raw.dash);
+  return color || width || dash ? { color, width, dash } : null;
+}
+
+/**
+ * The stroke-dasharray for a line style at a thickness, with the line cap it
+ * needs. The pattern grows with the line, so a thick dotted line is still
+ * dotted and not a smear; dots are zero-length dashes with round caps.
+ */
+export function lineDash(style, width = LINE_WIDTH.default) {
+  const w = Math.max(LINE_WIDTH.min, Number(width) || LINE_WIDTH.default);
+  const r = (n) => Math.round(n * 10) / 10;
+  switch (style) {
+    case 'dashed': return { array: `${r(w * 3 + 3)} ${r(w * 2 + 2)}`, cap: 'butt' };
+    case 'dotted': return { array: `0.01 ${r(w * 2.5 + 1)}`, cap: 'round' };
+    case 'dash-dot': return { array: `${r(w * 3 + 3)} ${r(w * 1.5 + 3)} 0.01 ${r(w * 1.5 + 3)}`, cap: 'round' };
+    default: return { array: 'none', cap: 'butt' };
+  }
+}
+
+/**
+ * How one line is drawn: its own style first, then the map's, then the
+ * theme's (a colour of '' leaves the stylesheet to choose). `cut` is a line
+ * out of a node that is down, drawn in the down colour whatever colour was
+ * chosen — an outage must never be hidden by a pretty map — but still in the
+ * thickness and dashes it was given. A dash of '' means nobody chose one, so
+ * the stylesheet's own (a down line is dashed unless told otherwise) stands.
+ * `cfg` is a normalised map configuration.
+ */
+export function edgeLook(cfg, linkStyle, cut = false) {
+  const own = normalizeLinkStyle(linkStyle) || { color: '', width: 0, dash: '' };
+  return {
+    color: cut ? '' : own.color || cfg.lineColor,
+    width: own.width || cfg.lineWidth,
+    dash: own.dash || (cfg.lineStyle !== 'solid' ? cfg.lineStyle : ''),
+    cut: !!cut,
+  };
+}
+
+/** The inline style for an edgeLook. Inline so it outranks the stylesheet and travels with an exported SVG. */
+export function edgeStyle(look) {
+  const parts = [`stroke-width:${look.width}`];
+  if (look.color) parts.push(`stroke:${look.color}`);
+  if (look.dash) {
+    const d = lineDash(look.dash, look.width);
+    parts.push(`stroke-dasharray:${d.array}`, `stroke-linecap:${d.cap}`);
+  }
+  return parts.join(';');
+}
 
 /** A complete map configuration with its defaults filled in. */
 export function normalizeMapConfig(cfg = {}) {
@@ -55,6 +157,11 @@ export function normalizeMapConfig(cfg = {}) {
     // the reach of an outage can be followed by eye.
     colorEdges: c.colorEdges !== false,
     showLegend: c.showLegend !== false,
+    // The look of every line that has no style of its own. A colour of ''
+    // is the theme's.
+    lineColor: normalizeLineColor(c.lineColor),
+    lineWidth: normalizeLineWidth(c.lineWidth, LINE_WIDTH.default),
+    lineStyle: normalizeLineDash(c.lineStyle) || 'solid',
   };
 }
 
@@ -103,20 +210,35 @@ function subtreeSize(forest, id) {
 }
 
 /**
- * Positions for every node, in slots and levels rather than pixels:
- * { pos: Map id → { slot, level }, slots, levels, linked: Set, isolated: [] }.
- * For a tree layout `slot` runs across and `level` down from the roots; for
- * a radial one `slot` is the angle (in slots of the full circle) and `level`
- * the ring. Trees come first, largest first; nodes with no link at all are
- * packed into rows of their own after them, or left out with `onlyLinked`.
+ * Positions for every node. For the tree layouts they are in slots and levels
+ * rather than pixels:
+ * { pos: Map id → { slot, level }, slots, levels, linked: Set, isolated: [], radial: false },
+ * where `slot` runs across and `level` down from the roots. Trees come first,
+ * largest first; nodes with no link at all are packed into rows of their own
+ * after them, or left out with `onlyLinked`.
+ *
+ * The clusters layout (orientation "radial") needs to know how big a node is
+ * to keep its rings clear of one another, so it works in pixels: pass
+ * `node: { w, h }` (the box a node is drawn in), `spacing` (the least space
+ * between two neighbouring boxes) and `reach` (the shortest a line from a node
+ * to the ring around it may be). It returns
+ * { pos: Map id → { x, y, level, ring }, rings: [{ id, x, y, r }], bounds,
+ *   levels, linked, isolated, radial: true }
+ * with `x`, `y` the centre of the node's box (a single tree's root is at 0,0),
+ * `ring` the radius of the ring of its children (0 for a leaf) and `bounds`
+ * the box that holds every node's box.
  */
-export function layoutMap(forest, { orientation = 'down', onlyLinked = false, isolatedPerRow = 0 } = {}) {
+export function layoutMap(forest, { orientation = 'down', onlyLinked = false, isolatedPerRow = 0, node = null, spacing = 24, reach = 58 } = {}) {
   const pos = new Map();
   const linked = new Set();
   for (const [id, p] of forest.parentOf) { linked.add(id); linked.add(p); }
   const trees = forest.roots.filter((r) => linked.has(r))
     .sort((a, b) => subtreeSize(forest, b) - subtreeSize(forest, a) || compareNames(forest.byId.get(a)?.name, forest.byId.get(b)?.name));
   const isolated = forest.roots.filter((r) => !linked.has(r));
+
+  if (orientation === 'radial') {
+    return layoutClusters(forest, trees, isolated, linked, { onlyLinked, isolatedPerRow, node: node || { w: 148, h: 32 }, spacing, reach });
+  }
 
   let next = 0;
   let deepest = trees.length ? 0 : -1;
@@ -132,18 +254,6 @@ export function layoutMap(forest, { orientation = 'down', onlyLinked = false, is
   let slots = next;
   let levels = deepest + 1;
 
-  if (orientation === 'radial') {
-    // Everything around one centre: a single tree's root sits in the middle,
-    // several trees (and the unlinked nodes) take the first ring.
-    const one = trees.length === 1 && (!isolated.length || onlyLinked);
-    if (!onlyLinked) for (const id of isolated) pos.set(id, { slot: next++, level: 0 });
-    slots = Math.max(1, next);
-    for (const p of pos.values()) p.level += one ? 0 : 1;
-    if (one) pos.set(trees[0], { slot: 0, level: 0 });
-    levels = Math.max(0, ...[...pos.values()].map((p) => p.level)) + 1;
-    return { pos, slots, levels, linked, isolated: onlyLinked ? [] : isolated, radial: true };
-  }
-
   if (!onlyLinked && isolated.length) {
     // A block under (or beside) the trees, as wide as they are.
     const perRow = Math.max(1, isolatedPerRow || Math.max(4, Math.ceil(slots) || Math.ceil(Math.sqrt(isolated.length * 2))));
@@ -153,6 +263,142 @@ export function layoutMap(forest, { orientation = 'down', onlyLinked = false, is
     levels = top + Math.ceil(isolated.length / perRow);
   }
   return { pos, slots: Math.max(1, slots), levels: Math.max(1, levels), linked, isolated: onlyLinked ? [] : isolated, radial: false };
+}
+
+/**
+ * The clusters layout. A node with children is the centre of a ring and its
+ * children are spaced evenly around it; a child with children of its own is
+ * the centre of a ring of its own, and the whole of that sits on the ring of
+ * its parent — circles around circles.
+ *
+ * Every cluster is measured first, from the leaves up, as a circle that holds
+ * the node's box and everything below it. A ring is then given the radius
+ * that keeps three things true: its children's circles clear the box of the
+ * node in the middle (by `reach`, so there is always a line to see), clear
+ * one another all the way round, and are all inside the circle the cluster
+ * itself will be measured as. Two circles that do not overlap cannot hold two
+ * boxes that do, so no box overlaps another.
+ *
+ * Children keep the order of their names. Round a node that has a parent they
+ * start half a step away from the line to it, so the line runs through a gap
+ * and never through a child; a node with one child puts it straight out
+ * beyond itself, so a chain of switches reads as a chain and its circle is
+ * not a ring around nothing (which would double in size with every link).
+ *
+ * Several trees: the biggest is laid out as above, the others sit on a ring
+ * around it the same way. Nodes with no link at all are a block of rows under
+ * everything, as in the tree layouts — a ring would suggest they hang off
+ * something.
+ */
+function layoutClusters(forest, trees, isolated, linked, { onlyLinked, isolatedPerRow, node, spacing, reach: wantReach }) {
+  // A line shorter than the space kept round a box would be all box.
+  const reach = Math.max(wantReach, spacing / 2);
+  const half = Math.hypot(node.w / 2, node.h / 2); // a box fits in a circle this big
+  const own = half + spacing / 2; // ... with half the space to its neighbours all round
+  const info = new Map();
+  const pos = new Map();
+  const rings = [];
+  let deepest = trees.length ? 0 : -1;
+
+  // Where the first child goes round a node with nothing above it: one child
+  // to the right, two left and right, more starting at the top.
+  const startAngle = (n) => (n === 1 ? 0 : n === 2 ? Math.PI : -Math.PI / 2);
+  // The distance at which `n` circles, the two biggest of radii a and b, sit
+  // evenly round a point without touching: neighbours are the closest pair, and
+  // the two biggest are the worst neighbours there could be.
+  const ringFor = (n, a, b, gap) => (n < 2 ? 0 : (a + b + gap) / (2 * Math.sin(Math.PI / n)));
+
+  const measure = (id) => {
+    const kids = forest.children.get(id) || [];
+    const ms = kids.map(measure);
+    let m;
+    if (!ms.length) {
+      m = { R: own, off: 0, rho: 0 };
+    } else {
+      // R is the radius of the circle that holds the cluster, centred `off`
+      // beyond the node along the way out. A ring is centred on its node
+      // (off 0); a node with one child is held by the smaller circle round
+      // the two of them. A child's circle reaches R - off back towards the
+      // ring's centre and R + off away from it.
+      let back = 0, ext = 0, big1 = 0, big2 = 0;
+      for (const c of ms) {
+        back = Math.max(back, c.R - c.off); ext = Math.max(ext, c.R + c.off);
+        if (c.R > big1) { big2 = big1; big1 = c.R; } else if (c.R > big2) big2 = c.R;
+      }
+      const rho = Math.max(half + back + reach, ringFor(ms.length, big1, big2, 0));
+      if (ms.length === 1) {
+        const far = rho + ms[0].off;
+        m = { R: (own + far + ms[0].R) / 2, off: (far + ms[0].R - own) / 2, rho };
+      } else {
+        m = { R: Math.max(own, rho + ext), off: 0, rho };
+      }
+    }
+    info.set(id, m);
+    return m;
+  };
+
+  const put = (id, x, y, level, outward) => {
+    deepest = Math.max(deepest, level);
+    const m = info.get(id);
+    const kids = forest.children.get(id) || [];
+    pos.set(id, { x, y, level, ring: m.rho });
+    if (!kids.length) return;
+    rings.push({ id, x, y, r: m.rho });
+    kids.forEach((k, j) => {
+      // Round the root they start where startAngle says; round anything else
+      // half a step on from the way back to the parent.
+      const a = outward == null
+        ? startAngle(kids.length) + (2 * Math.PI * j) / kids.length
+        : outward + Math.PI + ((2 * j + 1) * Math.PI) / kids.length;
+      put(k, x + m.rho * Math.cos(a), y + m.rho * Math.sin(a), level + 1, a);
+    });
+  };
+
+  if (trees.length) {
+    const ms = trees.map(measure);
+    // Trees are separated by more than the nodes in one: they are separate things.
+    const gap = spacing * 2;
+    put(trees[0], 0, 0, 0, null);
+    if (trees.length > 1) {
+      // A root with one child puts its cluster's centre out to its right.
+      const centre = { x: ms[0].off, y: 0 };
+      const radii = ms.slice(1).map((m) => m.R).sort((a, b) => b - a);
+      const n = radii.length;
+      const dist = Math.max(ms[0].R + radii[0] + gap, ringFor(n, radii[0], radii[1] || 0, gap));
+      for (let i = 1; i < trees.length; i++) {
+        const a = startAngle(n) + (2 * Math.PI * (i - 1)) / n;
+        put(trees[i], centre.x + dist * Math.cos(a) - ms[i].off, centre.y + dist * Math.sin(a), 0, null);
+      }
+    }
+  }
+
+  const extent = () => {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of pos.values()) {
+      minX = Math.min(minX, p.x - node.w / 2); maxX = Math.max(maxX, p.x + node.w / 2);
+      minY = Math.min(minY, p.y - node.h / 2); maxY = Math.max(maxY, p.y + node.h / 2);
+    }
+    return pos.size ? { minX, minY, maxX, maxY } : { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  };
+
+  if (!onlyLinked && isolated.length) {
+    // Rows, centred under the trees and about as wide as they are (or as
+    // near a landscape rectangle as the count allows when there are none).
+    const cellW = node.w + spacing, cellH = node.h + spacing;
+    const n = isolated.length;
+    const b = extent();
+    const landscape = Math.ceil(Math.sqrt((n * 1.6 * cellH) / cellW));
+    const cols = Math.max(1, Math.min(n, isolatedPerRow > 0 ? isolatedPerRow
+      : Math.max(landscape, Math.min(landscape * 2, Math.floor((b.maxX - b.minX + spacing) / cellW)))));
+    const rowsN = Math.ceil(n / cols);
+    const cx = pos.size ? (b.minX + b.maxX) / 2 : 0;
+    const top = pos.size ? b.maxY + reach : -(rowsN * cellH - spacing) / 2;
+    isolated.forEach((id, i) => {
+      const row = Math.floor(i / cols), inRow = Math.min(cols, n - row * cols);
+      pos.set(id, { x: cx + ((i % cols) - (inRow - 1) / 2) * cellW, y: top + node.h / 2 + row * cellH, level: 0, ring: 0 });
+    });
+  }
+  return { pos, rings, bounds: extent(), levels: Math.max(pos.size ? 1 : 0, deepest + 1), linked, isolated: onlyLinked ? [] : isolated, radial: true };
 }
 
 /**
@@ -212,6 +458,29 @@ function fit(text, chars) {
 }
 
 /**
+ * The path of a line in the clusters layout: from the edge of the parent's
+ * box to the edge of the child's, along the line between their centres. The
+ * line stops at the boxes rather than running under them so a dash pattern
+ * begins where the line does, and a faded box does not show it through.
+ * `curved` bows it a little, always the same way round, which keeps a ring of
+ * lines from looking ragged.
+ */
+function clusterEdge(a, b, w, h, round, curved) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len = Math.hypot(dx, dy);
+  if (!len) return `M${a.x},${a.y}`;
+  const ux = dx / len, uy = dy / len;
+  // How far from a box's centre its edge is, along the line.
+  const t = round ? w / 2 : Math.min(ux ? w / 2 / Math.abs(ux) : Infinity, uy ? h / 2 / Math.abs(uy) : Infinity);
+  const f = (n) => Math.round(n * 10) / 10;
+  if (t * 2 >= len) return `M${f(a.x)},${f(a.y)} L${f(b.x)},${f(b.y)}`;
+  const s = { x: a.x + ux * t, y: a.y + uy * t }, e = { x: b.x - ux * t, y: b.y - uy * t };
+  if (!curved) return `M${f(s.x)},${f(s.y)} L${f(e.x)},${f(e.y)}`;
+  const bow = (len - 2 * t) * 0.12;
+  return `M${f(s.x)},${f(s.y)} Q${f((s.x + e.x) / 2 - uy * bow)},${f((s.y + e.y) / 2 + ux * bow)} ${f(e.x)},${f(e.y)}`;
+}
+
+/**
  * Draws a map into `host`. `entries` are overview node entries
  * ({ node, status, affectedBy }). Options: `interactive` adds zooming and
  * panning (wheel, drag, the +/− buttons and the keyboard) and `onSelect(node)`
@@ -238,13 +507,13 @@ export function renderNetworkMap(host, entries, cfg, { interactive = false, onSe
     stage.replaceChildren();
     const shown = mapEntries(data, c);
     const forest = buildForest(shown.map((e) => e.node));
-    const layout = layoutMap(forest, { orientation: c.orientation, onlyLinked: c.onlyLinked });
     const entryOf = new Map(shown.map((e) => [String(e.node.id), e]));
     const S = SIZES[c.size];
     const bare = c.labels === 'none';
     const boxH = bare ? BARE[c.size] : c.labels === 'name-host' ? S.hHost : S.hName;
     const boxW = bare ? BARE[c.size] : S.w;
     const chars = Math.floor((boxW - 26) / (S.font * 0.56));
+    const layout = layoutMap(forest, { orientation: c.orientation, onlyLinked: c.onlyLinked, node: { w: boxW, h: boxH }, spacing: S.gapX, reach: Math.round(S.gapY * 0.7) });
 
     if (!layout.pos.size) {
       stage.append(h('div', { class: 'netmap-empty' },
@@ -262,15 +531,8 @@ export function renderNetworkMap(host, entries, cfg, { interactive = false, onSe
     const centre = new Map();
     let cx0 = 0, cy0 = 0;
     if (layout.radial) {
-      const ringGap = Math.max(boxH, bare ? 0 : 0) + S.gapY + (bare ? 10 : 30);
-      const circumference = layout.slots * (boxW + S.gapX);
-      const r1 = Math.max(ringGap, circumference / (2 * Math.PI));
-      for (const [id, p] of layout.pos) {
-        if (p.level === 0) { centre.set(id, { x: 0, y: 0 }); continue; }
-        const a = (p.slot / layout.slots) * Math.PI * 2 - Math.PI / 2;
-        const r = r1 + (p.level - 1) * ringGap;
-        centre.set(id, { x: Math.cos(a) * r, y: Math.sin(a) * r });
-      }
+      // The clusters layout is already in pixels.
+      for (const [id, p] of layout.pos) centre.set(id, { x: p.x, y: p.y });
     } else {
       const stepAcross = (c.orientation === 'right' ? boxH : boxW) + S.gapX;
       const stepDown = (c.orientation === 'right' ? boxW + S.gapY * 1.4 : boxH + S.gapY);
@@ -293,13 +555,17 @@ export function renderNetworkMap(host, entries, cfg, { interactive = false, onSe
     root.append(edgesG, nodesG);
 
     // Edges: from the parent's near side to the child's.
+    let cutCount = 0;
     for (const [id, p] of forest.parentOf) {
       const a = centre.get(p), b = centre.get(id);
       if (!a || !b) continue;
       const parentStatus = entryOf.get(p)?.status || 'unknown';
       const cut = c.colorEdges && (parentStatus === 'down');
+      if (cut) cutCount++;
       let d;
-      if (layout.radial || c.edges === 'straight') {
+      if (layout.radial) {
+        d = clusterEdge(a, b, boxW, boxH, bare, c.edges === 'curved');
+      } else if (c.edges === 'straight') {
         d = `M${a.x},${a.y} L${b.x},${b.y}`;
       } else if (c.orientation === 'right') {
         const x1 = a.x + boxW / 2, x2 = b.x - boxW / 2, mx = (x1 + x2) / 2;
@@ -309,7 +575,10 @@ export function renderNetworkMap(host, entries, cfg, { interactive = false, onSe
         d = c.edges === 'elbow' ? `M${a.x},${y1} V${my} H${b.x} V${y2}` : `M${a.x},${y1} C${a.x},${my} ${b.x},${my} ${b.x},${y2}`;
       }
       const ctx = entryOf.get(id)?.context || entryOf.get(p)?.context;
-      edgesG.append(svg('path', { d, class: `netmap-edge${cut ? ' netmap-edge-down' : ''}${ctx ? ' netmap-context' : ''}`, 'data-from': p, 'data-to': id }));
+      // The look of the line: its own style (kept on the node at its lower
+      // end), else the map's, else the theme's — with an outage always red.
+      const look = edgeLook(c, entryOf.get(id)?.node.linkStyle, cut);
+      edgesG.append(svg('path', { d, class: `netmap-edge${cut ? ' netmap-edge-down' : ''}${ctx ? ' netmap-context' : ''}`, style: edgeStyle(look), 'data-from': p, 'data-to': id }));
     }
 
     // Nodes.
@@ -354,7 +623,10 @@ export function renderNetworkMap(host, entries, cfg, { interactive = false, onSe
         if (!counts[s]) continue;
         legend.append(h('span', { class: 'netmap-key' }, h('span', { class: `orb orb-sm orb-${s}`, 'aria-hidden': 'true' }), `${statusMeta(s).label} ${counts[s]}`));
       }
-      legend.append(h('span', { class: 'netmap-key muted' }, c.orientation === 'right' ? 'Each node sits to the right of the node it depends on' : layout.radial ? 'Each node sits outside the node it depends on' : 'Each node sits under the node it depends on'));
+      legend.append(h('span', { class: 'netmap-key muted' }, c.orientation === 'right' ? 'Each node sits to the right of the node it depends on' : layout.radial ? 'Each node sits in a ring round the node it depends on' : 'Each node sits under the node it depends on'));
+      // Lines can be any colour and dash by now, so what a red one means is
+      // said in words — colour and dashes alone must not be the whole cue.
+      if (cutCount) legend.append(h('span', { class: 'netmap-key' }, h('span', { class: 'netmap-linekey', 'aria-hidden': 'true' }), `Red lines lead out of a node that is down (${plural(cutCount, 'link')})`));
       if (forest.cycles.length) legend.append(h('span', { class: 'netmap-key text-degraded' }, icon('alert'), `${plural(forest.cycles.length, 'dependency loop')} broken to draw this`));
     }
     renderList(forest, entryOf, layout);
@@ -454,6 +726,74 @@ export function mapFilterOptions(groups) {
 }
 
 /**
+ * Colour, thickness and style controls for a line — the map's own, a single
+ * link's, the node editor's. `.el` is the controls, `.value` what they hold
+ * as { color, width, dash } and `onChange(value)` fires when a person changes
+ * one. A colour of '' is the theme's.
+ *
+ * With `inherit` (a link's own style) an empty colour, thickness or style
+ * means "follow the map", and `defaults` ({ color, width, dash }) says what
+ * the map has, so the empty thickness can show it. Without, thickness and
+ * style always have a value.
+ */
+export function lineStyleControls({ value = {}, inherit = false, defaults = {}, disabled = false, label = 'Line', onChange } = {}) {
+  let color = normalizeLineColor(value.color);
+  let width = normalizeLineWidth(value.width, inherit ? 0 : LINE_WIDTH.default);
+  let dash = normalizeLineDash(value.dash) || (inherit ? '' : 'solid');
+  const unset = inherit ? 'Same as the map' : 'Theme colour';
+  // A colour input holds #rrggbb only; a stored #rgb or #rrggbbaa is shown
+  // as that and left exactly as it was unless the person picks another.
+  const hex6 = (c) => (c.length === 4 ? `#${[...c.slice(1)].map((x) => x + x).join('')}` : c.slice(0, 7));
+  const emit = () => onChange && onChange(api.value);
+
+  const picker = h('input', { type: 'color', value: hex6(color || normalizeLineColor(defaults.color) || '#8b949e'), 'aria-label': `${label} colour`, disabled });
+  const shown = h('span', { class: 'netmap-colour-text mono muted' }, color || unset);
+  const useDefault = h('button', { type: 'button', class: 'btn btn-sm', disabled: disabled || !color, 'aria-label': `Use the ${inherit ? 'map’s' : 'theme'} colour for the ${label.toLowerCase()}`, onclick: () => { color = ''; paint(); emit(); } }, 'Default');
+  const widthIn = numberInput({ min: LINE_WIDTH.min, max: LINE_WIDTH.max, step: LINE_WIDTH.step, value: width || '', placeholder: inherit ? String(defaults.width || LINE_WIDTH.default) : '', 'aria-label': `${label} thickness in pixels`, disabled });
+  const styleOpts = MAP_LINE_STYLES.map((o) => (inherit && o.value === defaults.dash ? { ...o, label: `${o.label} (map)` } : o));
+  const dashSel = selectInput({ options: inherit ? [{ value: '', label: 'Like the map' }, ...styleOpts] : MAP_LINE_STYLES, value: dash, 'aria-label': `${label} style`, disabled });
+
+  function paint() {
+    shown.textContent = color || unset;
+    if (color) picker.value = hex6(color);
+    useDefault.disabled = disabled || !color;
+    widthIn.value = width || '';
+    dashSel.value = dash;
+  }
+  picker.addEventListener('change', () => { color = normalizeLineColor(picker.value); paint(); emit(); });
+  widthIn.addEventListener('change', () => { width = normalizeLineWidth(widthIn.value, inherit ? 0 : LINE_WIDTH.default); paint(); emit(); });
+  dashSel.addEventListener('change', () => { dash = normalizeLineDash(dashSel.value) || (inherit ? '' : 'solid'); emit(); });
+
+  const api = {
+    el: h('div', { class: 'netmap-linestyle' },
+      field({ label: 'Colour', input: h('div', { class: 'netmap-colour' }, picker, shown, useDefault) }),
+      field({ label: 'Thickness', input: h('div', { class: 'input-with-unit' }, widthIn, h('span', { class: 'unit' }, 'px')) }),
+      field({ label: 'Style', input: dashSel })),
+    get value() { return { color, width, dash }; },
+    /** Back to the defaults, as a person's own change. */
+    reset() { color = ''; width = inherit ? 0 : LINE_WIDTH.default; dash = inherit ? '' : 'solid'; paint(); emit(); },
+  };
+  return api;
+}
+
+/**
+ * The style of one link, as a group of controls: the line from a node to the
+ * node it depends on, `parentName`. `value` is the link's style (or null),
+ * `defaults` what the map draws a line as, and `onChange(style)` gets the
+ * style as it should be kept — null when it sets nothing. The Reset button
+ * clears the lot, so the link follows the map again.
+ */
+export function linkStyleEditor({ parentName = '', value = null, defaults = {}, disabled = false, onChange } = {}) {
+  const controls = lineStyleControls({ value: value || {}, inherit: true, defaults, disabled, label: 'Link', onChange: (v) => onChange && onChange(normalizeLinkStyle(v)) });
+  const legend = h('legend', null, parentName ? `Link to ${parentName}` : 'Link style');
+  const reset = h('button', { type: 'button', class: 'btn btn-sm admin-only', 'aria-label': 'Reset the style of this link', onclick: () => controls.reset() }, icon('refresh'), 'Reset');
+  const wrap = h('fieldset', { class: 'netmap-linegroup' }, legend, controls.el, h('div', { class: 'row-between' }, h('span', { class: 'help' }, 'Applies on every map. An outage still shows in red.'), reset));
+  wrap.setParentName = (name) => { legend.textContent = name ? `Link to ${name}` : 'Link style'; };
+  Object.defineProperty(wrap, 'value', { get: () => normalizeLinkStyle(controls.value) });
+  return wrap;
+}
+
+/**
  * The map's options as a form — shared by the Network map page and the
  * dashboard widget editor. `.value` is the configuration the controls hold;
  * `onChange(cfg)` fires on every change.
@@ -471,19 +811,26 @@ export function mapConfigEditor(cfg, { groups = null, onChange } = {}) {
   const onlyLinked = checkbox({ label: 'Only nodes with a dependency', checked: c.onlyLinked, onChange: emit });
   const colorEdges = checkbox({ label: 'Colour the links out of a node that is down', checked: c.colorEdges, onChange: emit });
   const showLegend = checkbox({ label: 'Show the legend', checked: c.showLegend, onChange: emit });
+  // How every line looks unless a link has a style of its own.
+  const lines = lineStyleControls({ value: { color: c.lineColor, width: c.lineWidth, dash: c.lineStyle }, label: 'Map line', onChange: emit });
+  const resetLines = h('button', { type: 'button', class: 'btn btn-sm', onclick: () => lines.reset() }, icon('refresh'), 'Reset the lines');
   const wrap = h('div', { class: 'stack-sm netmap-options' },
     h('div', { class: 'form-grid' },
-      field({ label: 'Layout', input: orientation }),
+      field({ label: 'Layout', input: orientation, help: 'Clusters put each node in the middle of a ring of the nodes that depend on it.' }),
       field({ label: 'Labels', input: labels }),
       field({ label: 'Node size', input: size }),
-      field({ label: 'Lines', input: edges }),
+      field({ label: 'Line shape', input: edges, help: 'Clusters draw straight or gently curved lines.' }),
       field({ label: 'Group', input: group, help: 'The nodes a filtered node depends on stay on the map, faded.' }),
       field({ label: 'Tag', input: tag })),
+    h('fieldset', { class: 'netmap-linegroup' },
+      h('legend', null, 'Line style'),
+      lines.el,
+      h('div', { class: 'row-between' }, h('span', { class: 'help' }, 'A link can have its own colour, thickness and style: choose a node on the map.'), resetLines)),
     h('div', { class: 'stack-sm', style: { gap: '6px' } }, onlyLinked, colorEdges, showLegend));
   Object.defineProperty(wrap, 'value', { get: () => normalizeMapConfig({
     orientation: orientation.value, labels: labels.value, size: size.value, edges: edges.value, group: group.value, tag: tag.value,
     onlyLinked: onlyLinked.input.checked, colorEdges: colorEdges.input.checked, showLegend: showLegend.input.checked,
+    lineColor: lines.value.color, lineWidth: lines.value.width, lineStyle: lines.value.dash,
   }) });
   return wrap;
 }
-

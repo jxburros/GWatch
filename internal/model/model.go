@@ -141,6 +141,7 @@ type Node struct {
 	Importance    Importance `json:"importance"`
 	Enabled       bool       `json:"enabled"`
 	DependsOnNode *int64     `json:"dependsOnNodeId"` // parent node for dependency-aware alerting
+	LinkStyle     *LinkStyle `json:"linkStyle"`       // how the line to that parent is drawn on the network map
 	Template      string     `json:"template"`        // template used when created (informational)
 	CreatedAt     time.Time  `json:"createdAt"`
 	UpdatedAt     time.Time  `json:"updatedAt"`

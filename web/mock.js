@@ -1,4 +1,5 @@
 import templatesFixture from './mock-templates.js';
+import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './netmap.js';
 // In-browser mock of the GWatch API. Loaded ONLY when the page is opened with
 // ?mock=1 — it intercepts fetch() for /api/* and fakes the event stream so the
 // interface can be developed and screenshot-tested without the Go service.
@@ -30,12 +31,18 @@ import templatesFixture from './mock-templates.js';
     CHECK_PROFILES[id] = { base: opts.base ?? 20, noise: opts.noise ?? 0.3, status: opts.status || 'up', message: opts.message, downSince: opts.downSince, warn: opts.warn, cert: opts.cert, affectedBy: opts.affectedBy, loss: opts.loss ?? 0 };
     return c;
   }
+  // A link's style as the service sends it: only the fields that are set.
+  function styleOut(raw) {
+    const s = normalizeLinkStyle(raw);
+    if (!s) return null;
+    return { ...(s.color ? { color: s.color } : {}), ...(s.width ? { width: s.width } : {}), ...(s.dash ? { dash: s.dash } : {}) };
+  }
   function mkNode(o) {
     const id = ++seq.node;
     // group is the deprecated alias for the first group, exactly as the
     // server sends it.
     const groups = (o.groups || (o.group ? [o.group] : [])).slice(0, 16);
-    return { id, name: o.name, host: o.host, groups, group: groups[0] || '', tags: o.tags || [], notes: o.notes || '', importance: o.importance || 'normal', enabled: o.enabled !== false, dependsOnNodeId: o.dependsOnNodeId ?? null, template: o.template || '', createdAt: ago(40 * DAY), updatedAt: ago(2 * DAY), checks: [] };
+    return { id, name: o.name, host: o.host, groups, group: groups[0] || '', tags: o.tags || [], notes: o.notes || '', importance: o.importance || 'normal', enabled: o.enabled !== false, dependsOnNodeId: o.dependsOnNodeId ?? null, linkStyle: styleOut(o.linkStyle), template: o.template || '', createdAt: ago(40 * DAY), updatedAt: ago(2 * DAY), checks: [] };
   }
 
   const nodes = [];
@@ -134,6 +141,8 @@ import templatesFixture from './mock-templates.js';
   // What sits behind what, for the network map: the switch and the Pi-hole
   // hang off the gateway, and the wired machines off the switch.
   for (const n of [swtch, pihole]) n.dependsOnNodeId = gateway.id;
+  // The NAS's link is drawn heavier and blue, to show what a link's own style does.
+  nas.linkStyle = { color: '#3b82f6', width: 3 };
   for (const n of [nas, backupSrv, ha, printer, newHost]) n.dependsOnNodeId = swtch.id;
   nodes.push(gateway, plex, nas, ha, site, weather, printer, pihole, backupSrv, swtch, newHost);
 
@@ -718,6 +727,16 @@ import templatesFixture from './mock-templates.js';
   const routes = [];
   const on = (method, re, fn) => routes.push({ method, re, fn });
   const err = (status, message) => Object.assign(new Error(message), { status });
+  // What internal/model/linkstyle.go does to a link's style: a colour or a
+  // dash that is not one of the allowed forms is refused, a width is pulled
+  // into range, and a style that sets nothing is none. A node with nothing it
+  // depends on has no link, so no style.
+  function cleanLinkStyle(raw, dependsOn) {
+    if (!raw || typeof raw !== 'object' || !dependsOn) return null;
+    if (String(raw.color || '').trim() && !normalizeLineColor(raw.color)) throw err(400, `link colour "${raw.color}" must be a hex colour such as #3b82f6`);
+    if (String(raw.dash || '').trim() && !normalizeLineDash(raw.dash)) throw err(400, `link style "${raw.dash}" must be one of solid, dashed, dotted, dash-dot`);
+    return styleOut(raw);
+  }
 
   on('GET', /^\/api\/health$/, () => health());
   on('GET', /^\/api\/version$/, () => ({ version: '0.5.0', platform: 'windows/amd64', apiVersion: 1 }));
@@ -785,7 +804,7 @@ import templatesFixture from './mock-templates.js';
   on('GET', /^\/api\/nodes\/(\d+)$/, (m) => { const n = findNode(m[1]); if (!n) throw err(404, 'node not found'); return nodeOut(n, { withResults: true }); });
   on('POST', /^\/api\/nodes$/, (m, body) => {
     if (!body?.name) throw err(400, 'name is required');
-    const n = mkNode({ ...body, template: body.template || '' });
+    const n = mkNode({ ...body, linkStyle: cleanLinkStyle(body.linkStyle, body.dependsOnNodeId), template: body.template || '' });
     n.checks = (body.checks || []).map((c, i) => { const created = mkCheck(n.id, c.type, c.name, { interval: c.intervalSeconds, timeout: c.timeoutSeconds, failureThreshold: c.failureThreshold, config: c.config, alerts: c.alerts, enabled: c.enabled, sortOrder: i, base: c.type === 'ping' ? 3 : 120, status: 'unknown' }); created.retries = c.retries ?? 1; return created; });
     nodes.push(n);
     addEvent('config_changed', { nodeId: n.id, nodeName: n.name, title: 'Node created', detail: `${n.checks.length} checks` });
@@ -794,7 +813,7 @@ import templatesFixture from './mock-templates.js';
   on('PUT', /^\/api\/nodes\/(\d+)$/, (m, body) => {
     const n = findNode(m[1]); if (!n) throw err(404, 'node not found');
     const groups = (body.groups && body.groups.length ? body.groups : (body.group ? [body.group] : [])).slice(0, 16);
-    Object.assign(n, { name: body.name, host: body.host, groups, group: groups[0] || '', tags: body.tags || [], notes: body.notes || '', importance: body.importance || 'normal', enabled: body.enabled !== false, dependsOnNodeId: body.dependsOnNodeId ?? null, updatedAt: iso(Date.now()) });
+    Object.assign(n, { name: body.name, host: body.host, groups, group: groups[0] || '', tags: body.tags || [], notes: body.notes || '', importance: body.importance || 'normal', enabled: body.enabled !== false, dependsOnNodeId: body.dependsOnNodeId ?? null, linkStyle: cleanLinkStyle(body.linkStyle, body.dependsOnNodeId), updatedAt: iso(Date.now()) });
     const keep = new Set();
     const next = (body.checks || []).map((c, i) => {
       const existing = c.id ? n.checks.find((x) => x.id === c.id) : null;
@@ -838,6 +857,8 @@ import templatesFixture from './mock-templates.js';
     if (hasNode) {
       const fold = (list, drop) => list.filter((x) => !(drop || []).some((d) => String(d).toLowerCase() === String(x).toLowerCase()));
       const dedupe = (list) => { const out = [], seenL = new Set(); for (const v of list) { const k = String(v).trim().toLowerCase(); if (!k || seenL.has(k)) continue; seenL.add(k); out.push(String(v).trim()); } return out; };
+      // Refused before anything changes, as the service does.
+      if ('linkStyle' in np) cleanLinkStyle(np.linkStyle, true);
       for (const n of pickedNodes) {
         let groups = np.groups ? [...np.groups] : groupsOf(n);
         groups = dedupe(fold(groups, np.removeGroups).concat(np.addGroups || [])).slice(0, 16);
@@ -847,6 +868,8 @@ import templatesFixture from './mock-templates.js';
         if (np.importance != null) n.importance = np.importance;
         if (np.enabled != null) n.enabled = !!np.enabled;
         if ('dependsOnNodeId' in np) n.dependsOnNodeId = np.dependsOnNodeId || null;
+        if ('linkStyle' in np) n.linkStyle = np.linkStyle;
+        n.linkStyle = cleanLinkStyle(n.linkStyle, n.dependsOnNodeId);
         n.updatedAt = iso(Date.now());
       }
       if (np.groups) changes.push(np.groups.length ? `groups → ${np.groups.join(', ')}` : 'groups cleared');
@@ -858,6 +881,7 @@ import templatesFixture from './mock-templates.js';
       if (np.importance != null) changes.push(`importance → ${np.importance}`);
       if (np.enabled != null) changes.push(np.enabled ? 'enabled' : 'disabled');
       if ('dependsOnNodeId' in np) changes.push(np.dependsOnNodeId ? `depends on → ${findNode(np.dependsOnNodeId)?.name || np.dependsOnNodeId}` : 'dependency cleared');
+      if ('linkStyle' in np) changes.push(np.linkStyle ? 'link style changed' : 'link style reset');
     }
     if (hasCheck) {
       for (const c of picked) {

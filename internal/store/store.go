@@ -147,6 +147,7 @@ CREATE TABLE IF NOT EXISTS nodes (
   importance TEXT NOT NULL DEFAULT 'normal',
   enabled INTEGER NOT NULL DEFAULT 1,
   depends_on_node_id INTEGER REFERENCES nodes(id) ON DELETE SET NULL,
+  link_style TEXT NOT NULL DEFAULT '',
   template TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -341,6 +342,9 @@ var addedColumns = []struct{ table, column, ddl string }{
 	// "groups" is quoted everywhere it is used: it is a keyword in SQLite's
 	// window-frame syntax, and a bare one reads badly even where it parses.
 	{"nodes", "groups", `ALTER TABLE nodes ADD COLUMN "groups" TEXT NOT NULL DEFAULT '[]'`},
+	// How the line from a node to the node it depends on is drawn on the
+	// network map: the JSON of a model.LinkStyle, or '' for the map's own.
+	{"nodes", "link_style", "ALTER TABLE nodes ADD COLUMN link_style TEXT NOT NULL DEFAULT ''"},
 	// The named metrics a check measured beyond its latency, as a JSON object
 	// of name -> number. An SNMP check writes one entry per OID here; every
 	// other check leaves it empty.

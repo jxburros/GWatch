@@ -922,6 +922,11 @@ func (s *Server) normalizeNode(n *model.Node) error {
 	if n.DependsOnNode != nil && (*n.DependsOnNode <= 0 || *n.DependsOnNode == n.ID) {
 		n.DependsOnNode = nil
 	}
+	// The style of the line to the parent: a colour or dash that is not one of
+	// the allowed forms is refused here, rather than stored for a map to draw.
+	if err := n.CleanLinkStyle(); err != nil {
+		return err
+	}
 	if n.Checks == nil {
 		n.Checks = []model.Check{}
 	}
@@ -1118,6 +1123,9 @@ func describeNodeChange(before, after model.Node, deletedChecks int) string {
 	}
 	if (before.DependsOnNode == nil) != (after.DependsOnNode == nil) || (before.DependsOnNode != nil && after.DependsOnNode != nil && *before.DependsOnNode != *after.DependsOnNode) {
 		parts = append(parts, "dependency changed")
+	}
+	if !before.LinkStyle.Equal(after.LinkStyle) {
+		parts = append(parts, "link style changed")
 	}
 	added := len(after.Checks) - (len(before.Checks) - deletedChecks)
 	if added > 0 {

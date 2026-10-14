@@ -1036,6 +1036,15 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .netmap-tree { padding: 6px 0 0; }
 .netmap-tree li { padding: 2px 0; }
 .netmap-parent select { flex: 1; min-width: 0; }
+/* The look of a line: the map's own and a single link's. */
+.netmap-linegroup { border: 1px solid var(--line); margin: 0.5rem 0 0; padding: 0.5rem 0.75rem 0.75rem; min-inline-size: 0; display: flex; flex-direction: column; gap: 0.625rem; }
+.netmap-linegroup > legend { padding: 0 0.375rem; font-family: var(--mono); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--dim); }
+.netmap-linegroup .help { font-size: 0.75rem; color: var(--dim); line-height: 1.4; flex: 1; min-width: 8rem; }
+.netmap-linestyle { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.625rem 0.75rem; }
+.netmap-linestyle > .field:first-child { grid-column: 1 / -1; }
+.netmap-colour { display: flex; align-items: center; gap: 0.5rem; }
+.netmap-colour-text { flex: 1; min-width: 0; font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.netmap-linekey { display: inline-block; width: 1.25rem; border-top: 2px dashed var(--down); }
 .netmap-facts { display: grid; gap: 2px; margin-top: 10px; font-size: 0.8125rem; }
 .widget-map { overflow: hidden; }
 .widget-map .netmap-list { display: none; }

@@ -306,12 +306,26 @@ echoed as written, so an `Authorization` header on an HTTP check is stored in th
 ### Node and Check objects
 
 A `Node` is `{id, name, host, groups, group, tags, notes, importance, enabled,
-dependsOnNodeId, template, createdAt, updatedAt, checks}`. `host` is the default target
+dependsOnNodeId, linkStyle, template, createdAt, updatedAt, checks}`. `host` is the default target
 its checks inherit when their own `config.target` is empty; `importance` is `low`,
 `normal`, `high` or `critical`; `dependsOnNodeId` is the parent used for
 dependency-aware alert suppression; `template` records which template the node was
 created from and is informational only. `group` is the deprecated single-group alias
 described above.
+
+`linkStyle` is how the line from this node to its parent (`dependsOnNodeId`) is
+drawn on the network map, or `null` for "like the map". It is
+`{ "color": "#3b82f6", "width": 3, "dash": "dashed" }`, and every field is
+optional and left out when it is not set. `color` is `#rgb`, `#rrggbb` or
+`#rrggbbaa` and nothing else (it is returned in lower case); `width` is the
+thickness in the map's drawing units, 1 to 8 (a number outside that range is
+clamped, one decimal is kept); `dash` is `solid`, `dashed`, `dotted` or
+`dash-dot`. A colour or dash that is not one of these is a 400 on create, update
+and bulk edit. The style belongs to the link, so a node with no
+`dependsOnNodeId` has none (it is dropped when the dependency is cleared, and
+when the parent is deleted) and one pointed at a different parent keeps it.
+It is part of the node everywhere a node goes: the overview, the configuration
+export, backups and restores, and `POST /api/nodes/{id}/duplicate`.
 
 A `Check` is `{id, nodeId, type, name, enabled, intervalSeconds, timeoutSeconds,
 retries, failureThreshold, config, alerts, sortOrder, createdAt, updatedAt}`.
@@ -492,7 +506,9 @@ the change would silently not happen.
 
 **Node fields.** `groups` (replaces the whole list), `addGroups`,
 `removeGroups`, `tags` (replaces), `addTags`, `removeTags`, `importance`,
-`enabled`, `dependsOnNodeId` (a node id, or `null` to clear it). Group and tag
+`enabled`, `dependsOnNodeId` (a node id, or `null` to clear it), `linkStyle`
+(an object as above to set the style of the node's link to its parent, or `null`
+to reset it; the network map's side panel uses this). Group and tag
 names are trimmed, folded case-insensitively onto the spelling already in use
 and capped at 16 groups, exactly as `PUT /api/nodes/{id}` does; removals match
 ignoring case. A dependency that would form a loop, or point a node at itself,
@@ -918,7 +934,7 @@ Widget types (`Widget.type`) and their `config`:
 | `summary` | `{}` | overall health counts (up/degraded/down/unknown) |
 | `groups` | `{ "groups": ["Home Network", ...] }` (empty = all) | group status cards |
 | `status_list` | `{ "group": "", "tag": "", "nodeIds": [], "sort": "" }` | node/check status list, filtered (`group` matches any of a node's groups); `sort` is `""` (as the overview lists them), `status`, `name`, `name-desc`, `host` or `importance` |
-| `network_map` | `{ "orientation": "down|right|radial", "labels": "name|name-host|none", "size": "small|medium|large", "edges": "curved|straight|elbow", "group": "", "tag": "", "onlyLinked": false, "colorEdges": true, "showLegend": true }` | the dependency map: every node under the node it depends on |
+| `network_map` | `{ "orientation": "down|right|radial", "labels": "name|name-host|none", "size": "small|medium|large", "edges": "curved|straight|elbow", "group": "", "tag": "", "onlyLinked": false, "colorEdges": true, "showLegend": true, "lineColor": "", "lineWidth": 1.5, "lineStyle": "solid|dashed|dotted|dash-dot" }` | the dependency map: every node under the node it depends on (`radial` is the clusters layout: each node in the middle of a ring of the nodes that depend on it). `lineColor` (`#rgb`, `#rrggbb` or `#rrggbbaa`; empty = the theme's), `lineWidth` (1–8) and `lineStyle` are how a line looks unless the node at its lower end has a `linkStyle` of its own; saving a dashboard with a colour or style that is not allowed is a 400, and a width out of range is clamped |
 | `latency_chart` | `{ "checkIds": [1,2], "range": "24h", "metric": "avg" }` | line chart of latency/response time |
 | `response_chart` | same as latency_chart (HTTP checks) | response time |
 | `loss_chart` | `{ "checkIds": [], "range": "24h" }` | packet loss % |
