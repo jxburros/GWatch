@@ -1140,13 +1140,6 @@ func newClient(cfg config) *http.Client {
 	return &http.Client{Transport: transport, Timeout: requestTimeout}
 }
 
-func envOr(key, def string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
-	}
-	return def
-}
-
 // envBool reads an on/off environment variable. Anything unrecognised leaves
 // the default alone: a misspelt value must never quietly turn off something
 // like automatic updates.
@@ -1158,18 +1151,6 @@ func envBool(key string, def bool) bool {
 		return false
 	}
 	return def
-}
-
-func envDuration(key string, def time.Duration) time.Duration {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return def
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil || d <= 0 {
-		return def
-	}
-	return d
 }
 
 func fatal(err error) {

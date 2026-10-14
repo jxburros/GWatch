@@ -95,9 +95,9 @@ func TestSettingsFromGWatchAreCheckedAndRemembered(t *testing.T) {
 }
 
 func TestTheMachinesOwnLimitIsNeverWidened(t *testing.T) {
-	rt, cfg := runtimeFor(t, true)
+	_, cfg := runtimeFor(t, true)
 	cfg.collect = model.CollectSelection{Interfaces: []string{"eth0"}}
-	rt = newRuntime(cfg)
+	rt := newRuntime(cfg)
 	rt.apply(cfg, model.AgentSettings{CheckInSeconds: 900, Collect: model.CollectSelection{Interfaces: []string{"eth0", "docker0"}}})
 	if got := rt.effective().Interfaces; len(got) != 1 || got[0] != "eth0" {
 		t.Errorf("GWatch widened the machine's limit: %v", got)
@@ -111,9 +111,9 @@ func TestTheMachinesOwnLimitIsNeverWidened(t *testing.T) {
 }
 
 func TestInventoryIsWhatTheMachineMayOffer(t *testing.T) {
-	rt, cfg := runtimeFor(t, true)
+	_, cfg := runtimeFor(t, true)
 	cfg.collect = model.CollectSelection{Interfaces: []string{"eth0", "docker0"}}
-	rt = newRuntime(cfg)
+	rt := newRuntime(cfg)
 	rt.shape(model.HostMetrics{Interfaces: []model.HostInterface{
 		{Name: "eth0", Up: true}, {Name: "docker0", Up: true}, {Name: "wlan0", Up: true},
 	}})
