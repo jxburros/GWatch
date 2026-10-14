@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jxburros/GWatch/internal/auth"
 	"github.com/jxburros/GWatch/internal/model"
 )
 
@@ -77,13 +78,31 @@ CREATE INDEX IF NOT EXISTS idx_agent_pairings_expires ON agent_pairings(expires_
 
 const agentCols = `id, name, node_id, prefix, enabled, created_by, created_at, revoked_at, last_seen_at, last_addr, last_version, hostname, os, arch`
 
+// agentSelectCols is agentCols plus what the interface needs and a backup does
+// not: whether a token can be read back, whether a rotation is waiting, and
+// the settings GWatch holds for the machine. The sealed tokens themselves are
+// never selected here; only RevealAgentToken reads them.
+const agentSelectCols = agentCols + `,
+	CASE WHEN token_sealed = '' THEN 0 ELSE 1 END, CASE WHEN pending_token_hash = '' THEN 0 ELSE 1 END,
+	pending_since, collect, inventory, checked_in_at`
+
 func scanAgent(sc interface{ Scan(...any) error }) (model.Agent, error) {
+	return scanAgentWith(sc)
+}
+
+// scanAgentWith is scanAgent for a query that selects further columns after
+// agentSelectCols; extra receives them.
+func scanAgentWith(sc interface{ Scan(...any) error }, extra ...any) (model.Agent, error) {
 	var a model.Agent
 	var nodeID sql.NullInt64
 	var createdAt string
-	var revokedAt, lastSeenAt sql.NullString
-	err := sc.Scan(&a.ID, &a.Name, &nodeID, &a.Prefix, &a.Enabled, &a.CreatedBy, &createdAt,
-		&revokedAt, &lastSeenAt, &a.LastAddr, &a.LastVersion, &a.Hostname, &a.OS, &a.Arch)
+	var revokedAt, lastSeenAt, pendingSince, checkedInAt sql.NullString
+	var viewable, pending int
+	var collect, inventory string
+	dest := append([]any{&a.ID, &a.Name, &nodeID, &a.Prefix, &a.Enabled, &a.CreatedBy, &createdAt,
+		&revokedAt, &lastSeenAt, &a.LastAddr, &a.LastVersion, &a.Hostname, &a.OS, &a.Arch,
+		&viewable, &pending, &pendingSince, &collect, &inventory, &checkedInAt}, extra...)
+	err := sc.Scan(dest...)
 	if err != nil {
 		return model.Agent{}, err
 	}
@@ -96,6 +115,19 @@ func scanAgent(sc interface{ Scan(...any) error }) (model.Agent, error) {
 	}
 	a.RevokedAt = parseTime(revokedAt)
 	a.LastSeenAt = parseTime(lastSeenAt)
+	a.TokenViewable = viewable == 1
+	a.RotationPending = pending == 1
+	a.RotationSince = parseTime(pendingSince)
+	a.CheckedInAt = parseTime(checkedInAt)
+	if collect != "" {
+		_ = json.Unmarshal([]byte(collect), &a.Collect)
+	}
+	if inventory != "" {
+		var inv model.Inventory
+		if json.Unmarshal([]byte(inventory), &inv) == nil {
+			a.Inventory = &inv
+		}
+	}
 	return a, nil
 }
 
@@ -123,7 +155,7 @@ func (s *Store) CreateAgent(ctx context.Context, name string, nodeID *int64, pre
 
 // GetAgent returns one registered machine.
 func (s *Store) GetAgent(ctx context.Context, id int64) (model.Agent, error) {
-	row := s.queryRow(ctx, `SELECT `+agentCols+` FROM agents WHERE id = ?`, id)
+	row := s.queryRow(ctx, `SELECT `+agentSelectCols+` FROM agents WHERE id = ?`, id)
 	a, err := scanAgent(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Agent{}, ErrNotFound
@@ -133,7 +165,7 @@ func (s *Store) GetAgent(ctx context.Context, id int64) (model.Agent, error) {
 
 // ListAgents returns every registered machine, newest first.
 func (s *Store) ListAgents(ctx context.Context) ([]model.Agent, error) {
-	rows, err := s.query(ctx, `SELECT `+agentCols+` FROM agents ORDER BY id DESC`)
+	rows, err := s.query(ctx, `SELECT `+agentSelectCols+` FROM agents ORDER BY id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +186,7 @@ func (s *Store) ListAgents(ctx context.Context) ([]model.Agent, error) {
 // revoked rather than at the next restart.
 func (s *Store) AgentByTokenHash(ctx context.Context, tokenHash string) (model.Agent, error) {
 	row := s.queryRow(ctx,
-		`SELECT `+agentCols+` FROM agents WHERE token_hash = ? AND revoked_at IS NULL AND enabled = 1`, tokenHash)
+		`SELECT `+agentSelectCols+` FROM agents WHERE token_hash = ? AND revoked_at IS NULL AND enabled = 1`, tokenHash)
 	a, err := scanAgent(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Agent{}, ErrNotFound
@@ -215,6 +247,157 @@ func (s *Store) DeleteAgent(ctx context.Context, id int64) error {
 		}
 		return nil
 	})
+}
+
+// AgentByAnyTokenHash resolves a presented token against both the agent's
+// current token and a replacement waiting to be picked up, and says which one
+// it was. A revoked or disabled agent is not found, whichever token is used.
+func (s *Store) AgentByAnyTokenHash(ctx context.Context, tokenHash string) (agent model.Agent, pending bool, err error) {
+	row := s.queryRow(ctx,
+		`SELECT `+agentSelectCols+`, CASE WHEN token_hash = ? THEN 0 ELSE 1 END FROM agents
+		 WHERE (token_hash = ? OR (pending_token_hash <> '' AND pending_token_hash = ?)) AND revoked_at IS NULL AND enabled = 1`,
+		tokenHash, tokenHash, tokenHash)
+	var which int
+	a, err := scanAgentWith(row, &which)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Agent{}, false, ErrNotFound
+	}
+	return a, which == 1, err
+}
+
+// SetAgentToken keeps a copy of the agent's token, sealed with the server's own
+// key, so that an administrator can read it back and compare it with the one in
+// the machine's configuration file. The digest it is authenticated by is stored
+// separately and does not depend on this.
+func (s *Store) SetAgentToken(ctx context.Context, id int64, token string) error {
+	sealed, err := s.sealSecret(token)
+	if err != nil {
+		return err
+	}
+	res, err := s.exec(ctx, `UPDATE agents SET token_sealed = ? WHERE id = ?`, sealed, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// AgentTokens is what an administrator may be shown of an agent's credentials.
+// Either is empty when GWatch holds no readable copy.
+type AgentTokens struct {
+	Current string
+	Pending string
+}
+
+// RevealAgentToken opens the sealed copies of an agent's tokens. A token that
+// was stored before copies were kept, or that came back from a backup, is
+// simply not there to open: the answer is empty, not an error.
+func (s *Store) RevealAgentToken(ctx context.Context, id int64) (AgentTokens, error) {
+	var current, pending string
+	err := s.queryRow(ctx, `SELECT token_sealed, pending_token_sealed FROM agents WHERE id = ?`, id).Scan(&current, &pending)
+	if errors.Is(err, sql.ErrNoRows) {
+		return AgentTokens{}, ErrNotFound
+	}
+	if err != nil {
+		return AgentTokens{}, err
+	}
+	var out AgentTokens
+	if current != "" {
+		if out.Current, err = s.secrets.Open(current); err != nil {
+			return AgentTokens{}, fmt.Errorf("open the stored token: %w", err)
+		}
+	}
+	if pending != "" {
+		if out.Pending, err = s.secrets.Open(pending); err != nil {
+			return AgentTokens{}, fmt.Errorf("open the stored replacement token: %w", err)
+		}
+	}
+	return out, nil
+}
+
+// StartAgentRotation records a replacement token for a machine. With retireOld
+// false the old token keeps working until the new one is first used, which is
+// what lets the agent pick it up by itself and switch over without a gap. With
+// retireOld true the old token stops working at once and the new one is the
+// only one, for the case where the old one may have leaked.
+func (s *Store) StartAgentRotation(ctx context.Context, id int64, token, prefix string, retireOld bool) error {
+	sealed, err := s.sealSecret(token)
+	if err != nil {
+		return err
+	}
+	hash := auth.HashToken(token)
+	var res sql.Result
+	if retireOld {
+		res, err = s.exec(ctx, `UPDATE agents SET token_hash = ?, token_sealed = ?, prefix = ?,
+			pending_token_hash = '', pending_token_sealed = '', pending_since = NULL WHERE id = ?`,
+			hash, sealed, prefix, id)
+	} else {
+		res, err = s.exec(ctx, `UPDATE agents SET pending_token_hash = ?, pending_token_sealed = ?, pending_since = ?
+			WHERE id = ?`, hash, sealed, fmtTime(time.Now()), id)
+	}
+	if err != nil {
+		if s.d.isUniqueViolation(err) {
+			return ErrDuplicate
+		}
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// CancelAgentRotation drops a replacement token that has not been used.
+func (s *Store) CancelAgentRotation(ctx context.Context, id int64) error {
+	_, err := s.exec(ctx, `UPDATE agents SET pending_token_hash = '', pending_token_sealed = '', pending_since = NULL WHERE id = ?`, id)
+	return err
+}
+
+// PromoteAgentToken makes the replacement the agent's token, which is what the
+// first request made with it does. The old token stops working in the same
+// statement; the condition on the digest means only the request that actually
+// presented the replacement can do this.
+func (s *Store) PromoteAgentToken(ctx context.Context, id int64, pendingHash, prefix string) error {
+	_, err := s.exec(ctx, `UPDATE agents SET token_hash = pending_token_hash, token_sealed = pending_token_sealed,
+		prefix = ?, pending_token_hash = '', pending_token_sealed = '', pending_since = NULL
+		WHERE id = ? AND pending_token_hash = ? AND pending_token_hash <> ''`, prefix, id, pendingHash)
+	return err
+}
+
+// collectColumn is a selection as it is stored: empty for "nothing chosen".
+func collectColumn(sel model.CollectSelection) string {
+	sel = sel.Normalize()
+	if sel.IsZero() {
+		return ""
+	}
+	return jsonString(sel)
+}
+
+// SetAgentCollect stores the selection an administrator made for a machine.
+func (s *Store) SetAgentCollect(ctx context.Context, id int64, sel model.CollectSelection) error {
+	res, err := s.exec(ctx, `UPDATE agents SET collect = ? WHERE id = ?`, collectColumn(sel), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// RecordAgentCheckIn notes that a machine asked for its settings, and keeps
+// what it said it could collect. A check-in that carries no inventory leaves
+// the last one in place.
+func (s *Store) RecordAgentCheckIn(ctx context.Context, id int64, inv *model.Inventory) error {
+	if inv == nil {
+		_, err := s.exec(ctx, `UPDATE agents SET checked_in_at = ? WHERE id = ?`, fmtTime(time.Now()), id)
+		return err
+	}
+	_, err := s.exec(ctx, `UPDATE agents SET checked_in_at = ?, inventory = ? WHERE id = ?`,
+		fmtTime(time.Now()), jsonString(inv.Normalize()), id)
+	return err
 }
 
 // TouchAgent records that a machine reported in, along with what it says it

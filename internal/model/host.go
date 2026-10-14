@@ -243,6 +243,23 @@ type Agent struct {
 	Hostname    string     `json:"hostname,omitempty"`
 	OS          string     `json:"os,omitempty"`
 	Arch        string     `json:"arch,omitempty"`
+
+	// TokenViewable is whether an administrator can read this agent's token
+	// back out of GWatch. A token minted by this version is kept sealed with
+	// the server's own key so it can be compared with the one in the agent's
+	// configuration file; one registered before that, or restored from a
+	// backup, is only a digest and has to be rotated to get a viewable one.
+	TokenViewable bool `json:"tokenViewable"`
+	// RotationPending is set while a replacement token has been issued and the
+	// agent has not yet used it. The old token works until then.
+	RotationPending bool       `json:"rotationPending,omitempty"`
+	RotationSince   *time.Time `json:"rotationSince,omitempty"`
+	// Collect is the selection an administrator made for this machine; zero
+	// means automatic. Inventory is what the agent last said it could collect,
+	// and CheckedInAt when it last asked GWatch for its settings.
+	Collect     CollectSelection `json:"collect"`
+	Inventory   *Inventory       `json:"inventory,omitempty"`
+	CheckedInAt *time.Time       `json:"checkedInAt,omitempty"`
 }
 
 // Revoked reports whether the agent's token can no longer be used.

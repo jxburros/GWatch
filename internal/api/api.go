@@ -211,6 +211,10 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /api/agents", s.handleCreateAgent)
 	s.route(mux, "PUT /api/agents/{id}", s.handleUpdateAgent)
 	s.route(mux, "DELETE /api/agents/{id}", s.handleRevokeAgent)
+	s.route(mux, "POST /api/agents/{id}/token", s.handleRevealAgentToken)
+	s.route(mux, "POST /api/agents/{id}/rotate", s.handleRotateAgentToken)
+	s.route(mux, "POST /api/agents/{id}/rotate/cancel", s.handleCancelAgentRotation)
+	s.route(mux, "PUT /api/agents/{id}/collect", s.handleSetAgentCollect)
 
 	s.route(mux, "GET /api/agents/latest", s.handleAgentLatest)
 	s.route(mux, "GET /api/agents/pairings", s.handleListPairings)
@@ -225,6 +229,7 @@ func (s *Server) Handler() http.Handler {
 	// Agents authenticate with their own token and are handled outside the
 	// authorization table; see handleIngestMetrics for why.
 	s.route(mux, "/ingest/metrics", s.handleIngestMetrics)
+	s.route(mux, "/ingest/checkin", s.handleAgentCheckIn)
 
 	s.route(mux, "GET /api/charts", s.handleListCharts)
 	s.route(mux, "PUT /api/charts", s.handlePutCharts)

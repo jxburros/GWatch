@@ -1,0 +1,238 @@
+package model
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+)
+
+// What an agent may ask GWatch for, and what GWatch may answer.
+//
+// An agent connects outwards, so GWatch can never tell it to do anything. What
+// it can do is answer, when the agent asks, a handful of questions whose
+// answers are plain data: which readings to collect, how long to wait before
+// asking again, which agent release is the newest, and — only while an
+// administrator is rotating this machine's token — the replacement token.
+// That is the whole list. There is no field here that names a URL to fetch, a
+// command to run, a file to write or a version to install, and adding one
+// would change what an agent is, so it is written as a closed set of types
+// rather than a map (docs/AGENT-DECISIONS.md, entry 12).
+
+// Collection limits. They bound what an agent will accept from a server and
+// what a server will accept from a person, so a confused client cannot make
+// either side carry something unreasonable.
+const (
+	MaxCollectNames   = 256 // entries per list
+	MaxCollectNameLen = 200 // characters per entry
+
+	// CheckInDefault is how often an agent asks GWatch for its settings when
+	// nothing says otherwise. Rare on purpose: nothing it learns is urgent.
+	CheckInDefault = 15 * time.Minute
+	CheckInMin     = time.Minute
+	CheckInMax     = 24 * time.Hour
+)
+
+// CollectSelection says which readings an agent takes and sends. An empty list
+// means "automatic" — everything the agent would collect had nobody chosen —
+// so the zero value is the agent's behaviour before this existed.
+//
+// Two of these meet on every agent: the one in the agent's own configuration
+// file, which is a ceiling the machine's owner sets, and the one an
+// administrator sets in GWatch, which chooses within it. Effective applies the
+// rule.
+type CollectSelection struct {
+	// Metrics are the families to collect (cpu, memory, swap, load, disk,
+	// inodes, net, diskio — the MetricFamilies). Empty means every family.
+	Metrics []string `json:"metrics,omitempty"`
+	// Interfaces are the network interface names to report. Empty means the
+	// automatic set, which leaves out virtual and tunnel interfaces.
+	Interfaces []string `json:"interfaces,omitempty"`
+	// Disks are the block devices whose throughput is reported. Empty means
+	// the automatic set.
+	Disks []string `json:"disks,omitempty"`
+	// Mounts are the filesystems reported, by mount point. Empty means the
+	// automatic set.
+	Mounts []string `json:"mounts,omitempty"`
+}
+
+// IsZero reports whether the selection chooses nothing, which is "automatic"
+// everywhere.
+func (c CollectSelection) IsZero() bool {
+	return len(c.Metrics) == 0 && len(c.Interfaces) == 0 && len(c.Disks) == 0 && len(c.Mounts) == 0
+}
+
+// Normalize trims, de-duplicates and sorts every list, so two selections that
+// mean the same thing compare equal and are stored the same way.
+func (c CollectSelection) Normalize() CollectSelection {
+	return CollectSelection{
+		Metrics:    normalizeNames(c.Metrics),
+		Interfaces: normalizeNames(c.Interfaces),
+		Disks:      normalizeNames(c.Disks),
+		Mounts:     normalizeNames(c.Mounts),
+	}
+}
+
+func normalizeNames(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// Validate reports a selection that should be refused rather than stored: an
+// unknown metric family (which would silently collect nothing), or more or
+// longer entries than any machine has.
+func (c CollectSelection) Validate() error {
+	for _, m := range c.Metrics {
+		if !isMetricFamily(m) {
+			return fmt.Errorf("%q is not a metric family; use %s", m, strings.Join(MetricFamilies, ", "))
+		}
+	}
+	for label, list := range map[string][]string{"metrics": c.Metrics, "interfaces": c.Interfaces, "disks": c.Disks, "mounts": c.Mounts} {
+		if len(list) > MaxCollectNames {
+			return fmt.Errorf("too many %s (at most %d)", label, MaxCollectNames)
+		}
+		for _, s := range list {
+			if len(s) > MaxCollectNameLen {
+				return fmt.Errorf("a name in %s is too long", label)
+			}
+		}
+	}
+	return nil
+}
+
+func isMetricFamily(s string) bool {
+	for _, f := range MetricFamilies {
+		if f == s {
+			return true
+		}
+	}
+	return false
+}
+
+// Effective combines a ceiling (the agent's own configuration) with a
+// selection (chosen in GWatch). For each list: nothing chosen by either side
+// is automatic; one side chosen uses that side; both chosen keeps only what
+// both allow. The machine's owner therefore always has the last word on what
+// leaves the machine, and GWatch can never widen it.
+func (c CollectSelection) Effective(selection CollectSelection) CollectSelection {
+	return CollectSelection{
+		Metrics:    combineNames(c.Metrics, selection.Metrics),
+		Interfaces: combineNames(c.Interfaces, selection.Interfaces),
+		Disks:      combineNames(c.Disks, selection.Disks),
+		Mounts:     combineNames(c.Mounts, selection.Mounts),
+	}
+}
+
+func combineNames(ceiling, selection []string) []string {
+	switch {
+	case len(ceiling) == 0:
+		return selection
+	case len(selection) == 0:
+		return ceiling
+	}
+	allowed := make(map[string]bool, len(ceiling))
+	for _, s := range ceiling {
+		allowed[s] = true
+	}
+	out := make([]string, 0, len(selection))
+	for _, s := range selection {
+		if allowed[s] {
+			out = append(out, s)
+		}
+	}
+	if len(out) == 0 {
+		// Both sides chose and nothing is in common. An empty list would mean
+		// "automatic", the opposite of what was asked, so the only honest
+		// answer is a list nobody can match.
+		return []string{""}
+	}
+	return out
+}
+
+// InventoryItem is one thing an agent could report: a network interface, a
+// block device or a mounted filesystem.
+type InventoryItem struct {
+	Name string `json:"name"`
+	// Detail is a short description for a person choosing: an address, a size,
+	// a filesystem type.
+	Detail string `json:"detail,omitempty"`
+	// Auto is whether the automatic selection includes it. Virtual and tunnel
+	// interfaces are not Auto, so the list a person ticks from starts out as
+	// the sensible one.
+	Auto bool `json:"auto"`
+}
+
+// Inventory is what an agent could collect, within what its own configuration
+// allows. It is what lets GWatch offer checkboxes for a drive it has not been
+// told about, and it is the only thing an agent says about itself beyond its
+// readings.
+type Inventory struct {
+	Interfaces []InventoryItem `json:"interfaces,omitempty"`
+	Disks      []InventoryItem `json:"disks,omitempty"`
+	Mounts     []InventoryItem `json:"mounts,omitempty"`
+}
+
+// Normalize bounds an inventory received from the network.
+func (i Inventory) Normalize() Inventory {
+	clip := func(in []InventoryItem) []InventoryItem {
+		if len(in) > MaxCollectNames {
+			in = in[:MaxCollectNames]
+		}
+		out := make([]InventoryItem, 0, len(in))
+		for _, it := range in {
+			it.Name = strings.TrimSpace(it.Name)
+			if it.Name == "" {
+				continue
+			}
+			if len(it.Name) > MaxCollectNameLen {
+				it.Name = it.Name[:MaxCollectNameLen]
+			}
+			if len(it.Detail) > MaxCollectNameLen {
+				it.Detail = it.Detail[:MaxCollectNameLen]
+			}
+			out = append(out, it)
+		}
+		return out
+	}
+	return Inventory{Interfaces: clip(i.Interfaces), Disks: clip(i.Disks), Mounts: clip(i.Mounts)}
+}
+
+// AgentCheckIn is what an agent says when it asks GWatch for its settings.
+type AgentCheckIn struct {
+	Version   string     `json:"version,omitempty"`
+	Inventory *Inventory `json:"inventory,omitempty"`
+}
+
+// AgentSettings is GWatch's whole answer to a check-in. See the note at the
+// top of this file: this struct is the complete list of what an agent can be
+// told, and every field is data.
+type AgentSettings struct {
+	// CheckInSeconds is when to ask again.
+	CheckInSeconds int `json:"checkInSeconds"`
+	// Collect is the selection an administrator made for this machine.
+	Collect CollectSelection `json:"collect"`
+	// LatestAgent is the newest agent release GWatch knows of, or empty. It is
+	// a hint that a release exists, nothing more: an agent still fetches and
+	// verifies releases itself, from the release feed, and never from here.
+	LatestAgent string `json:"latestAgent,omitempty"`
+	// Token is the replacement token, present only while a rotation is waiting
+	// to be picked up, and only when the caller authenticated with the token
+	// being replaced.
+	Token string `json:"token,omitempty"`
+}

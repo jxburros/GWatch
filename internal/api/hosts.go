@@ -322,6 +322,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	s.keepAgentToken(ctx, created.ID, token)
 	if body.NodeID != nil {
 		if err := s.bindMachineCheck(ctx, *body.NodeID, created); err != nil {
 			s.Log.Errorf("bind hardware check to agent %d: %v", created.ID, err)
@@ -674,6 +675,7 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	s.keepAgentToken(ctx, created.ID, token)
 	if err := s.Store.AttachPairingAgent(ctx, pairing.ID, created.ID); err != nil {
 		s.Log.Errorf("attach pairing agent: %v", err)
 	}
@@ -699,6 +701,16 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		"agent":           created,
 		"intervalSeconds": int(hostmon.DefaultSampleInterval.Seconds()),
 	})
+}
+
+// keepAgentToken stores a sealed copy of a freshly minted token, which is what
+// lets an administrator read it back later. Failing to is not worth failing
+// the registration over: the machine has its token and works, and the only
+// loss is that the token cannot be viewed until it is rotated.
+func (s *Server) keepAgentToken(ctx context.Context, id int64, token string) {
+	if err := s.Store.SetAgentToken(ctx, id, token); err != nil {
+		s.Log.Errorf("keep a viewable copy of the token for agent %d: %v", id, err)
+	}
 }
 
 // rejectPairing answers every unusable code identically and records the reason
@@ -828,32 +840,10 @@ func (s *Server) handleIngestMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token := bearerToken(r)
-	if token == "" {
-		writeError(w, http.StatusUnauthorized, "an agent token is required")
+	agent, _, ok := s.authenticateAgent(w, r, "Hardware reading rejected")
+	if !ok {
 		return
 	}
-	// A token is a credential, so a wrong one counts against the same failure
-	// budget as a wrong password. A correct one gives its budget back, so an
-	// agent reporting every minute never exhausts it.
-	ip := s.clientIP(r)
-	if allowed, wait := s.failLimiter.Allow(limiterKey(limiterIngest, ip)); !allowed {
-		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds()+0.999)))
-		writeError(w, http.StatusTooManyRequests, "too many failed attempts; try again shortly")
-		return
-	}
-	agent, err := s.Store.AgentByTokenHash(ctx, auth.HashToken(token))
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			s.auditAuthFailure(ctx, "Hardware reading rejected",
-				fmt.Sprintf("An unknown or revoked agent token was presented from %s.", ip), ip)
-			writeError(w, http.StatusUnauthorized, "this agent token is not registered, or has been revoked")
-			return
-		}
-		s.fail(w, err)
-		return
-	}
-	s.failLimiter.Reset(limiterKey(limiterIngest, ip))
 
 	var metrics model.HostMetrics
 	if err := json.NewDecoder(io.LimitReader(r.Body, maxIngestBody)).Decode(&metrics); err != nil {

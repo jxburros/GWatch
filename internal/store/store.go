@@ -352,6 +352,19 @@ var addedColumns = []struct{ table, column, ddl string }{
 	{"check_state", "metric_status", "ALTER TABLE check_state ADD COLUMN metric_status TEXT NOT NULL DEFAULT ''"},
 	{"triggers", "metric", "ALTER TABLE triggers ADD COLUMN metric TEXT NOT NULL DEFAULT ''"},
 	{"triggers", "metric_over", "ALTER TABLE triggers ADD COLUMN metric_over REAL NOT NULL DEFAULT 0"},
+	// An agent's token is kept sealed (like every other secret GWatch holds) so
+	// an administrator can compare it with the one in the machine's config file,
+	// and a replacement token waits beside it while a rotation is picked up.
+	// collect is the administrator's choice of readings for the machine and
+	// inventory what the agent last said it could collect; both are JSON, empty
+	// meaning "nothing chosen" and "nothing said".
+	{"agents", "token_sealed", "ALTER TABLE agents ADD COLUMN token_sealed TEXT NOT NULL DEFAULT ''"},
+	{"agents", "pending_token_hash", "ALTER TABLE agents ADD COLUMN pending_token_hash TEXT NOT NULL DEFAULT ''"},
+	{"agents", "pending_token_sealed", "ALTER TABLE agents ADD COLUMN pending_token_sealed TEXT NOT NULL DEFAULT ''"},
+	{"agents", "pending_since", "ALTER TABLE agents ADD COLUMN pending_since TEXT"},
+	{"agents", "collect", "ALTER TABLE agents ADD COLUMN collect TEXT NOT NULL DEFAULT ''"},
+	{"agents", "inventory", "ALTER TABLE agents ADD COLUMN inventory TEXT NOT NULL DEFAULT ''"},
+	{"agents", "checked_in_at", "ALTER TABLE agents ADD COLUMN checked_in_at TEXT"},
 }
 
 // currentSchemaVersion is the schema_version this build expects. Every
