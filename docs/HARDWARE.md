@@ -124,7 +124,7 @@ to change:
 | `autoUpdate` | Whether the agent installs new signed releases by itself. |
 | `insecure`, `certPin` | Accept a self-signed certificate, or pin the server's public key. These are about the server named above, and are dropped if the agent is pointed at a different one for a run. |
 | `collect` | The machine's own limit on what it will report (below). |
-| `listen`, `repo`, `hostRoot` | Serve mode's address, the repository updates are taken from, and the container host mount. Rarely needed. |
+| `listen`, `repo`, `hostRoot` | Not written unless needed: serve mode's address, the repository updates are taken from, and the container host mount. Rarely needed. |
 
 Change a value, then restart the agent (`gwatch-agent restart`, or restart the
 machine) and it applies. Durations are written like `"90s"`, `"15m"`, `"6h"`.

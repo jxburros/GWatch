@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -298,5 +299,61 @@ func TestStatusFileCarriesNoSecretsAndNoReadings(t *testing.T) {
 	st, err := readAgentStatus()
 	if err != nil || st.Held != 2 || !st.ReportOK || st.Inventory == nil || len(st.Inventory.Interfaces) != 1 {
 		t.Errorf("status %+v err %v", st, err)
+	}
+}
+
+// While GWatch cannot be reached the agent keeps taking a reading every
+// interval — only its attempts to deliver back off — so what is held through an
+// outage is a reading per interval, and what arrives afterwards arrives oldest
+// first. (An earlier version waited out each backoff before taking its next
+// reading, and held one per attempt.)
+func TestAnOutageHoldsAReadingPerIntervalAndDeliversThemInOrder(t *testing.T) {
+	isolate(t)
+	var mu sync.Mutex
+	var got []time.Time
+	failUntil := time.Now().Add(1200 * time.Millisecond)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if time.Now().Before(failUntil) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		var m model.HostMetrics
+		if json.NewDecoder(r.Body).Decode(&m) == nil {
+			mu.Lock()
+			got = append(got, m.Timestamp)
+			mu.Unlock()
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+
+	cfg := defaultConfig()
+	cfg.server, cfg.token, cfg.interval, cfg.buffer = srv.URL, oldToken, 30*time.Millisecond, time.Hour
+	cfg.tokenSource = srcEnv
+	p := &program{cfg: cfg, mode: "run"}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { p.report(ctx); close(done) }()
+	time.Sleep(2400 * time.Millisecond)
+	cancel()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	before := 0
+	for i, ts := range got {
+		if i > 0 && ts.Before(got[i-1]) {
+			t.Fatalf("readings must be delivered oldest first: %v before %v", got[i-1], ts)
+		}
+		if ts.Before(failUntil) {
+			before++
+		}
+	}
+	// The first reading alone takes the collector 300ms to prime, leaving about
+	// 900ms of outage at a 30ms interval: a dozen or more readings. Delivery
+	// backs off 30, 60, 120, 240, 480ms…, so a loop that took one reading per
+	// attempt would have held five or six.
+	if before < 9 {
+		t.Errorf("only %d readings from the outage were delivered (%d in all); the agent stopped taking readings while it waited", before, len(got))
 	}
 }

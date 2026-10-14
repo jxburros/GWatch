@@ -513,7 +513,12 @@ func persistConfig(c config) error {
 	if c.certPin != "" || doc.has("certPin") {
 		doc.set("certPin", c.certPin)
 	}
-	put("listen", c.listen, false)
+	// Serve mode's address is only written when someone gave it or it is already
+	// there; a push-mode agent has no use for it and the file is not the place
+	// to advertise it.
+	if explicit("listen") || doc.has("listen") {
+		doc.set("listen", c.listen)
+	}
 	if c.repo != defaultRepo || doc.has("repo") {
 		doc.set("repo", c.repo)
 	}

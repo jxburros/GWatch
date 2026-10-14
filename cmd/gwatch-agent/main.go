@@ -70,10 +70,14 @@ const (
 	// requestTimeout bounds one report. It is well under the smallest useful
 	// interval so a hung server cannot stall the next reading.
 	requestTimeout = 20 * time.Second
-	// maxBackoff caps the wait between failed reports. The agent keeps trying
-	// forever: a server that is down comes back, and the machine it is
-	// reporting on is usually not the one that needs attention.
-	maxBackoff = 10 * time.Minute
+	// maxBackoff caps the wait between attempts to deliver while GWatch cannot
+	// be reached. The agent keeps trying forever: a server that is down comes
+	// back, and the machine it is reporting on is usually not the one that needs
+	// attention. The cap is short because readings are being held for the
+	// moment it does: an agent that waited ten minutes between attempts would
+	// leave GWatch looking at a machine up to ten minutes behind for no reason
+	// but politeness, and a refused connection costs the server nothing.
+	maxBackoff = 2 * time.Minute
 )
 
 type config struct {
@@ -699,8 +703,13 @@ func (p *program) report(ctx context.Context) {
 	rt.writeStatus(p.cfg, queue.len())
 	go p.checkInLoop(ctx, rt, client)
 
+	// Taking readings and delivering them are two clocks. Readings are taken
+	// every interval, always, so that what is held through an outage is a
+	// reading per interval and not a reading per attempt; delivery is tried at
+	// the same pace while all is well and backs off while it is not.
 	backoff := time.Duration(0)
 	failures := 0
+	var nextAttempt time.Time
 	for {
 		// A little spread on each wait: twenty machines set up by the same
 		// script would otherwise report on the same second of every minute
@@ -716,28 +725,32 @@ func (p *program) report(ctx context.Context) {
 			rt.noteReport(err, failures)
 		} else {
 			queue.add(rt.shape(metrics))
-			sent, err := queue.flush(ctx, func(m model.HostMetrics) error {
-				c := p.cfg
-				c.token = rt.currentToken()
-				return send(ctx, client, c, m)
-			})
-			if err != nil {
-				if ctx.Err() != nil {
-					return
+			// While a failed delivery is being waited out the reading is simply
+			// held; the status keeps saying what the last attempt came to.
+			if !time.Now().Before(nextAttempt) {
+				sent, err := queue.flush(ctx, func(m model.HostMetrics) error {
+					c := p.cfg
+					c.token = rt.currentToken()
+					return send(ctx, client, c, m)
+				})
+				if err != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					failures++
+					backoff = nextBackoff(backoff, p.cfg.interval)
+					nextAttempt = time.Now().Add(backoff)
+					// A rejected token will not start working on its own, so say so
+					// plainly rather than burying it in a retry count.
+					log.Printf("report failed (attempt %d, trying again in %s, %d reading(s) held): %v", failures, backoff, queue.len(), err)
+					rt.noteReport(err, failures)
+				} else {
+					if failures > 0 {
+						log.Printf("reporting again after %d failed attempt(s); %d reading(s) delivered", failures, sent)
+					}
+					failures, backoff, nextAttempt = 0, 0, time.Time{}
+					rt.noteReport(nil, 0)
 				}
-				failures++
-				backoff = nextBackoff(backoff, p.cfg.interval)
-				wait = backoff
-				// A rejected token will not start working on its own, so say so
-				// plainly rather than burying it in a retry count.
-				log.Printf("report failed (attempt %d, retrying in %s, %d reading(s) held): %v", failures, wait, queue.len(), err)
-				rt.noteReport(err, failures)
-			} else {
-				if failures > 0 {
-					log.Printf("reporting again after %d failed attempt(s); %d reading(s) delivered", failures, sent)
-				}
-				failures, backoff = 0, 0
-				rt.noteReport(nil, 0)
 			}
 		}
 		rt.writeStatus(p.cfg, queue.len())
