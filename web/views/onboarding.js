@@ -53,9 +53,9 @@ const STEPS = [
     body: () => [
       h('p', null, 'GWatch reads this computer\'s processor, memory, disk space and throughput on its own. For any other machine, you install the small ', h('b', null, 'agent'), ' on it and it reports in every minute.'),
       h('p', null, 'The agent connects outwards and hangs up: GWatch never connects back, holds no credential for that machine, and the agent\'s token can do exactly one thing — submit that machine\'s readings.'),
-      h('p', { class: 'note' }, 'Pair a machine from the Nodes page. GWatch makes a node for it, and its readings appear on that node within a minute of the agent starting.'),
+      h('p', { class: 'note' }, 'Add a machine from the Nodes page: Add node, then A machine with the GWatch agent. GWatch makes a node for it, and its readings appear on that node within a minute of the agent starting.'),
     ],
-    actions: () => [h('a', { class: 'btn', href: '#/nodes' }, icon('cpu'), 'Pair a machine')],
+    actions: () => [h('a', { class: 'btn', href: '#/nodes' }, icon('cpu'), 'Add a machine')],
   },
   {
     id: 'alerts',

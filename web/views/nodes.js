@@ -3,7 +3,7 @@
 import { api } from '../api.js';
 import { h, icon, clear, append, preserveFocus, replace, statusSpine, statusWord, checkChip, importanceBadge, tagList, toggle, menuButton, toast, confirmDialog, openModal, emptyState, skeleton } from '../components.js';
 import { relTime, nodeGroups, inGroup, NODE_SORTS, sortNodes, compareNames } from '../fmt.js';
-import { pairMachine } from './machines.js';
+import { addAgentNode } from './machines.js';
 
 const STATUS_ORDER = ['down', 'degraded', 'unknown', 'maintenance', 'up', 'paused'];
 
@@ -19,16 +19,15 @@ export async function mount(root, ctx) {
   if (!NODE_SORTS.some((o) => o.value === state.sort)) state.sort = 'status';
   state.sections = remembered(SECTIONS_KEY, 'group') === 'none' ? 'none' : 'group';
 
-  // A machine is a node too, so pairing one starts from here rather than from
-  // a hardware section of its own.
+  // A machine is a node too, so adding one starts from Add node, beside the
+  // other things GWatch can watch, rather than from a hardware section of its own.
   ctx.setTitle('Nodes', {
     actions: [
       h('a', { class: 'btn admin-only', href: '#/nodes/bulk' }, icon('sliders'), 'Bulk edit'),
-      h('button', { class: 'btn admin-only', type: 'button', onclick: () => pairMachine(load) }, icon('cpu'), 'Pair a machine'),
       // Sweeping the network is the other way of getting here: rather than
       // typing an address, be shown the ones that answer.
       h('button', { class: 'btn admin-only', type: 'button', onclick: () => discover(ctx, load) }, icon('radar'), 'Discover'),
-      h('button', { class: 'btn btn-primary admin-only', type: 'button', onclick: () => openTemplatePicker(state, ctx) }, icon('plus'), 'Add node'),
+      h('button', { class: 'btn btn-primary admin-only', type: 'button', onclick: () => openTemplatePicker(state, ctx, load) }, icon('plus'), 'Add node'),
     ],
   });
 
@@ -329,7 +328,7 @@ export async function mount(root, ctx) {
 
 const TEMPLATE_ICONS = { website: 'globe', 'home-server': 'server', router: 'router', 'snmp-device': 'wifi', ping: 'activity', 'api-endpoint': 'api', 'tcp-service': 'link', dns: 'hash', blank: 'file' };
 
-export async function openTemplatePicker(state, ctx) {
+export async function openTemplatePicker(state, ctx, reload) {
   const body = h('div', { class: 'stack-sm' }, h('p', null, 'Pick a starting point. Every setting can be changed afterwards.'), skeleton({ lines: 3 }));
   const m = openModal({ title: 'Add a node', wide: true, body });
   let templates = state?.templates;
@@ -340,6 +339,11 @@ export async function openTemplatePicker(state, ctx) {
       h('span', { class: 't-icon' }, icon(TEMPLATE_ICONS[t.id] || t.icon || 'server')),
       h('span', null, h('b', null, t.name), h('span', null, t.description || ''))));
   }
+  // A machine running the GWatch agent is one more thing to add, so it is here
+  // with the rest: a name, what to monitor, and a code to type into the agent.
+  grid.append(h('button', { class: 'template-card', type: 'button', 'data-template': 'agent', onclick: () => { m.close(); addAgentNode(reload); } },
+    h('span', { class: 't-icon' }, icon('cpu')),
+    h('span', null, h('b', null, 'A machine with the GWatch agent'), h('span', null, 'Processor, memory, disks and network of a computer you install the small agent on. You get a short code to type into it.'))));
   grid.append(h('a', { class: 'template-card', href: '#/nodes/new', onclick: () => m.close() },
     h('span', { class: 't-icon' }, icon('file')),
     h('span', null, h('b', null, 'Blank'), h('span', null, 'Start from an empty node and add the checks you want.'))));

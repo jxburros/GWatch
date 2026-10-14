@@ -1001,7 +1001,7 @@ export async function mount(root, ctx) {
     });
     const agentRow = field({
       label: 'Machine', input: agentSel, error: err.agentId,
-      help: 'Register machines under Settings › Hardware. The agent on that machine connects out to GWatch; GWatch never connects to it.',
+      help: 'Machines are added from Nodes › Add node › GWatch agent. The agent on that machine connects out to GWatch; GWatch never connects to it.',
     });
     loadAgents(agentSel, cfg);
 
@@ -1153,7 +1153,7 @@ export async function mount(root, ctx) {
     }
     const usable = agents.filter((a) => !a.revokedAt);
     if (!usable.length) {
-      select.append(h('option', { value: '' }, 'No machines registered yet — add one under Settings \u203a Hardware'));
+      select.append(h('option', { value: '' }, 'No machines yet — add one with Add node \u203a GWatch agent'));
       return;
     }
     select.append(h('option', { value: '' }, 'Choose a machine\u2026'));

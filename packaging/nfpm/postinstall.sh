@@ -38,7 +38,7 @@ if [ "$configured" = no ]; then
 	cat <<'EOF'
 
 gwatch-agent is installed. Pair this machine with GWatch to start reporting
-(GWatch: Nodes > Pair a machine gives you the code):
+(GWatch: Nodes > Add node > GWatch agent gives you the code):
 
   sudo gwatch-agent pair --server https://gwatch.lan:7230 --code XXXX-XXXX
 

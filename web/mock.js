@@ -1165,9 +1165,20 @@ import templatesFixture from './mock-templates.js';
   // Two machines: the computer "GWatch" is pretending to run on, and one that
   // reports through an agent. Readings are generated from the same clock as
   // everything else so the charts line up with the rest of the mock.
+  const mockInventory = () => ({
+    interfaces: [
+      { name: 'eth0', detail: '192.168.1.24 · 1000 Mbit/s', auto: true }, { name: 'docker0', auto: false },
+      { name: 'veth3a4b5c', auto: false }, { name: 'wlan0', detail: 'down', auto: true },
+    ],
+    disks: [{ name: 'sda', auto: true }, { name: 'nvme0n1', auto: true }],
+    mounts: [{ name: '/', detail: '/dev/sda2 · ext4', auto: true }, { name: '/srv/media', detail: '/dev/sdb1 · xfs', auto: true }],
+  });
   const agents = [
-    { id: 1, name: 'Living room NAS', nodeId: null, prefix: 'gwa_k3m9vq2x', enabled: true, createdBy: 'local', createdAt: ago(21 * DAY), revokedAt: null, lastSeenAt: ago(40e3), lastAddr: '192.168.1.24:52104', lastVersion: '0.5.0', hostname: 'nas.lan', os: 'linux', arch: 'arm64' },
+    { id: 1, name: 'Living room NAS', nodeId: null, prefix: 'gwa_k3m9vq2x', enabled: true, createdBy: 'local', createdAt: ago(21 * DAY), revokedAt: null, lastSeenAt: ago(40e3), lastAddr: '192.168.1.24:52104', lastVersion: '0.5.0', hostname: 'nas.lan', os: 'linux', arch: 'arm64', tokenViewable: true, collect: {}, inventory: mockInventory(), checkedInAt: ago(4 * MIN) },
   ];
+  // The tokens themselves, kept apart from the agent objects the way the server
+  // keeps them apart from the list: only the reveal route hands one out.
+  const agentTokens = { 1: { current: 'gwa_k3m9vq2xabcdefghij234567abcdefghij234567', pending: '' } };
 
   function mockReading(key, hostname, seed, at = Date.now()) {
     const r = rng(seed + Math.floor(at / MIN));
@@ -1275,9 +1286,36 @@ import templatesFixture from './mock-templates.js';
   on('GET', /^\/api\/agents\/latest$/, () => ({ version: '0.6.0', url: 'https://github.com/jxburros/GWatch/releases', checkedAt: iso(NOW - 3600e3) }));
   on('POST', /^\/api\/agents$/, (m, body) => {
     if (!body?.name) throw err(400, 'give the machine a name so you can recognise it later');
-    const a = { id: Math.max(0, ...agents.map((x) => x.id)) + 1, name: body.name, nodeId: body.nodeId ?? null, prefix: 'gwa_mockmock', enabled: true, createdBy: 'local', createdAt: iso(Date.now()), revokedAt: null, lastSeenAt: null, lastAddr: '', lastVersion: '', hostname: '', os: '', arch: '' };
+    const a = { id: Math.max(0, ...agents.map((x) => x.id)) + 1, name: body.name, nodeId: body.nodeId ?? null, prefix: 'gwa_mockmock', enabled: true, createdBy: 'local', createdAt: iso(Date.now()), revokedAt: null, lastSeenAt: null, lastAddr: '', lastVersion: '', hostname: '', os: '', arch: '', tokenViewable: true, collect: {} };
     agents.push(a);
+    agentTokens[a.id] = { current: 'gwa_mockmocktokenqwertyuiopasdfghjklzxcvbnm23', pending: '' };
     return { token: 'gwa_mockmocktokenqwertyuiopasdfghjklzxcvbnm23', agent: clone(a) };
+  });
+  const agentById = (id) => { const a = agents.find((x) => x.id === Number(id)); if (!a) throw err(404, 'not found'); return a; };
+  on('POST', /^\/api\/agents\/(\d+)\/token$/, (m) => {
+    const a = agentById(m[1]); const t = agentTokens[a.id] || { current: '', pending: '' };
+    return { agent: clone(a), token: t.current, pending: t.pending, viewable: !!t.current };
+  });
+  on('POST', /^\/api\/agents\/(\d+)\/rotate$/, (m, body) => {
+    const a = agentById(m[1]);
+    if (a.revokedAt) throw err(409, 'this machine has been revoked; register it again instead of rotating its token');
+    const token = `gwa_rotated${String(Math.floor(Math.random() * 1e9)).padStart(9, '0')}abcdefghijklmnopqrstu`;
+    const t = agentTokens[a.id] || (agentTokens[a.id] = { current: '', pending: '' });
+    if (body?.retireOld) { t.current = token; t.pending = ''; a.prefix = token.slice(0, 12); a.rotationPending = false; a.tokenViewable = true; }
+    else { t.pending = token; a.rotationPending = true; a.rotationSince = iso(Date.now()); }
+    return { token, retiredOld: !!body?.retireOld, agent: clone(a) };
+  });
+  on('POST', /^\/api\/agents\/(\d+)\/rotate\/cancel$/, (m) => {
+    const a = agentById(m[1]); a.rotationPending = false; delete a.rotationSince;
+    if (agentTokens[a.id]) agentTokens[a.id].pending = '';
+    return null;
+  });
+  on('PUT', /^\/api\/agents\/(\d+)\/collect$/, (m, body) => {
+    const a = agentById(m[1]);
+    const bad = (body?.metrics || []).find((x) => !['cpu', 'memory', 'swap', 'load', 'disk', 'inodes', 'net', 'diskio'].includes(x));
+    if (bad) throw err(400, `"${bad}" is not a metric family`);
+    a.collect = { metrics: body?.metrics || [], interfaces: body?.interfaces || [], disks: body?.disks || [], mounts: body?.mounts || [] };
+    return clone(a);
   });
   on('PUT', /^\/api\/agents\/(\d+)$/, (m, body) => { const a = agents.find((x) => x.id === Number(m[1])); if (!a) throw err(404, 'not found'); Object.assign(a, { name: body.name ?? a.name, nodeId: body.nodeId ?? a.nodeId, enabled: body.enabled ?? a.enabled }); return clone(a); });
   on('DELETE', /^\/api\/agents\/(\d+)$/, (m, body, u) => {
@@ -1297,8 +1335,9 @@ import templatesFixture from './mock-templates.js';
   const pairingProgress = (p) => {
     const age = Date.now() - +new Date(p.createdAt);
     if (!p.revokedAt && !p.redeemedAt && age >= pairingDelays.redeemMs) {
-      const a = { id: Math.max(0, ...agents.map((x) => x.id)) + 1, name: p.name, nodeId: p.nodeId, prefix: 'gwa_mockpair', enabled: true, createdBy: 'pairing code (local)', createdAt: iso(Date.now()), revokedAt: null, lastSeenAt: null, lastAddr: '192.168.1.77', lastVersion: '0.5.0', hostname: 'mock-machine.lan', os: 'linux', arch: 'amd64' };
+      const a = { id: Math.max(0, ...agents.map((x) => x.id)) + 1, name: p.name, nodeId: p.nodeId, prefix: 'gwa_mockpair', enabled: true, createdBy: 'pairing code (local)', createdAt: iso(Date.now()), revokedAt: null, lastSeenAt: null, lastAddr: '192.168.1.77', lastVersion: '0.5.0', hostname: 'mock-machine.lan', os: 'linux', arch: 'amd64', tokenViewable: true, collect: clone(p.collect || {}), inventory: mockInventory() };
       agents.push(a);
+      agentTokens[a.id] = { current: 'gwa_mockpairedtokenabcdefghijklmnopqrstuvwxyz', pending: '' };
       Object.assign(p, { redeemedAt: iso(Date.now()), agentId: a.id, redeemedAddr: '192.168.1.77' });
     }
     const agent = p.agentId ? agents.find((x) => x.id === p.agentId) : null;
@@ -1309,7 +1348,7 @@ import templatesFixture from './mock-templates.js';
   on('GET', /^\/api\/agents\/pairings$/, () => clone(pairings));
   on('POST', /^\/api\/agents\/pairings$/, (m, body) => {
     if (!body?.name?.trim()) throw err(400, 'give the machine a name so you can recognise it later');
-    const p = { id: pairings.length + 1, name: body.name.trim(), nodeId: body.nodeId ?? null, createdBy: 'local', createdAt: iso(Date.now()), expiresAt: iso(Date.now() + 15 * 60e3) };
+    const p = { id: pairings.length + 1, name: body.name.trim(), nodeId: body.nodeId ?? null, createdBy: 'local', createdAt: iso(Date.now()), expiresAt: iso(Date.now() + 15 * 60e3), collect: body.collect || {} };
     pairings.push(p);
     return { code: 'KQWX-HMTZ', pairing: clone(p) };
   });
@@ -1381,7 +1420,7 @@ import templatesFixture from './mock-templates.js';
   }
   window.EventSource = MockEventSource;
 
-  window.__gwatchMock = { nodes, events, dashboards, states, overview, history };
+  window.__gwatchMock = { nodes, events, dashboards, states, overview, history, agents };
   console.info('[GWatch] mock API enabled (?mock=1)');
 
   /* ---------- Unmistakable "this is fake" banner ---------- */

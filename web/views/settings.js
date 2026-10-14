@@ -1,10 +1,10 @@
 // Settings: general, appearance, network access, alerts, automation
-// (endpoints + all triggers), rules, hardware, AI & MCP, retention, maintenance,
+// (endpoints + all triggers), rules, AI & MCP, retention, maintenance,
 // backups, database, updates, monitor health. Logs moved to the Audit tab.
 
 import { api, qs } from '../api.js';
-import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, openModal, emptyState, skeleton, banner, eventRow, busy, applyTheme, applyAccent, ACCENT_PRESETS, hexToRgb, applyDensity, currentDensity, agentLogo } from '../components.js';
-import { relTime, dateTime, bytes, num, duration, retentionSpan, toLocalInput, fromLocalInput, weekdayShort, timeShort, plural, isBeta, agentIsBehind } from '../fmt.js';
+import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, openModal, emptyState, skeleton, banner, eventRow, busy, applyTheme, applyAccent, ACCENT_PRESETS, hexToRgb, applyDensity, currentDensity } from '../components.js';
+import { relTime, dateTime, bytes, num, duration, retentionSpan, toLocalInput, fromLocalInput, weekdayShort, timeShort, plural, isBeta } from '../fmt.js';
 import { openEndpointEditor, endpointRow, triggerRow, openTriggerEditor } from './automation.js';
 import { rulesPanel } from './rules.js';
 import { tipsEnabled, setTipsEnabled, resetTips, seenCount, resetOnboarding, TIPS } from '../tips.js';
@@ -16,7 +16,7 @@ const TABS = [
   { id: 'general', label: 'General' }, { id: 'appearance', label: 'Appearance', viewer: true },
   { id: 'indicators', label: 'Indicators' }, { id: 'users', label: 'Users & access' },
   { id: 'network', label: 'Network access' }, { id: 'alerts', label: 'Alerts' },
-  { id: 'automation', label: 'Automation' }, { id: 'rules', label: 'Rules' }, { id: 'hardware', label: 'Hardware' },
+  { id: 'automation', label: 'Automation' }, { id: 'rules', label: 'Rules' },
   { id: 'mcp', label: 'AI & MCP' }, { id: 'retention', label: 'Retention' }, { id: 'maintenance', label: 'Maintenance' },
   { id: 'backups', label: 'Backups' }, { id: 'database', label: 'Database' }, { id: 'updates', label: 'Updates' }, { id: 'health', label: 'Monitor health', viewer: true },
   { id: 'about', label: 'About', viewer: true },
@@ -47,6 +47,9 @@ export async function mount(root, ctx) {
   const visibleTabs = TABS.filter((t) => isAdmin || t.viewer);
   const state = { tab: visibleTabs.some((t) => t.id === ctx.params.tab) ? ctx.params.tab : (isAdmin ? 'general' : 'health'), settings: null, version: null, destroyed: false, panelRefresh: null };
   if (ctx.params.tab === 'logs') { ctx.navigate('/audit/log'); return { destroy() {} }; }
+  // Machines are nodes, and adding one is part of Add node; an old link to the
+  // Hardware section goes to the node list, where that now lives.
+  if (ctx.params.tab === 'hardware') { ctx.navigate('/nodes'); return { destroy() {} }; }
   const nav = h('nav', { class: 'settings-nav', 'aria-label': 'Settings sections' });
   const panel = h('div', { class: 'settings-panel' });
   const versionLink = h('a', { href: '#/settings/about' });
@@ -79,7 +82,7 @@ export async function mount(root, ctx) {
     replace(panel, skeleton({ lines: 5 }));
     state.panelRefresh = null;
     try {
-      const fn = { general: tabGeneral, appearance: tabAppearance, indicators: tabIndicators, users: tabUsers, network: tabNetwork, alerts: tabAlerts, automation: tabAutomation, rules: tabRules, hardware: tabHardware, mcp: tabMcp, retention: tabRetention, maintenance: tabMaintenance, backups: tabBackups, database: tabDatabase, updates: tabUpdates, health: tabHealth, about: tabAbout }[state.tab];
+      const fn = { general: tabGeneral, appearance: tabAppearance, indicators: tabIndicators, users: tabUsers, network: tabNetwork, alerts: tabAlerts, automation: tabAutomation, rules: tabRules, mcp: tabMcp, retention: tabRetention, maintenance: tabMaintenance, backups: tabBackups, database: tabDatabase, updates: tabUpdates, health: tabHealth, about: tabAbout }[state.tab];
       const el = await fn();
       if (state.destroyed) return;
       replace(panel, isAdmin ? el : h('div', { class: 'stack' }, readOnlyNotice(), el));
@@ -534,163 +537,6 @@ export async function mount(root, ctx) {
   }
 
   /* ---------- Retention ---------- */
-  /* ---------- Hardware ---------- */
-  async function tabHardware() {
-    const wrap = h('section', { class: 'card' });
-    let nodes = [];
-    // The newest agent release, so machines running an older one can be
-    // marked. GWatch cannot update an agent and is never given a way to: an
-    // agent takes its own updates from releases it verifies against keys built
-    // into it (docs/HARDWARE.md#keeping-agents-up-to-date). This is a label.
-    // Not knowing what is newest marks nothing.
-    let latestAgent = null;
-    let agentReleaseURL = null;
-
-    async function reload() {
-      const [agents, nodeList, latest] = await Promise.all([
-        api.get('/api/agents'),
-        api.get('/api/nodes').catch(() => []),
-        api.get('/api/agents/latest').catch(() => null),
-      ]);
-      nodes = nodeList || [];
-      latestAgent = latest?.version || null;
-      agentReleaseURL = latest?.url || null;
-      const behind = agents.filter((a) => !a.revokedAt && agentIsBehind(a.lastVersion, latestAgent));
-      replace(wrap,
-        h('div', { class: 'card-head' }, h('h2', null, 'Machines'),
-          h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => registerAgent(reload) }, icon('plus'), 'Register a machine')),
-        h('div', { class: 'agent-intro' },
-          agentLogo(),
-          h('p', { class: 'lead' }, 'GWatch reads this computer by itself. To see another machine\u2019s hardware, register it here and install gwatch-agent on it — the agent only sends readings out, so registering a machine gives GWatch no way into it. Each machine gets a node of its own, and its readings are shown there.')),
-        // Worth saying once, above the table, rather than only as a mark per
-        // row: the question people have is "is my fleet current", and the
-        // answer is a count.
-        behind.length
-          ? banner('info', h('div', null,
-              h('strong', null, `${plural(behind.length, 'machine')} running an older agent`),
-              h('div', { class: 'note' },
-                `gwatch-agent ${latestAgent} has been released. Agents left on automatic updates take it by themselves within a few hours — there is nothing to do here. `,
-                h('a', { href: agentReleaseURL || 'https://github.com/jxburros/GWatch/releases', target: '_blank', rel: 'noreferrer noopener' }, 'Release notes'),
-                '.')))
-          : null,
-        agents.length
-          ? h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
-              h('thead', null, h('tr', null, h('th', null, 'Name'), h('th', null, 'Token'), h('th', null, 'Reporting'), h('th', null, 'Last seen'), h('th', null, 'Node'), h('th', null, ''))),
-              h('tbody', null, ...agents.map((a) => agentRow(a, reload)))))
-          : emptyState({ icon: 'cpu', title: 'No machines registered', text: 'Register one to watch another computer\u2019s processor, memory, disk and network.', compact: true }));
-    }
-
-    function agentRow(a, reloadFn) {
-      const revoked = !!a.revokedAt;
-      const state_ = revoked ? 'revoked' : a.enabled ? (a.lastSeenAt ? 'reporting' : 'waiting for first reading') : 'paused';
-      return h('tr', null,
-        h('td', null, h('div', null, h('b', null, a.name)),
-          a.hostname ? h('div', { class: 'muted', style: { fontSize: '12px' } }, `${a.hostname}${a.os ? ` · ${a.os}/${a.arch}` : ''}`) : null),
-        h('td', { class: 'mono' }, `${a.prefix}\u2026`),
-        h('td', null, h('span', { class: revoked ? 'muted' : '' }, state_),
-          a.lastVersion
-            ? h('div', { class: 'muted', style: { fontSize: '12px' } }, `agent ${a.lastVersion}`,
-                agentIsBehind(a.lastVersion, latestAgent)
-                  ? h('span', { class: 'pill pill-warn', style: { marginLeft: '6px' }, title: `${latestAgent} has been released` }, `${latestAgent} available`)
-                  : null)
-            : null),
-        h('td', null, a.lastSeenAt ? relTime(a.lastSeenAt) : h('span', { class: 'muted' }, 'never')),
-        h('td', null, nodes.find((n) => n.id === a.nodeId)?.name || h('span', { class: 'muted' }, '—')),
-        h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },
-          a.nodeId ? h('a', { class: 'btn btn-sm', href: `#/nodes/${a.nodeId}` }, 'Open node') : null,
-          revoked
-            ? h('button', { class: 'btn btn-sm btn-danger', type: 'button', onclick: () => purgeAgent(a, reloadFn) }, 'Delete')
-            : h('button', { class: 'btn btn-sm', type: 'button', onclick: () => revokeAgent(a, reloadFn) }, 'Revoke')));
-    }
-
-    await reload();
-    state.panelRefresh = () => reload().catch(() => {});
-    return h('div', { class: 'stack' }, wrap, agentExplainerCard());
-  }
-
-  async function registerAgent(reload) {
-    const name = textInput({ autocomplete: 'off', placeholder: 'e.g. Living room NAS' });
-    const nodes = await api.get('/api/nodes').catch(() => []);
-    const nodeSel = selectInput({
-      options: [{ value: '', label: 'Not attached to a node' }, ...nodes.map((n) => ({ value: String(n.id), label: n.name }))],
-      value: '',
-    });
-    const ok = await confirmDialog({
-      title: 'Register a machine',
-      body: h('div', { class: 'stack' },
-        field({ label: 'Name', input: name, help: 'How this machine appears under Hardware.' }),
-        field({ label: 'Node', input: nodeSel, help: 'Optional. Attaching it lets a hardware check on that node watch this machine.' })),
-      confirmLabel: 'Register and get a token',
-    });
-    if (!ok) return;
-    try {
-      const res = await api.post('/api/agents', {
-        name: name.value.trim(),
-        nodeId: nodeSel.value ? Number(nodeSel.value) : null,
-      });
-      await reload();
-      showAgentToken(res.token);
-    } catch (e) { toast(e.message, { kind: 'error' }); }
-  }
-
-  // The token is shown here and nowhere else, so the install command is shown
-  // with it: copying one line is the whole setup on the other machine.
-  function showAgentToken(token) {
-    const base = `${location.protocol}//${location.host}`;
-    const command = `gwatch-agent install --server ${base} --token ${token}`;
-    const copy = h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
-      try { await navigator.clipboard.writeText(command); toast('Install command copied', { kind: 'success' }); }
-      catch { toast('Could not copy — select the command and copy it by hand.', { kind: 'error' }); }
-    } }, icon('copy'), 'Copy install command');
-    openModal({
-      title: 'Install the agent on that machine',
-      wide: true,
-      body: h('div', { class: 'stack' },
-        h('div', { class: 'agent-intro' },
-          agentLogo(),
-          h('p', { class: 'lead' }, 'Run this on the machine you want to watch. GWatch keeps only a fingerprint of the token, so it cannot be shown again — if you lose it, revoke this machine and register it afresh.')),
-        h('code', { class: 'agent-setup' }, command),
-        h('p', { class: 'note' }, 'The token is good for exactly one thing: submitting that machine\u2019s hardware readings. It cannot read or change anything in GWatch, and GWatch never connects back to the machine.'),
-        h('p', { class: 'note' }, 'Without ', h('code', null, 'install'), ' the agent runs in the foreground, which is the quickest way to see that it works. ',
-          h('code', null, 'gwatch-agent once --server … --token …'), ' sends a single reading and exits.'),
-        h('p', { class: 'note' }, 'If this GWatch is reached over HTTPS with a self-signed certificate, add ', h('code', null, '--insecure'), ' — the agent still uses TLS, it just stops checking the certificate.')),
-      footer: copy,
-    });
-  }
-
-  async function revokeAgent(a, reload) {
-    const ok = await confirmDialog({
-      title: `Revoke ${a.name}?`,
-      message: 'The agent on that machine stops being accepted immediately. Its past readings are kept, and you can delete them separately afterwards.',
-      confirmLabel: 'Revoke token', danger: true,
-    });
-    if (!ok) return;
-    try { await api.del(`/api/agents/${a.id}`); toast('Machine revoked', { kind: 'success' }); await reload(); }
-    catch (e) { toast(e.message, { kind: 'error' }); }
-  }
-
-  async function purgeAgent(a, reload) {
-    const ok = await confirmDialog({
-      title: `Delete ${a.name} and its readings?`,
-      message: 'Every hardware reading this machine sent is deleted with it. This cannot be undone.',
-      confirmLabel: 'Delete machine and readings', danger: true,
-    });
-    if (!ok) return;
-    try { await api.del(`/api/agents/${a.id}?purge=1`); toast('Machine deleted', { kind: 'success' }); await reload(); }
-    catch (e) { toast(e.message, { kind: 'error' }); }
-  }
-
-  function agentExplainerCard() {
-    const item = (t, d) => h('div', null, h('b', null, t), h('div', { class: 'muted', style: { fontSize: '13px' } }, d));
-    return h('section', { class: 'card' }, h('h2', null, 'How another machine reports in'),
-      h('div', { class: 'stack-sm', style: { marginTop: '8px' } },
-        item('The agent connects to GWatch, never the other way round', 'It posts a reading every minute and hangs up. Nothing needs to be opened on that machine, and GWatch holds no credential for it.'),
-        item('A token can do one thing', 'Submit that one machine\u2019s readings. It cannot read your nodes, your settings or anyone else\u2019s readings, and it is not an API key.'),
-        item('Losing a token is small', 'Someone holding it could send false readings for that machine. Revoke it here and it stops working on the next request.'),
-        item('If you would rather GWatch did the asking', 'Run the agent with `serve` instead, and add a hardware check with its source set to a metrics URL. That opens a port on the machine, which is why pushing is the default.')),
-      h('p', { class: 'note' }, 'Full details, including how to build the agent for another platform, are in ', h('code', null, 'docs/HARDWARE.md'), '.'));
-  }
-
   /* ---------- AI & MCP ---------- */
   // The MCP companion (gwatch-mcp) is a separate program that talks to this
   // GWatch with an API key. Nothing here changes a setting; the tab is the

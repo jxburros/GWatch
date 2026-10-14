@@ -1,7 +1,7 @@
 // Machines: a machine is not a separate kind of thing in GWatch, it is a node
 // with a hardware check. So this is a helper module, not a page or a route —
 // there is no #/machines URL and nothing in app.js imports it as a view. It
-// hands the node list the pairing flow (pairMachine) and hands the node
+// hands Add node the agent flow (addAgentNode) and hands the node
 // detail view the readings panel for that node's machine (hardwarePanel).
 // The old #/hardware/<key> URLs still work: app.js redirects them to the
 // owning node.
@@ -12,6 +12,7 @@ import {
   openModal, confirmDialog, field, textInput, selectInput, toast, agentLogo,
 } from '../components.js';
 import { LineChart, SERIES_COLORS } from '../charts.js';
+import { collectionPicker } from './agent-collect.js';
 import { bytes, pct, duration, dateTime, num, agentIsBehind, rate as fmtRate } from '../fmt.js';
 
 // Shading for a usage bar. These are display thresholds only — what actually
@@ -20,30 +21,39 @@ import { bytes, pct, duration, dateTime, num, agentIsBehind, rate as fmtRate } f
 const WARN_AT = 80;
 const CRIT_AT = 92;
 
-/* ---------------- Pairing a machine ---------------- */
+/* ---------------- Adding a machine ---------------- */
 
-// Pairing exists because the other way round is miserable: an agent token is
-// forty characters of noise, and getting it onto another computer means
-// copying it through whatever channel is to hand. A pairing code is eight
-// characters somebody can read off this screen and type into an installer
-// prompt on the other machine — and it is worth almost nothing if it leaks,
-// being good for one machine, once, for about a quarter of an hour.
+// A machine is added from Add node, like everything else GWatch watches: a name,
+// what to monitor on it, and a short code to type into the agent. Pairing exists
+// because the other way round is miserable: an agent token is forty characters
+// of noise, and getting it onto another computer means copying it through
+// whatever channel is to hand. A pairing code is eight characters somebody can
+// read off this screen and type into an installer prompt on the other machine —
+// and it is worth almost nothing if it leaks, being good for one machine, once,
+// for about a quarter of an hour. The agent swaps it for a token, which GWatch
+// then shows on the machine's node so it can be compared with the agent's file.
 
-export async function pairMachine(reload) {
+export async function addAgentNode(reload) {
   const name = textInput({ autocomplete: 'off', placeholder: 'e.g. Living room NAS' });
+  const picker = collectionPicker({ instances: false });
   const nodes = await api.get('/api/nodes').catch(() => []);
   const nodeSel = selectInput({
-    options: [{ value: '', label: 'Not attached to a node' }, ...nodes.map((n) => ({ value: String(n.id), label: n.name }))],
+    options: [{ value: '', label: 'A new node, made for this machine' }, ...nodes.map((n) => ({ value: String(n.id), label: n.name }))],
     value: '',
   });
   const ok = await confirmDialog({
-    title: 'Pair a machine',
+    title: 'Add a machine with the GWatch agent',
     body: h('div', { class: 'stack' },
       h('div', { class: 'agent-intro' },
         agentLogo(),
-        h('p', { class: 'lead' }, 'You will get a short code to type into the agent on the other machine. It enrols that one machine and then stops working.')),
-      field({ label: 'Name', input: name, help: 'How this machine appears under Hardware.' }),
-      field({ label: 'Node', input: nodeSel, help: 'Optional. Attaching it lets a hardware check on that node watch this machine.' })),
+        h('p', { class: 'lead' }, 'Watch a computer’s processor, memory, disks and network. You get a short code to type into the agent on that machine; it enrols that one machine and then stops working. The agent only sends readings out — GWatch never connects to it.')),
+      field({ label: 'Name', input: name, help: 'How this machine appears in the node list.' }),
+      h('details', { class: 'collect-details' },
+        h('summary', null, 'What to monitor'),
+        h('div', { class: 'stack-sm', style: { marginTop: '10px' } },
+          h('p', { class: 'note' }, 'Everything is on to begin with. Untick what you do not want; which network interfaces, disks and filesystems to report can be chosen on the node once the machine has reported. This can be changed at any time.'),
+          picker.el)),
+      field({ label: 'Node', input: nodeSel, help: 'Normally a node is made for the machine. Choose an existing node to add the machine’s hardware check to it instead.' })),
     confirmLabel: 'Get a pairing code',
   });
   if (!ok) return;
@@ -51,10 +61,14 @@ export async function pairMachine(reload) {
     const res = await api.post('/api/agents/pairings', {
       name: name.value.trim(),
       nodeId: nodeSel.value ? Number(nodeSel.value) : null,
+      collect: picker.value(),
     });
     showPairingCode(res.code, res.pairing, reload);
   } catch (e) { toast(e.message, { kind: 'error' }); }
 }
+
+/** The old name, kept so anything still importing it keeps working. */
+export const pairMachine = addAgentNode;
 
 /** How often the pairing dialog asks whether its code has been used. An
  *  object so a test can make it quick. */
@@ -64,8 +78,14 @@ export const pairingWatch = { intervalMs: 3000 };
 // it — so the command to run on the other machine is shown with it, and the
 // clock runs where the reader can see it rather than expiring behind their back.
 function showPairingCode(code, pairing, reload) {
-  const base = `${location.protocol}//${location.host}`;
-  const command = `gwatch-agent pair --server ${base} --code ${code}`;
+  // The address the agent should use is the one it can reach, which is not
+  // always the one this page was opened on, so it can be changed.
+  const serverInput = textInput({ value: `${location.protocol}//${location.host}`, autocomplete: 'off', spellcheck: 'false', 'aria-describedby': 'agent-server-help' });
+  const commandEl = h('code', { class: 'agent-setup' });
+  const commandText = () => `gwatch-agent pair --server ${serverInput.value.trim() || `${location.protocol}//${location.host}`} --code ${code}`;
+  const showCommand = () => { commandEl.textContent = commandText(); };
+  serverInput.addEventListener('input', showCommand);
+  showCommand();
 
   const codeEl = h('div', {
     class: 'mono',
@@ -169,14 +189,15 @@ function showPairingCode(code, pairing, reload) {
       noteEl,
       statusEl,
       h('p', { class: 'lead' }, 'On the machine you want to watch, install gwatch-agent and run:'),
-      h('code', { class: 'agent-setup' }, command),
-      h('p', { class: 'note' }, 'The agent swaps the code for its own token, keeps the token on that machine and sends one reading to prove it worked. Use ',
+      commandEl,
+      field({ label: 'GWatch address, as that machine reaches it', input: serverInput, id: 'agent-server', help: h('span', { id: 'agent-server-help' }, 'Change this if the machine cannot use the address in your browser’s bar.') }),
+      h('p', { class: 'note' }, 'The agent swaps the code for its own token, keeps it in its configuration file (agent.json — one plain file you can edit, and restart the agent to apply) and sends one reading to prove it worked. The token is shown on this machine’s node afterwards. Use ',
         h('code', null, 'gwatch-agent install --server … --code …'), ' instead to pair and install the background service in one go — the Windows installer asks for the address and this code and does exactly that.'),
       h('p', { class: 'note' }, 'Letters only, in any case, and the dash does not matter. There is no I, L, O or U and no 0 or 1 in a code, so nothing here is the character you think it might be.'),
-      h('p', { class: 'note' }, 'What the machine ends up holding can do one thing: submit its own hardware readings. It cannot read or change anything in GWatch, and GWatch never connects back to it.'),
+      h('p', { class: 'note' }, 'What the machine ends up holding can do one thing: submit its own hardware readings. It cannot read or change anything in GWatch, and GWatch never connects back to it. Every so often the agent asks GWatch for a small fixed set of things — which readings you want, and a replacement token if you rotate it — and applies them itself.'),
       h('p', { class: 'note' }, 'If this GWatch is reached over HTTPS with a self-signed certificate, add ', h('code', null, '--insecure'), ' — the agent still uses TLS, it just stops checking the certificate.')),
     footer: [cancelBtn, openNodeBtn, copy(code, 'Copy code'), h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
-      try { await navigator.clipboard.writeText(command); toast('Command copied', { kind: 'success' }); }
+      try { await navigator.clipboard.writeText(commandText()); toast('Command copied', { kind: 'success' }); }
       catch { toast('Could not copy — select the command and copy it by hand.', { kind: 'error' }); }
     } }, icon('copy'), 'Copy command')],
   });
@@ -287,7 +308,7 @@ function usageMeter(label, value, { detail = '', level: given = null } = {}) {
 // Being unable to find out what is newest is not evidence that a machine is
 // behind.
 let latestAgentPromise = null;
-function latestAgentRelease() {
+export function latestAgentRelease() {
   latestAgentPromise ||= api.get('/api/agents/latest')
     .then((r) => (r?.version ? { version: r.version, url: r.url || '' } : null))
     .catch(() => null);
@@ -376,7 +397,7 @@ export function hardwarePanel(key, { title = 'Hardware', metricStatus = null } =
     if (!m) {
       snapEl.append(emptyState({
         icon: 'cpu', title: 'No reading yet', compact: true,
-        text: 'Install gwatch-agent on this machine and give it the token you were shown when you registered it.',
+        text: 'Install gwatch-agent on this machine and pair it with the code GWatch showed you (Add node › GWatch agent). Readings appear here within a minute.',
       }));
       return;
     }
