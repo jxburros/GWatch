@@ -9,7 +9,7 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
-## Unreleased
+## 0.7.0 — 2026-10-14
 
 ### Added
 
@@ -120,6 +120,18 @@ disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 - A link's style is dropped when the node stops depending on anything and when
   its parent is deleted, so a colour chosen for one link does not turn up on
   another.
+
+### Versions and upgrading
+
+- GWatch is **0.7.0** and GWatch Agent is **0.7.0**. The agent needs 0.7.0 to use
+  most of what is above (its file, token rotation, check-ins, held readings and the
+  control panel); a 0.6.x agent keeps reporting to a 0.7.0 server,
+  but it never asks for settings, so it ignores a rotation and the readings chosen
+  for it until it updates.
+- The database moves to schema version 4 the first time 0.7.0 opens it. A SQLite
+  database is copied aside first; PostgreSQL and MySQL want the server-side backup
+  [`docs/DATABASE.md`](docs/DATABASE.md) asks for before any upgrade. Downgrading to
+  0.6.x afterwards is not supported: the table 0.6.x keeps hardware readings in is gone.
 
 ## 0.6.2 — 2026-10-13
 

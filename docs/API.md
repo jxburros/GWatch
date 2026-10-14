@@ -820,7 +820,7 @@ per-IP failure budget as a wrong password.
 ### Asking for settings
 
 `POST /ingest/checkin` with `Authorization: Bearer gwa_…` and an optional body
-`{ "version": "0.8.0", "inventory": { "interfaces": [{ "name", "detail", "auto" }], "disks": […], "mounts": […] } }`.
+`{ "version": "0.7.0", "inventory": { "interfaces": [{ "name", "detail", "auto" }], "disks": […], "mounts": […] } }`.
 Answers `200` with an `AgentSettings`:
 
 ```json
