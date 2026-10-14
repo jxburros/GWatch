@@ -13,6 +13,53 @@ disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ### Added
 
+- **Adding a machine is part of Add node.** *Nodes › Add node › A machine with the
+  GWatch agent*: a name, what to monitor, and an eight-character pairing code with
+  the command to run (its server address editable, for a machine that reaches GWatch
+  differently from your browser). The *Pair a machine* button and the *Settings ›
+  Hardware* section are gone, and an old link to either lands on Nodes. Choosing an
+  existing node to add the machine to now gives that node a hardware check for it.
+- **The agent card, on the machine's node.** Administrators see the agent that
+  reports for a node in the node itself: identity and a quiet note when a newer agent
+  exists, **the token** (shown on request, so it can be compared with the one in the
+  machine's file), **rotation**, **what it collects**, and revoke / delete. GWatch now
+  keeps a copy of a token sealed with its own key (a backup does not carry it; an agent
+  registered before this has only a digest and gets a readable token by being
+  rotated).
+- **Token rotation**, in two forms. *Rotate* issues a new token while the old one keeps
+  working; the agent collects it the next time it asks for its settings, writes it into
+  its file and switches over, and its first use retires the old one. *Replace now* is
+  for a token that may have leaked: the old one stops at once and nothing is sent to the
+  machine.
+- **Choose what an agent reports.** Checkboxes for the kinds of reading and, once the
+  machine has said what it has, for its network interfaces, disks and filesystems —
+  while adding the machine and on its node afterwards. Automatic leaves out virtual,
+  bridge, container, tunnel and Windows pseudo interfaces, which are offered but not
+  ticked. The choice narrows what the agent sends inside a limit set in its own file;
+  GWatch can never widen it.
+- **The agent asks GWatch for a small, fixed set of things** every so often
+  (`POST /ingest/checkin`): which readings were chosen, when to ask again, the newest
+  agent release (a hint only) and, during a rotation, the replacement token. It has no
+  field for a URL, a command, a file or a version to install, and the agent still opens
+  every connection. See [`docs/AGENT-DECISIONS.md`](docs/AGENT-DECISIONS.md), entry 12.
+- **The agent keeps one editable file.** `agent.json` holds the server, token, name,
+  intervals, auto-update, certificate trust and a collection limit; the service is
+  registered with no settings of its own, so a change is an edit and a restart rather
+  than a reinstall, and the token is no longer left on a service's command line.
+  `gwatch-agent config show` prints each setting with the layer that decided it
+  (defaults, file, environment, flags) and `config validate` checks the file. Agents
+  paired by an earlier version move their token and settings into it on first start.
+- **The agent holds readings through an outage** (up to `buffer`, six hours by default,
+  in memory) and sends them oldest first when GWatch is back, so a gap in the network
+  leaves a gap in the history no longer than itself.
+- **A control panel for the agent: `gwatch-agent ui`.** A page on the machine's own
+  loopback address, in GWatch's style: whether the agent is reporting, every setting,
+  the collection limit as checkboxes for the interfaces and drives the machine really
+  has, the token, a test reading, an update check, start / stop / restart, and the
+  file itself. It runs as the person who opened it rather than inside the root/SYSTEM
+  service, so it can change only what that person could; see entry 6 of
+  [`docs/AGENT-DECISIONS.md`](docs/AGENT-DECISIONS.md).
+
 - **Network map: clusters, and lines you can style.**
   - **Clusters layout.** The *Radial* layout, which put every node on rings
     round one centre and read as one giant circle, is replaced by **Clusters**:
@@ -50,6 +97,25 @@ disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ### Changed
 
+- **A machine's hardware readings are its check's results.** They used to be stored
+  twice — once as every hardware check's result, and again, in full, in a table of
+  readings of their own with its own retention, API, backups and charts. That second
+  copy is gone (schema version 4 drops it; SQLite databases are copied aside first, and
+  PostgreSQL and MySQL want the server-side backup `docs/DATABASE.md` asks for). An
+  agent's reading is judged when it arrives: a current one goes through the check's
+  state, incident and alert machinery; one the agent held back through an outage joins
+  the history at the time it was taken and alerts nobody. The check's schedule is kept
+  to notice that readings have stopped. A node's hardware charts and the hardware list
+  are served from the results, and **Settings › Retention › Keep hardware check results
+  for** now bounds hardware checks' results (every other check follows the setting for
+  individual results). See entry 15 of [`docs/AGENT-DECISIONS.md`](docs/AGENT-DECISIONS.md).
+  - **Behaviour that changes:** a machine no hardware check watches keeps only its
+    newest reading, in memory — the migration drops what the old table held for such
+    machines; deleting an agent removes its registration but leaves the node and its
+    history; a year-long chart of a hardware metric reaches back as far as the hardware
+    retention (90 days by default); and an archive from before this carries a list of
+    hardware readings that restore ignores, since every reading in it was also a check
+    result.
 - The *Radial* layout is now called **Clusters (radial)** in the layout list.
 - A link's style is dropped when the node stops depending on anything and when
   its parent is deleted, so a colour chosen for one link does not turn up on

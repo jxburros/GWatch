@@ -74,6 +74,13 @@ func runUI(cfg config, addr string, openBrowser bool) error {
 	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
 		return fmt.Errorf("the control panel only listens on this machine's own address (127.0.0.1, ::1 or localhost), not %q", host)
 	}
+	// A panel that cannot even read the configuration is no use to anyone, and
+	// the reason is nearly always the same: on a machine where the agent was
+	// installed by root or an administrator its files are theirs alone. Say so
+	// before opening a page that would only show an error.
+	if err := checkConfigReadable(cfg.configPathOrDefault()); err != nil {
+		return err
+	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
@@ -126,6 +133,21 @@ func runUI(cfg config, addr string, openBrowser bool) error {
 	}()
 	if err := httpSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
+	}
+	return nil
+}
+
+// checkConfigReadable refuses to open the panel over a configuration this
+// account may not read. A file that does not exist yet is fine: the panel is
+// also how someone sets a machine up.
+func checkConfigReadable(path string) error {
+	f, err := os.Open(path)
+	if err == nil {
+		f.Close()
+		return nil
+	}
+	if isPermissionError(err) {
+		return fmt.Errorf("this account cannot read %s, which belongs to the account the agent was installed by; run `sudo gwatch-agent ui` (on Windows, from an Administrator terminal)", path)
 	}
 	return nil
 }

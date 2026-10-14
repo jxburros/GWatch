@@ -800,7 +800,7 @@ Windows and `$XDG_DATA_HOME/gwatch` (or `~/.local/share/gwatch`) elsewhere —
 `GWATCH_AGENT_CONFIG` or `--config` names the file and `GWATCH_AGENT_TOKEN_FILE` moves the
 whole directory. `run` and `once` read it when `--token` is not given. The file is
 created 0600 under a 0700 directory; on Windows the inherited ACL is replaced with
-SYSTEM and the administrators group. (Versions before 0.7 kept the token in `agent-token`
+SYSTEM and the administrators group. (Earlier agents kept the token in `agent-token`
 and the server in `agent-settings.json`; an agent that finds those moves them into
 `agent.json` the first time it starts.)
 
@@ -820,7 +820,7 @@ per-IP failure budget as a wrong password.
 ### Asking for settings
 
 `POST /ingest/checkin` with `Authorization: Bearer gwa_…` and an optional body
-`{ "version": "0.7.0", "inventory": { "interfaces": [{ "name", "detail", "auto" }], "disks": […], "mounts": […] } }`.
+`{ "version": "0.8.0", "inventory": { "interfaces": [{ "name", "detail", "auto" }], "disks": […], "mounts": […] } }`.
 Answers `200` with an `AgentSettings`:
 
 ```json

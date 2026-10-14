@@ -334,3 +334,27 @@ func TestTheEditorNeverNeedsToSeeTheToken(t *testing.T) {
 		t.Errorf("typing over the mask should set the token: %s", c.token)
 	}
 }
+
+func TestAPanelOverAFileItCannotReadSaysHowToGetAccess(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read anything")
+	}
+	dir := isolate(t)
+	path := filepath.Join(dir, "agent.json")
+	writeFile(t, path, `{"server":"https://s:7230"}`)
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Skip(err)
+	}
+	t.Cleanup(func() { os.Chmod(path, 0o600) })
+	cfg := defaultConfig()
+	cfg.configPath = path
+	err := runUI(cfg, "127.0.0.1:0", false)
+	if err == nil || !strings.Contains(err.Error(), "sudo gwatch-agent ui") {
+		t.Fatalf("want advice to use sudo, got %v", err)
+	}
+	// A file that is not there yet is not an access problem: the panel is also
+	// how a machine gets set up.
+	if err := checkConfigReadable(filepath.Join(dir, "not-yet.json")); err != nil {
+		t.Errorf("a missing file should be fine: %v", err)
+	}
+}

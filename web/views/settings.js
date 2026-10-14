@@ -1369,7 +1369,15 @@ export async function mount(root, ctx) {
   await renderTab();
   return {
     refresh: () => state.panelRefresh && state.panelRefresh(),
-    async update(params) { const tab = visibleTabs.some((t) => t.id === params.tab) ? params.tab : (params.tab === 'logs' ? 'health' : visibleTabs[0].id); if (tab !== state.tab) { state.tab = tab; await renderTab(); } return true; },
+    async update(params) {
+      // The same two retired links as at mount, followed when they are reached
+      // from inside Settings, where the view is updated rather than mounted.
+      if (params.tab === 'hardware') { ctx.navigate('/nodes'); return true; }
+      if (params.tab === 'logs') { ctx.navigate('/audit/log'); return true; }
+      const tab = visibleTabs.some((t) => t.id === params.tab) ? params.tab : visibleTabs[0].id;
+      if (tab !== state.tab) { state.tab = tab; await renderTab(); }
+      return true;
+    },
     destroy() { state.destroyed = true; },
   };
 }
