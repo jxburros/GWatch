@@ -15,18 +15,42 @@ import (
 
 // group_name holds the node's first group. It stays in the row next to the
 // groups list because older binaries and the existing indexes still read it.
-const nodeCols = `id, name, host, group_name, "groups", tags, notes, importance, enabled, depends_on_node_id, template, created_at, updated_at`
+const nodeCols = `id, name, host, group_name, "groups", tags, notes, importance, enabled, depends_on_node_id, link_style, template, created_at, updated_at`
+
+// linkStyleJSON is how a node's link style is kept in its row: the JSON of the
+// style, or an empty string when there is none. It is sanitised on the way in
+// and again on the way out (parseLinkStyle), so no path — an import, a restore,
+// a hand-edited database — can leave a colour in the row that the drawing
+// would not accept from the API.
+func linkStyleJSON(ls *model.LinkStyle) string {
+	if ls = ls.Sanitized(); ls == nil {
+		return ""
+	}
+	return jsonString(ls)
+}
+
+func parseLinkStyle(raw string) *model.LinkStyle {
+	if raw == "" || raw == "null" {
+		return nil
+	}
+	var ls model.LinkStyle
+	if err := json.Unmarshal([]byte(raw), &ls); err != nil {
+		return nil
+	}
+	return ls.Sanitized()
+}
 
 func scanNode(sc interface{ Scan(...any) error }) (model.Node, error) {
 	var n model.Node
-	var groups, tags, created, updated string
+	var groups, tags, linkStyle, created, updated string
 	var enabled int
 	var dep sql.NullInt64
-	if err := sc.Scan(&n.ID, &n.Name, &n.Host, &n.Group, &groups, &tags, &n.Notes, &n.Importance, &enabled, &dep, &n.Template, &created, &updated); err != nil {
+	if err := sc.Scan(&n.ID, &n.Name, &n.Host, &n.Group, &groups, &tags, &n.Notes, &n.Importance, &enabled, &dep, &linkStyle, &n.Template, &created, &updated); err != nil {
 		return n, err
 	}
 	n.Enabled = enabled == 1
 	n.DependsOnNode = int64Ptr(dep)
+	n.LinkStyle = parseLinkStyle(linkStyle)
 	n.CreatedAt = mustTime(created)
 	n.UpdatedAt = mustTime(updated)
 	_ = json.Unmarshal([]byte(groups), &n.Groups)
@@ -106,9 +130,9 @@ func (s *Store) CreateNode(ctx context.Context, n model.Node) (model.Node, error
 		n.Importance = model.ImportanceNormal
 	}
 	err := s.writeTx(ctx, func(tx *wtx) error {
-		newID, err := tx.insertID(ctx, `INSERT INTO nodes(name, host, group_name, "groups", tags, notes, importance, enabled, depends_on_node_id, template, created_at, updated_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-			n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), n.Template, fmtTime(now), fmtTime(now))
+		newID, err := tx.insertID(ctx, `INSERT INTO nodes(name, host, group_name, "groups", tags, notes, importance, enabled, depends_on_node_id, link_style, template, created_at, updated_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), linkStyleJSON(n.LinkStyle), n.Template, fmtTime(now), fmtTime(now))
 		if err != nil {
 			return err
 		}
@@ -148,8 +172,8 @@ func (s *Store) UpdateNode(ctx context.Context, n model.Node) (model.Node, []int
 	}
 	var deleted []int64
 	err := s.writeTx(ctx, func(tx *wtx) error {
-		res, err := tx.exec(ctx, `UPDATE nodes SET name=?, host=?, group_name=?, "groups"=?, tags=?, notes=?, importance=?, enabled=?, depends_on_node_id=?, template=?, updated_at=? WHERE id=?`,
-			n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), n.Template, fmtTime(now), n.ID)
+		res, err := tx.exec(ctx, `UPDATE nodes SET name=?, host=?, group_name=?, "groups"=?, tags=?, notes=?, importance=?, enabled=?, depends_on_node_id=?, link_style=?, template=?, updated_at=? WHERE id=?`,
+			n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), linkStyleJSON(n.LinkStyle), n.Template, fmtTime(now), n.ID)
 		if err != nil {
 			return err
 		}
@@ -215,16 +239,25 @@ func (s *Store) SetNodeEnabled(ctx context.Context, id int64, enabled bool) erro
 	return nil
 }
 
-// DeleteNode removes a node, its checks, results, rollups and state.
+// DeleteNode removes a node, its checks, results, rollups and state. The
+// nodes that depended on it lose that dependency, and with it the style of the
+// line that joined them: a style is the style of a link, and a node later
+// pointed at another parent should not turn up with a colour chosen for this
+// one.
 func (s *Store) DeleteNode(ctx context.Context, id int64) error {
-	res, err := s.exec(ctx, "DELETE FROM nodes WHERE id = ?", id)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.writeTx(ctx, func(tx *wtx) error {
+		if _, err := tx.exec(ctx, "UPDATE nodes SET link_style = '' WHERE depends_on_node_id = ?", id); err != nil {
+			return err
+		}
+		res, err := tx.exec(ctx, "DELETE FROM nodes WHERE id = ?", id)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
 }
 
 // GroupCounts returns groups and tags with node counts. A node that belongs to
@@ -291,8 +324,8 @@ func (s *Store) BulkUpdate(ctx context.Context, nodes []model.Node, checks []mod
 			if n.DependsOnNode != nil && *n.DependsOnNode == n.ID {
 				n.DependsOnNode = nil
 			}
-			out, err := tx.exec(ctx, `UPDATE nodes SET group_name=?, "groups"=?, tags=?, importance=?, enabled=?, depends_on_node_id=?, updated_at=? WHERE id=?`,
-				n.Group, jsonString(n.Groups), jsonString(n.Tags), string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), fmtTime(now), n.ID)
+			out, err := tx.exec(ctx, `UPDATE nodes SET group_name=?, "groups"=?, tags=?, importance=?, enabled=?, depends_on_node_id=?, link_style=?, updated_at=? WHERE id=?`,
+				n.Group, jsonString(n.Groups), jsonString(n.Tags), string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), linkStyleJSON(n.LinkStyle), fmtTime(now), n.ID)
 			if err != nil {
 				return err
 			}

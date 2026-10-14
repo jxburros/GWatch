@@ -7,7 +7,8 @@ import { relTime, ms as fmtMs, pct, dateTime, interval, plural, timeShort, nodeG
 import { namedMetrics } from '../chart-config.js';
 import { resultInspector } from './inspector.js';
 import { openTriggerEditor, triggerRow } from './automation.js';
-import { hardwarePanel } from './machines.js';
+import { hardwarePanel, latestAgentRelease } from './machines.js';
+import { agentCard } from './agent-card.js';
 
 export async function mount(root, ctx) {
   const id = ctx.params.id;
@@ -19,6 +20,9 @@ export async function mount(root, ctx) {
   // A machine is a node, so its readings belong on the node rather than on a
   // page of their own. One panel per hardware check.
   const hardwareEl = h('div', { class: 'stack' });
+  // The agent that reports for this machine — its token, what it collects — is
+  // managed here too, for administrators; viewers never see credentials.
+  const agentsEl = h('div', { class: 'stack' });
   const triggersEl = h('section', { class: 'card', 'aria-label': 'Triggers' });
   const chartsEl = h('section', { class: 'card', 'aria-label': 'History' });
   const eventsEl = h('section', { class: 'card', 'aria-label': 'Events' });
@@ -27,14 +31,14 @@ export async function mount(root, ctx) {
   // charts are never taken off the page while their new data is in flight.
   const historyChips = h('div', { class: 'card-actions' });
   const historyBody = h('div', { class: 'stack' });
-  root.append(headEl, bannersEl, h('div', { class: 'stack' }, checksEl, hardwareEl, chartsEl, triggersEl, eventsEl));
+  root.append(headEl, bannersEl, h('div', { class: 'stack' }, checksEl, hardwareEl, agentsEl, chartsEl, triggersEl, eventsEl));
   headEl.append(skeleton({ lines: 2 }));
 
   async function load({ quiet = false } = {}) {
     const [node, events, triggers, nodes] = await Promise.all([api.get(`/api/nodes/${id}`), api.get(`/api/events${qs({ nodeId: id, limit: 30 })}`).catch(() => []), api.get(`/api/triggers?nodeId=${id}`).catch(() => []), quiet && state.nodes.length ? Promise.resolve(state.nodes) : api.get('/api/nodes').catch(() => [])]);
     if (state.destroyed) return;
     state.node = node; state.events = events || []; state.triggers = triggers || []; state.nodes = nodes || [];
-    renderHead(); renderBanners(); renderChecks(); renderHardware(); renderTriggers(); renderEvents();
+    renderHead(); renderBanners(); renderChecks(); renderHardware(); renderAgents().catch(() => {}); renderTriggers(); renderEvents();
     if (!quiet || !state.history) await loadHistory();
     else await loadHistory();
   }
@@ -296,6 +300,30 @@ export async function mount(root, ctx) {
       for (const r of (state.node.lastResults || {})[c.id]?.details?.metricResults || []) out[r.key] = r.status;
     }
     return out;
+  }
+
+  /* ---------- Agent ---------- */
+  // The agent list is asked for when the node's agents change, not on every live
+  // update: what the card shows moves slowly, and every action on it redraws it.
+  async function renderAgents({ force = false } = {}) {
+    if (!ctx.me?.isAdmin) return;
+    const ids = (state.node?.checks || [])
+      .filter((c) => c.type === 'system' && c.config?.hostSource === 'agent' && c.config?.agentId)
+      .map((c) => c.config.agentId);
+    const key = ids.join(',');
+    if (!force && state.agentKey === key) return;
+    state.agentKey = key;
+    if (!ids.length) { clear(agentsEl); return; }
+    const [list, latest] = await Promise.all([api.get('/api/agents').catch(() => null), latestAgentRelease()]);
+    if (state.destroyed || !list) return;
+    clear(agentsEl);
+    for (const agent of list.filter((a) => ids.includes(a.id))) {
+      agentsEl.append(agentCard(agent, {
+        latest: latest?.version || null,
+        releaseURL: latest?.url || '',
+        onChange: () => { renderAgents({ force: true }).catch(() => {}); load({ quiet: true }).catch(() => {}); },
+      }));
+    }
   }
 
   function destroyHardware() {

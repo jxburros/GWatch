@@ -14,7 +14,7 @@ test('settings view (admin) lists every tab and opens on General', async (t) => 
   const tabLabels = tabLinks.map((a) => a.textContent);
   assert.deepEqual(tabLabels, [
     'General', 'Appearance', 'Indicators', 'Users & access', 'Network access', 'Alerts', 'Automation', 'Rules',
-    'Hardware', 'AI & MCP', 'Retention', 'Maintenance', 'Backups', 'Database', 'Updates', 'Monitor health', 'About',
+    'AI & MCP', 'Retention', 'Maintenance', 'Backups', 'Database', 'Updates', 'Monitor health', 'About',
   ]);
   assert.ok(tabLinks.find((a) => a.textContent === 'General').classList.contains('active'));
   const nameInput = root.querySelector('.settings-panel input[type="text"]');
@@ -125,29 +125,11 @@ test('settings Database tab shows the active backend and saves a server for the 
   assert.match(panel.textContent, /PostgreSQL at db\.lan:5432\/gwatch/);
 });
 
-// #52: the Hardware tab marks machines running an agent older than the newest
-// release. It is only ever a label — GWatch cannot update an agent, and the
-// wording has to say so, or the mark reads as a job someone has to do.
-test('settings Hardware marks machines running an older agent', async (t) => {
-  const { root } = await mountView(settingsView, { params: { tab: 'hardware' } }, t);
-  const panel = root.querySelector('.settings-panel');
-  await waitFor(() => panel.textContent.includes('0.6.0'));
-
-  // web/mock.js: one machine reporting agent 0.5.0, newest release 0.6.0.
-  assert.match(panel.textContent, /agent 0\.5\.0/, 'the running version is shown');
-  assert.match(panel.textContent, /0\.6\.0 available/, 'the newer release is marked on the row');
-  assert.match(panel.textContent, /1 machine running an older agent/, 'and counted above the table');
-  assert.match(panel.textContent, /take it by themselves/, 'the note must say nothing needs doing here');
-});
-
-// #79: the Hardware tab introduces the agent with the agent's own mark. It sits
-// beside text that already names the agent, so it is decorative.
-test('settings Hardware shows the agent mark beside its introduction', async (t) => {
-  const { root } = await mountView(settingsView, { params: { tab: 'hardware' } }, t);
-  const panel = root.querySelector('.settings-panel');
-  await waitFor(() => panel.querySelector('.agent-intro'));
-  const img = panel.querySelector('.agent-intro img.agent-logo');
-  assert.ok(img, 'the agent mark is shown');
-  assert.equal(img.getAttribute('src'), 'agent-logo.png');
-  assert.equal(img.getAttribute('alt'), '', 'decorative: the text beside it says "agent"');
+// Machines are nodes, so there is no Hardware section under Settings any more:
+// adding one is part of Add node, and managing one is done on its node. An old
+// link to the section still goes somewhere sensible.
+test('settings no longer has a Hardware section, and the old link goes to Nodes', async (t) => {
+  const { root, ctx } = await mountView(settingsView, { params: { tab: 'hardware' } }, t);
+  assert.deepEqual(ctx.navigated, ['/nodes']);
+  assert.equal(root.querySelector('.settings-nav'), null, 'nothing of Settings is drawn for a link that is passed on');
 });

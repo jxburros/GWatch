@@ -5,7 +5,7 @@ and several of them close off options that look obvious from the outside — so
 they are written down, with the reasoning, rather than left to be rediscovered
 or quietly reversed.
 
-Dated 2026-09-21; entries 10 and 11 added 2026-09-27. Each entry says what was
+Dated 2026-09-21; entries 10 and 11 added 2026-09-27; entries 12 to 15 and the update to 6 added 2026-10-14. Each entry says what was
 decided, what was rejected, and what would have to change for the decision to
 be worth revisiting.
 
@@ -25,11 +25,14 @@ do anything. A push channel would invert that and make every agent a remote
 code execution target for anything that got into GWatch, which is a far softer
 target than the machines it watches.
 
-**Also rejected, for now: GWatch as a hint** — the agent asking GWatch which
-version it *should* run, then still fetching and verifying independently. This
-is defensible (the worst a compromised GWatch could do is pin agents to an
-older *signed* version) and it would allow coordinating a fleet from one
-screen. It is not built because nothing yet needs it.
+**Also rejected, for now: GWatch as a hint about what to *run*** — the agent
+asking GWatch which version it *should* run, then still fetching and verifying
+independently. This is defensible (the worst a compromised GWatch could do is pin
+agents to an older *signed* version) and it would allow coordinating a fleet from
+one screen. It is not built because nothing yet needs it. (Since entry 12 the
+agent does ask GWatch a few other small questions, and one of the answers is the
+newest release *number*; that is only said in the agent's log, and changes
+nothing about what it installs.)
 
 **On by default** follows from the goal: "you install an agent by hand once"
 only holds if updating is the default rather than something to discover. The
@@ -100,21 +103,47 @@ what must be put back when an install goes badly.
 
 ## 6. The agent gets a local control panel, not a tray icon.
 
-**Decided** (not yet built — issue #64): a small local page, served on the
-loopback interface by the agent and styled like GWatch, for someone who does
-not want a terminal. Start/stop, what it is collecting and sending, update and
-the automatic-update setting, and enough to troubleshoot with.
+**Decided, and built** (issue #64): `gwatch-agent ui` serves a small page on the
+loopback interface, styled like GWatch, for someone who does not want a
+terminal. What it is collecting and sending, its settings, its token, and
+start/stop/restart.
 
-**How it commands the service:** by shelling out to `gwatch-agent start/stop`
-and letting the OS ask for elevation. The alternative — a local control socket
-the service listens on — is smoother and is the first inbound path on a machine
-whose whole point is that it has none. Not worth it until the prompts prove
-annoying.
+**It is a separate, short-lived process run as the person at the keyboard, not
+a page hosted by the service.** The first version of this decision said the
+agent "serves" the panel, which is the obvious reading and the wrong one: the
+service runs as root or SYSTEM, and a page it hosted — however well guarded —
+would be a way for any user on the machine, or any web page that reaches
+loopback, to change what a root process does, including pointing it at a
+different server with the token in hand. As its own process the panel has
+exactly the rights of whoever started it: it can edit `agent.json` only if they
+could edit it themselves, and control the service only if the operating system
+lets them. On a machine whose files belong to root that means `sudo
+gwatch-agent ui`, which is the right friction, and it opens read-only otherwise.
+It stops itself after half an hour of not being used.
+
+**How it commands the service:** by asking the service manager to start, stop
+or restart it and letting the OS say no. The alternative — a local control
+socket the service listens on — is smoother and is the first inbound path on a
+machine whose whole point is that it has none. Not worth it until the prompts
+prove annoying.
+
+**How it knows what the service is doing:** the service writes a small status
+file (last report, last check-in, readings held, what the machine could
+collect) after each report; the panel reads it. It holds no token and no
+readings, and it is the only thing the two processes share besides the
+configuration file.
+
+**What guards it:** loopback only; a Host check against DNS rebinding; a random
+secret in the address, traded for a cookie and dropped from the address bar;
+a custom header and an Origin check on anything that changes something; a
+strict content-security policy; the token absent from the page until someone
+presses Show (the file editor is shown a mask where it is).
 
 **Why a loopback page and not a native window:** the agent is a seven-platform,
 pure-Go, `CGO_ENABLED=0` cross-compile from one Linux runner. Fyne and Wails
 drag in cgo and break that for every target. A served page stays pure Go, works
-the same on all three platforms, and reuses the interface GWatch already has.
+the same on all three platforms, and reuses the interface GWatch already has —
+its fonts and mark are embedded from `web/`, not copied.
 
 **The tray is deferred** (issue #53), and dropping it from this round removed
 the single worst constraint on the plan: the cgo requirement, the per-desktop
@@ -122,8 +151,6 @@ Linux tray mess (GNOME needs an extension), the login-autostart registration in
 the installer, and a second binary to sign and release. A tray is passive where
 a panel is active, but GWatch already covers that — an agent that stops
 reporting makes its machine unhealthy on the dashboard and raises the alert.
-The panel needs a front door instead: a start menu entry, a `.desktop` file,
-and `gwatch-agent ui`.
 
 **Revisit if:** the panel ships and people want it glanceable. By then the tray
 is a thin shim over an interface that exists, buildable on the platforms where
@@ -285,6 +312,195 @@ not fit it: half of them would be the host's anyway.
 **Revisit if:** someone needs the Docker *containers* on a host watched, rather
 than the host — that is per-container cgroup accounting, a new collector rather
 than a new mount.
+
+## 12. An agent asks GWatch for a small, fixed set of things.
+
+**Decided** (2026-10-14). Every so often an agent POSTs a check-in
+(`/ingest/checkin`, authenticated by its token like a reading) and applies the
+answer. The answer is a closed struct, `model.AgentSettings`, and this is all of
+it:
+
+| Field | What the agent does with it |
+| --- | --- |
+| `checkInSeconds` | Waits that long before asking again, clamped to one minute to one day; its own `checkIn` setting wins if it has one. |
+| `collect` | Narrows which readings it sends, *inside* the limit in its own file. Nothing here can widen what the machine's owner allows. |
+| `latestAgent` | Says in its log that a newer agent exists. It changes nothing: the agent still looks for releases on its own schedule, from the release feed, and verifies what it downloads. |
+| `token` | Present only while an administrator is rotating this machine's token, and only to a caller that authenticated with the token being replaced. Taken up only if the agent's own file is where its token lives. |
+
+There is no field for a URL, a command, a script, a file to write or a version to
+install, and a reply that carries anything else is read as the fields above and
+nothing more. Adding such a field would change what an agent is; if it ever
+seems worth doing it should be argued here first.
+
+**Why this is not the push channel entry 1 rejected.** Entry 1's worry is a
+GWatch that has been got into becoming a way onto every machine that reports to
+it. The worst a compromised GWatch can do with this is: ask the agent to send
+*fewer* readings; make it check in more or less often; and, during a rotation it
+started, hand over a token the agent then uses to talk to that same GWatch.
+None of that executes anything, and none of it can reach past what the machine's
+own limit allows. The agent still opens every connection; GWatch still has no
+address for it and no credential to it.
+
+**Why not leave collection to the agent's file alone?** Because the person
+watching a machine is usually not the person at it. "I plugged in a drive and
+want it monitored" should be a checkbox where the drive's node is, not an SSH
+session. The machine's owner keeps the last word through the limit in `agent.json`.
+
+**Token rotation rides on it, with a deliberate exception.** The ordinary
+rotation delivers the replacement to whoever holds the old token, which is
+exactly wrong if the old token leaked; so there is a second form, *replace now*,
+that retires the old token at once and delivers nothing over the network.
+
+**Rejected: piggybacking on every reading.** Cheaper, but it would make "GWatch
+may answer an agent" a property of the one route every agent hits every minute,
+and it would couple the reading's interval to the settings'. A separate, rare
+check-in keeps the reading path as dull as it was.
+
+**Rejected: GWatch holding no copy of the token at all** (the original design:
+shown once, digest only). It makes the one thing people need to do — compare the
+token on a machine with the one GWatch expects — impossible. The copy is sealed
+with the server's key like every other secret GWatch holds; a backup does not
+carry it, so a restore never turns a backup file into a bag of readable
+credentials. An agent registered before this has only a digest and gets a
+readable token by being rotated.
+
+**Revisit if:** a second kind of answer is wanted. Add it to `AgentSettings`
+with the reasoning here, rather than reaching for a generic "directives" list.
+
+## 13. The agent's settings are one editable file, and the service has none.
+
+**Decided** (2026-10-14). `agent.json` holds the server, the token, the name,
+the intervals, auto-update, certificate trust and the collection limit. The
+service is registered with `run` and nothing else.
+
+Before this, settings were flags baked into the service at install time, the
+token among them. Changing one meant reinstalling; getting at the install screens
+meant reinstalling; and the token sat on a command line any user of the machine
+could read from the service manager.
+
+**Precedence is defaults < file < environment < flags**, the usual order, and
+`gwatch-agent config show` prints each setting with its layer, because the cost
+of a layered system is "I edited the file and nothing changed". A service
+installed by an older agent keeps its baked-in flags, which therefore still win;
+the answer is to reinstall once, and `config show` says so.
+
+**A file it cannot read stops the agent** (exit 78, which the packaged unit does
+not restart on) rather than running on defaults: reporting a machine under the
+wrong name to the wrong place without anyone knowing the file was ignored is
+worse than not reporting. An unknown key is a warning, not a refusal — a typo is
+worth a line in the log, not a dead agent — and `config validate` fails on it.
+
+**JSON, not XML.** The agent already wrote JSON, the standard library reads it,
+and nobody needs a second parser for a dozen keys.
+
+**`insecure` and `certPin` belong to the server in the file.** Pointing the
+agent at a different server for one run drops them, or "accept any certificate"
+would follow the token to a server it was never a decision about.
+
+**A rotation is written back only to the file.** A token that comes from the
+environment or a flag comes straight back at the next restart, after GWatch has
+retired the copy the file now holds; so such an agent leaves the file alone and
+says where the new token has to go.
+
+**Rejected: live reload.** An edit applies on restart, which is what was asked
+for and needs no watcher, signal or Windows equivalent of either.
+
+**Held readings are memory only.** Up to `buffer` (six hours by default) of
+readings are held while GWatch is unreachable and sent oldest first, so an
+outage leaves a gap no longer than itself. Not written to disk: the agent stores
+nothing on a machine beyond its configuration, and hours-old readings lost to a
+restart mid-outage are not worth a spool file. GWatch already accepts readings up
+to 48 hours old, which is also the ceiling on `buffer`.
+
+## 14. Automatic collection leaves out what looks like scaffolding.
+
+**Decided** (2026-10-14). With nothing chosen, an agent reports every kind of
+reading, every disk and filesystem, and every network interface that is up or
+has carried traffic *and* does not look virtual: container veth pairs, bridges,
+tunnels, Windows pseudo and Teredo/ISATAP adapters, hypervisor switches. Ninety
+percent of an interface list on a Docker host or a Windows machine is these, and
+none of it is what anyone sat down to watch.
+
+They are **offered but not ticked** in the inventory, marked "hidden by default",
+so one tick brings a WireGuard tunnel or a bridge that matters back. The test is
+on the name, and it errs towards hiding; the cost of a miss is one checkbox, the
+cost of the other mistake is a hundred lines of noise.
+
+The selection is applied to a finished reading rather than steering the platform
+collectors, because rates are derived from consecutive readings: a collector that
+skipped an interface for a while would hand back a nonsense rate when it was
+switched back on.
+
+## 15. A machine's readings are its check's results, not a table of their own.
+
+**Decided** (2026-10-14). A machine is a node with a hardware check, and what
+that check measures is stored the way any check's measurements are: a row in
+`results`, with its metrics by key and the whole snapshot in its details. The
+separate `host_samples` table is gone.
+
+**What was wrong.** Hardware was stored twice. Every run of a hardware check
+already recorded a result carrying every metric and the full snapshot; the
+agent's reading was *also* written, again in full, to a table keyed by machine
+rather than by check, with its own retention, its own API, its own export and
+restore code and its own charts. A second copy of the same history at the same
+resolution, in a shape nothing else shares — the opposite of "a machine is just
+a check".
+
+**How it works now.**
+
+- An agent's reading is judged **when it arrives** (`Engine.IngestHostReading`).
+  A current reading goes through the check's whole machinery — state, incidents,
+  alerts — as if the check had run and taken it. A reading the agent held back
+  through an outage (entry 13) is added to the check's history at the time it
+  was taken and does nothing else: the machine being back is the news, and an
+  alert for a disk that was full yesterday is noise.
+- The check's **schedule** is kept for one job: noticing that readings have
+  stopped. While a fresh reading exists, a due run would only judge the same
+  reading twice, so it is skipped; once readings stop, the run happens and
+  fails with "no hardware reading for …", exactly as before.
+- Results are recorded at about the check's interval (80% of it, to tolerate
+  jitter), whatever the machine's own: one that reports every ten seconds does
+  not turn a once-a-minute check into six results a minute.
+- GWatch's newest reading of each machine is held in memory. After a restart it
+  is read back out of the check's latest result that carries a snapshot.
+- Retention: hardware checks keep their results for the **hardware** setting
+  (`hostDays`, 90 days) and every other check for `rawDays`. A hardware result
+  is a whole snapshot, which is why it has a retention of its own.
+- The charts on a node read the series back out of those results, averaged into
+  buckets as they are streamed so a year of them is never held in memory.
+
+**What this costs, accepted.**
+
+- **A machine no hardware check watches keeps only its newest reading, in
+  memory.** An agent registered onto a node that never had a hardware check, or
+  this computer's own readings when no "This computer" check exists, used to
+  leave a history in the readings table. Now there is nowhere for it to go, and
+  those readings are dropped by the migration. Adding a machine from Add node
+  makes its check, and attaching one to an existing node adds one if there is
+  none.
+- **Deleting an agent no longer deletes readings**, because they are not the
+  agent's: they are the node's history and go with the node.
+- **A named metric is only as old as raw results.** A year-long chart of a
+  hardware metric reaches back as far as `hostDays`, not a year; per-metric
+  rollups would fix that for every named metric (SNMP and JSON included) and
+  are the right next step, not a part of this one.
+- **Old archives** carry a `hostsamples.jsonl`. It is not read: every reading in
+  it was also a hardware check's result, which `results.jsonl` has.
+
+**The migration** (schema version 4) is a `DROP TABLE`. SQLite databases are
+copied aside before any numbered migration runs; for PostgreSQL and MySQL, take
+the server-side backup `docs/DATABASE.md` already asks for.
+
+**Rejected: keeping the table as a cache.** It would be the same second copy
+under a kinder name, and the question to answer is "where is this machine's
+history", which should have one answer.
+
+**Rejected: running the check on its schedule *and* on arrival.** Two results a
+minute for the same reading, or a rule for choosing between them.
+
+**Rejected: judging only on the schedule** (the smallest change). A reading the
+agent held back would never reach the history, which would make the held-back
+readings of entry 13 a feature that keeps them in memory for nothing.
 
 ---
 

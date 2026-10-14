@@ -29,7 +29,7 @@ Tags:
   - homelab
 ReleaseNotesUrl: https://github.com/jxburros/GWatch/releases/tag/agent-v@VERSION@
 InstallationNotes: |-
-  Pair this machine with GWatch to start reporting. Get a code in GWatch under Nodes > Pair a machine, then either install with it:
+  Pair this machine with GWatch to start reporting. Get a code in GWatch under Nodes > Add node > GWatch agent, then either install with it:
     winget install GWatch.Agent --override "/VERYSILENT /SUPPRESSMSGBOXES /SERVER=https://gwatch.lan:7230 /CODE=XXXX-XXXX"
   or, after a plain install, from an Administrator prompt:
     "%ProgramFiles%\GWatch Agent\gwatch-agent.exe" install --server https://gwatch.lan:7230 --code XXXX-XXXX

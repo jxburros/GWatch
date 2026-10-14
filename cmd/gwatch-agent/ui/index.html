@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark light">
+  <title>GWatch Agent</title>
+  <link rel="icon" href="agent-logo.png" type="image/png">
+  <link rel="stylesheet" href="panel.css">
+  <script src="panel.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="top">
+    <img class="mark" src="agent-logo.png" alt="" width="36" height="36">
+    <div class="title">
+      <h1>GWatch Agent</h1>
+      <p class="sub" id="sub">Control panel for this machine</p>
+    </div>
+    <span id="svc-pill" class="pill pill-unknown" role="status">Loading…</span>
+  </header>
+  <main id="main" tabindex="-1">
+    <div id="banner" class="banner" hidden role="status"></div>
+    <noscript><p class="note">This panel needs JavaScript.</p></noscript>
+    <div id="app"></div>
+  </main>
+  <footer class="foot">
+    <p>This panel runs with your account's rights, only on this machine, and closes itself after half an hour of not being used.</p>
+  </footer>
+</body>
+</html>

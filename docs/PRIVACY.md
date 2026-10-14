@@ -68,9 +68,10 @@ Inside the database:
   codes, resolved addresses, certificate issuers and expiry dates, final URLs,
   response snippets for keyword and JSON checks, and the output of custom
   script checks.
-- **Hardware readings** — processor, memory, swap, filesystem, network and disk
+- **Hardware results** — processor, memory, swap, filesystem, network and disk
   throughput for this computer and for any machine you install the agent on,
-  with the machine's hostname, operating system and architecture.
+  with the machine's hostname, operating system and architecture, recorded as
+  the results of that machine's hardware check.
 - **Incidents and the audit log** — outages, recoveries, warnings, maintenance
   windows, configuration changes, backups and restores, service start and stop,
   sleep gaps, and your own notes. Sign-ins and failed sign-in attempts are

@@ -1,0 +1,116 @@
+// Choosing what an agent reports: which kinds of reading, and — once the
+// machine has said what it has — which network interfaces, disks and
+// filesystems. Used when a machine is added (kinds only, since nothing has
+// reported yet) and on the machine's node afterwards (everything).
+//
+// The empty answer is "automatic" everywhere, which is also what an agent does
+// when nobody has chosen: every kind of reading, and every interface that is not
+// obviously virtual. The picker therefore only writes a list when someone has
+// narrowed something, so leaving it alone changes nothing.
+
+import { h } from '../components.js';
+
+/** The kinds of reading an agent collects, in the order they are listed. */
+export const COLLECT_FAMILIES = [
+  { key: 'cpu', label: 'Processor use' },
+  { key: 'load', label: 'Load average', help: 'For machines that cannot report processor use' },
+  { key: 'memory', label: 'Memory' },
+  { key: 'swap', label: 'Swap' },
+  { key: 'disk', label: 'Disk space' },
+  { key: 'inodes', label: 'Inodes', help: 'Needs disk space' },
+  { key: 'net', label: 'Network throughput' },
+  { key: 'diskio', label: 'Disk throughput' },
+];
+
+const INSTANCE_KINDS = [
+  { key: 'interfaces', title: 'Network interfaces', auto: 'Automatic leaves out virtual, bridge and tunnel interfaces.' },
+  { key: 'disks', title: 'Disks (throughput)', auto: 'Automatic reports every physical disk.' },
+  { key: 'mounts', title: 'Filesystems (space)', auto: 'Automatic reports every mounted filesystem.' },
+];
+
+let seq = 0;
+
+/**
+ * collectionPicker({ value, inventory, instances }) → { el, value(), summary() }
+ *
+ * `value` is a selection as the API has it ({ metrics, interfaces, disks, mounts },
+ * any of them absent). `inventory` is what the agent said it could collect
+ * ({ interfaces: [{ name, detail, auto }], … }), or null before it has said.
+ * `instances: false` shows only the kinds of reading.
+ */
+export function collectionPicker({ value = {}, inventory = null, instances = true, disabled = false } = {}) {
+  const id = `collect-${++seq}`;
+  const chosen = new Set(value.metrics?.length ? value.metrics : COLLECT_FAMILIES.map((f) => f.key));
+
+  const famBoxes = COLLECT_FAMILIES.map((f) => {
+    const input = h('input', { type: 'checkbox', id: `${id}-${f.key}`, checked: chosen.has(f.key), disabled });
+    return { key: f.key, input, el: h('label', { class: 'checkbox', for: input.id }, input, h('span', null, f.label, f.help ? h('span', { class: 'dim small' }, ` — ${f.help}`) : null)) };
+  });
+
+  const kinds = instances ? INSTANCE_KINDS.map((k) => buildKind(id, k, value[k.key] || [], inventory?.[k.key] || [], disabled)) : [];
+
+  const el = h('div', { class: 'stack-sm collect-picker' },
+    h('fieldset', { class: 'collect-group' }, h('legend', null, 'Kinds of reading'),
+      h('div', { class: 'collect-cols' }, famBoxes.map((b) => b.el))),
+    kinds.map((k) => k.el),
+    instances && !inventory ? h('p', { class: 'note' }, 'Which network interfaces, disks and filesystems to report can be chosen once the machine has reported for the first time.') : null);
+
+  const api = {
+    el,
+    /** The selection as the API wants it. */
+    value() {
+      const ticked = famBoxes.filter((b) => b.input.checked).map((b) => b.key);
+      const out = { metrics: ticked.length === famBoxes.length ? [] : ticked };
+      for (const k of kinds) out[k.key] = k.value();
+      // Nothing narrowed anywhere is "automatic": the empty selection.
+      return out;
+    },
+    /** One line saying what is chosen, for a summary. */
+    summary: () => describeSelection(api.value()),
+  };
+  return api;
+}
+
+/** A selection in words: what has been narrowed, or "everything" when nothing has. */
+export function describeSelection(sel = {}) {
+  const parts = [];
+  if (sel.metrics?.length) parts.push(`${sel.metrics.length} of ${COLLECT_FAMILIES.length} kinds of reading`);
+  for (const k of INSTANCE_KINDS) if (sel[k.key]?.length) parts.push(`${sel[k.key].length} ${k.title.toLowerCase()}`);
+  return parts.length ? parts.join(', ') : 'everything, with virtual interfaces left out';
+}
+
+function buildKind(id, kind, current, items, disabled) {
+  const chosen = new Set(current);
+  const only = chosen.size > 0;
+  const seen = new Set(items.map((i) => i.name));
+  // A name that was chosen but is not on the machine now (a drive that was
+  // unplugged) stays in the list, so saving does not quietly forget it.
+  const rows = items.map((i) => ({ ...i, here: true })).concat([...chosen].filter((n) => !seen.has(n)).map((n) => ({ name: n, here: false })));
+
+  const boxes = rows.map((r, i) => {
+    const input = h('input', { type: 'checkbox', id: `${id}-${kind.key}-${i}`, checked: only ? chosen.has(r.name) : r.auto !== false, disabled });
+    return {
+      name: r.name, input,
+      el: h('label', { class: 'checkbox', for: input.id }, input,
+        h('span', null, r.name,
+          r.auto === false ? h('span', { class: 'tag' }, 'hidden by default') : null,
+          r.here ? null : h('span', { class: 'tag' }, 'not seen now'),
+          r.detail ? h('span', { class: 'dim small collect-detail' }, r.detail) : null)),
+    };
+  });
+  const list = h('div', { class: 'collect-cols' }, boxes.map((b) => b.el));
+  const auto = h('input', { type: 'radio', name: `${id}-${kind.key}-mode`, id: `${id}-${kind.key}-auto`, checked: !only, disabled });
+  const pick = h('input', { type: 'radio', name: `${id}-${kind.key}-mode`, id: `${id}-${kind.key}-only`, checked: only, disabled });
+  const sync = () => { list.hidden = !pick.checked; };
+  auto.addEventListener('change', sync);
+  pick.addEventListener('change', sync);
+  sync();
+
+  const el = h('fieldset', { class: 'collect-group' }, h('legend', null, kind.title),
+    h('div', { class: 'collect-modes' },
+      h('label', { class: 'radio', for: auto.id }, auto, h('span', null, 'Automatic')),
+      h('label', { class: 'radio', for: pick.id }, pick, h('span', null, 'Only the ones I tick'))),
+    h('p', { class: 'note' }, kind.auto),
+    rows.length ? list : h('p', { class: 'note' }, 'Nothing listed yet.'));
+  return { key: kind.key, el, value: () => (pick.checked ? boxes.filter((b) => b.input.checked).map((b) => b.name) : []) };
+}

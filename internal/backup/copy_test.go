@@ -14,7 +14,7 @@ import (
 
 // seedFull fills a store with one of everything a full backup carries, and
 // returns the counts a copy or restore should reproduce.
-func seedFull(t *testing.T, ctx context.Context, st *store.Store) (users, keys, agents, boards, samples, results, events int) {
+func seedFull(t *testing.T, ctx context.Context, st *store.Store) (users, keys, agents, boards, results, events int) {
 	t.Helper()
 	gw, err := st.CreateNode(ctx, model.Node{Name: "Gateway", Host: "192.168.1.1", Group: "Home Network", Enabled: true,
 		Checks: []model.Check{{Type: model.CheckPing, Name: "Ping", Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5}}})
@@ -76,18 +76,10 @@ func seedFull(t *testing.T, ctx context.Context, st *store.Store) (users, keys, 
 		t.Fatal(err)
 	}
 	keys = 1
-	ag, err := st.CreateAgent(ctx, "nas agent", &nas.ID, "gwa_x", auth.HashToken("gwa_xyz"), "admin")
-	if err != nil {
+	if _, err := st.CreateAgent(ctx, "nas agent", &nas.ID, "gwa_x", auth.HashToken("gwa_xyz"), "admin"); err != nil {
 		t.Fatal(err)
 	}
 	agents = 1
-	cpu := 42.0
-	for i := 0; i < 7; i++ {
-		if err := st.SaveHostSample(ctx, model.HostSample{Key: model.AgentHostKey(ag.ID), Timestamp: time.Now().Add(-time.Duration(i) * time.Minute), CPUPct: &cpu}); err != nil {
-			t.Fatal(err)
-		}
-		samples++
-	}
 	settings, _ := st.LoadSettings(ctx)
 	settings.Alerts.Recipients = []string{"me@example.com"}
 	settings.Alerts.SMTP.Password = "smtp-secret"
@@ -108,7 +100,7 @@ func TestCopyMovesEverything(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer src.Close()
-	users, keys, agents, boards, samples, results, events := seedFull(t, ctx, src)
+	users, keys, agents, boards, results, events := seedFull(t, ctx, src)
 
 	dst := storetest.Open(t)
 	if empty, err := dst.IsEmpty(ctx); err != nil || !empty {
@@ -120,10 +112,10 @@ func TestCopyMovesEverything(t *testing.T) {
 		t.Fatalf("copy: %v", err)
 	}
 	if sum.Nodes != 2 || sum.Checks != 2 || sum.Results != results || sum.Events != events || sum.Rollups == 0 ||
-		sum.Users != users || sum.APIKeys != keys || sum.Agents != agents || sum.Wallboards != boards || sum.HostSamples != samples {
+		sum.Users != users || sum.APIKeys != keys || sum.Agents != agents || sum.Wallboards != boards {
 		t.Fatalf("summary: %+v", sum)
 	}
-	if stages["results"] != results || stages["hardware readings"] != samples {
+	if stages["results"] != results {
 		t.Fatalf("progress was not reported: %v", stages)
 	}
 	if empty, _ := dst.IsEmpty(ctx); empty {
@@ -152,8 +144,9 @@ func TestCopyMovesEverything(t *testing.T) {
 	if err != nil {
 		t.Fatalf("agent did not arrive: %v", err)
 	}
-	if got, err := dst.HostSamples(ctx, model.AgentHostKey(ag.ID), time.Now().Add(-time.Hour), time.Now(), 0); err != nil || len(got) != samples {
-		t.Fatalf("readings did not follow their agent's id: %d %v", len(got), err)
+	srcAgent, err := src.AgentByTokenHash(ctx, auth.HashToken("gwa_xyz"))
+	if err != nil || ag.ID != srcAgent.ID || ag.NodeID == nil || *ag.NodeID != srcNodes[1].ID {
+		t.Fatalf("the agent's id and node must survive, a node's hardware history is keyed by them: %+v vs %+v (%v)", ag, srcAgent, err)
 	}
 	if b, err := dst.WallboardByShareToken(ctx, "wall-token-1"); err != nil || b.Name != "Lobby" {
 		t.Fatalf("wallboard share token did not arrive: %v", err)
@@ -191,14 +184,14 @@ func TestCopyMovesEverything(t *testing.T) {
 func TestBackupCarriesAccountsAndAgents(t *testing.T) {
 	ctx := context.Background()
 	src := storetest.Open(t)
-	users, keys, agents, boards, samples, _, _ := seedFull(t, ctx, src)
+	users, keys, agents, boards, _, _ := seedFull(t, ctx, src)
 	dir := t.TempDir()
 	info, err := Create(ctx, src, dir, "pw", true, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	m, err := Inspect(filepath.Join(dir, info.FileName), "pw")
-	if err != nil || m.Format != Format || m.Users != users || m.APIKeys != keys || m.Agents != agents || m.Wallboards != boards || m.HostSamples != samples {
+	if err != nil || m.Format != Format || m.Users != users || m.APIKeys != keys || m.Agents != agents || m.Wallboards != boards {
 		t.Fatalf("manifest: %v %+v", err, m)
 	}
 
@@ -213,7 +206,7 @@ func TestBackupCarriesAccountsAndAgents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("restore: %v", err)
 	}
-	if sum.Users != users-1 || sum.APIKeys != keys || sum.Agents != agents || sum.Wallboards != boards || sum.HostSamples != samples {
+	if sum.Users != users-1 || sum.APIKeys != keys || sum.Agents != agents || sum.Wallboards != boards {
 		t.Fatalf("summary: %+v", sum)
 	}
 	if _, hash, err := dst.GetUserByName(ctx, "admin"); err != nil || auth.VerifyPassword(hash, "other") != nil {

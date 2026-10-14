@@ -174,6 +174,34 @@ func (s *Store) DeleteResultsBefore(ctx context.Context, t time.Time) (int64, er
 	return n, nil
 }
 
+// CountResultsNear counts a check's raw results within window of t, either side.
+// It is how a reading that arrives late is kept from being recorded twice, or
+// from being recorded in a minute a result already covers.
+func (s *Store) CountResultsNear(ctx context.Context, checkID int64, t time.Time, window time.Duration) (int, error) {
+	var n int
+	err := s.queryRow(ctx, "SELECT COUNT(*) FROM results WHERE check_id = ? AND ts >= ? AND ts <= ?",
+		checkID, t.Add(-window).UnixMilli(), t.Add(window).UnixMilli()).Scan(&n)
+	return n, err
+}
+
+// DeleteResultsBeforeByKind removes raw results older than t: those of hardware
+// checks when hardware is true, those of every other check when it is false.
+// A hardware result is a whole snapshot of a machine rather than a latency, so
+// its retention is its own setting (Settings › Retention, "hardware readings"),
+// which is how long the separate table of readings used to be kept.
+func (s *Store) DeleteResultsBeforeByKind(ctx context.Context, t time.Time, hardware bool) (int64, error) {
+	in := "NOT IN"
+	if hardware {
+		in = "IN"
+	}
+	res, err := s.exec(ctx, "DELETE FROM results WHERE ts < ? AND check_id "+in+" (SELECT id FROM checks WHERE type = 'system')", t.UnixMilli())
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // DeleteRollupsBefore removes buckets of a size older than t.
 func (s *Store) DeleteRollupsBefore(ctx context.Context, bucket int, t time.Time) (int64, error) {
 	res, err := s.exec(ctx, "DELETE FROM rollups WHERE bucket_seconds = ? AND bucket_start < ?", bucket, t.Unix())
@@ -590,7 +618,7 @@ func (s *Store) RestoreNodes(ctx context.Context, nodes []model.Node, includeHis
 				return err
 			}
 		}
-		nodeColumns := []string{"id", "name", "host", "group_name", "\"groups\"", "tags", "notes", "importance", "enabled", "depends_on_node_id", "template", "created_at", "updated_at"}
+		nodeColumns := []string{"id", "name", "host", "group_name", "\"groups\"", "tags", "notes", "importance", "enabled", "depends_on_node_id", "link_style", "template", "created_at", "updated_at"}
 		checkColumns := []string{"id", "node_id", "type", "name", "enabled", "interval_seconds", "timeout_seconds", "retries", "failure_threshold", "config", "alerts", "sort_order", "created_at", "updated_at"}
 		keepNodes, keepChecks := map[int64]bool{}, map[int64]bool{}
 		for _, n := range nodes {
@@ -603,7 +631,7 @@ func (s *Store) RestoreNodes(ctx context.Context, nodes []model.Node, includeHis
 				n.Tags = []string{}
 			}
 			if _, err := tx.exec(ctx, insertValues("nodes", nodeColumns)+" "+s.d.upsertClause([]string{"id"}, nodeColumns),
-				n.ID, n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nil, n.Template, fmtTime(n.CreatedAt), fmtTime(n.UpdatedAt)); err != nil {
+				n.ID, n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nil, linkStyleJSON(n.LinkStyle), n.Template, fmtTime(n.CreatedAt), fmtTime(n.UpdatedAt)); err != nil {
 				return err
 			}
 		}

@@ -2,13 +2,14 @@
 // "Depends on" hangs under the node it names, so a firewall or a gateway sits
 // at the top of everything it would take down with it. The map can be laid
 // out three ways and styled, its options are remembered in this browser, a
-// node's dependency can be changed from beside it, and the map as configured
-// can be pinned to a dashboard as a widget.
+// node's dependency — and the look of the line to it — can be changed from
+// beside it, and the map as configured can be pinned to a dashboard as a
+// widget.
 
 import { api } from '../api.js';
 import { h, append, icon, clear, replace, toast, confirmDialog, menuButton, emptyState, skeleton, statusPill, field, selectInput, uid } from '../components.js';
 import { plural, compareNames } from '../fmt.js';
-import { renderNetworkMap, mapConfigEditor, normalizeMapConfig, buildForest } from '../netmap.js';
+import { renderNetworkMap, mapConfigEditor, linkStyleEditor, normalizeMapConfig, buildForest } from '../netmap.js';
 
 const STORE_KEY = 'gw.netmap';
 function savedConfig() { try { return normalizeMapConfig(JSON.parse(localStorage.getItem(STORE_KEY) || '{}')); } catch { return normalizeMapConfig({}); } }
@@ -100,8 +101,16 @@ export async function mount(root, ctx) {
     const options = all.map((x) => x.node).filter((x) => !blocked.has(String(x.id))).sort((a, b) => compareNames(a.name, b.name));
     const sel = selectInput({ options: [{ value: '', label: 'Nothing (a root of the map)' }, ...options.map((x) => ({ value: x.id, label: `${x.name}${x.host ? ` (${x.host})` : ''}` }))], value: n.dependsOnNodeId ?? '', disabled: !ctx.me?.isAdmin });
     const saveBtn = h('button', { type: 'button', class: 'btn btn-primary btn-sm admin-only', onclick: () => setParent(n, sel.value ? Number(sel.value) : null) }, 'Save');
+    // The line to the parent has a look of its own, kept on this node and
+    // seen on every map; what it leaves unset follows the map's.
+    const linkEditor = parent ? linkStyleEditor({
+      parentName: parent.name, value: n.linkStyle, disabled: !ctx.me?.isAdmin,
+      defaults: { color: state.cfg.lineColor, width: state.cfg.lineWidth, dash: state.cfg.lineStyle },
+      onChange: (style) => setLinkStyle(n, style),
+    }) : null;
     append(selectedCard, [
       field({ label: 'Depends on', input: h('div', { class: 'row netmap-parent', style: { gap: '6px', flexWrap: 'nowrap' } }, sel, saveBtn), help: 'While the node it depends on is down, this node’s failures are put down to it and its alerts are held back.' }),
+      linkEditor,
       chain.length ? h('div', { class: 'netmap-facts' }, h('span', { class: 'section-title' }, 'Upstream'), h('div', null, chain.map((p, i) => [i ? ' › ' : '', h('a', { href: '#', onclick: (ev) => { ev.preventDefault(); select(p.id); } }, p.name)]))) : null,
       h('div', { class: 'netmap-facts' }, h('span', { class: 'section-title' }, 'Depends on this'),
         children.length ? h('div', null, children.sort((a, b) => compareNames(a.name, b.name)).map((c, i) => [i ? ', ' : '', h('a', { href: '#', onclick: (ev) => { ev.preventDefault(); select(c.id); } }, c.name)])) : h('div', { class: 'muted' }, 'Nothing')),
@@ -120,6 +129,24 @@ export async function mount(root, ctx) {
       toast(parentId ? `${n.name} now depends on ${entryOf(parentId)?.node.name || 'that node'}` : `${n.name} no longer depends on anything`, { kind: 'success' });
       await load(); state.map?.update(entries(), state.cfg); renderSelected();
     } catch (err) { toast(err.message, { kind: 'error' }); }
+  }
+
+  // A link's style is saved as it is changed, one request after another so
+  // that the last change is the one that stays; the map redraws from what
+  // came back. A failure puts the panel back as it was saved.
+  let linkSaving = Promise.resolve();
+  function setLinkStyle(n, style) {
+    linkSaving = linkSaving.then(async () => {
+      try {
+        await api.patch('/api/nodes/bulk', { nodeIds: [n.id], node: { linkStyle: style } });
+        await load();
+        if (!state.destroyed) state.map?.update(entries(), state.cfg);
+      } catch (err) {
+        toast(err.message, { kind: 'error' });
+        if (!state.destroyed) { await load().catch(() => {}); renderSelected(); }
+      }
+    });
+    return linkSaving;
   }
 
   async function pinToDashboard() {
@@ -145,7 +172,7 @@ export async function mount(root, ctx) {
     const pairs = [...el.querySelectorAll('*')].map((x, i) => [x, copy.querySelectorAll('*')[i]]);
     for (const [src, dst] of pairs) {
       const s = getComputedStyle(src);
-      for (const prop of ['fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'opacity', 'font-family', 'font-weight']) {
+      for (const prop of ['fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'stroke-linecap', 'opacity', 'font-family', 'font-weight']) {
         const v = s.getPropertyValue(prop); if (v) dst.style.setProperty(prop, v);
       }
     }

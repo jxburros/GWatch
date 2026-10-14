@@ -219,6 +219,17 @@ func (s *Server) handleSaveDashboard(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "every widget needs a type")
 			return
 		}
+		// A widget's configuration is the interface's to read, but a network
+		// map's line colour ends up in a drawing, so it is held to the same
+		// rule as the colour of a link.
+		if wd.Type == "network_map" {
+			cfg, err := model.CleanMapLineConfig(wd.Config)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("network map widget: %v", err))
+				return
+			}
+			wd.Config = cfg
+		}
 	}
 	saved, err := s.Store.SaveDashboard(r.Context(), d)
 	if err != nil {
@@ -399,7 +410,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if rt.HostDays < 1 || rt.HostDays > 3650 {
-		writeError(w, http.StatusBadRequest, "hardware readings must be kept between 1 and 3650 days")
+		writeError(w, http.StatusBadRequest, "hardware check results must be kept between 1 and 3650 days")
 		return
 	}
 	for _, v := range []int{rt.FiveMinDays, rt.HourlyDays, rt.DailyDays, rt.EventDays} {

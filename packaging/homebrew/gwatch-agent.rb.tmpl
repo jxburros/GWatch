@@ -43,7 +43,7 @@ class GwatchAgent < Formula
 
   def caveats
     <<~EOS
-      Pair this machine with GWatch once (in GWatch: Nodes > Pair a machine):
+      Pair this machine with GWatch once (in GWatch: Nodes > Add node > GWatch agent):
         gwatch-agent pair --server https://gwatch.lan:7230 --code XXXX-XXXX
       then keep it reporting in the background, starting at login:
         brew services start gwatch-agent

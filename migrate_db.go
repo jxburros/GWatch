@@ -84,8 +84,8 @@ func migrateDB(ctx context.Context, cfg config) error {
 		return fmt.Errorf("copy failed, nothing was changed in %s: %w", src.Path, err)
 	}
 
-	fmt.Printf("Done: %d nodes, %d checks, %d results, %d rollups, %d events, %d hardware readings, %d wallboards, %d users, %d API keys, %d agents.\n",
-		sum.Nodes, sum.Checks, sum.Results, sum.Rollups, sum.Events, sum.HostSamples, sum.Wallboards, sum.Users, sum.APIKeys, sum.Agents)
+	fmt.Printf("Done: %d nodes, %d checks, %d results, %d rollups, %d events, %d wallboards, %d users, %d API keys, %d agents.\n",
+		sum.Nodes, sum.Checks, sum.Results, sum.Rollups, sum.Events, sum.Wallboards, sum.Users, sum.APIKeys, sum.Agents)
 
 	if !fromFile || !cfg.db.Empty() || !dbconfig.FromEnv().Empty() {
 		if err := dbconfig.Save(cfg.dataDir, target); err != nil {

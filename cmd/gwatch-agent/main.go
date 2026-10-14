@@ -70,10 +70,14 @@ const (
 	// requestTimeout bounds one report. It is well under the smallest useful
 	// interval so a hung server cannot stall the next reading.
 	requestTimeout = 20 * time.Second
-	// maxBackoff caps the wait between failed reports. The agent keeps trying
-	// forever: a server that is down comes back, and the machine it is
-	// reporting on is usually not the one that needs attention.
-	maxBackoff = 10 * time.Minute
+	// maxBackoff caps the wait between attempts to deliver while GWatch cannot
+	// be reached. The agent keeps trying forever: a server that is down comes
+	// back, and the machine it is reporting on is usually not the one that needs
+	// attention. The cap is short because readings are being held for the
+	// moment it does: an agent that waited ten minutes between attempts would
+	// leave GWatch looking at a machine up to ten minutes behind for no reason
+	// but politeness, and a refused connection costs the server nothing.
+	maxBackoff = 2 * time.Minute
 )
 
 type config struct {
@@ -87,10 +91,27 @@ type config struct {
 	name       string
 	repo       string
 	autoUpdate bool
+	// checkIn is how often the agent asks GWatch for its settings, and buffer
+	// how long it holds readings while GWatch cannot be reached.
+	checkIn time.Duration
+	buffer  time.Duration
+	// collect is the machine's own limit on what it will report: a list that is
+	// empty means no limit, and GWatch narrows within whatever is set here.
+	collect model.CollectSelection
 	// hostRoot is where the host's root filesystem is mounted when the agent
 	// runs in a container and is watching the machine around it rather than
 	// the container (docs/HARDWARE.md#in-a-container). Empty everywhere else.
 	hostRoot string
+
+	// Where the settings came from (configfile.go). sources maps a setting to
+	// the layer that decided it, tokenSource is where the token in use came
+	// from, and fileServer is the server the file named, which is what
+	// insecure/certPin there were a statement about.
+	configPath  string
+	fileExists  bool
+	fileServer  string
+	tokenSource string
+	sources     map[string]string
 }
 
 func usage() {
@@ -100,21 +121,29 @@ The agent only ever sends data out. GWatch is never given a way in.
 
 Usage:
   gwatch-agent pair --server URL --code XXXX-XXXX [--name NAME]
-        exchange a pairing code for this machine's own token, save it and
-        send one reading to prove it works
-  gwatch-agent run --server URL --token TOKEN [--interval 60s]
-        send a reading every interval until stopped
-  gwatch-agent once --server URL --token TOKEN
-        send a single reading and exit (useful for testing the token)
+        exchange a pairing code for this machine's own token, save it in the
+        configuration file and send one reading to prove it works
+  gwatch-agent run
+        send a reading every interval until stopped, using the settings in the
+        configuration file (flags and environment variables override them)
+  gwatch-agent once
+        send a single reading and exit (useful for testing the settings)
   gwatch-agent print
-        print this computer's reading as JSON and exit; sends nothing
+        print the reading this computer would send as JSON and exit; sends nothing
+  gwatch-agent ui
+        open the control panel: status, settings, what is collected and the
+        token, in a browser. It runs as you, only on this machine, and closes by
+        itself when it is not being used.
+  gwatch-agent config [show|path|validate] [--show-token]
+        show every setting and where it came from, print the configuration
+        file's location, or check the file for mistakes
   gwatch-agent serve --token TOKEN [--listen %s]
         expose readings for GWatch to read, instead of pushing them.
         This opens a port on this computer; prefer run unless you need it.
-  gwatch-agent install --server URL --token TOKEN [--interval 60s]
-  gwatch-agent install --server URL --code XXXX-XXXX [--name NAME] [--interval 60s]
+  gwatch-agent install [--server URL] [--token TOKEN | --code XXXX-XXXX] [--interval 60s]
         install and start the background service (run as Administrator on
-        Windows). With --code the machine is paired first.
+        Windows). With --code the machine is paired first. The service is
+        registered with no settings of its own: it reads the configuration file.
   gwatch-agent uninstall | start | stop | restart | status
   gwatch-agent update [--check]
         install the newest signed agent release (--check only reports one).
@@ -123,30 +152,34 @@ Usage:
         put back the version the last update replaced
   gwatch-agent version
 
-Get a pairing code or a token from GWatch, under Hardware. A code is short
-enough to type off the screen and is good for one machine for a few minutes;
-a token is the long gwa_… string, shown once. Either way, what this machine
-ends up holding can do one thing only: submit this machine's readings.
-
-A token obtained with a pairing code is saved to
+Settings live in one plain-text JSON file:
   %s
-readable only by the account that paired the machine. run and once use
-it when --token is not given.
+Open it, change a setting, restart the agent. It holds this machine's token,
+so it is readable only by the account that paired the machine. Settings given
+as flags or environment variables win over the file; "gwatch-agent config show"
+says which is in force. Pair this machine from GWatch (Add node › GWatch agent)
+with a short code, or put a token from GWatch's node page in the file.
+
+Whoever holds the token can do one thing: submit this machine's readings. Every
+so often the agent also asks GWatch for a small, fixed set of things — which
+readings to send (only ever fewer than this machine allows), when to ask again,
+and a replacement token while an administrator is rotating this one. GWatch can
+not tell it to do anything else.
 
 Keeping itself up to date: a running agent checks for a new agent release
 every few hours, installs it if the download is signed by a release key this
 build trusts, and restarts into it. The machines an agent runs on are rarely
 machines anyone logs into, which is the argument for doing this by default;
---auto-update=false, or GWATCH_AGENT_AUTO_UPDATE=off, turns it off and leaves
+--auto-update=false, or "autoUpdate": false in the file, turns it off and leaves
 gwatch-agent update to be run by hand. GWatch is not involved either way: it
 is never asked what version to run and cannot make this machine install
 anything.%s
 
 Environment: GWATCH_SERVER, GWATCH_AGENT_TOKEN, GWATCH_AGENT_CODE,
-GWATCH_AGENT_INTERVAL, GWATCH_AGENT_LISTEN, GWATCH_AGENT_TOKEN_FILE,
-GWATCH_AGENT_AUTO_UPDATE, GWATCH_AGENT_REPO, GWATCH_HOST_ROOT override the
-defaults.
-`, version, defaultListen, tokenFile(), packagedUsage())
+GWATCH_AGENT_INTERVAL, GWATCH_AGENT_LISTEN, GWATCH_AGENT_CONFIG,
+GWATCH_AGENT_TOKEN_FILE (moves the whole data directory), GWATCH_AGENT_AUTO_UPDATE,
+GWATCH_AGENT_REPO, GWATCH_HOST_ROOT override the file.
+`, version, defaultListen, configFile(), packagedUsage())
 }
 
 // packagedUsage is the paragraph a packaged build adds to the usage text, so
@@ -171,56 +204,77 @@ func main() {
 		cmd = args[0]
 		args = args[1:]
 	}
+	// `config show` and friends: the word after config is a subcommand, and
+	// flag parsing would stop at it.
+	configSub := ""
+	if cmd == "config" && len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		configSub, args = args[0], args[1:]
+	}
+
+	// Where the configuration file is has to be known before the flags are
+	// declared, because the file supplies their defaults.
+	configPathOverride = configPathFromArgs(args)
+	base, problems, warnings := baseConfig()
 
 	fs := flag.NewFlagSet("gwatch-agent", flag.ContinueOnError)
 	fs.Usage = usage
-	cfg := config{}
-	fs.StringVar(&cfg.server, "server", os.Getenv("GWATCH_SERVER"), "base URL of the GWatch server, e.g. https://gwatch.lan:7230")
-	fs.StringVar(&cfg.token, "token", os.Getenv("GWATCH_AGENT_TOKEN"), "agent token from Settings › Hardware")
-	fs.StringVar(&cfg.code, "code", os.Getenv("GWATCH_AGENT_CODE"), "pairing code shown in GWatch (Hardware › Pair a machine), e.g. XXXX-XXXX")
-	fs.DurationVar(&cfg.interval, "interval", envDuration("GWATCH_AGENT_INTERVAL", defaultInterval), "how often to send a reading")
-	fs.StringVar(&cfg.listen, "listen", envOr("GWATCH_AGENT_LISTEN", defaultListen), "serve mode: address to listen on")
-	fs.StringVar(&cfg.certPin, "cert-pin", os.Getenv("GWATCH_AGENT_CERT_PIN"), "pinned SHA-256 server public key")
-	fs.BoolVar(&cfg.insecure, "insecure", false, "accept an untrusted TLS certificate from the server (use only with a self-signed certificate you recognise)")
-	fs.StringVar(&cfg.name, "name", "", "override the hostname reported to GWatch")
-	fs.StringVar(&cfg.repo, "repo", envOr("GWATCH_AGENT_REPO", defaultRepo), "GitHub repository the agent takes its own updates from")
-	fs.BoolVar(&cfg.autoUpdate, "auto-update", envBool("GWATCH_AGENT_AUTO_UPDATE", true), "keep this agent up to date from signed agent releases")
-	fs.StringVar(&cfg.hostRoot, "host-root", os.Getenv("GWATCH_HOST_ROOT"), "in a container: where the host's / is mounted (e.g. /host), to report the host rather than the container")
-	var noStart bool
+	cfg := base
+	fs.StringVar(&configPathOverride, "config", configPathOverride, "the configuration file (default: agent.json beside the stored token)")
+	fs.StringVar(&cfg.server, "server", base.server, "base URL of the GWatch server, e.g. https://gwatch.lan:7230")
+	fs.StringVar(&cfg.token, "token", base.token, "this machine's agent token (normally kept in the configuration file)")
+	fs.StringVar(&cfg.code, "code", base.code, "pairing code shown in GWatch (Add node › GWatch agent), e.g. XXXX-XXXX")
+	fs.DurationVar(&cfg.interval, "interval", base.interval, "how often to send a reading")
+	fs.StringVar(&cfg.listen, "listen", base.listen, "serve mode: address to listen on")
+	fs.StringVar(&cfg.certPin, "cert-pin", base.certPin, "pinned SHA-256 server public key")
+	fs.BoolVar(&cfg.insecure, "insecure", base.insecure, "accept an untrusted TLS certificate from the server (use only with a self-signed certificate you recognise)")
+	fs.StringVar(&cfg.name, "name", base.name, "override the hostname reported to GWatch")
+	fs.StringVar(&cfg.repo, "repo", base.repo, "GitHub repository the agent takes its own updates from")
+	fs.BoolVar(&cfg.autoUpdate, "auto-update", base.autoUpdate, "keep this agent up to date from signed agent releases")
+	fs.StringVar(&cfg.hostRoot, "host-root", base.hostRoot, "in a container: where the host's / is mounted (e.g. /host), to report the host rather than the container")
+	var noStart, showToken bool
 	fs.BoolVar(&noStart, "no-start", false, "install without starting")
+	fs.BoolVar(&showToken, "show-token", false, "config show: print the token in full")
 	var updateCheckOnly bool
 	fs.BoolVar(&updateCheckOnly, "check", false, "update: report whether a newer agent exists without installing it")
+	var uiAddr string
+	fs.StringVar(&uiAddr, "ui-listen", "127.0.0.1:0", "ui: loopback address for the control panel (port 0 picks a free one)")
+	var uiNoBrowser bool
+	fs.BoolVar(&uiNoBrowser, "no-browser", false, "ui: print the address instead of opening a browser")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
+	configPathOverride = strings.TrimSpace(configPathOverride)
+	cfg.configPath = configFile()
 
-	// Naming both is a mistake worth stopping rather than guessing at: the two
-	// would enrol this machine twice, or use a token the person did not mean.
+	// Anything given on the command line decided its setting.
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+	for flagName, key := range map[string]string{
+		"server": "server", "token": "token", "code": "code", "interval": "interval", "listen": "listen",
+		"cert-pin": "certPin", "insecure": "insecure", "name": "name", "repo": "repo", "auto-update": "autoUpdate",
+		"host-root": "hostRoot",
+	} {
+		if given[flagName] {
+			cfg.sources[key] = srcFlag
+		}
+	}
+	cfg.tokenSource = cfg.sources["token"]
+
+	cfg.dropServerBoundTrust(given["insecure"], given["cert-pin"])
+
+	// A token that is only the one the file holds yields to a pairing code
+	// (re-pairing this machine); one that was given explicitly, alongside a code,
+	// is a mistake worth stopping rather than guessing at.
 	if cfg.token != "" && cfg.code != "" {
-		fatal(errors.New("give either --token or --code, not both: a code is exchanged for a token, so naming both leaves it unclear which machine you meant to enrol"))
-	}
-	// A machine paired earlier already has its token on disk, so the commands
-	// that need one should not have to be told it again.
-	if cfg.token == "" && cfg.code == "" && cmd != "serve" {
-		if stored, err := readStoredToken(); err == nil {
-			cfg.token = stored
+		if cfg.tokenSource == srcFlag || cfg.tokenSource == srcEnv {
+			fatal(errors.New("give either --token or --code, not both: a code is exchanged for a token, so naming both leaves it unclear which machine you meant to enrol"))
 		}
+		cfg.token, cfg.tokenSource = "", srcDefault
 	}
-	// The same goes for where to send readings. Pairing keeps the server it
-	// paired with beside the token, so that a service started with no
-	// arguments at all — the systemd unit a package installs, a Homebrew
-	// service — reports to it. Anything given on the command line or in the
-	// environment wins; the stored settings only fill in what was not said.
-	if strings.TrimSpace(cfg.server) == "" {
-		if s, err := readStoredSettings(); err == nil {
-			insecureGiven := false
-			fs.Visit(func(f *flag.Flag) {
-				if f.Name == "insecure" {
-					insecureGiven = true
-				}
-			})
-			cfg.applyStored(s, insecureGiven)
-		}
+	// Serve mode's token is the one GWatch presents to read from this machine,
+	// not the one this machine presents to push; the stored token is the latter.
+	if cmd == "serve" && (cfg.tokenSource == srcFile || cfg.tokenSource == srcLegacy) {
+		cfg.token, cfg.tokenSource = "", srcDefault
 	}
 
 	// A packaged build hands the service to the package that installed it.
@@ -234,6 +288,44 @@ func main() {
 		}
 	}
 
+	switch cmd {
+	case "version", "-v", "--version":
+		fmt.Println(versionLine())
+		return
+	case "help", "-h", "--help":
+		usage()
+		return
+	case "config":
+		if err := runConfigCommand(configSub, cfg, problems, warnings, showToken); err != nil {
+			fatal(err)
+		}
+		return
+	case "update":
+		if err := runUpdate(cfg, updateCheckOnly); err != nil {
+			fatal(err)
+		}
+		return
+	case "rollback":
+		if err := runRollback(); err != nil {
+			fatal(err)
+		}
+		return
+	}
+
+	// A configuration file that cannot be read is not something to guess
+	// around. Running on defaults would report a machine to the wrong place, or
+	// under the wrong name, without anyone knowing the file was ignored.
+	if len(problems) > 0 {
+		for _, p := range problems {
+			fmt.Fprintln(os.Stderr, "error:", p)
+		}
+		fmt.Fprintf(os.Stderr, "fix the file, or move it aside; `%s config validate` checks it\n", filepath.Base(os.Args[0]))
+		os.Exit(exitNotConfigured)
+	}
+	for _, w := range warnings {
+		fmt.Fprintln(os.Stderr, "warning:", w)
+	}
+
 	// Watching the host from inside a container is decided before any reading
 	// is taken, and a host root that is not there is an error rather than a
 	// warning: an agent that quietly fell back to reading the container would
@@ -241,7 +333,7 @@ func main() {
 	// Only the commands that take a reading ask; `update --check`, `rollback`
 	// or `version` in the same container have no reason to fail over it.
 	switch cmd {
-	case "run", "serve", "once", "print", "pair", "install":
+	case "run", "serve", "once", "print", "pair", "install", "ui":
 		if root := strings.TrimSpace(cfg.hostRoot); root != "" {
 			if err := sysmetrics.SetHostRoot(root); err != nil {
 				fatal(fmt.Errorf("%w (in a container, mount the host with -v /:%s:ro; to report the container itself instead, set GWATCH_HOST_ROOT to nothing)", err, root))
@@ -250,12 +342,6 @@ func main() {
 	}
 
 	switch cmd {
-	case "version", "-v", "--version":
-		fmt.Println(versionLine())
-		return
-	case "help", "-h", "--help":
-		usage()
-		return
 	case "print":
 		if err := printReading(cfg); err != nil {
 			fatal(err)
@@ -272,13 +358,8 @@ func main() {
 			fatal(err)
 		}
 		return
-	case "update":
-		if err := runUpdate(cfg, updateCheckOnly); err != nil {
-			fatal(err)
-		}
-		return
-	case "rollback":
-		if err := runRollback(); err != nil {
+	case "ui":
+		if err := runUI(cfg, uiAddr, !uiNoBrowser); err != nil {
 			fatal(err)
 		}
 		return
@@ -302,6 +383,18 @@ func main() {
 		os.Exit(exitNotConfigured)
 	}
 
+	// An agent paired by an older version gets its configuration file now, so
+	// there is one place to edit; and one that is about to be taken up with a
+	// replacement token has to be able to write it.
+	if cmd == "run" {
+		if migrateLegacy(cfg) {
+			cfg.fileExists = true
+			if cfg.tokenSource == srcLegacy {
+				cfg.tokenSource = srcFile
+			}
+		}
+	}
+
 	prg := &program{cfg: cfg, mode: cmd}
 	svc, err := newService(prg, cfg, cmd)
 	if err != nil {
@@ -314,23 +407,24 @@ func main() {
 			fatal(err)
 		}
 	case "install":
-		if _, err := saveToken(cfg.token); err != nil {
-			fatal(err)
-		}
-		if err := saveStoredSettings(storedSettings{Server: cfg.baseURL(), Insecure: cfg.insecure, CertPin: cfg.certPin, Name: cfg.name}); err != nil {
+		// Everything the service needs is written to the configuration file,
+		// and the service is registered with nothing but `run`: the token is
+		// not left on a command line any user of the machine can read, and
+		// changing a setting later is an edit and a restart, not a reinstall.
+		if err := persistConfig(cfg); err != nil {
 			fatal(err)
 		}
 		if err := svc.Install(); err != nil {
 			fatal(fmt.Errorf("install failed: %w (on Windows run this from an Administrator prompt)", err))
 		}
-		fmt.Printf("Installed service %q.\n", serviceName)
+		fmt.Printf("Installed service %q. Its settings are in %s.\n", serviceName, cfg.configPathOrDefault())
 		if noStart {
 			return
 		}
 		if err := svc.Start(); err != nil {
 			fatal(fmt.Errorf("service installed but could not be started: %w", err))
 		}
-		fmt.Println("Service started. This computer will appear under Hardware in GWatch within a minute.")
+		fmt.Println("Service started. This computer will appear in GWatch within a minute.")
 	case "uninstall":
 		_ = svc.Stop()
 		if err := svc.Uninstall(); err != nil {
@@ -357,6 +451,41 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+}
+
+// dropServerBoundTrust forgets the file's insecure and certPin when the agent
+// has been pointed at a different server for this run. Both were decisions about
+// the server the file names; pointing the agent somewhere else must not carry
+// them along, or "accept any certificate" would follow a credential to a server
+// it was never about. Anything given explicitly this run is kept.
+func (c *config) dropServerBoundTrust(insecureGiven, pinGiven bool) {
+	if c.fileServer == "" || strings.TrimRight(c.server, "/") == strings.TrimRight(c.fileServer, "/") {
+		return
+	}
+	if !insecureGiven && c.sources["insecure"] != srcEnv {
+		c.insecure = false
+	}
+	if !pinGiven && c.sources["certPin"] != srcEnv {
+		c.certPin = ""
+	}
+}
+
+// configPathFromArgs finds --config before flags are parsed, since the file it
+// names supplies the other flags' defaults.
+func configPathFromArgs(args []string) string {
+	for i, a := range args {
+		switch {
+		case a == "--config" || a == "-config":
+			if i+1 < len(args) {
+				return strings.TrimSpace(args[i+1])
+			}
+		case strings.HasPrefix(a, "--config="):
+			return strings.TrimSpace(strings.TrimPrefix(a, "--config="))
+		case strings.HasPrefix(a, "-config="):
+			return strings.TrimSpace(strings.TrimPrefix(a, "-config="))
+		}
+	}
+	return ""
 }
 
 // exitNotConfigured is EX_CONFIG from sysexits.h: the agent has no token or no
@@ -392,8 +521,8 @@ func (c config) validate(cmd string) error {
 		return nil
 	}
 	if c.token == "" {
-		return fmt.Errorf("a token is required: pair this machine with %s, or pass --token (GWatch: Hardware › Pair a machine)",
-			"gwatch-agent pair --server URL --code XXXX-XXXX")
+		return fmt.Errorf("a token is required: pair this machine with %s, or put one in %s (GWatch: Add node › GWatch agent)",
+			"gwatch-agent pair --server URL --code XXXX-XXXX", c.configPathOrDefault())
 	}
 	if cmd == "serve" {
 		if _, _, err := net.SplitHostPort(c.listen); err != nil {
@@ -410,40 +539,21 @@ func (c config) validate(cmd string) error {
 	return nil
 }
 
-// serviceArgs reconstructs the command line the service manager should use.
-// The token is on it, so the service registration is as sensitive as the
-// token itself — which is why it can only submit readings.
+// serviceArgs is the command line the service manager is given. It is nearly
+// empty on purpose: every setting is in the configuration file, so the service
+// reads them when it starts and changing one is an edit and a restart. The only
+// thing that has to travel on the command line is where the file is, and only
+// when it is not in its usual place. (A service installed by an older agent
+// still carries its settings as arguments, and they still win; `config show`
+// says so when they do.)
 func (c config) serviceArgs(cmd string) []string {
 	mode := "run"
 	if cmd == "serve" {
 		mode = "serve"
 	}
-	args := []string{mode, "--token", c.token}
-	if mode == "serve" {
-		args = append(args, "--listen", c.listen)
-	} else {
-		args = append(args, "--server", c.server, "--interval", c.interval.String())
-	}
-	if c.certPin != "" {
-		args = append(args, "--cert-pin", c.certPin)
-	}
-	if c.insecure {
-		args = append(args, "--insecure")
-	}
-	if c.name != "" {
-		args = append(args, "--name", c.name)
-	}
-	// The service runs with no arguments a person typed, so anything turned
-	// off here has to be turned off on its command line too, or the installed
-	// service would quietly go back to the default.
-	if !c.autoUpdate {
-		args = append(args, "--auto-update=false")
-	}
-	if r := strings.TrimSpace(c.repo); r != "" && r != defaultRepo {
-		args = append(args, "--repo", r)
-	}
-	if r := strings.TrimSpace(c.hostRoot); r != "" {
-		args = append(args, "--host-root", r)
+	args := []string{mode}
+	if override := strings.TrimSpace(configPathOverride); override != "" {
+		args = append(args, "--config", override)
 	}
 	return args
 }
@@ -575,14 +685,31 @@ func (p *program) restartForUpdate() {
 }
 
 // report sends a reading every interval, backing off when the server cannot
-// be reached and recovering as soon as it can.
+// be reached and recovering as soon as it can. Readings that could not be
+// delivered are held, oldest first, and sent when it can — the agent keeps
+// nothing on this machine, but it does not throw away the last few hours just
+// because the network was down for them.
 func (p *program) report(ctx context.Context) {
 	collector := newCollector(p.cfg)
 	client := newClient(p.cfg)
-	log.Printf("gwatch-agent %s reporting to %s every %s", version, p.cfg.server, p.cfg.interval)
+	rt := newRuntime(p.cfg)
+	queue := newReadingQueue(p.cfg)
+	log.Printf("gwatch-agent %s reporting to %s every %s (settings: %s)", version, p.cfg.server, p.cfg.interval, p.cfg.configPathOrDefault())
+	if ov := overrides(p.cfg); len(ov) > 0 {
+		for _, o := range ov {
+			log.Printf("note: %s", o)
+		}
+	}
+	rt.writeStatus(p.cfg, queue.len())
+	go p.checkInLoop(ctx, rt, client)
 
+	// Taking readings and delivering them are two clocks. Readings are taken
+	// every interval, always, so that what is held through an outage is a
+	// reading per interval and not a reading per attempt; delivery is tried at
+	// the same pace while all is well and backs off while it is not.
 	backoff := time.Duration(0)
 	failures := 0
+	var nextAttempt time.Time
 	for {
 		// A little spread on each wait: twenty machines set up by the same
 		// script would otherwise report on the same second of every minute
@@ -595,22 +722,38 @@ func (p *program) report(ctx context.Context) {
 				return
 			}
 			log.Printf("cannot read this computer's hardware: %v", err)
-		} else if err := send(ctx, client, p.cfg, metrics); err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			failures++
-			backoff = nextBackoff(backoff, p.cfg.interval)
-			wait = backoff
-			// A rejected token will not start working on its own, so say so
-			// plainly rather than burying it in a retry count.
-			log.Printf("report failed (attempt %d, retrying in %s): %v", failures, wait, err)
+			rt.noteReport(err, failures)
 		} else {
-			if failures > 0 {
-				log.Printf("reporting again after %d failed attempt(s)", failures)
+			queue.add(rt.shape(metrics))
+			// While a failed delivery is being waited out the reading is simply
+			// held; the status keeps saying what the last attempt came to.
+			if !time.Now().Before(nextAttempt) {
+				sent, err := queue.flush(ctx, func(m model.HostMetrics) error {
+					c := p.cfg
+					c.token = rt.currentToken()
+					return send(ctx, client, c, m)
+				})
+				if err != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					failures++
+					backoff = nextBackoff(backoff, p.cfg.interval)
+					nextAttempt = time.Now().Add(backoff)
+					// A rejected token will not start working on its own, so say so
+					// plainly rather than burying it in a retry count.
+					log.Printf("report failed (attempt %d, trying again in %s, %d reading(s) held): %v", failures, backoff, queue.len(), err)
+					rt.noteReport(err, failures)
+				} else {
+					if failures > 0 {
+						log.Printf("reporting again after %d failed attempt(s); %d reading(s) delivered", failures, sent)
+					}
+					failures, backoff, nextAttempt = 0, 0, time.Time{}
+					rt.noteReport(nil, 0)
+				}
 			}
-			failures, backoff = 0, 0
 		}
+		rt.writeStatus(p.cfg, queue.len())
 
 		select {
 		case <-ctx.Done():
@@ -632,7 +775,9 @@ func nextBackoff(current, interval time.Duration) time.Duration {
 	return next
 }
 
-// send posts one reading.
+// send posts one reading. A failure says whether sending the same reading again
+// later can help: an unreachable server, a busy one and a rejected token can all
+// mend; a reading GWatch calls malformed will not.
 func send(ctx context.Context, client *http.Client, cfg config, metrics model.HostMetrics) error {
 	body, err := json.Marshal(metrics)
 	if err != nil {
@@ -651,7 +796,7 @@ func send(ctx context.Context, client *http.Client, cfg config, metrics model.Ho
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return &sendFailure{err: err, retry: true}
 	}
 	defer resp.Body.Close()
 	// Drain a little of the body so the connection can be reused, and so a
@@ -660,11 +805,13 @@ func send(ctx context.Context, client *http.Client, cfg config, metrics model.Ho
 	if resp.StatusCode/100 == 2 {
 		return nil
 	}
+	retry := resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests ||
+		resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusUnauthorized
 	if resp.StatusCode == http.StatusUnauthorized {
-		return fmt.Errorf("the server rejected this token; register the machine again in GWatch (HTTP %d: %s)",
-			resp.StatusCode, strings.TrimSpace(string(snippet)))
+		return &sendFailure{retry: retry, err: fmt.Errorf("the server rejected this token; check it against the one GWatch shows for this machine, or pair it again (HTTP %d: %s)",
+			resp.StatusCode, strings.TrimSpace(string(snippet)))}
 	}
-	return fmt.Errorf("the server answered HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
+	return &sendFailure{retry: retry, err: fmt.Errorf("the server answered HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))}
 }
 
 func runOnce(cfg config) error {
@@ -677,7 +824,7 @@ func runOnce(cfg config) error {
 	if err != nil {
 		return fmt.Errorf("cannot read this computer's hardware: %w", err)
 	}
-	return send(ctx, newClient(cfg), cfg, metrics)
+	return send(ctx, newClient(cfg), cfg, newRuntime(cfg).shape(metrics))
 }
 
 // printReading shows what this machine would report. It contacts nothing, so
@@ -689,6 +836,7 @@ func printReading(cfg config) error {
 	if err != nil {
 		return fmt.Errorf("cannot read this computer's hardware: %w", err)
 	}
+	metrics = newRuntime(cfg).shape(metrics)
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(metrics)
@@ -728,7 +876,7 @@ func pair(cfg *config) error {
 	}
 	code := tidyCode(cfg.code)
 	if code == "" {
-		return errors.New("a pairing code is required, e.g. --code XXXX-XXXX (GWatch: Hardware › Pair a machine)")
+		return errors.New("a pairing code is required, e.g. --code XXXX-XXXX (GWatch: Add node › GWatch agent)")
 	}
 	pk, packaged := currentPackaging()
 	if packaged && pk.dataDir != "" && filepath.Dir(tokenFile()) == pk.dataDir {
@@ -784,23 +932,26 @@ func pair(cfg *config) error {
 		cfg.certPin = hex.EncodeToString(sum[:])
 		cfg.insecure = false
 	}
-	path, err := saveToken(out.Token)
-	if err != nil {
-		// The token is real and the code is spent, so losing it here would
-		// mean going back for another code. Print it rather than swallow it.
-		fmt.Fprintf(os.Stderr, "warning: could not save the token to %s: %v\n", tokenFile(), err)
-		fmt.Fprintf(os.Stderr, "the token is %s — keep it somewhere only this machine can read\n", out.Token)
-	}
 	cfg.token = out.Token
+	cfg.tokenSource = srcFile
 	cfg.code = ""
-	// Where to report goes beside the token, so that a service given no
-	// arguments knows it too. Losing it is not worth failing over — the token
-	// is the part that cannot be had again — but it is worth saying, since a
-	// service started without --server would then refuse to run.
-	if path != "" {
-		if err := saveStoredSettings(storedSettings{Server: cfg.baseURL(), Insecure: cfg.insecure, CertPin: cfg.certPin, Name: strings.TrimSpace(cfg.name)}); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not save the server address beside the token (%v); give the service --server %s\n", err, cfg.baseURL())
-		}
+	cfg.configPath = configFile()
+	if cfg.sources == nil {
+		cfg.sources = map[string]string{}
+	}
+	if name := strings.TrimSpace(cfg.name); name != "" {
+		cfg.sources["name"] = srcFlag
+	}
+	// The token and the server it belongs to go into the configuration file,
+	// so a service started with no arguments — a package's systemd unit, a
+	// Homebrew service — reports to the server this machine was paired with.
+	// The code is spent whatever happens next, so a failure to keep the token
+	// prints it rather than losing it.
+	path := cfg.configPath
+	if err := persistConfig(*cfg); err != nil {
+		path = ""
+		fmt.Fprintf(os.Stderr, "warning: could not save the token to %s: %v\n", cfg.configPath, err)
+		fmt.Fprintf(os.Stderr, "the token is %s — keep it somewhere only this machine can read\n", out.Token)
 	}
 
 	name := out.Agent.Name
@@ -809,7 +960,7 @@ func pair(cfg *config) error {
 	}
 	fmt.Printf("Paired with GWatch as %q.\n", name)
 	if path != "" {
-		fmt.Printf("Token saved to %s (readable only by this account).\n", path)
+		fmt.Printf("Token and settings saved to %s (readable only by this account); edit that file to change them.\n", path)
 	}
 
 	// Sending a reading straight away is the difference between "the code was
@@ -818,7 +969,7 @@ func pair(cfg *config) error {
 	if err := runOnce(*cfg); err != nil {
 		return fmt.Errorf("paired, but the first reading did not go through: %w", err)
 	}
-	fmt.Println("First reading accepted. This computer now appears under Hardware in GWatch.")
+	fmt.Println("First reading accepted. This computer now appears in GWatch.")
 	if packaged && path != "" {
 		pk.afterPair(path)
 	}
@@ -850,11 +1001,12 @@ func serverMessage(status int, body []byte) string {
 	return fmt.Sprintf("the server answered HTTP %d: %s", status, strings.TrimSpace(string(body)))
 }
 
-// ---- the stored token ----
+// ---- where the agent keeps its files ----
 
-// tokenFile is where a token obtained by pairing is kept, so that the service
-// installed afterwards — which runs with no arguments a person typed — can
-// find it, and so that pairing a machine twice is never necessary.
+// tokenFile is where an older agent kept its token, and now only what decides
+// the data directory: the configuration file lives beside it. GWATCH_AGENT_TOKEN_FILE
+// moves the whole directory, which is how tests and unusual installs point the
+// agent somewhere else.
 //
 // The directory is the agent's half of where GWatch itself keeps its data:
 // %ProgramData%\GWatch on Windows, $XDG_DATA_HOME/gwatch or
@@ -888,140 +1040,32 @@ func agentDataDir() string {
 	return "."
 }
 
-// saveToken writes the token where run and once will find it, and reports
-// where that was.
+// restrictWindowsACL takes the inherited permissions off a file holding a
+// credential and leaves SYSTEM and the administrators group. It does nothing
+// anywhere else, where the mode bits have already said the same thing.
 //
-// The file is created 0600 and the directory 0700, so on Linux and macOS only
-// the account that paired the machine — root, for the usual sudo install — can
-// read it. Windows has no mode bits, and a file under %ProgramData%\GWatch
-// would otherwise inherit an ACL every user of that computer can read, so the
-// inherited entries are replaced with SYSTEM and the administrators group:
-// SYSTEM because that is what the installed service runs as, administrators
-// because that is who installed it.
-//
-// Tightening the ACL is best effort. If it does not work the token is still
+// Tightening the ACL is best effort. If it does not work the file is still
 // written, because the failure to protect it matters far less than it looks:
-// an agent token submits one machine's readings and can do nothing else at
-// all, and the same token is already on the service's command line where the
-// service manager will show it to anyone who asks.
-func saveToken(token string) (string, error) {
-	path := tokenFile()
-	if err := permissions.EnsurePrivateDir(filepath.Dir(path)); err != nil {
-		return "", fmt.Errorf("create %s: %w", filepath.Dir(path), err)
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if err != nil {
-		return "", err
-	}
-	if _, err := f.WriteString(token + "\n"); err != nil {
-		f.Close()
-		return "", err
-	}
-	if err := f.Close(); err != nil {
-		return "", err
-	}
-	// A file left over from an earlier pairing keeps whatever mode it had, so
-	// the permissions are set again rather than assumed.
-	if err := os.Chmod(path, 0o600); err != nil && runtime.GOOS != "windows" {
-		return "", err
-	}
-	restrictWindowsACL(path)
-	return path, nil
-}
-
-// restrictWindowsACL takes the inherited permissions off the token file and
-// leaves SYSTEM and the administrators group. It does nothing anywhere else,
-// where the mode bits have already said the same thing.
+// an agent token submits one machine's readings and can do nothing else at all.
 func restrictWindowsACL(path string) {
 	if err := permissions.EnsurePrivateFile(path); err != nil {
 		fmt.Fprintf(os.Stderr, "cannot protect %s: %v\n", path, err)
 	}
 }
 
-// readStoredToken returns the token saved by a previous pairing. A missing
-// file is not an error worth reporting: it only means this machine was set up
-// with --token, or has not been set up at all, and the caller says so better.
+// readStoredToken returns the token this machine holds: the configuration
+// file's, or failing that the one an older agent saved. A missing file is not
+// an error worth reporting: it only means this machine was set up with
+// --token, or has not been set up at all, and the caller says so better.
 func readStoredToken() (string, error) {
-	b, err := os.ReadFile(tokenFile())
+	doc, err := loadConfigDoc(configFile())
 	if err != nil {
 		return "", err
 	}
-	token := strings.TrimSpace(string(b))
-	if token == "" {
-		return "", errors.New("the stored token file is empty")
+	if fsx, _ := doc.settings(); fsx.Token != "" {
+		return fsx.Token, nil
 	}
-	return token, nil
-}
-
-// ---- the stored settings ----
-
-// storedSettings is what pairing learned besides the token: where the server
-// is, and the two things about talking to it that were decided when the
-// machine was paired. It lets `gwatch-agent run` with no arguments — which is
-// how a package's service runs it — report to the server the machine was
-// paired with, instead of refusing for want of a --server.
-//
-// None of it is secret, but it sits beside the token with the same
-// permissions, because it is the other half of what the token is for.
-type storedSettings struct {
-	CertPin  string `json:"certPin,omitempty"`
-	Server   string `json:"server"`
-	Insecure bool   `json:"insecure,omitempty"`
-	Name     string `json:"name,omitempty"`
-}
-
-// settingsFile lives beside the token file, wherever that is.
-func settingsFile() string {
-	return filepath.Join(filepath.Dir(tokenFile()), "agent-settings.json")
-}
-
-func saveStoredSettings(s storedSettings) error {
-	b, err := json.MarshalIndent(s, "", "  ")
-	if err != nil {
-		return err
-	}
-	path := settingsFile()
-	if err := os.WriteFile(path, append(b, '\n'), 0o600); err != nil {
-		return err
-	}
-	if err := os.Chmod(path, 0o600); err != nil && runtime.GOOS != "windows" {
-		return err
-	}
-	restrictWindowsACL(path)
-	return nil
-}
-
-func readStoredSettings() (storedSettings, error) {
-	var s storedSettings
-	b, err := os.ReadFile(settingsFile())
-	if err != nil {
-		return s, err
-	}
-	if err := json.Unmarshal(b, &s); err != nil {
-		return s, fmt.Errorf("%s: %w", settingsFile(), err)
-	}
-	if strings.TrimSpace(s.Server) == "" {
-		return s, errors.New("the stored settings name no server")
-	}
-	return s, nil
-}
-
-// applyStored fills in what the command line and environment left unsaid.
-// It is only called when no server was given, so the stored server is the
-// one in use; --insecure is taken from the store only in that case and only
-// when it was not given explicitly, because "this server's certificate is
-// self-signed" was a statement about that server and nothing else.
-func (c *config) applyStored(s storedSettings, insecureGiven bool) {
-	c.server = s.Server
-	if c.certPin == "" {
-		c.certPin = s.CertPin
-	}
-	if !insecureGiven {
-		c.insecure = s.Insecure
-	}
-	if strings.TrimSpace(c.name) == "" {
-		c.name = s.Name
-	}
+	return readLegacyToken()
 }
 
 // ---- serve mode ----
@@ -1096,13 +1140,6 @@ func newClient(cfg config) *http.Client {
 	return &http.Client{Transport: transport, Timeout: requestTimeout}
 }
 
-func envOr(key, def string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
-	}
-	return def
-}
-
 // envBool reads an on/off environment variable. Anything unrecognised leaves
 // the default alone: a misspelt value must never quietly turn off something
 // like automatic updates.
@@ -1114,18 +1151,6 @@ func envBool(key string, def bool) bool {
 		return false
 	}
 	return def
-}
-
-func envDuration(key string, def time.Duration) time.Duration {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return def
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil || d <= 0 {
-		return def
-	}
-	return d
 }
 
 func fatal(err error) {

@@ -306,12 +306,26 @@ echoed as written, so an `Authorization` header on an HTTP check is stored in th
 ### Node and Check objects
 
 A `Node` is `{id, name, host, groups, group, tags, notes, importance, enabled,
-dependsOnNodeId, template, createdAt, updatedAt, checks}`. `host` is the default target
+dependsOnNodeId, linkStyle, template, createdAt, updatedAt, checks}`. `host` is the default target
 its checks inherit when their own `config.target` is empty; `importance` is `low`,
 `normal`, `high` or `critical`; `dependsOnNodeId` is the parent used for
 dependency-aware alert suppression; `template` records which template the node was
 created from and is informational only. `group` is the deprecated single-group alias
 described above.
+
+`linkStyle` is how the line from this node to its parent (`dependsOnNodeId`) is
+drawn on the network map, or `null` for "like the map". It is
+`{ "color": "#3b82f6", "width": 3, "dash": "dashed" }`, and every field is
+optional and left out when it is not set. `color` is `#rgb`, `#rrggbb` or
+`#rrggbbaa` and nothing else (it is returned in lower case); `width` is the
+thickness in the map's drawing units, 1 to 8 (a number outside that range is
+clamped, one decimal is kept); `dash` is `solid`, `dashed`, `dotted` or
+`dash-dot`. A colour or dash that is not one of these is a 400 on create, update
+and bulk edit. The style belongs to the link, so a node with no
+`dependsOnNodeId` has none (it is dropped when the dependency is cleared, and
+when the parent is deleted) and one pointed at a different parent keeps it.
+It is part of the node everywhere a node goes: the overview, the configuration
+export, backups and restores, and `POST /api/nodes/{id}/duplicate`.
 
 A `Check` is `{id, nodeId, type, name, enabled, intervalSeconds, timeoutSeconds,
 retries, failureThreshold, config, alerts, sortOrder, createdAt, updatedAt}`.
@@ -492,7 +506,9 @@ the change would silently not happen.
 
 **Node fields.** `groups` (replaces the whole list), `addGroups`,
 `removeGroups`, `tags` (replaces), `addTags`, `removeTags`, `importance`,
-`enabled`, `dependsOnNodeId` (a node id, or `null` to clear it). Group and tag
+`enabled`, `dependsOnNodeId` (a node id, or `null` to clear it), `linkStyle`
+(an object as above to set the style of the node's link to its parent, or `null`
+to reset it; the network map's side panel uses this). Group and tag
 names are trimmed, folded case-insensitively onto the spelling already in use
 and capped at 16 groups, exactly as `PUT /api/nodes/{id}` does; removals match
 ignoring case. A dependency that would form a loop, or point a node at itself,
@@ -703,7 +719,32 @@ routes — an administrator in the browser, never an API key:
   sha256 digest is stored, so it cannot be shown again.
 - `PUT /api/agents/{id}` body `{ "name": …, "nodeId": …, "enabled": bool }` → `Agent`.
 - `DELETE /api/agents/{id}` → 204. Revokes the token and keeps the machine's past
-  readings. `?purge=1` deletes the machine and every reading it ever sent.
+  readings. `?purge=1` deletes the registration (token, how it was enrolled); the node, and the history its hardware check recorded, stay with the node.
+- `POST /api/agents/{id}/token` → `{ "agent": Agent, "token": "gwa_…", "pending": "gwa_…"|"", "viewable": bool }`.
+  Reads the agent's token back, so it can be compared with the one in the machine's
+  `agent.json`. A token minted by this version is also kept sealed with the server's own key
+  (`gwatch.key`), the way every other secret GWatch holds is; `pending` is the replacement
+  waiting during a rotation. `viewable: false` means GWatch only has a digest (an agent
+  registered before copies were kept, or restored from a backup — a backup never carries the
+  readable copy), and a rotation gets a readable one. It is a `POST`, it writes to the audit
+  trail, and like the rest of the credential routes it is for an administrator in the
+  browser, never an API key. `Agent` carries `tokenViewable`, `rotationPending`,
+  `rotationSince`, `collect`, `inventory` and `checkedInAt`; never a token.
+- `POST /api/agents/{id}/rotate` body `{ "retireOld": bool }` → `{ "token": "gwa_…", "retiredOld": bool, "agent": Agent }`.
+  Issues a replacement token. By default the old token keeps working until the new one is
+  first used; an agent holding the old one is handed the new one when it next checks in
+  (below), writes it to its file and switches over, and its first request with the new token
+  retires the old. `retireOld: true` is for a token that may have leaked: the old token stops
+  working at once, nothing is delivered over the network, and the new token has to be put on
+  the machine by hand. `409` for a revoked agent.
+- `POST /api/agents/{id}/rotate/cancel` → 204. Drops a replacement nobody has used.
+- `PUT /api/agents/{id}/collect` body `CollectSelection` → `Agent`. Which readings the
+  administrator wants from the machine: `{ "metrics": ["cpu","net"], "interfaces": ["eth0"],
+  "disks": [], "mounts": [] }`. An empty list is "automatic" — every kind of reading, every
+  disk and filesystem, and the interfaces that are not obviously virtual. The agent applies
+  it the next time it checks in, always inside the limit set in its own configuration file:
+  GWatch can narrow what a machine reports, never widen it. `400` for an unknown metric
+  family (`cpu`, `memory`, `swap`, `load`, `disk`, `inodes`, `net`, `diskio`).
 
 ### Pairing codes
 
@@ -718,7 +759,7 @@ and can be cancelled in the meantime.
 - `GET /api/agents/pairings` → `[PairingCode]`, newest first. The code itself is never
   returned; the row carries `name`, `nodeId`, `createdAt`, `expiresAt`, and whichever
   of `redeemedAt`, `revokedAt`, `agentId` and `redeemedAddr` apply.
-- `POST /api/agents/pairings` body `{ "name": "Living room NAS", "nodeId": null|id }` →
+- `POST /api/agents/pairings` body `{ "name": "Living room NAS", "nodeId": null|id, "collect": CollectSelection }` →
   `{ "code": "XXXX-XXXX", "pairing": PairingCode }`. **The code is returned exactly
   once.** Only its sha256 digest is stored, exactly as an agent token's is.
 - `GET /api/agents/pairings/{id}` → `{ "state", "pairing": PairingCode, "agent"?: Agent }`.
@@ -753,12 +794,15 @@ underscores and whitespace are ignored wherever they land, so `a2b3 c4d5` and
 
 On the machine being enrolled this is `gwatch-agent pair --server URL --code XXXX-XXXX`,
 or `gwatch-agent install --server URL --code XXXX-XXXX` to pair and install the service
-in one go. The token that comes back is saved with owner-only permissions to
-`%ProgramData%\GWatch\agent-token` on Windows and `$XDG_DATA_HOME/gwatch/agent-token`
-(or `~/.local/share/gwatch/agent-token`) elsewhere — `GWATCH_AGENT_TOKEN_FILE` overrides
-it — and `run`, `once` and `serve` use it when `--token` is not given. The file is
+in one go. The token that comes back is saved, with the server's address, in the agent's
+configuration file, `agent.json`, with owner-only permissions: in `%ProgramData%\GWatch` on
+Windows and `$XDG_DATA_HOME/gwatch` (or `~/.local/share/gwatch`) elsewhere —
+`GWATCH_AGENT_CONFIG` or `--config` names the file and `GWATCH_AGENT_TOKEN_FILE` moves the
+whole directory. `run` and `once` read it when `--token` is not given. The file is
 created 0600 under a 0700 directory; on Windows the inherited ACL is replaced with
-SYSTEM and the administrators group.
+SYSTEM and the administrators group. (Earlier agents kept the token in `agent-token`
+and the server in `agent-settings.json`; an agent that finds those moves them into
+`agent.json` the first time it starts.)
 
 ### Submitting a reading
 
@@ -772,6 +816,34 @@ agent therefore never holds a credential that could read or change anything in G
 which is the point of installing one on a machine you would rather not hand over. An
 agent token is refused by every `/api/…` route, and a wrong one counts against the same
 per-IP failure budget as a wrong password.
+
+### Asking for settings
+
+`POST /ingest/checkin` with `Authorization: Bearer gwa_…` and an optional body
+`{ "version": "0.7.0", "inventory": { "interfaces": [{ "name", "detail", "auto" }], "disks": […], "mounts": […] } }`.
+Answers `200` with an `AgentSettings`:
+
+```json
+{ "checkInSeconds": 900,
+  "collect": { "metrics": [], "interfaces": ["eth0"], "disks": [], "mounts": [] },
+  "latestAgent": "0.7.1",
+  "token": "gwa_…" }
+```
+
+That is the **whole** of what GWatch can tell an agent, and it is a closed set on purpose:
+how long to wait before asking again, the readings the administrator chose, the newest
+agent release as a hint, and — only while a rotation is waiting, and only to a caller that
+holds the token being replaced — the replacement token. There is no field for a URL to
+fetch, a command to run, a file to write or a version to install. The agent applies each
+part on its own terms: the selection only ever narrows what its own file allows, the
+interval is clamped to between one minute and a day, a token is taken up only if the
+agent's file owns it, and `latestAgent` changes nothing (an agent still fetches and
+verifies releases itself, from the release feed). The agent sends an inventory of what it
+could report so that GWatch can offer checkboxes for a disk or interface it has not been
+told about; only what the machine's own limit allows is listed. Like `/ingest/metrics` the
+route is reached with an agent token and nothing else, shares its failure budget, and is
+outside the authorization table. [`AGENT-DECISIONS.md`](AGENT-DECISIONS.md#12-an-agent-asks-gwatch-for-a-small-fixed-set-of-things)
+says why this does not turn GWatch into a control channel.
 
 Rates in a `HostMetrics` (`usagePct`, anything `…PerSec`) are derived by the reporting
 machine from two of its own consecutive readings, never by GWatch subtracting across the
@@ -862,7 +934,7 @@ Widget types (`Widget.type`) and their `config`:
 | `summary` | `{}` | overall health counts (up/degraded/down/unknown) |
 | `groups` | `{ "groups": ["Home Network", ...] }` (empty = all) | group status cards |
 | `status_list` | `{ "group": "", "tag": "", "nodeIds": [], "sort": "" }` | node/check status list, filtered (`group` matches any of a node's groups); `sort` is `""` (as the overview lists them), `status`, `name`, `name-desc`, `host` or `importance` |
-| `network_map` | `{ "orientation": "down|right|radial", "labels": "name|name-host|none", "size": "small|medium|large", "edges": "curved|straight|elbow", "group": "", "tag": "", "onlyLinked": false, "colorEdges": true, "showLegend": true }` | the dependency map: every node under the node it depends on |
+| `network_map` | `{ "orientation": "down|right|radial", "labels": "name|name-host|none", "size": "small|medium|large", "edges": "curved|straight|elbow", "group": "", "tag": "", "onlyLinked": false, "colorEdges": true, "showLegend": true, "lineColor": "", "lineWidth": 1.5, "lineStyle": "solid|dashed|dotted|dash-dot" }` | the dependency map: every node under the node it depends on (`radial` is the clusters layout: each node in the middle of a ring of the nodes that depend on it). `lineColor` (`#rgb`, `#rrggbb` or `#rrggbbaa`; empty = the theme's), `lineWidth` (1–8) and `lineStyle` are how a line looks unless the node at its lower end has a `linkStyle` of its own; saving a dashboard with a colour or style that is not allowed is a 400, and a width out of range is clamped |
 | `latency_chart` | `{ "checkIds": [1,2], "range": "24h", "metric": "avg" }` | line chart of latency/response time |
 | `response_chart` | same as latency_chart (HTTP checks) | response time |
 | `loss_chart` | `{ "checkIds": [], "range": "24h" }` | packet loss % |
@@ -1108,7 +1180,7 @@ assistant up, not for the assistant: both are admin-only and refuse every API ke
 | `hourlyDays` | `730` | the hourly rollups |
 | `dailyDays` | `0` | the daily rollups |
 | `eventDays` | `730` | the incident/event timeline |
-| `hostDays` | `90` | hardware readings, which are whole snapshots rather than one number |
+| `hostDays` | `90` | the results of hardware checks, which are whole snapshots of a machine rather than one number (`rawDays` bounds every other check's) |
 
 ### Database
 

@@ -109,8 +109,8 @@ Then open <http://127.0.0.1:7230> — monitoring runs only while this process ru
 
 `gwatch-agent` is the small, dependency-free companion that reports hardware
 health — processor, memory, swap, load, disks, inodes, network and disk
-throughput — from another machine back to your GWatch server. Pair a machine
-from **Nodes › Pair a machine**, then type the short code it shows into the
+throughput — from another machine back to your GWatch server. Add a machine
+from **Nodes › Add node › A machine with the GWatch agent**, then type the short code it shows into the
 agent's Windows installer, or run:
 
 ```

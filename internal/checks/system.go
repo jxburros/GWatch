@@ -55,6 +55,30 @@ const defaultStaleFactor = 3
 // machine down over ordinary scheduling jitter.
 const minStaleSeconds = 60
 
+// EvaluateHost judges a reading against a hardware check's thresholds and
+// returns the result the check would have recorded had it taken the reading
+// itself. The engine uses it for readings a machine pushes, so they are judged
+// when they arrive rather than whenever the check next happens to run; now is
+// the moment the reading is judged as of, which for a reading held back through
+// an outage is the moment it was taken.
+func EvaluateHost(check model.Check, m model.HostMetrics, now time.Time) model.Result {
+	// Finalised as a run of the check would be: status, attempts and the check's
+	// id are filled in the same way, and the result is stamped with when the
+	// reading was taken.
+	return finalize(evaluateHost(check, m, now), check, Options{}, m.Timestamp)
+}
+
+// StaleAfter is how long a machine may go without a reading before a hardware
+// check counts it as down.
+func StaleAfter(check model.Check) time.Duration { return staleAfter(check) }
+
+// PushesReadings reports whether a check is fed by readings its machine pushes
+// to GWatch. Such a check is judged when a reading arrives, and its schedule
+// only exists to notice that readings have stopped.
+func PushesReadings(check model.Check) bool {
+	return check.Type == model.CheckSystem && source(check) == model.HostSourceAgent
+}
+
 func runSystemCheck(ctx context.Context, check model.Check, opts Options) model.Result {
 	metrics, err := readHostMetrics(ctx, check, opts)
 	if err != nil {

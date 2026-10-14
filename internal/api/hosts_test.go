@@ -165,8 +165,8 @@ func TestRevokedAgentStopsBeingAccepted(t *testing.T) {
 		t.Errorf("a revoked token must stop working immediately, got %d", code)
 	}
 
-	// Revoking keeps the registration and its readings, so the record of what
-	// that machine was doing survives.
+	// Revoking keeps the registration and what its check recorded, so the
+	// record of what that machine was doing survives.
 	var hosts []model.HostSummary
 	call(t, ts, "GET", "/api/hosts", nil, &hosts)
 	found := false
@@ -185,7 +185,8 @@ func TestRevokedAgentStopsBeingAccepted(t *testing.T) {
 		t.Error("the revoked machine vanished from the list")
 	}
 
-	// Purging is the destructive form and takes the readings with it.
+	// Purging removes the registration. The node and its history stay, since
+	// they are the node's; they go when the node does.
 	if code := call(t, ts, "DELETE", "/api/agents/1?purge=1", nil, nil); code != 204 {
 		t.Fatalf("purge: %d", code)
 	}
@@ -202,18 +203,18 @@ func TestRevokedAgentStopsBeingAccepted(t *testing.T) {
 // current.
 func TestHostSummaryMarksSilentMachines(t *testing.T) {
 	fresh := hostSummary(model.HostSummary{Key: "agent:1", Source: model.HostSourceAgent},
-		model.HostSample{Key: "agent:1", Timestamp: time.Now()})
+		model.HostMetrics{Key: "agent:1", Timestamp: time.Now()})
 	if fresh.Stale || fresh.Status != model.StatusUp {
 		t.Errorf("a machine that just reported: %+v", fresh)
 	}
 
 	silent := hostSummary(model.HostSummary{Key: "agent:1", Source: model.HostSourceAgent},
-		model.HostSample{Key: "agent:1", Timestamp: time.Now().Add(-time.Hour)})
+		model.HostMetrics{Key: "agent:1", Timestamp: time.Now().Add(-time.Hour)})
 	if !silent.Stale || silent.Status != model.StatusDown {
 		t.Errorf("a machine that stopped reporting: %+v", silent)
 	}
 
-	never := hostSummary(model.HostSummary{Key: "agent:1", Source: model.HostSourceAgent}, model.HostSample{})
+	never := hostSummary(model.HostSummary{Key: "agent:1", Source: model.HostSourceAgent}, model.HostMetrics{})
 	if never.Status != model.StatusUnknown || never.Metrics != nil {
 		t.Errorf("a machine that never reported: %+v", never)
 	}
@@ -236,48 +237,6 @@ func TestLocalHardwareIsListed(t *testing.T) {
 	}
 	if hosts[0].Source != model.HostSourceLocal {
 		t.Errorf("source: %q", hosts[0].Source)
-	}
-}
-
-func TestDownsampleHostSamplesKeepsTheShape(t *testing.T) {
-	var in []model.HostSample
-	base := time.Now().Add(-time.Hour)
-	for i := 0; i < 1000; i++ {
-		v := float64(i % 100)
-		in = append(in, model.HostSample{Key: "local", Timestamp: base.Add(time.Duration(i) * time.Second), CPUPct: &v})
-	}
-	out := downsampleHostSamples(in, 100)
-	if len(out) != 100 {
-		t.Fatalf("want 100 points, got %d", len(out))
-	}
-	if !out[0].Timestamp.Before(out[99].Timestamp) {
-		t.Error("points are not in time order")
-	}
-	for _, s := range out {
-		if s.CPUPct == nil {
-			t.Fatal("a bucket lost its value")
-		}
-	}
-	// Below the limit nothing is touched: a short range shows every reading
-	// exactly as it was taken.
-	if got := downsampleHostSamples(in[:50], 100); len(got) != 50 {
-		t.Errorf("want the readings untouched, got %d", len(got))
-	}
-}
-
-// Averaging must not invent a zero for a metric no reading in the bucket had.
-func TestAverageHostSamplesKeepsMissingMetricsMissing(t *testing.T) {
-	cpu := 40.0
-	bucket := []model.HostSample{
-		{Key: "local", Timestamp: time.Now(), CPUPct: &cpu},
-		{Key: "local", Timestamp: time.Now()},
-	}
-	got := averageHostSamples(bucket)
-	if got.CPUPct == nil || *got.CPUPct != 40 {
-		t.Errorf("processor: %v", got.CPUPct)
-	}
-	if got.MemPct != nil {
-		t.Errorf("memory was never reported and must stay absent, got %v", *got.MemPct)
 	}
 }
 

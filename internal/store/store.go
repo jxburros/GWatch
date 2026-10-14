@@ -147,6 +147,7 @@ CREATE TABLE IF NOT EXISTS nodes (
   importance TEXT NOT NULL DEFAULT 'normal',
   enabled INTEGER NOT NULL DEFAULT 1,
   depends_on_node_id INTEGER REFERENCES nodes(id) ON DELETE SET NULL,
+  link_style TEXT NOT NULL DEFAULT '',
   template TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -341,6 +342,9 @@ var addedColumns = []struct{ table, column, ddl string }{
 	// "groups" is quoted everywhere it is used: it is a keyword in SQLite's
 	// window-frame syntax, and a bare one reads badly even where it parses.
 	{"nodes", "groups", `ALTER TABLE nodes ADD COLUMN "groups" TEXT NOT NULL DEFAULT '[]'`},
+	// How the line from a node to the node it depends on is drawn on the
+	// network map: the JSON of a model.LinkStyle, or '' for the map's own.
+	{"nodes", "link_style", "ALTER TABLE nodes ADD COLUMN link_style TEXT NOT NULL DEFAULT ''"},
 	// The named metrics a check measured beyond its latency, as a JSON object
 	// of name -> number. An SNMP check writes one entry per OID here; every
 	// other check leaves it empty.
@@ -352,6 +356,22 @@ var addedColumns = []struct{ table, column, ddl string }{
 	{"check_state", "metric_status", "ALTER TABLE check_state ADD COLUMN metric_status TEXT NOT NULL DEFAULT ''"},
 	{"triggers", "metric", "ALTER TABLE triggers ADD COLUMN metric TEXT NOT NULL DEFAULT ''"},
 	{"triggers", "metric_over", "ALTER TABLE triggers ADD COLUMN metric_over REAL NOT NULL DEFAULT 0"},
+	// An agent's token is kept sealed (like every other secret GWatch holds) so
+	// an administrator can compare it with the one in the machine's config file,
+	// and a replacement token waits beside it while a rotation is picked up.
+	// collect is the administrator's choice of readings for the machine and
+	// inventory what the agent last said it could collect; both are JSON, empty
+	// meaning "nothing chosen" and "nothing said".
+	{"agents", "token_sealed", "ALTER TABLE agents ADD COLUMN token_sealed TEXT NOT NULL DEFAULT ''"},
+	{"agents", "pending_token_hash", "ALTER TABLE agents ADD COLUMN pending_token_hash TEXT NOT NULL DEFAULT ''"},
+	{"agents", "pending_token_sealed", "ALTER TABLE agents ADD COLUMN pending_token_sealed TEXT NOT NULL DEFAULT ''"},
+	{"agents", "pending_since", "ALTER TABLE agents ADD COLUMN pending_since TEXT"},
+	{"agents", "collect", "ALTER TABLE agents ADD COLUMN collect TEXT NOT NULL DEFAULT ''"},
+	{"agents", "inventory", "ALTER TABLE agents ADD COLUMN inventory TEXT NOT NULL DEFAULT ''"},
+	{"agents", "checked_in_at", "ALTER TABLE agents ADD COLUMN checked_in_at TEXT"},
+	// The readings chosen while a machine was being added, kept with the pairing
+	// code until the machine redeems it and becomes an agent.
+	{"agent_pairings", "collect", "ALTER TABLE agent_pairings ADD COLUMN collect TEXT NOT NULL DEFAULT ''"},
 }
 
 // currentSchemaVersion is the schema_version this build expects. Every
@@ -365,7 +385,7 @@ var addedColumns = []struct{ table, column, ddl string }{
 // instead); migrate() takes care of backing up the file first, running the
 // step in its own transaction, and recording the new version once it
 // commits.
-const currentSchemaVersion = 3
+const currentSchemaVersion = 4
 
 // migration is one numbered step that brings the database from version-1 to
 // version. Steps run in order, oldest first, each in its own transaction.
@@ -389,6 +409,29 @@ var migrations = []migration{
 		name:    "backfill node groups from group_name",
 		run:     migrateBackfillNodeGroups,
 	},
+	{
+		version: 4,
+		name:    "retire the host_samples table",
+		run:     migrateRetireHostSamples,
+	},
+}
+
+// migrateRetireHostSamples drops the table hardware readings used to be kept in.
+// A machine is a node with a hardware check, and what that check measures is
+// recorded in results like everything else's: every run of the check already
+// stored its metrics and the whole snapshot, so for any machine a check watched
+// the table was a second copy of the same history at the same resolution, and
+// nothing is lost by dropping it. What it also held, and this does lose, is the
+// readings of a machine no hardware check was pointed at — an agent registered
+// onto a node that never had one, or this computer's own readings when no "This
+// computer" check exists. Those have nowhere to live in a model where a machine
+// is something GWatch checks.
+//
+// SQLite databases are copied aside before any numbered migration runs
+// (migrate), so the table can be got back from there.
+func migrateRetireHostSamples(ctx context.Context, tx *wtx) error {
+	_, err := tx.exec(ctx, "DROP TABLE IF EXISTS host_samples")
+	return err
 }
 
 // migrateBackfillCheckState gives every check a check_state row. Every

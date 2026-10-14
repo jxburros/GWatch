@@ -12,7 +12,7 @@
 ;   iscc /DAppVersion=1.2.3 /DExePath=..\..\dist\gwatch-agent-windows-amd64.exe gwatch-agent.iss
 ;
 ; The wizard asks for the GWatch server's address and a pairing code (get one
-; in GWatch under Nodes > Pair a machine), hands both to
+; in GWatch under Nodes > Add node > GWatch agent), hands both to
 ; `gwatch-agent install --code`, and that command exchanges the code for this
 ; machine's own submit-only token before registering the "GWatchAgent"
 ; service. See docs/HARDWARE.md.
@@ -163,7 +163,7 @@ begin
   ServerEdit.Width := ConnectPage.SurfaceWidth;
   ServerEdit.Text := ExpandConstant('{param:SERVER|http://gwatch.lan:7230}');
 
-  AddLabel(ConnectPage, 48, 'Pairing code (GWatch > Nodes > Pair a machine)');
+  AddLabel(ConnectPage, 48, 'Pairing code (GWatch > Nodes > Add node > GWatch agent)');
   CodeEdit := TNewEdit.Create(ConnectPage);
   CodeEdit.Parent := ConnectPage.Surface;
   CodeEdit.Left := 0;

@@ -45,7 +45,6 @@ type Manifest struct {
 	Users          int       `json:"users,omitempty"`
 	APIKeys        int       `json:"apiKeys,omitempty"`
 	Agents         int       `json:"agents,omitempty"`
-	HostSamples    int       `json:"hostSamples,omitempty"`
 }
 
 // Config is the configuration part of an archive.
@@ -74,18 +73,17 @@ type Config struct {
 
 // Summary reports what a restore (or a migrate-db copy) imported.
 type Summary struct {
-	Nodes       int      `json:"nodes"`
-	Checks      int      `json:"checks"`
-	Results     int      `json:"results"`
-	Rollups     int      `json:"rollups"`
-	Events      int      `json:"events"`
-	Wallboards  int      `json:"wallboards"`
-	Users       int      `json:"users"`
-	APIKeys     int      `json:"apiKeys"`
-	Agents      int      `json:"agents"`
-	HostSamples int      `json:"hostSamples"`
-	History     bool     `json:"history"`
-	Manifest    Manifest `json:"manifest"`
+	Nodes      int      `json:"nodes"`
+	Checks     int      `json:"checks"`
+	Results    int      `json:"results"`
+	Rollups    int      `json:"rollups"`
+	Events     int      `json:"events"`
+	Wallboards int      `json:"wallboards"`
+	Users      int      `json:"users"`
+	APIKeys    int      `json:"apiKeys"`
+	Agents     int      `json:"agents"`
+	History    bool     `json:"history"`
+	Manifest   Manifest `json:"manifest"`
 }
 
 var safeName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -239,14 +237,6 @@ func writeArchive(ctx context.Context, st *store.Store, w io.Writer, password st
 		}
 		enc = json.NewEncoder(rw)
 		if err := st.AllEvents(ctx, func(e model.Event) error { manifest.Events++; return enc.Encode(e) }); err != nil {
-			return err
-		}
-		rw, err = zw.Create("hostsamples.jsonl")
-		if err != nil {
-			return err
-		}
-		enc = json.NewEncoder(rw)
-		if err := st.AllHostSamples(ctx, func(h model.HostSample) error { manifest.HostSamples++; return enc.Encode(h) }); err != nil {
 			return err
 		}
 	}
@@ -477,19 +467,9 @@ func Restore(ctx context.Context, st *store.Store, path, password string, includ
 		}); err != nil {
 			return sum, err
 		}
-		if err := importLines(&zr.Reader, "hostsamples.jsonl", batchSize, func(lines [][]byte) error {
-			batch := make([]model.HostSample, 0, len(lines))
-			for _, l := range lines {
-				var h model.HostSample
-				if err := json.Unmarshal(l, &h); err == nil {
-					batch = append(batch, h)
-				}
-			}
-			sum.HostSamples += len(batch)
-			return st.InsertHostSamplesBatch(ctx, batch)
-		}); err != nil {
-			return sum, err
-		}
+		// Archives from before hardware readings became results carry a
+		// hostsamples.jsonl. It is not read: every reading in it was also the
+		// result of a hardware check, which results.jsonl has.
 	}
 	return sum, nil
 }
@@ -712,31 +692,6 @@ func Copy(ctx context.Context, src, dst *store.Store, progress func(stage string
 		return sum, fmt.Errorf("copy events: %w", err)
 	}
 
-	samples := make([]model.HostSample, 0, batchSize)
-	flushSamples := func() error {
-		if len(samples) == 0 {
-			return nil
-		}
-		if err := dst.InsertHostSamplesBatch(ctx, samples); err != nil {
-			return err
-		}
-		sum.HostSamples += len(samples)
-		samples = samples[:0]
-		report("hardware readings", sum.HostSamples)
-		return nil
-	}
-	if err := src.AllHostSamples(ctx, func(h model.HostSample) error {
-		samples = append(samples, h)
-		if len(samples) >= batchSize {
-			return flushSamples()
-		}
-		return nil
-	}); err != nil {
-		return sum, fmt.Errorf("copy hardware readings: %w", err)
-	}
-	if err := flushSamples(); err != nil {
-		return sum, fmt.Errorf("copy hardware readings: %w", err)
-	}
 	sum.History = true
 	return sum, nil
 }

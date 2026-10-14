@@ -67,7 +67,13 @@ func (m *mailbox) subjects() []string {
 
 func setup(t *testing.T) (*Engine, *store.Store, *fakeNet, *mailbox) {
 	t.Helper()
-	st := storetest.Open(t)
+	return setupOn(t, storetest.Open(t))
+}
+
+// setupOn is setup over a store that already exists — an engine started again
+// on the same database, as after a restart.
+func setupOn(t *testing.T, st *store.Store) (*Engine, *store.Store, *fakeNet, *mailbox) {
+	t.Helper()
 	log, _ := logging.New("", nil)
 	settings := model.DefaultSettings()
 	settings.Alerts.Enabled = true

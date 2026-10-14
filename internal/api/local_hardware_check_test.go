@@ -25,9 +25,7 @@ func TestLocalHardwareCheckThroughAPI(t *testing.T) {
 	eng := engine.New(st, log, engine.Options{})
 	metrics := reading("local-hardware-fixture", 12)
 	metrics.Key = model.HostKeyLocal
-	if err := eng.Hosts().Record(ctx, metrics); err != nil {
-		t.Fatal(err)
-	}
+	eng.Hosts().Hold(metrics)
 	srv := &Server{Engine: eng, Store: st, Log: log, DataDir: t.TempDir(), Web: fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html>app</html>")}}}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)

@@ -29,9 +29,9 @@ const maxIngestBody = 256 << 10
 // machine has its own, configurable, staleness limit.
 const agentStaleAfter = 5 * time.Minute
 
-// maxHostChartPoints bounds a history response. Readings are stored as taken,
-// which over a year is far more points than a chart can draw, so the handler
-// averages them into buckets rather than sending everything.
+// maxHostChartPoints bounds a history response. A machine's results over a year
+// are far more points than a chart can draw, so they are averaged into buckets
+// as they are read rather than sent as they are.
 const maxHostChartPoints = 600
 
 // ---- reading hardware ----
@@ -65,6 +65,11 @@ func (s *Server) handleGetHost(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleHostHistory returns the numeric series for one machine over a range.
+//
+// The series is read from the results of the hardware check that watches the
+// machine — the same results every other view of that check reads — and not
+// from a store of readings of its own. A machine no hardware check watches has
+// no history, only its newest reading.
 func (s *Server) handleHostHistory(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	key := r.PathValue("key")
@@ -75,28 +80,43 @@ func (s *Server) handleHostHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	from := now.Add(-rng.Duration)
-	samples, err := s.Store.HostSamples(ctx, key, from, now, 0)
+	samples, err := s.Store.HostSeries(ctx, s.Engine.HostChecks(key), from, now, maxHostChartPoints)
 	if err != nil {
 		s.fail(w, err)
 		return
+	}
+	for i := range samples {
+		samples[i].Key = key
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"key":     key,
 		"range":   rng.Name,
 		"from":    from,
 		"to":      now,
-		"samples": downsampleHostSamples(samples, maxHostChartPoints),
+		"samples": samples,
 	})
+}
+
+// latestReadings is every machine's newest reading: what is held in memory,
+// and for a machine with none (the first look after a restart) what its check
+// last recorded.
+func (s *Server) latestReadings(ctx context.Context, keys []string) map[string]model.HostMetrics {
+	latest := s.Engine.Hosts().All()
+	for _, key := range keys {
+		if _, ok := latest[key]; ok {
+			continue
+		}
+		if m, ok := s.Engine.RestoreHost(ctx, key); ok {
+			latest[key] = m
+		}
+	}
+	return latest
 }
 
 // hostSummaries builds the hardware list: this computer first, then every
 // registered machine, each with its newest reading.
 func (s *Server) hostSummaries(r *http.Request) ([]model.HostSummary, error) {
 	ctx := r.Context()
-	latest, err := s.Store.LatestHostSamples(ctx)
-	if err != nil {
-		return nil, err
-	}
 	agents, err := s.Store.ListAgents(ctx)
 	if err != nil {
 		return nil, err
@@ -105,6 +125,11 @@ func (s *Server) hostSummaries(r *http.Request) ([]model.HostSummary, error) {
 	if err != nil {
 		return nil, err
 	}
+	keys := []string{model.HostKeyLocal}
+	for _, a := range agents {
+		keys = append(keys, a.HostKey())
+	}
+	latest := s.latestReadings(ctx, keys)
 
 	out := make([]model.HostSummary, 0, len(agents)+1)
 	out = append(out, hostSummary(model.HostSummary{
@@ -131,33 +156,30 @@ func (s *Server) hostSummaries(r *http.Request) ([]model.HostSummary, error) {
 	// Machines that only exist as a scraped endpoint have readings but no
 	// agent row. They are listed under the check that fetched them.
 	scraped := make([]model.HostSummary, 0)
-	for key, sample := range latest {
+	for key, m := range latest {
 		if key == model.HostKeyLocal || strings.HasPrefix(key, "agent:") {
 			continue
 		}
-		name := sample.Metrics.Hostname
+		name := m.Hostname
 		if name == "" {
 			name = key
 		}
-		scraped = append(scraped, hostSummary(model.HostSummary{
-			Key: key, Name: name, Source: model.HostSourceURL,
-		}, sample))
+		scraped = append(scraped, hostSummary(model.HostSummary{Key: key, Name: name, Source: model.HostSourceURL}, m))
 	}
 	sort.Slice(scraped, func(i, j int) bool { return scraped[i].Name < scraped[j].Name })
 	return append(out, scraped...), nil
 }
 
 // hostSummary fills in the reading and the derived status for one machine.
-func hostSummary(summary model.HostSummary, sample model.HostSample) model.HostSummary {
+func hostSummary(summary model.HostSummary, metrics model.HostMetrics) model.HostSummary {
 	if summary.Agent != nil && (summary.Agent.Revoked() || !summary.Agent.Enabled) {
 		summary.Status = model.StatusPaused
 	} else {
 		summary.Status = model.StatusUnknown
 	}
-	if sample.Timestamp.IsZero() {
+	if metrics.Timestamp.IsZero() {
 		return summary
 	}
-	metrics := sample.Metrics
 	summary.Metrics = &metrics
 	summary.Warnings = metrics.Warnings
 	if summary.Status == model.StatusPaused {
@@ -166,7 +188,7 @@ func hostSummary(summary model.HostSummary, sample model.HostSample) model.HostS
 	// The list's own idea of health is only "is this machine still talking to
 	// us". What counts as too hot or too full is a check's business, because
 	// only a check knows the thresholds someone chose.
-	summary.Stale = time.Since(sample.Timestamp) > agentStaleAfter
+	summary.Stale = time.Since(metrics.Timestamp) > agentStaleAfter
 	if summary.Stale {
 		summary.Status = model.StatusDown
 	} else {
@@ -177,9 +199,9 @@ func hostSummary(summary model.HostSummary, sample model.HostSample) model.HostS
 
 // localHostName names this computer from its newest reading, falling back to
 // the instance name so the row is never blank on a fresh install.
-func (s *Server) localHostName(ctx context.Context, latest map[string]model.HostSample) string {
-	if sample, ok := latest[model.HostKeyLocal]; ok && sample.Metrics.Hostname != "" {
-		return sample.Metrics.Hostname
+func (s *Server) localHostName(ctx context.Context, latest map[string]model.HostMetrics) string {
+	if m, ok := latest[model.HostKeyLocal]; ok && m.Hostname != "" {
+		return m.Hostname
 	}
 	if st, err := s.Store.LoadSettings(ctx); err == nil && st.General.InstanceName != "" {
 		return st.General.InstanceName
@@ -197,69 +219,6 @@ func (s *Server) nodeNames(r *http.Request) (map[int64]string, error) {
 		out[n.ID] = n.Name
 	}
 	return out, nil
-}
-
-// downsampleHostSamples averages readings into at most limit buckets. A year
-// of minute-by-minute readings is half a million points; a chart can draw a
-// few hundred, and averaging is what keeps a spike visible rather than
-// dropping whichever readings happen to fall between the points kept.
-func downsampleHostSamples(samples []model.HostSample, limit int) []model.HostSample {
-	if limit <= 0 || len(samples) <= limit {
-		return samples
-	}
-	out := make([]model.HostSample, 0, limit)
-	per := float64(len(samples)) / float64(limit)
-	for i := 0; i < limit; i++ {
-		start := int(float64(i) * per)
-		end := int(float64(i+1) * per)
-		if end > len(samples) {
-			end = len(samples)
-		}
-		if start >= end {
-			continue
-		}
-		out = append(out, averageHostSamples(samples[start:end]))
-	}
-	return out
-}
-
-// averageHostSamples reduces a bucket to one point, timestamped at the middle
-// of the bucket. A metric missing from every reading in the bucket stays
-// missing rather than being averaged into a zero.
-func averageHostSamples(bucket []model.HostSample) model.HostSample {
-	out := model.HostSample{
-		Key:       bucket[0].Key,
-		Timestamp: bucket[len(bucket)/2].Timestamp,
-	}
-	fields := []struct {
-		in  func(model.HostSample) *float64
-		out **float64
-	}{
-		{func(s model.HostSample) *float64 { return s.CPUPct }, &out.CPUPct},
-		{func(s model.HostSample) *float64 { return s.MemPct }, &out.MemPct},
-		{func(s model.HostSample) *float64 { return s.SwapPct }, &out.SwapPct},
-		{func(s model.HostSample) *float64 { return s.DiskPct }, &out.DiskPct},
-		{func(s model.HostSample) *float64 { return s.LoadPerCore }, &out.LoadPerCore},
-		{func(s model.HostSample) *float64 { return s.NetRxBytesSec }, &out.NetRxBytesSec},
-		{func(s model.HostSample) *float64 { return s.NetTxBytesSec }, &out.NetTxBytesSec},
-		{func(s model.HostSample) *float64 { return s.DiskReadBytes }, &out.DiskReadBytes},
-		{func(s model.HostSample) *float64 { return s.DiskWriteBytes }, &out.DiskWriteBytes},
-	}
-	for _, f := range fields {
-		var sum float64
-		var n int
-		for _, sample := range bucket {
-			if v := f.in(sample); v != nil {
-				sum += *v
-				n++
-			}
-		}
-		if n > 0 {
-			avg := sum / float64(n)
-			*f.out = &avg
-		}
-	}
-	return out
 }
 
 // ---- registered machines ----
@@ -322,6 +281,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	s.keepAgentToken(ctx, created.ID, token)
 	if body.NodeID != nil {
 		if err := s.bindMachineCheck(ctx, *body.NodeID, created); err != nil {
 			s.Log.Errorf("bind hardware check to agent %d: %v", created.ID, err)
@@ -445,7 +405,7 @@ const maxPairBody = 4 << 10
 // that a code exists but has run out, which is most of the way to knowing the
 // shape of the codes GWatch mints — so the person who mistyped theirs and the
 // person fishing for one get the same sentence.
-const pairingRejected = "that pairing code is not valid; ask for a fresh one in GWatch under Hardware"
+const pairingRejected = "that pairing code is not valid; ask for a fresh one in GWatch (Nodes › Add node › GWatch agent)"
 
 // handleAgentLatest reports the newest published agent release, so the
 // interface can mark machines whose agent is behind.
@@ -485,6 +445,9 @@ func (s *Server) handleCreatePairing(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name   string `json:"name"`
 		NodeID *int64 `json:"nodeId"`
+		// Collect is the readings chosen while adding the machine; the agent
+		// starts with them once the code is redeemed.
+		Collect model.CollectSelection `json:"collect"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeDecodeError(w, err)
@@ -497,6 +460,11 @@ func (s *Server) handleCreatePairing(w http.ResponseWriter, r *http.Request) {
 		return
 	case len(name) > 100:
 		writeError(w, http.StatusBadRequest, "the name is too long")
+		return
+	}
+	body.Collect = body.Collect.Normalize()
+	if err := body.Collect.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if body.NodeID != nil {
@@ -526,6 +494,11 @@ func (s *Server) handleCreatePairing(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.fail(w, err)
 		return
+	}
+	if !body.Collect.IsZero() {
+		if err := s.Store.SetPairingCollect(ctx, created.ID, body.Collect); err != nil {
+			s.Log.Errorf("keep the chosen readings with pairing code %d: %v", created.ID, err)
+		}
 	}
 	s.auditAuth(ctx, "Pairing code created for "+created.Name,
 		fmt.Sprintf("Whoever types it within %s enrols one machine, which may then submit that machine's hardware readings and nothing else.",
@@ -674,6 +647,13 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	s.keepAgentToken(ctx, created.ID, token)
+	if sel, err := s.Store.PairingCollect(ctx, pairing.ID); err == nil && !sel.IsZero() {
+		if err := s.Store.SetAgentCollect(ctx, created.ID, sel); err != nil {
+			s.Log.Errorf("apply the chosen readings to agent %d: %v", created.ID, err)
+		}
+		created.Collect = sel
+	}
 	if err := s.Store.AttachPairingAgent(ctx, pairing.ID, created.ID); err != nil {
 		s.Log.Errorf("attach pairing agent: %v", err)
 	}
@@ -699,6 +679,16 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		"agent":           created,
 		"intervalSeconds": int(hostmon.DefaultSampleInterval.Seconds()),
 	})
+}
+
+// keepAgentToken stores a sealed copy of a freshly minted token, which is what
+// lets an administrator read it back later. Failing to is not worth failing
+// the registration over: the machine has its token and works, and the only
+// loss is that the token cannot be viewed until it is rotated.
+func (s *Server) keepAgentToken(ctx context.Context, id int64, token string) {
+	if err := s.Store.SetAgentToken(ctx, id, token); err != nil {
+		s.Log.Errorf("keep a viewable copy of the token for agent %d: %v", id, err)
+	}
 }
 
 // rejectPairing answers every unusable code identically and records the reason
@@ -732,8 +722,6 @@ func describeMachine(hostname, os, arch, version string) string {
 // disabled rather than failing every minute against an agent that may never
 // arrive.
 func (s *Server) createMachineNode(ctx context.Context, name string) (model.Node, error) {
-	cfg := model.SystemDefaults()
-	cfg.HostSource = model.HostSourceAgent
 	node := model.Node{
 		Name:       name,
 		Group:      machineGroup,
@@ -741,16 +729,7 @@ func (s *Server) createMachineNode(ctx context.Context, name string) (model.Node
 		Importance: model.ImportanceNormal,
 		Enabled:    true,
 		Template:   "agent-machine",
-		Checks: []model.Check{{
-			Type:             model.CheckSystem,
-			Name:             "Hardware health",
-			Enabled:          false,
-			IntervalSeconds:  60,
-			TimeoutSeconds:   10,
-			Retries:          1,
-			FailureThreshold: 2,
-			Config:           cfg,
-		}},
+		Checks:     []model.Check{machineCheck(false)},
 	}
 	created, err := s.Store.CreateNode(ctx, node)
 	if err != nil {
@@ -761,24 +740,39 @@ func (s *Server) createMachineNode(ctx context.Context, name string) (model.Node
 }
 
 // bindMachineCheck points the node's hardware check at the agent that has just
-// been enrolled, and switches it on. A node the administrator chose themselves
-// may already have a hardware check for this machine, or none at all; both are
-// left as they are, since only a check that is waiting for an agent is ours to
-// complete.
+// been enrolled, and switches it on. A check that is waiting for an agent (the
+// one made with the node, or one left unbound) is completed. A node an
+// administrator chose themselves usually has no such check, so one is added:
+// choosing "add the machine to this node" has to end with the node watching the
+// machine. A check that already reads this agent, or one that reads somewhere
+// else, is left as it is.
 func (s *Server) bindMachineCheck(ctx context.Context, nodeID int64, agent model.Agent) error {
 	node, err := s.Store.GetNode(ctx, nodeID)
 	if err != nil {
 		return err
 	}
 	changed := false
+	reads := false
 	for i, c := range node.Checks {
-		if c.Type != model.CheckSystem || c.Config.HostSource != model.HostSourceAgent || c.Config.AgentID != 0 {
+		if c.Type != model.CheckSystem || c.Config.HostSource != model.HostSourceAgent {
+			continue
+		}
+		if c.Config.AgentID == agent.ID {
+			reads = true
+			continue
+		}
+		if c.Config.AgentID != 0 || changed {
 			continue
 		}
 		node.Checks[i].Config.AgentID = agent.ID
 		node.Checks[i].Enabled = true
 		changed = true
-		break
+	}
+	if !changed && !reads {
+		check := machineCheck(true)
+		check.Config.AgentID = agent.ID
+		node.Checks = append(node.Checks, check)
+		changed = true
 	}
 	if !changed {
 		return nil
@@ -789,6 +783,23 @@ func (s *Server) bindMachineCheck(ctx context.Context, nodeID int64, agent model
 	}
 	s.configChanged(ctx, &updated, "Machine "+agent.Name+" attached to node "+updated.Name, "Its hardware check now reads the readings this machine sends.")
 	return nil
+}
+
+// machineCheck is the hardware check a machine is watched by. It starts
+// switched off when there is no machine to read yet.
+func machineCheck(enabled bool) model.Check {
+	cfg := model.SystemDefaults()
+	cfg.HostSource = model.HostSourceAgent
+	return model.Check{
+		Type:             model.CheckSystem,
+		Name:             "Hardware health",
+		Enabled:          enabled,
+		IntervalSeconds:  60,
+		TimeoutSeconds:   10,
+		Retries:          1,
+		FailureThreshold: 2,
+		Config:           cfg,
+	}
 }
 
 // machineGroup is the group a node created for a paired machine lands in, so
@@ -828,39 +839,17 @@ func (s *Server) handleIngestMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token := bearerToken(r)
-	if token == "" {
-		writeError(w, http.StatusUnauthorized, "an agent token is required")
+	agent, _, ok := s.authenticateAgent(w, r, "Hardware reading rejected")
+	if !ok {
 		return
 	}
-	// A token is a credential, so a wrong one counts against the same failure
-	// budget as a wrong password. A correct one gives its budget back, so an
-	// agent reporting every minute never exhausts it.
-	ip := s.clientIP(r)
-	if allowed, wait := s.failLimiter.Allow(limiterKey(limiterIngest, ip)); !allowed {
-		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds()+0.999)))
-		writeError(w, http.StatusTooManyRequests, "too many failed attempts; try again shortly")
-		return
-	}
-	agent, err := s.Store.AgentByTokenHash(ctx, auth.HashToken(token))
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			s.auditAuthFailure(ctx, "Hardware reading rejected",
-				fmt.Sprintf("An unknown or revoked agent token was presented from %s.", ip), ip)
-			writeError(w, http.StatusUnauthorized, "this agent token is not registered, or has been revoked")
-			return
-		}
-		s.fail(w, err)
-		return
-	}
-	s.failLimiter.Reset(limiterKey(limiterIngest, ip))
 
 	var metrics model.HostMetrics
 	if err := json.NewDecoder(io.LimitReader(r.Body, maxIngestBody)).Decode(&metrics); err != nil {
 		writeError(w, http.StatusBadRequest, "the body is not a GWatch hardware reading")
 		return
 	}
-	stored, err := s.Engine.Hosts().Ingest(ctx, agent, metrics, s.remoteAddr(r))
+	stored, err := s.Engine.IngestHostReading(ctx, agent, metrics, s.remoteAddr(r))
 	if err != nil {
 		s.fail(w, err)
 		return

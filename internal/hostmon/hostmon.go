@@ -1,6 +1,13 @@
-// Package hostmon owns hardware readings: it samples the computer GWatch runs
-// on, accepts readings pushed by registered agents, and answers the hardware
-// check and the API with the newest reading for any machine.
+// Package hostmon owns the newest hardware reading of every machine: it samples
+// the computer GWatch runs on, accepts readings pushed by registered agents, and
+// answers the hardware check and the API with the newest reading for any
+// machine.
+//
+// It does not keep history. A machine's readings are recorded the way any
+// check's are — as results of the machine's hardware check, with the check's
+// retention, charts and backups — and what this package holds is only what has
+// not yet been through a check: the latest reading, in memory. After a restart
+// that reading is read back out of the check's results (Restore).
 //
 // It is the boundary the agent design turns on. An agent connects outwards to
 // GWatch and hands over a reading; GWatch never dials back, holds no
@@ -23,8 +30,8 @@ import (
 )
 
 // DefaultSampleInterval is how often this computer is read when nothing says
-// otherwise. It is independent of any check: the hardware page shows a history
-// for this machine whether or not anyone pointed a check at it.
+// otherwise. It is independent of any check, so a hardware check on this
+// computer always has a fresh reading to judge.
 const DefaultSampleInterval = time.Minute
 
 // maxClockSkew bounds how far ahead of GWatch a reporting machine's clock may
@@ -50,9 +57,15 @@ type Monitor struct {
 	// Interval is how often this computer is sampled. Zero means the default.
 	Interval time.Duration
 
-	// OnSample is called after each stored reading, so the engine can tell
-	// subscribers that the hardware page has something new. It may be nil.
+	// OnSample is called after each reading is taken or accepted, so the engine
+	// can tell subscribers that the hardware page has something new. It may be
+	// nil.
 	OnSample func(key string)
+
+	// Restore finds the newest reading of a machine when none is in memory — the
+	// first look after a restart — from what its hardware check recorded. It may
+	// be nil, in which case there is simply no reading until one arrives.
+	Restore func(ctx context.Context, key string) (model.HostMetrics, bool)
 
 	// OnError reports a sampling failure once per transition rather than on
 	// every tick, so a machine with no readable hardware does not fill the
@@ -74,7 +87,7 @@ func New(st *store.Store) *Monitor {
 }
 
 // Run samples this computer until ctx is cancelled. The first sample is taken
-// immediately so the hardware page is populated as soon as GWatch starts.
+// immediately so there is a reading as soon as GWatch starts.
 func (m *Monitor) Run(ctx context.Context) {
 	interval := m.Interval
 	if interval <= 0 {
@@ -105,12 +118,6 @@ func (m *Monitor) sampleLocal(ctx context.Context) {
 	}
 	m.reportError(nil)
 	m.remember(metrics)
-	if err := m.store.SaveHostSample(ctx, model.SampleFrom(metrics)); err != nil {
-		if ctx.Err() == nil {
-			m.reportError(fmt.Errorf("store hardware reading: %w", err))
-		}
-		return
-	}
 	m.notify(model.HostKeyLocal)
 }
 
@@ -136,23 +143,29 @@ func (m *Monitor) notify(key string) {
 	}
 }
 
+// remember keeps a reading as the machine's newest, unless one that is newer is
+// already held: readings a machine held back through an outage arrive after the
+// ones taken since, and must not push the newest backwards.
 func (m *Monitor) remember(metrics model.HostMetrics) {
 	m.mu.Lock()
-	m.latest[metrics.Key] = metrics
+	if cur, ok := m.latest[metrics.Key]; !ok || !metrics.Timestamp.Before(cur.Timestamp) {
+		m.latest[metrics.Key] = metrics
+	}
 	m.mu.Unlock()
 }
 
-// Ingest stores a reading pushed by a registered machine and records that the
+// Accept takes in a reading pushed by a registered machine and records that the
 // machine reported in. The reading is filed under the agent's own key whatever
-// the payload claims, so a token can only ever write that machine's history.
-func (m *Monitor) Ingest(ctx context.Context, agent model.Agent, metrics model.HostMetrics, remoteAddr string) (model.HostMetrics, error) {
+// the payload claims, so a token can only ever write that machine's readings.
+//
+// Accepting is not recording: the reading is held as the machine's newest and
+// handed back, and whoever called (the engine) runs the machine's hardware check
+// over it, which is what puts it in the history.
+func (m *Monitor) Accept(ctx context.Context, agent model.Agent, metrics model.HostMetrics, remoteAddr string) (model.HostMetrics, error) {
 	metrics.Key = agent.HostKey()
 	metrics.Timestamp = m.settleTimestamp(metrics.Timestamp)
 	metrics.Warnings = trimStrings(metrics.Warnings, 8, 200)
 
-	if err := m.store.SaveHostSample(ctx, model.SampleFrom(metrics)); err != nil {
-		return model.HostMetrics{}, fmt.Errorf("store hardware reading: %w", err)
-	}
 	m.remember(metrics)
 	if err := m.store.TouchAgent(ctx, agent.ID, remoteAddr,
 		trim(metrics.AgentVersion, 40), trim(metrics.Hostname, 120),
@@ -161,21 +174,6 @@ func (m *Monitor) Ingest(ctx context.Context, agent model.Agent, metrics model.H
 	}
 	m.notify(metrics.Key)
 	return metrics, nil
-}
-
-// Record stores a reading GWatch fetched itself, such as one a hardware check
-// scraped from an exposed endpoint.
-func (m *Monitor) Record(ctx context.Context, metrics model.HostMetrics) error {
-	if strings.TrimSpace(metrics.Key) == "" {
-		return errors.New("a host key is required")
-	}
-	metrics.Timestamp = m.settleTimestamp(metrics.Timestamp)
-	if err := m.store.SaveHostSample(ctx, model.SampleFrom(metrics)); err != nil {
-		return err
-	}
-	m.remember(metrics)
-	m.notify(metrics.Key)
-	return nil
 }
 
 // settleTimestamp keeps a reporting machine's clock from placing readings
@@ -211,17 +209,16 @@ func (m *Monitor) AgentHost(ctx context.Context, agentID int64) (model.HostMetri
 	if metrics, ok := m.Latest(key); ok {
 		return metrics, nil
 	}
-	// Nothing in memory: this is the first run after a restart, so the
-	// reading is in the database rather than lost.
-	sample, err := m.store.LatestHostSample(ctx, key)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return model.HostMetrics{}, ErrNoReading
+	// Nothing in memory: this is the first look after a restart, so the reading
+	// is whatever the machine's check last recorded rather than lost.
+	if m.Restore != nil {
+		if metrics, ok := m.Restore(ctx, key); ok {
+			metrics.Key = key
+			m.remember(metrics)
+			return metrics, nil
 		}
-		return model.HostMetrics{}, err
 	}
-	m.remember(sample.Metrics)
-	return sample.Metrics, nil
+	return model.HostMetrics{}, ErrNoReading
 }
 
 // Latest returns the newest in-memory reading for a machine.
@@ -230,6 +227,31 @@ func (m *Monitor) Latest(key string) (model.HostMetrics, bool) {
 	defer m.mu.RUnlock()
 	metrics, ok := m.latest[key]
 	return metrics, ok
+}
+
+// Hold keeps a reading as its machine's newest, as the sampler does for this
+// computer and Accept does for an agent's, without anything else happening. It
+// is for callers that already have a reading in hand — tests, mostly — and want
+// a check to find it.
+func (m *Monitor) Hold(metrics model.HostMetrics) {
+	if strings.TrimSpace(metrics.Key) == "" {
+		return
+	}
+	if metrics.Timestamp.IsZero() {
+		metrics.Timestamp = time.Now()
+	}
+	m.remember(metrics)
+}
+
+// All returns the newest in-memory reading of every machine that has one.
+func (m *Monitor) All() map[string]model.HostMetrics {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make(map[string]model.HostMetrics, len(m.latest))
+	for k, v := range m.latest {
+		out[k] = v
+	}
+	return out
 }
 
 // Forget drops the cached reading for a machine, so a revoked or deleted agent

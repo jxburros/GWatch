@@ -9,16 +9,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jxburros/GWatch/internal/auth"
 	"github.com/jxburros/GWatch/internal/model"
 )
 
-// Schema for hardware health: the machines registered to report in, and the
-// readings themselves. Applied by migrate() after the base schema.
+// Schema for the machines registered to report in, and the invitations to enrol
+// them. Applied by migrate() after the base schema.
 //
-// Readings are keyed by a host key ("local", "agent:<id>", "url:<check id>")
-// rather than by a check, because one machine's readings are worth keeping
-// whether or not a check happens to be pointed at it, and because two checks
-// may watch different aspects of the same machine.
+// A machine's readings are not stored here. They used to be, in a table of their
+// own keyed by host; a machine is a node with a hardware check, and what that
+// check measures is recorded like what any other check measures — in results,
+// with its retention, its history and its backups (see hostseries.go).
 const hostSchema = `
 CREATE TABLE IF NOT EXISTS agents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,23 +38,6 @@ CREATE TABLE IF NOT EXISTS agents (
   os TEXT NOT NULL DEFAULT '',
   arch TEXT NOT NULL DEFAULT ''
 );
-
-CREATE TABLE IF NOT EXISTS host_samples (
-  host_key TEXT NOT NULL,
-  ts INTEGER NOT NULL,                  -- unix milliseconds
-  cpu_pct REAL,
-  mem_pct REAL,
-  swap_pct REAL,
-  disk_pct REAL,
-  load_per_core REAL,
-  net_rx_bps REAL,
-  net_tx_bps REAL,
-  disk_read_bps REAL,
-  disk_write_bps REAL,
-  metrics TEXT NOT NULL DEFAULT '{}',
-  PRIMARY KEY (host_key, ts)
-);
-CREATE INDEX IF NOT EXISTS idx_host_samples_ts ON host_samples(ts);
 
 -- Invitations to enrol a machine. A row survives being redeemed, revoked or
 -- expiring: it is what lets the Hardware page say where an agent came from,
@@ -77,13 +61,31 @@ CREATE INDEX IF NOT EXISTS idx_agent_pairings_expires ON agent_pairings(expires_
 
 const agentCols = `id, name, node_id, prefix, enabled, created_by, created_at, revoked_at, last_seen_at, last_addr, last_version, hostname, os, arch`
 
+// agentSelectCols is agentCols plus what the interface needs and a backup does
+// not: whether a token can be read back, whether a rotation is waiting, and
+// the settings GWatch holds for the machine. The sealed tokens themselves are
+// never selected here; only RevealAgentToken reads them.
+const agentSelectCols = agentCols + `,
+	CASE WHEN token_sealed = '' THEN 0 ELSE 1 END, CASE WHEN pending_token_hash = '' THEN 0 ELSE 1 END,
+	pending_since, collect, inventory, checked_in_at`
+
 func scanAgent(sc interface{ Scan(...any) error }) (model.Agent, error) {
+	return scanAgentWith(sc)
+}
+
+// scanAgentWith is scanAgent for a query that selects further columns after
+// agentSelectCols; extra receives them.
+func scanAgentWith(sc interface{ Scan(...any) error }, extra ...any) (model.Agent, error) {
 	var a model.Agent
 	var nodeID sql.NullInt64
 	var createdAt string
-	var revokedAt, lastSeenAt sql.NullString
-	err := sc.Scan(&a.ID, &a.Name, &nodeID, &a.Prefix, &a.Enabled, &a.CreatedBy, &createdAt,
-		&revokedAt, &lastSeenAt, &a.LastAddr, &a.LastVersion, &a.Hostname, &a.OS, &a.Arch)
+	var revokedAt, lastSeenAt, pendingSince, checkedInAt sql.NullString
+	var viewable, pending int
+	var collect, inventory string
+	dest := append([]any{&a.ID, &a.Name, &nodeID, &a.Prefix, &a.Enabled, &a.CreatedBy, &createdAt,
+		&revokedAt, &lastSeenAt, &a.LastAddr, &a.LastVersion, &a.Hostname, &a.OS, &a.Arch,
+		&viewable, &pending, &pendingSince, &collect, &inventory, &checkedInAt}, extra...)
+	err := sc.Scan(dest...)
 	if err != nil {
 		return model.Agent{}, err
 	}
@@ -96,6 +98,19 @@ func scanAgent(sc interface{ Scan(...any) error }) (model.Agent, error) {
 	}
 	a.RevokedAt = parseTime(revokedAt)
 	a.LastSeenAt = parseTime(lastSeenAt)
+	a.TokenViewable = viewable == 1
+	a.RotationPending = pending == 1
+	a.RotationSince = parseTime(pendingSince)
+	a.CheckedInAt = parseTime(checkedInAt)
+	if collect != "" {
+		_ = json.Unmarshal([]byte(collect), &a.Collect)
+	}
+	if inventory != "" {
+		var inv model.Inventory
+		if json.Unmarshal([]byte(inventory), &inv) == nil {
+			a.Inventory = &inv
+		}
+	}
 	return a, nil
 }
 
@@ -123,7 +138,7 @@ func (s *Store) CreateAgent(ctx context.Context, name string, nodeID *int64, pre
 
 // GetAgent returns one registered machine.
 func (s *Store) GetAgent(ctx context.Context, id int64) (model.Agent, error) {
-	row := s.queryRow(ctx, `SELECT `+agentCols+` FROM agents WHERE id = ?`, id)
+	row := s.queryRow(ctx, `SELECT `+agentSelectCols+` FROM agents WHERE id = ?`, id)
 	a, err := scanAgent(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Agent{}, ErrNotFound
@@ -133,7 +148,7 @@ func (s *Store) GetAgent(ctx context.Context, id int64) (model.Agent, error) {
 
 // ListAgents returns every registered machine, newest first.
 func (s *Store) ListAgents(ctx context.Context) ([]model.Agent, error) {
-	rows, err := s.query(ctx, `SELECT `+agentCols+` FROM agents ORDER BY id DESC`)
+	rows, err := s.query(ctx, `SELECT `+agentSelectCols+` FROM agents ORDER BY id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +169,7 @@ func (s *Store) ListAgents(ctx context.Context) ([]model.Agent, error) {
 // revoked rather than at the next restart.
 func (s *Store) AgentByTokenHash(ctx context.Context, tokenHash string) (model.Agent, error) {
 	row := s.queryRow(ctx,
-		`SELECT `+agentCols+` FROM agents WHERE token_hash = ? AND revoked_at IS NULL AND enabled = 1`, tokenHash)
+		`SELECT `+agentSelectCols+` FROM agents WHERE token_hash = ? AND revoked_at IS NULL AND enabled = 1`, tokenHash)
 	a, err := scanAgent(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Agent{}, ErrNotFound
@@ -199,13 +214,11 @@ func (s *Store) RevokeAgent(ctx context.Context, id int64) error {
 	return nil
 }
 
-// DeleteAgent removes a machine and every reading it ever sent.
+// DeleteAgent removes a machine's registration: its token, and the record of how
+// it was enrolled. The node it reported for and everything its hardware check
+// recorded stay, since that is the node's history and is deleted with the node.
 func (s *Store) DeleteAgent(ctx context.Context, id int64) error {
-	key := model.AgentHostKey(id)
 	return s.writeTx(ctx, func(tx *wtx) error {
-		if _, err := tx.exec(ctx, `DELETE FROM host_samples WHERE host_key = ?`, key); err != nil {
-			return err
-		}
 		res, err := tx.exec(ctx, `DELETE FROM agents WHERE id = ?`, id)
 		if err != nil {
 			return err
@@ -215,6 +228,157 @@ func (s *Store) DeleteAgent(ctx context.Context, id int64) error {
 		}
 		return nil
 	})
+}
+
+// AgentByAnyTokenHash resolves a presented token against both the agent's
+// current token and a replacement waiting to be picked up, and says which one
+// it was. A revoked or disabled agent is not found, whichever token is used.
+func (s *Store) AgentByAnyTokenHash(ctx context.Context, tokenHash string) (agent model.Agent, pending bool, err error) {
+	row := s.queryRow(ctx,
+		`SELECT `+agentSelectCols+`, CASE WHEN token_hash = ? THEN 0 ELSE 1 END FROM agents
+		 WHERE (token_hash = ? OR (pending_token_hash <> '' AND pending_token_hash = ?)) AND revoked_at IS NULL AND enabled = 1`,
+		tokenHash, tokenHash, tokenHash)
+	var which int
+	a, err := scanAgentWith(row, &which)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Agent{}, false, ErrNotFound
+	}
+	return a, which == 1, err
+}
+
+// SetAgentToken keeps a copy of the agent's token, sealed with the server's own
+// key, so that an administrator can read it back and compare it with the one in
+// the machine's configuration file. The digest it is authenticated by is stored
+// separately and does not depend on this.
+func (s *Store) SetAgentToken(ctx context.Context, id int64, token string) error {
+	sealed, err := s.sealSecret(token)
+	if err != nil {
+		return err
+	}
+	res, err := s.exec(ctx, `UPDATE agents SET token_sealed = ? WHERE id = ?`, sealed, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// AgentTokens is what an administrator may be shown of an agent's credentials.
+// Either is empty when GWatch holds no readable copy.
+type AgentTokens struct {
+	Current string
+	Pending string
+}
+
+// RevealAgentToken opens the sealed copies of an agent's tokens. A token that
+// was stored before copies were kept, or that came back from a backup, is
+// simply not there to open: the answer is empty, not an error.
+func (s *Store) RevealAgentToken(ctx context.Context, id int64) (AgentTokens, error) {
+	var current, pending string
+	err := s.queryRow(ctx, `SELECT token_sealed, pending_token_sealed FROM agents WHERE id = ?`, id).Scan(&current, &pending)
+	if errors.Is(err, sql.ErrNoRows) {
+		return AgentTokens{}, ErrNotFound
+	}
+	if err != nil {
+		return AgentTokens{}, err
+	}
+	var out AgentTokens
+	if current != "" {
+		if out.Current, err = s.secrets.Open(current); err != nil {
+			return AgentTokens{}, fmt.Errorf("open the stored token: %w", err)
+		}
+	}
+	if pending != "" {
+		if out.Pending, err = s.secrets.Open(pending); err != nil {
+			return AgentTokens{}, fmt.Errorf("open the stored replacement token: %w", err)
+		}
+	}
+	return out, nil
+}
+
+// StartAgentRotation records a replacement token for a machine. With retireOld
+// false the old token keeps working until the new one is first used, which is
+// what lets the agent pick it up by itself and switch over without a gap. With
+// retireOld true the old token stops working at once and the new one is the
+// only one, for the case where the old one may have leaked.
+func (s *Store) StartAgentRotation(ctx context.Context, id int64, token, prefix string, retireOld bool) error {
+	sealed, err := s.sealSecret(token)
+	if err != nil {
+		return err
+	}
+	hash := auth.HashToken(token)
+	var res sql.Result
+	if retireOld {
+		res, err = s.exec(ctx, `UPDATE agents SET token_hash = ?, token_sealed = ?, prefix = ?,
+			pending_token_hash = '', pending_token_sealed = '', pending_since = NULL WHERE id = ?`,
+			hash, sealed, prefix, id)
+	} else {
+		res, err = s.exec(ctx, `UPDATE agents SET pending_token_hash = ?, pending_token_sealed = ?, pending_since = ?
+			WHERE id = ?`, hash, sealed, fmtTime(time.Now()), id)
+	}
+	if err != nil {
+		if s.d.isUniqueViolation(err) {
+			return ErrDuplicate
+		}
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// CancelAgentRotation drops a replacement token that has not been used.
+func (s *Store) CancelAgentRotation(ctx context.Context, id int64) error {
+	_, err := s.exec(ctx, `UPDATE agents SET pending_token_hash = '', pending_token_sealed = '', pending_since = NULL WHERE id = ?`, id)
+	return err
+}
+
+// PromoteAgentToken makes the replacement the agent's token, which is what the
+// first request made with it does. The old token stops working in the same
+// statement; the condition on the digest means only the request that actually
+// presented the replacement can do this.
+func (s *Store) PromoteAgentToken(ctx context.Context, id int64, pendingHash, prefix string) error {
+	_, err := s.exec(ctx, `UPDATE agents SET token_hash = pending_token_hash, token_sealed = pending_token_sealed,
+		prefix = ?, pending_token_hash = '', pending_token_sealed = '', pending_since = NULL
+		WHERE id = ? AND pending_token_hash = ? AND pending_token_hash <> ''`, prefix, id, pendingHash)
+	return err
+}
+
+// collectColumn is a selection as it is stored: empty for "nothing chosen".
+func collectColumn(sel model.CollectSelection) string {
+	sel = sel.Normalize()
+	if sel.IsZero() {
+		return ""
+	}
+	return jsonString(sel)
+}
+
+// SetAgentCollect stores the selection an administrator made for a machine.
+func (s *Store) SetAgentCollect(ctx context.Context, id int64, sel model.CollectSelection) error {
+	res, err := s.exec(ctx, `UPDATE agents SET collect = ? WHERE id = ?`, collectColumn(sel), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// RecordAgentCheckIn notes that a machine asked for its settings, and keeps
+// what it said it could collect. A check-in that carries no inventory leaves
+// the last one in place.
+func (s *Store) RecordAgentCheckIn(ctx context.Context, id int64, inv *model.Inventory) error {
+	if inv == nil {
+		_, err := s.exec(ctx, `UPDATE agents SET checked_in_at = ? WHERE id = ?`, fmtTime(time.Now()), id)
+		return err
+	}
+	_, err := s.exec(ctx, `UPDATE agents SET checked_in_at = ?, inventory = ? WHERE id = ?`,
+		fmtTime(time.Now()), jsonString(inv.Normalize()), id)
+	return err
 }
 
 // TouchAgent records that a machine reported in, along with what it says it
@@ -279,6 +443,30 @@ func scanPairingWithHash(sc interface{ Scan(...any) error }) (model.PairingCode,
 	p.RedeemedAt = parseTime(redeemedAt)
 	p.RevokedAt = parseTime(revokedAt)
 	return p, hash, nil
+}
+
+// SetPairingCollect keeps the readings an administrator chose while adding a
+// machine, so that the agent starts with them when the code is redeemed.
+func (s *Store) SetPairingCollect(ctx context.Context, id int64, sel model.CollectSelection) error {
+	_, err := s.exec(ctx, `UPDATE agent_pairings SET collect = ? WHERE id = ?`, collectColumn(sel), id)
+	return err
+}
+
+// PairingCollect returns what SetPairingCollect kept; zero means nothing chosen.
+func (s *Store) PairingCollect(ctx context.Context, id int64) (model.CollectSelection, error) {
+	var raw string
+	err := s.queryRow(ctx, `SELECT collect FROM agent_pairings WHERE id = ?`, id).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.CollectSelection{}, ErrNotFound
+	}
+	if err != nil {
+		return model.CollectSelection{}, err
+	}
+	var sel model.CollectSelection
+	if raw != "" {
+		_ = json.Unmarshal([]byte(raw), &sel)
+	}
+	return sel, nil
 }
 
 // CreatePairingCode records an invitation to enrol one machine. Only the hash
@@ -422,154 +610,4 @@ func (s *Store) RevokePairingCode(ctx context.Context, id int64) error {
 		}
 	}
 	return nil
-}
-
-// ---- readings ----
-
-// SaveHostSample stores one reading. A reading that arrives with the same
-// timestamp as one already stored replaces it, so a retried push cannot
-// produce two points a chart would draw as a spike.
-func (s *Store) SaveHostSample(ctx context.Context, sample model.HostSample) error {
-	if strings.TrimSpace(sample.Key) == "" {
-		return errors.New("a host key is required")
-	}
-	if sample.Timestamp.IsZero() {
-		sample.Timestamp = time.Now()
-	}
-	sample.Metrics.Key = sample.Key
-	blob, err := json.Marshal(sample.Metrics)
-	if err != nil {
-		return fmt.Errorf("encode metrics: %w", err)
-	}
-	_, err = s.exec(ctx, insertValues("host_samples", hostSampleColList)+" "+s.d.upsertClause([]string{"host_key", "ts"}, hostSampleColList),
-		sample.Key, sample.Timestamp.UnixMilli(),
-		sample.CPUPct, sample.MemPct, sample.SwapPct, sample.DiskPct, sample.LoadPerCore,
-		sample.NetRxBytesSec, sample.NetTxBytesSec, sample.DiskReadBytes, sample.DiskWriteBytes,
-		string(blob))
-	return err
-}
-
-// LatestHostSample returns the newest reading for a machine.
-func (s *Store) LatestHostSample(ctx context.Context, key string) (model.HostSample, error) {
-	row := s.queryRow(ctx, `SELECT `+hostSampleCols+`
-		FROM host_samples WHERE host_key = ? ORDER BY ts DESC LIMIT 1`, key)
-	sample, err := scanHostSample(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return model.HostSample{}, ErrNotFound
-	}
-	return sample, err
-}
-
-// LatestHostSamples returns the newest reading for every machine that has one,
-// keyed by host key. It is one query rather than one per machine so the
-// hardware list stays a single round trip however many agents there are.
-func (s *Store) LatestHostSamples(ctx context.Context) (map[string]model.HostSample, error) {
-	rows, err := s.query(ctx, `SELECT `+hostSampleCols+` FROM host_samples
-		WHERE (host_key, ts) IN (SELECT host_key, MAX(ts) FROM host_samples GROUP BY host_key)`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]model.HostSample{}
-	for rows.Next() {
-		sample, err := scanHostSample(rows)
-		if err != nil {
-			return nil, err
-		}
-		out[sample.Key] = sample
-	}
-	return out, rows.Err()
-}
-
-// HostSamples returns the readings for a machine between two times, oldest
-// first. The full snapshot is left out: a chart wants the numeric series, and
-// decoding several thousand snapshots to draw a line is pure waste.
-func (s *Store) HostSamples(ctx context.Context, key string, from, to time.Time, limit int) ([]model.HostSample, error) {
-	if limit <= 0 || limit > 20000 {
-		limit = 20000
-	}
-	rows, err := s.query(ctx, `SELECT host_key, ts, cpu_pct, mem_pct, swap_pct, disk_pct,
-		load_per_core, net_rx_bps, net_tx_bps, disk_read_bps, disk_write_bps
-		FROM host_samples WHERE host_key = ? AND ts >= ? AND ts <= ? ORDER BY ts LIMIT ?`,
-		key, from.UnixMilli(), to.UnixMilli(), limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	out := []model.HostSample{}
-	for rows.Next() {
-		var sample model.HostSample
-		var ms int64
-		if err := rows.Scan(&sample.Key, &ms, &sample.CPUPct, &sample.MemPct, &sample.SwapPct,
-			&sample.DiskPct, &sample.LoadPerCore, &sample.NetRxBytesSec, &sample.NetTxBytesSec,
-			&sample.DiskReadBytes, &sample.DiskWriteBytes); err != nil {
-			return nil, err
-		}
-		sample.Timestamp = time.UnixMilli(ms)
-		out = append(out, sample)
-	}
-	return out, rows.Err()
-}
-
-// HostKeys lists every machine that has at least one stored reading. It
-// includes keys whose agent has since been deleted, which is how the retention
-// sweep finds readings to clear out.
-func (s *Store) HostKeys(ctx context.Context) ([]string, error) {
-	rows, err := s.query(ctx, `SELECT DISTINCT host_key FROM host_samples ORDER BY host_key`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []string{}
-	for rows.Next() {
-		var key string
-		if err := rows.Scan(&key); err != nil {
-			return nil, err
-		}
-		out = append(out, key)
-	}
-	return out, rows.Err()
-}
-
-// PruneHostSamples deletes readings older than cutoff and reports how many
-// rows went.
-func (s *Store) PruneHostSamples(ctx context.Context, cutoff time.Time) (int64, error) {
-	res, err := s.exec(ctx, `DELETE FROM host_samples WHERE ts < ?`, cutoff.UnixMilli())
-	if err != nil {
-		return 0, err
-	}
-	n, _ := res.RowsAffected()
-	return n, nil
-}
-
-// DeleteHostSamples removes every reading for one machine.
-func (s *Store) DeleteHostSamples(ctx context.Context, key string) error {
-	_, err := s.exec(ctx, `DELETE FROM host_samples WHERE host_key = ?`, key)
-	return err
-}
-
-const hostSampleCols = `host_key, ts, cpu_pct, mem_pct, swap_pct, disk_pct, load_per_core, net_rx_bps, net_tx_bps, disk_read_bps, disk_write_bps, metrics`
-
-var hostSampleColList = strings.Split(strings.ReplaceAll(hostSampleCols, " ", ""), ",")
-
-func scanHostSample(sc interface{ Scan(...any) error }) (model.HostSample, error) {
-	var sample model.HostSample
-	var ms int64
-	var blob string
-	err := sc.Scan(&sample.Key, &ms, &sample.CPUPct, &sample.MemPct, &sample.SwapPct, &sample.DiskPct,
-		&sample.LoadPerCore, &sample.NetRxBytesSec, &sample.NetTxBytesSec,
-		&sample.DiskReadBytes, &sample.DiskWriteBytes, &blob)
-	if err != nil {
-		return model.HostSample{}, err
-	}
-	sample.Timestamp = time.UnixMilli(ms)
-	if blob != "" {
-		// A snapshot that cannot be decoded (a row written by a newer build,
-		// say) still has usable numeric columns, so the row is kept rather
-		// than failing the whole query.
-		_ = json.Unmarshal([]byte(blob), &sample.Metrics)
-	}
-	sample.Metrics.Key = sample.Key
-	return sample, nil
 }
