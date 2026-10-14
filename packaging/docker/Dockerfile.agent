@@ -35,9 +35,13 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 # Only what the agent is built from: it imports the collector, the shared
-# types and the release verifier, nothing of the server or its web interface.
+# types and the release verifier, and — for its control panel — the fonts and
+# the agent's mark from web/. Nothing of the server's web interface.
 COPY cmd/gwatch-agent cmd/gwatch-agent
 COPY internal internal
+COPY web/embed.go web/embed.go
+COPY web/fonts web/fonts
+COPY web/agent-logo.png web/agent-logo.png
 
 RUN set -eu; \
     version="${VERSION:-$(tr -d ' \t\r\n' < cmd/gwatch-agent/VERSION)}"; \
