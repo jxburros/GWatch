@@ -1,0 +1,1185 @@
+name: Release
+'on':
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel
+        type: choice
+        options:
+        - stable
+        - preview
+        default: stable
+      dry_run:
+        description: Build and verify without publishing
+        type: boolean
+        default: true
+      app:
+        description: Optional app ID; empty selects every advanced app
+        type: string
+        default: ''
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+jobs:
+  plan:
+    uses: JX-Holdings-LLC/release-infrastructure/.github/workflows/plan.yml@181636b602317ba703c3f4bf12775c34560f4efb
+    with:
+      toolkit-ref: 181636b602317ba703c3f4bf12775c34560f4efb
+      channel: ${{ inputs.channel }}
+      app: ${{ inputs.app }}
+  ci:
+    name: Lint, build, test (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+    - name: Keep LF line endings
+      run: git config --global core.autocrlf false
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ needs.plan.outputs.sha }}
+    - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+      with:
+        go-version: 1.26.x
+        check-latest: true
+        cache: true
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      with:
+        node-version: '22'
+    - name: gofmt, go vet, go mod tidy, go mod verify
+      run: |
+        unformatted="$(gofmt -l .)"
+        if [ -n "$unformatted" ]; then
+          echo "::error::These files are not gofmt'd:"; echo "$unformatted"; gofmt -d .; exit 1
+        fi
+        go vet ./...
+        cp go.mod go.mod.orig && cp go.sum go.sum.orig
+        go mod tidy
+        if ! diff -q go.mod go.mod.orig >/dev/null || ! diff -q go.sum go.sum.orig >/dev/null; then
+          echo "::error::go.mod/go.sum are out of date. Run 'go mod tidy' and commit the result."
+          diff -u go.mod.orig go.mod || true; diff -u go.sum.orig go.sum || true; exit 1
+        fi
+        rm -f go.mod.orig go.sum.orig
+        go mod verify
+    - name: Build and test
+      run: |
+        go build ./...
+        go test -count=1 ./...
+    - name: "MCP companion \u2014 gofmt, go vet, go test"
+      working-directory: mcp
+      run: |
+        unformatted="$(gofmt -l .)"
+        if [ -n "$unformatted" ]; then
+          echo "::error::These files in mcp/ are not gofmt'd:"; echo "$unformatted"; gofmt -d .; exit 1
+        fi
+        go mod verify
+        go vet ./...
+        go test -count=1 ./...
+    - name: "MCP companion \u2014 build"
+      working-directory: mcp
+      run: go build ./...
+    - name: Windows icon resources are up to date
+      run: "go run ./cmd/gwatch-rsrc -ico scripts/installer/assets/gwatch.ico -out rsrc\ngo run ./cmd/gwatch-rsrc\
+        \ -ico scripts/installer/assets/gwatch-agent.ico -out cmd/gwatch-agent/rsrc\nif ! git diff --quiet -- '*.syso';\
+        \ then\n  echo \"::error::the committed .syso files do not match scripts/installer/assets/gwatch.ico and\
+        \ gwatch-agent.ico \u2014 run 'make rsrc' and commit the result\"\n  git diff --stat -- '*.syso'\n  exit\
+        \ 1\nfi\n"
+    - name: Web assets
+      run: "status=0\nwhile IFS= read -r f; do\n  if ! node --check \"$f\"; then echo \"::error file=$f::JavaScript\
+        \ syntax error\"; status=1; fi\ndone < <(find web -name '*.js' -type f | sort)\nfor f in web/index.html\
+        \ web/app.js web/app.css web/api.js web/components.js web/logo.svg; do\n  if [ ! -s \"$f\" ]; then echo\
+        \ \"::error::missing or empty web asset: $f\"; status=1; fi\ndone\nif [ $status -ne 0 ]; then exit $status;\
+        \ fi\n# The tests themselves live outside web/ (tests/web/), not because\n# they belong to a different feature\
+        \ but so //go:embed web never\n# picks them up and ships them inside gwatch.exe \u2014 see tests/web/.\n\
+        npm ci\nnpm test\n"
+    - name: PowerShell scripts parse
+      shell: pwsh
+      run: |
+        $failed = $false
+        foreach ($file in Get-ChildItem -Path scripts -Filter *.ps1 -Recurse) {
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$errors) | Out-Null
+          if ($errors -and $errors.Count -gt 0) {
+            $failed = $true
+            foreach ($e in $errors) { Write-Host "::error file=$($file.FullName)::$($e.Message)" }
+          } else { Write-Host "ok $($file.Name)" }
+        }
+        if ($failed) { exit 1 }
+    - name: Inno Setup scripts lint
+      shell: pwsh
+      run: pwsh -File scripts/installer/lint.ps1
+    - name: Build Windows executable
+      run: |
+        mkdir -p dist
+        CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=ci-${GITHUB_SHA::7}" -o dist/gwatch-windows-amd64.exe .
+        ls -lh dist
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: gwatch-windows-amd64
+        path: dist/gwatch-windows-amd64.exe
+        if-no-files-found: error
+    - name: Build the agent executable
+      run: |
+        CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=ci-${GITHUB_SHA::7}" -o dist/gwatch-agent-windows-amd64.exe ./cmd/gwatch-agent
+    - name: Install Inno Setup
+      run: choco install innosetup --version=6.7.1 --allow-downgrade --no-progress -y
+      shell: pwsh
+    - name: Build Windows installers
+      shell: pwsh
+      run: |
+        $version = "0.0.0-ci-" + $env:GITHUB_SHA.Substring(0, 7)
+        $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+        foreach ($pair in @(
+            @{ Script = "scripts\installer\gwatch.iss";       Exe = "dist\gwatch-windows-amd64.exe" },
+            @{ Script = "scripts\installer\gwatch-agent.iss"; Exe = "dist\gwatch-agent-windows-amd64.exe" })) {
+          $exe = Join-Path $PWD $pair.Exe
+          & $iscc "/DAppVersion=$version" "/DExePath=$exe" $pair.Script
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        }
+        Get-ChildItem scripts\installer\Output
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: gwatch-windows-installer
+        path: |
+          scripts/installer/Output/gwatch-setup-*.exe
+          scripts/installer/Output/gwatch-agent-setup-*.exe
+        if-no-files-found: error
+    - name: Build the winget variant of the agent installer
+      run: sh packaging/build-agent.sh winget "0.0.0-ci-${GITHUB_SHA::7}" dist/packaged windows/amd64
+    - name: Compile the winget setup program
+      shell: pwsh
+      run: |
+        $version = "0.0.0-ci-" + $env:GITHUB_SHA.Substring(0, 7)
+        $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+        $exe = Join-Path $PWD "dist\packaged\winget\windows-amd64\gwatch-agent.exe"
+        & $iscc "/DAppVersion=$version" "/DExePath=$exe" "/Fgwatch-agent-winget-setup-$version" "scripts\installer\gwatch-agent.iss"
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        if (-not (Test-Path "scripts\installer\Output\gwatch-agent-winget-setup-$version.exe")) { Write-Host "::error::ISCC did not write gwatch-agent-winget-setup-$version.exe"; exit 1 }
+    needs:
+    - plan
+    if: needs.plan.outputs.selected == 'true'
+  linux:
+    name: Test (Linux)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: gwatch
+          POSTGRES_PASSWORD: gwatch
+          POSTGRES_DB: gwatch
+        ports:
+        - 5432:5432
+        options: --health-cmd "pg_isready -U gwatch" --health-interval 5s --health-timeout 5s --health-retries 20
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: gwatch
+          MYSQL_DATABASE: gwatch
+        ports:
+        - 3306:3306
+        options: --health-cmd "mysqladmin ping -h 127.0.0.1 -pgwatch --silent" --health-interval 5s --health-timeout
+          5s --health-retries 30
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ needs.plan.outputs.sha }}
+    - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+      with:
+        go-version: 1.26.x
+        check-latest: true
+        cache: true
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      with:
+        node-version: '22'
+        cache: npm
+    - name: gofmt, go vet, go build, go test
+      run: |
+        unformatted="$(gofmt -l .)"
+        if [ -n "$unformatted" ]; then
+          echo "::error::These files are not gofmt'd:"; echo "$unformatted"; gofmt -d .; exit 1
+        fi
+        go vet ./...
+        go build ./...
+        go test -count=1 ./...
+    - name: Race tests
+      run: go test -race -count=1 ./...
+    - name: Store under PostgreSQL
+      env:
+        GWATCH_TEST_DB: postgres
+        GWATCH_TEST_PG_DSN: postgres://gwatch:gwatch@localhost:5432/gwatch?sslmode=disable
+      run: go test -count=1 . ./internal/store/... ./internal/backup/... ./internal/api/... ./internal/engine/...
+        ./internal/hostmon/...
+    - name: Store under MySQL
+      env:
+        GWATCH_TEST_DB: mysql
+        GWATCH_TEST_MYSQL_DSN: root:gwatch@tcp(127.0.0.1:3306)/gwatch
+      run: go test -count=1 . ./internal/store/... ./internal/backup/... ./internal/api/... ./internal/engine/...
+        ./internal/hostmon/...
+    - name: Store under ncruces/go-sqlite3
+      run: |
+        go vet -tags sqlite_ncruces ./...
+        go test -tags sqlite_ncruces -count=1 ./internal/store/... ./internal/api/... ./internal/engine/... ./internal/backup/...
+    - name: Store under mattn/go-sqlite3 (cgo)
+      env:
+        CGO_ENABLED: '1'
+      run: |
+        go vet -tags sqlite_cgo ./...
+        go test -tags sqlite_cgo -count=1 ./internal/store/... ./internal/api/... ./internal/engine/... ./internal/backup/...
+    - name: "MCP companion \u2014 gofmt, go vet, go build, go test"
+      working-directory: mcp
+      run: |
+        unformatted="$(gofmt -l .)"
+        if [ -n "$unformatted" ]; then
+          echo "::error::These files in mcp/ are not gofmt'd:"; echo "$unformatted"; gofmt -d .; exit 1
+        fi
+        go vet ./...
+        go build ./...
+        go test -count=1 ./...
+    - name: Linux service installation and journal
+      run: |
+        go build -o "$RUNNER_TEMP/gwatch-install-test" .
+        sudo "$RUNNER_TEMP/gwatch-install-test" install --data-dir "$RUNNER_TEMP/gwatch-service-data" --listen 127.0.0.1:7239 --no-start
+        # The root service executable is inside a protected root-only directory.
+        sudo systemd-analyze verify /etc/systemd/system/GWatch.service
+        systemctl cat GWatch | grep -q 'RestartSec=5s'
+        systemctl cat GWatch | grep -q '/usr/local/libexec/gwatch/gwatch'
+        if systemctl is-active --quiet GWatch; then echo 'no-start was ignored'; exit 1; fi
+        sudo systemctl start GWatch
+        for i in $(seq 1 60); do
+          if curl -fsS http://127.0.0.1:7239/api/health; then break; fi
+          sleep 1
+        done
+        curl -fsS http://127.0.0.1:7239/api/health
+        sudo journalctl -u GWatch --no-pager | grep -q 'starting'
+        sudo /usr/local/libexec/gwatch/gwatch uninstall
+        if systemctl cat GWatch >/dev/null 2>&1; then echo 'unit remained after uninstall'; exit 1; fi
+    - name: Shell installer lint
+      run: |
+        shellcheck scripts/install.sh scripts/install-agent.sh scripts/test-installers.sh
+        sh scripts/test-installers.sh
+    - name: Staticcheck
+      run: |
+        go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
+        (cd mcp && go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...)
+    - name: MCP race tests
+      working-directory: mcp
+      run: go test -race -count=1 ./...
+    - name: Install govulncheck
+      run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+    - name: govulncheck
+      run: govulncheck ./...
+    - name: govulncheck (mcp)
+      working-directory: mcp
+      run: govulncheck ./...
+    - name: Web accessibility (Playwright + axe)
+      run: |
+        npm ci
+        npx playwright install --with-deps chromium
+        npm run test:e2e
+    - name: Browser tests against real server
+      run: |
+        go run tests/e2e/generate-fixtures.go
+        git diff --exit-code -- web/mock-templates.js
+        GWATCH_REAL=1 npx playwright test
+    needs:
+    - plan
+    if: needs.plan.outputs.selected == 'true'
+  macos:
+    name: Test (macOS)
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ needs.plan.outputs.sha }}
+    - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+      with:
+        go-version: 1.26.x
+        check-latest: true
+        cache: true
+    - name: go vet, go test
+      run: |
+        go vet ./...
+        go test -count=1 ./...
+    needs:
+    - plan
+    if: needs.plan.outputs.selected == 'true'
+  docker:
+    name: Container image
+    strategy:
+      matrix:
+        platform:
+        - linux/amd64
+        - linux/arm/v7
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ needs.plan.outputs.sha }}
+    - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
+    - name: Build
+      env:
+        TARGET_PLATFORM: ${{ matrix.platform }}
+      run: |
+        docker build --platform "$TARGET_PLATFORM" --build-arg VERSION="ci-${GITHUB_SHA::7}" -t gwatch:ci .
+        docker image inspect gwatch:ci --format 'size {{.Size}} bytes, user {{.Config.User}}, labels {{json .Config.Labels}}'
+    - name: gwatch version
+      run: |
+        out="$(docker run --rm gwatch:ci version)"
+        echo "$out"
+        case "$out" in
+          "gwatch ci-${GITHUB_SHA::7} ("*) ;;
+          *) echo "::error::expected 'gwatch ci-${GITHUB_SHA::7} (...)', got '$out'"; exit 1 ;;
+        esac
+    - name: Starts and answers /api/health
+      run: |
+        docker run -d --name gwatch-smoke -p 127.0.0.1:7230:7230 \
+          --tmpfs /data:rw,uid=7230,gid=7230 gwatch:ci
+        code=0
+        for i in $(seq 1 30); do
+          code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:7230/api/health || true)"
+          [ "$code" = "200" ] && break
+          sleep 1
+        done
+        echo "--- container log ---"; docker logs gwatch-smoke; echo "---------------------"
+        if [ "$code" != "200" ]; then
+          echo "::error::/api/health answered '$code' after 30s"
+          docker rm -f gwatch-smoke
+          exit 1
+        fi
+        curl -s http://127.0.0.1:7230/api/health; echo
+        docker stop gwatch-smoke
+        docker rm gwatch-smoke
+    needs:
+    - plan
+    if: needs.plan.outputs.selected == 'true'
+  agent-packaging:
+    name: Agent packages
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ needs.plan.outputs.sha }}
+    - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+      with:
+        go-version: 1.26.x
+        check-latest: true
+        cache: true
+    - name: Build the .deb and .rpm
+      run: |
+        version="$(tr -d ' \t\r\n' < cmd/gwatch-agent/VERSION)"
+        echo "AGENT_VERSION=$version" >> "$GITHUB_ENV"
+        sh packaging/nfpm/package.sh "$version" dist/packages amd64 arm64 arm
+    - name: Inspect the .deb
+      run: |
+        deb="dist/packages/gwatch-agent_${AGENT_VERSION}-1_amd64.deb"
+        dpkg-deb -I "$deb"
+        dpkg-deb -c "$deb" | tee contents.txt
+        for want in ./usr/bin/gwatch-agent ./usr/lib/systemd/system/gwatch-agent.service ./etc/gwatch-agent/agent.env ./var/lib/gwatch-agent/; do
+          grep -q " $want\$" contents.txt || { echo "::error::$deb does not contain $want"; exit 1; }
+        done
+        grep -q '^-rw------- .* ./etc/gwatch-agent/agent.env$' contents.txt || { echo "::error::agent.env must be 0600: it may hold a token"; exit 1; }
+        dpkg-deb -I "$deb" conffiles | grep -qx /etc/gwatch-agent/agent.env
+    - name: Install, configure and purge the .deb
+      run: |
+        set -x
+        sudo apt-get install -y "./dist/packages/gwatch-agent_${AGENT_VERSION}-1_amd64.deb"
+        systemd-analyze verify /usr/lib/systemd/system/gwatch-agent.service
+        test "$(systemctl is-enabled gwatch-agent)" = enabled
+        # (`! cmd` would not fail the step under bash -e, hence the ifs.)
+        if systemctl is-active --quiet gwatch-agent; then echo "::error::an unpaired agent was started"; exit 1; fi
+        gwatch-agent version | grep -q "^gwatch-agent ${AGENT_VERSION} (linux/amd64; deb package)$"
+        # `update` asks GitHub first, so its refusal is left to the Go tests;
+        # rollback refuses without the network.
+        out="$(gwatch-agent rollback 2>&1 || true)"; echo "$out" | grep -q 'sudo apt install'
+        out="$(sudo gwatch-agent install --server http://127.0.0.1:9 --token x 2>&1 || true)"; echo "$out" | grep -q 'gwatch-agent pair'
+        printf 'GWATCH_SERVER=http://127.0.0.1:9\nGWATCH_AGENT_TOKEN=gwa_ci\n' | sudo tee -a /etc/gwatch-agent/agent.env >/dev/null
+        sudo systemctl restart gwatch-agent
+        sleep 5
+        systemctl is-active gwatch-agent
+        sudo journalctl -u gwatch-agent --no-pager | tail -20
+        sudo journalctl -u gwatch-agent --no-pager | grep -q 'automatic updates are off'
+        sudo apt-get purge -y gwatch-agent
+        if systemctl cat gwatch-agent >/dev/null 2>&1; then echo "::error::the unit outlived the package"; exit 1; fi
+        test ! -e /var/lib/gwatch-agent
+        test ! -e /usr/bin/gwatch-agent
+    - name: Homebrew formula
+      run: |
+        sh packaging/homebrew/package.sh "$AGENT_VERSION" dist/homebrew
+        ruby -c dist/homebrew/gwatch-agent.rb
+        if grep -n '@[A-Z0-9_]*@' dist/homebrew/gwatch-agent.rb; then echo "::error::unrendered placeholders in the formula"; exit 1; fi
+        tar -xzf "dist/homebrew/gwatch-agent-homebrew-${AGENT_VERSION}-linux-amd64.tar.gz" -C "$RUNNER_TEMP"
+        "$RUNNER_TEMP/gwatch-agent" version | grep -q 'homebrew package'
+        "$RUNNER_TEMP/gwatch-agent" help 2>&1 | grep -q 'brew upgrade gwatch-agent'
+    - name: winget manifests
+      run: |
+        printf 'stand-in for the setup program' > "$RUNNER_TEMP/setup.exe"
+        sh packaging/winget/render.sh "$AGENT_VERSION" "$RUNNER_TEMP/setup.exe" dist/winget
+        mkdir -p "$RUNNER_TEMP/schemas"
+        for kind in version installer defaultLocale; do
+          curl -fsSL -o "$RUNNER_TEMP/schemas/manifest.$kind.1.6.0.json" \
+            "https://raw.githubusercontent.com/microsoft/winget-cli/43956df571e025cc8739191d3ed2c881b6eac270/schemas/JSON/manifests/v1.6.0/manifest.$kind.1.6.0.json"
+        done
+        python3 -m pip install --quiet jsonschema pyyaml
+        python3 packaging/winget/validate.py "$RUNNER_TEMP/schemas" dist/winget
+    - name: Agent container image
+      run: |
+        docker build -f packaging/docker/Dockerfile.agent --build-arg VERSION="$AGENT_VERSION" -t gwatch-agent:ci .
+        docker run --rm gwatch-agent:ci version | grep -q "^gwatch-agent ${AGENT_VERSION} (linux/amd64; docker package)$"
+        if docker run --rm gwatch-agent:ci print >/dev/null 2>&1; then
+          echo "::error::without the host mounted the image must refuse to report rather than read the container"; exit 1
+        fi
+        docker run --rm --network host -v /:/host:ro gwatch-agent:ci print > reading.json
+        python3 - "$(head -n1 /etc/hostname 2>/dev/null || hostname)" <<'EOF'
+        import json, sys
+        r = json.load(open("reading.json"))
+        host = sys.argv[1]
+        print(r["hostname"], "|", r.get("platform"), "|", [f["mount"] for f in r.get("filesystems", [])])
+        assert r["hostname"] == host, f"hostname {r['hostname']!r}, want the runner's {host!r}"
+        assert "Ubuntu" in (r.get("platform") or ""), f"platform {r.get('platform')!r}, want the runner's Ubuntu"
+        assert any(f["mount"] == "/" for f in r.get("filesystems", [])), "the runner's / is missing"
+        EOF
+    - name: No package can pass for a self-update asset
+      run: |
+        if find dist/packages dist/homebrew dist/winget -type f | xargs -n1 basename \
+             | grep -E '^gwatch-agent[-_](linux|darwin|windows)[-_](amd64|arm64|arm)(\.exe)?$'; then
+          echo "::error::a package output is named like a self-update asset"; exit 1
+        fi
+    needs:
+    - plan
+    if: needs.plan.outputs.selected == 'true'
+  gwatch-build:
+    name: Release
+    if: needs.plan.outputs.selected == 'true' && fromJSON(needs.plan.outputs.apps)['gwatch'].selected
+    needs:
+    - plan
+    - ci
+    - linux
+    - macos
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+    - name: Keep LF line endings
+      run: git config --global core.autocrlf false
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ needs.plan.outputs.sha }}
+    - name: Tagged commit is reviewed on main
+      run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+    - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+      with:
+        go-version: 1.26.x
+        check-latest: true
+        cache: false
+    - name: Tag matches VERSION
+      run: |
+        tag="${RELEASE_TAG#v}"
+        file="$(tr -d ' \t\r\n' < VERSION)"
+        if [ "$tag" != "$file" ]; then
+          echo "::error::tag ${RELEASE_TAG} does not match the VERSION file (${file}). Update VERSION, commit, and re-tag."
+          exit 1
+        fi
+        echo "releasing ${file}"
+    - name: Cross-compile
+      run: |
+        version="${RELEASE_TAG#v}"
+        mkdir -p dist
+        for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64 linux/arm darwin/arm64 darwin/amd64; do
+          goos="${target%/*}"; goarch="${target#*/}"
+          out="dist/gwatch-${goos}-${goarch}"; [ "$goos" = "windows" ] && out="$out.exe"
+          CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOARM=7 go build -trimpath -ldflags "-s -w -X main.version=${version}" -o "$out" .
+          sha256sum "$out" | sed 's#dist/##' > "$out.sha256"
+        done
+        ls -lh dist
+    - name: Cross-compile the MCP companion
+      working-directory: mcp
+      run: |
+        version="$(tr -d ' \t\r\n' < VERSION)"
+        for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64 linux/arm darwin/arm64 darwin/amd64; do
+          goos="${target%/*}"; goarch="${target#*/}"
+          out="../dist/gwatch-mcp-${goos}-${goarch}"; [ "$goos" = "windows" ] && out="$out.exe"
+          CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOARM=7 go build -trimpath -ldflags "-s -w -X main.version=${version}" -o "$out" ./cmd/gwatch-mcp
+          sha256sum "$out" | sed 's#../dist/##' > "$out.sha256"
+        done
+        ls -lh ../dist
+    - name: Install Inno Setup
+      run: choco install innosetup --version=6.7.1 --allow-downgrade --no-progress -y
+      shell: pwsh
+    - name: Build Windows installers
+      shell: pwsh
+      run: |
+        $version = $env:RELEASE_TAG -replace '^v', ''
+        $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+        $exe = Join-Path $PWD "dist\gwatch-windows-amd64.exe"
+        & $iscc "/DAppVersion=$version" "/DExePath=$exe" "scripts\installer\gwatch.iss"
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        Copy-Item scripts\installer\Output\gwatch-setup-*.exe dist\
+        Get-ChildItem dist
+    - name: Include verified installer
+      run: cp scripts/install.sh dist/install.sh
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: unsigned-gwatch
+        path: dist/*
+        if-no-files-found: error
+    env:
+      RELEASE_TAG: ${{ fromJSON(needs.plan.outputs.apps)['gwatch'].tag }}
+      RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch'].version }}
+      RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+  gwatch-sign:
+    runs-on: ubuntu-latest
+    needs:
+    - plan
+    - gwatch-build
+    if: needs.plan.outputs.selected == 'true' && fromJSON(needs.plan.outputs.apps)['gwatch'].selected
+    environment: release
+    permissions:
+      contents: read
+    env:
+      RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ needs.plan.outputs.sha }}
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+      with:
+        go-version: 1.26.x
+        cache: false
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: unsigned-gwatch
+        path: dist
+    - name: Signing key
+      env:
+        GWATCH_SIGNING_KEY: ${{ secrets.GWATCH_SIGNING_KEY }}
+      run: "if [ -z \"$GWATCH_SIGNING_KEY\" ]; then\n  echo \"::error::set the GWATCH_SIGNING_KEY secret (base64\
+        \ ed25519 seed) \u2014 releases must be signed, see docs/RELEASING.md\"\n  exit 1\nfi\npub=\"$(go run ./cmd/gwatch-sign\
+        \ pubkey)\"\necho \"signing with $pub\"\nif ! grep -v '^[[:space:]]*#' internal/update/release_keys.txt\
+        \ | grep -qF \"$pub\"; then\n  echo \"::error::the GWATCH_SIGNING_KEY secret's public key ($pub) is not\
+        \ listed in internal/update/release_keys.txt, so the released binaries would reject their own updates. Add\
+        \ the line and tag again.\"\n  exit 1\nfi\n"
+    - name: Sign release assets
+      env:
+        GWATCH_SIGNING_KEY: ${{ secrets.GWATCH_SIGNING_KEY }}
+      run: |
+        go run ./cmd/gwatch-sign sign dist/gwatch-*
+        go run ./cmd/gwatch-sign verify dist/gwatch-*
+        ls -lh dist
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: signed-native-gwatch
+        path: dist/*
+        if-no-files-found: error
+  gwatch-agent-build:
+    name: Release the agent
+    if: needs.plan.outputs.selected == 'true' && fromJSON(needs.plan.outputs.apps)['gwatch-agent'].selected
+    needs:
+    - plan
+    - ci
+    - linux
+    - macos
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+    - name: Keep LF line endings
+      run: git config --global core.autocrlf false
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ needs.plan.outputs.sha }}
+    - name: Tagged commit is reviewed on main
+      run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+    - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+      with:
+        go-version: 1.26.x
+        check-latest: true
+        cache: false
+    - name: Tag matches cmd/gwatch-agent/VERSION
+      run: |
+        tag="${RELEASE_TAG#agent-v}"
+        file="$(tr -d ' \t\r\n' < cmd/gwatch-agent/VERSION)"
+        if [ "$tag" != "$file" ]; then
+          echo "::error::tag ${RELEASE_TAG} does not match cmd/gwatch-agent/VERSION (${file}). Update the file, commit, and re-tag."
+          exit 1
+        fi
+        echo "RELEASE_VERSION=$file" >> "$GITHUB_ENV"
+        echo "releasing agent ${file}"
+    - name: Cross-compile the agent
+      run: |
+        version="${RELEASE_TAG#agent-v}"
+        mkdir -p dist
+        for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64 linux/arm darwin/arm64 darwin/amd64; do
+          goos="${target%/*}"; goarch="${target#*/}"
+          out="dist/gwatch-agent-${goos}-${goarch}"; [ "$goos" = "windows" ] && out="$out.exe"
+          CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOARM=7 go build -trimpath -ldflags "-s -w -X main.version=${version}" -o "$out" ./cmd/gwatch-agent
+          sha256sum "$out" | sed 's#dist/##' > "$out.sha256"
+        done
+        ls -lh dist
+    - name: Install Inno Setup
+      run: choco install innosetup --version=6.7.1 --allow-downgrade --no-progress -y
+      shell: pwsh
+    - name: Build the agent installer
+      shell: pwsh
+      run: |
+        $version = $env:RELEASE_TAG -replace '^agent-v', ''
+        $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+        $exe = Join-Path $PWD "dist\gwatch-agent-windows-amd64.exe"
+        & $iscc "/DAppVersion=$version" "/DExePath=$exe" "scripts\installer\gwatch-agent.iss"
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        Copy-Item scripts\installer\Output\gwatch-agent-setup-*.exe dist\
+        Get-ChildItem dist
+    - name: Include verified installer
+      run: cp scripts/install-agent.sh dist/install-agent.sh
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: unsigned-gwatch-agent
+        path: dist/*
+        if-no-files-found: error
+    env:
+      RELEASE_TAG: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].tag }}
+      RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].version }}
+      RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+  gwatch-agent-sign:
+    runs-on: ubuntu-latest
+    needs:
+    - plan
+    - gwatch-agent-build
+    if: needs.plan.outputs.selected == 'true' && fromJSON(needs.plan.outputs.apps)['gwatch-agent'].selected
+    environment: release
+    permissions:
+      contents: read
+    env:
+      RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ needs.plan.outputs.sha }}
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+      with:
+        go-version: 1.26.x
+        cache: false
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: unsigned-gwatch-agent
+        path: dist
+    - name: Signing key
+      env:
+        GWATCH_SIGNING_KEY: ${{ secrets.GWATCH_SIGNING_KEY }}
+      run: "if [ -z \"$GWATCH_SIGNING_KEY\" ]; then\n  echo \"::error::set the GWATCH_SIGNING_KEY secret (base64\
+        \ ed25519 seed) \u2014 agent releases must be signed or no agent will install them, see docs/RELEASING.md\"\
+        \n  exit 1\nfi\npub=\"$(go run ./cmd/gwatch-sign pubkey)\"\necho \"signing with $pub\"\nif ! grep -v '^[[:space:]]*#'\
+        \ internal/update/release_keys.txt | grep -qF \"$pub\"; then\n  echo \"::error::the GWATCH_SIGNING_KEY secret's\
+        \ public key ($pub) is not listed in internal/update/release_keys.txt, so released agents would reject their\
+        \ own updates. Add the line and tag again.\"\n  exit 1\nfi\n"
+    - name: Sign release assets
+      env:
+        GWATCH_SIGNING_KEY: ${{ secrets.GWATCH_SIGNING_KEY }}
+      run: |
+        go run ./cmd/gwatch-sign sign dist/gwatch-agent-*
+        go run ./cmd/gwatch-sign verify dist/gwatch-agent-*
+        ls -lh dist
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: signed-native-gwatch-agent
+        path: dist/*
+        if-no-files-found: error
+  agent-linux-packages:
+    name: Agent .deb and .rpm
+    if: needs.plan.outputs.selected == 'true' && fromJSON(needs.plan.outputs.apps)['gwatch-agent'].selected
+    needs:
+    - plan
+    - gwatch-agent-build
+    - agent-packaging
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ needs.plan.outputs.sha }}
+    - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+      with:
+        go-version: 1.26.x
+        check-latest: true
+        cache: true
+    - name: Tag matches cmd/gwatch-agent/VERSION
+      run: |
+        tag="${RELEASE_TAG#agent-v}"
+        file="$(tr -d ' \t\r\n' < cmd/gwatch-agent/VERSION)"
+        if [ "$tag" != "$file" ]; then
+          echo "::error::tag ${RELEASE_TAG} does not match cmd/gwatch-agent/VERSION (${file})."
+          exit 1
+        fi
+        echo "AGENT_VERSION=$file" >> "$GITHUB_ENV"
+    - name: Build the packages
+      run: |
+        sh packaging/nfpm/package.sh "$AGENT_VERSION" dist/packages amd64 arm64 arm
+        (cd dist/packages && sha256sum *.deb *.rpm > "gwatch-agent-linux-packages-${AGENT_VERSION}.sha256")
+        cat "dist/packages/gwatch-agent-linux-packages-${AGENT_VERSION}.sha256"
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: agent-linux-packages
+        path: dist/packages/*
+        if-no-files-found: error
+    env:
+      RELEASE_TAG: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].tag }}
+      RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].version }}
+      RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+  agent-homebrew:
+    name: Agent Homebrew formula
+    if: needs.plan.outputs.selected == 'true' && fromJSON(needs.plan.outputs.apps)['gwatch-agent'].selected
+    needs:
+    - plan
+    - gwatch-agent-build
+    - agent-packaging
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO || 'jxburros/homebrew-tap' }}
+      RELEASE_TAG: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].tag }}
+      RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].version }}
+      RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ needs.plan.outputs.sha }}
+    - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+      with:
+        go-version: 1.26.x
+        check-latest: true
+        cache: true
+    - name: Tag matches cmd/gwatch-agent/VERSION
+      run: |
+        tag="${RELEASE_TAG#agent-v}"
+        file="$(tr -d ' \t\r\n' < cmd/gwatch-agent/VERSION)"
+        if [ "$tag" != "$file" ]; then
+          echo "::error::tag ${RELEASE_TAG} does not match cmd/gwatch-agent/VERSION (${file})."
+          exit 1
+        fi
+        echo "AGENT_VERSION=$file" >> "$GITHUB_ENV"
+    - name: Build the tarballs and render the formula
+      run: |
+        sh packaging/homebrew/package.sh "$AGENT_VERSION" dist/homebrew
+        ruby -c dist/homebrew/gwatch-agent.rb
+        (cd dist/homebrew && sha256sum *.tar.gz > "gwatch-agent-homebrew-${AGENT_VERSION}.sha256")
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: homebrew-formula
+        path: dist/homebrew/gwatch-agent.rb
+        if-no-files-found: error
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: agent-homebrew
+        path: |-
+          dist/homebrew/*.tar.gz
+          dist/homebrew/*.sha256
+        if-no-files-found: error
+  agent-winget:
+    name: Agent winget package
+    if: needs.plan.outputs.selected == 'true' && fromJSON(needs.plan.outputs.apps)['gwatch-agent'].selected
+    needs:
+    - plan
+    - gwatch-agent-build
+    - agent-packaging
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+    - name: Keep LF line endings
+      run: git config --global core.autocrlf false
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ needs.plan.outputs.sha }}
+    - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+      with:
+        go-version: 1.26.x
+        check-latest: true
+        cache: true
+    - name: Tag matches cmd/gwatch-agent/VERSION
+      run: |
+        tag="${RELEASE_TAG#agent-v}"
+        file="$(tr -d ' \t\r\n' < cmd/gwatch-agent/VERSION)"
+        if [ "$tag" != "$file" ]; then
+          echo "::error::tag ${RELEASE_TAG} does not match cmd/gwatch-agent/VERSION (${file})."
+          exit 1
+        fi
+        echo "AGENT_VERSION=$file" >> "$GITHUB_ENV"
+    - name: Build the packaged agent
+      run: sh packaging/build-agent.sh winget "$AGENT_VERSION" dist/packaged windows/amd64
+    - name: Install Inno Setup
+      run: choco install innosetup --version=6.7.1 --allow-downgrade --no-progress -y
+      shell: pwsh
+    - name: Build the winget setup program
+      shell: pwsh
+      run: |
+        $version = $env:AGENT_VERSION
+        $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+        $exe = Join-Path $PWD "dist\packaged\winget\windows-amd64\gwatch-agent.exe"
+        & $iscc "/DAppVersion=$version" "/DExePath=$exe" "/Fgwatch-agent-winget-setup-$version" "scripts\installer\gwatch-agent.iss"
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        New-Item -ItemType Directory -Force dist\winget | Out-Null
+        Copy-Item "scripts\installer\Output\gwatch-agent-winget-setup-$version.exe" dist\winget\
+    - name: Render the manifests
+      run: |
+        sh packaging/winget/render.sh "$AGENT_VERSION" "dist/winget/gwatch-agent-winget-setup-${AGENT_VERSION}.exe" "dist/winget/manifests/GWatch.Agent/${AGENT_VERSION}"
+    - name: Zip the manifests
+      shell: pwsh
+      run: Compress-Archive -Path "dist\winget\manifests\GWatch.Agent\$env:AGENT_VERSION\*" -DestinationPath "dist\winget\gwatch-agent-winget-manifests-$env:AGENT_VERSION.zip"
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: winget-manifests
+        path: dist/winget/manifests
+        if-no-files-found: error
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: agent-winget
+        path: |-
+          dist/winget/gwatch-agent-winget-*.exe
+          dist/winget/gwatch-agent-winget-*.zip
+        if-no-files-found: error
+    env:
+      RELEASE_TAG: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].tag }}
+      RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].version }}
+      RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+  assemble-gwatch:
+    runs-on: ubuntu-latest
+    needs:
+    - plan
+    - gwatch-sign
+    if: needs.plan.outputs.selected == 'true' && fromJSON(needs.plan.outputs.apps)['gwatch'].selected
+    env:
+      RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ needs.plan.outputs.sha }}
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: signed-native-gwatch
+        path: artifacts/core
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: JX-Holdings-LLC/release-infrastructure
+        ref: 181636b602317ba703c3f4bf12775c34560f4efb
+        path: .toolkit
+        persist-credentials: false
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      with:
+        node-version: 24
+    - name: Stage the complete configured release inventory
+      shell: bash
+      env:
+        RELEASE_APP: gwatch
+      run: node .toolkit/src/release.mjs stage --app "$RELEASE_APP" --from artifacts --bundle unified-bundle --sha
+        "$RELEASE_SOURCE_SHA"
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: bundle-gwatch
+        path: unified-bundle
+        if-no-files-found: error
+  assemble-gwatch-agent:
+    runs-on: ubuntu-latest
+    needs:
+    - plan
+    - gwatch-agent-sign
+    - agent-linux-packages
+    - agent-homebrew
+    - agent-winget
+    if: needs.plan.outputs.selected == 'true' && fromJSON(needs.plan.outputs.apps)['gwatch-agent'].selected
+    env:
+      RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ needs.plan.outputs.sha }}
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: signed-native-gwatch-agent
+        path: artifacts/native
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: agent-linux-packages
+        path: artifacts/linux
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: agent-homebrew
+        path: artifacts/homebrew
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: agent-winget
+        path: artifacts/winget
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: JX-Holdings-LLC/release-infrastructure
+        ref: 181636b602317ba703c3f4bf12775c34560f4efb
+        path: .toolkit
+        persist-credentials: false
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      with:
+        node-version: 24
+    - name: Stage the complete configured release inventory
+      shell: bash
+      env:
+        RELEASE_APP: gwatch-agent
+      run: node .toolkit/src/release.mjs stage --app "$RELEASE_APP" --from artifacts --bundle unified-bundle --sha
+        "$RELEASE_SOURCE_SHA"
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: bundle-gwatch-agent
+        path: unified-bundle
+        if-no-files-found: error
+  publish-gwatch:
+    needs:
+    - plan
+    - assemble-gwatch
+    if: needs.plan.outputs.selected == 'true' && fromJSON(needs.plan.outputs.apps)['gwatch'].selected
+    uses: JX-Holdings-LLC/release-infrastructure/.github/workflows/finish.yml@181636b602317ba703c3f4bf12775c34560f4efb
+    permissions:
+      contents: write
+    with:
+      toolkit-ref: 181636b602317ba703c3f4bf12775c34560f4efb
+      source-sha: ${{ needs.plan.outputs.sha }}
+      app: gwatch
+      security: standard
+      artifact: bundle-gwatch
+      dry-run: ${{ inputs.dry_run }}
+  publish-gwatch-agent:
+    needs:
+    - plan
+    - assemble-gwatch-agent
+    if: needs.plan.outputs.selected == 'true' && fromJSON(needs.plan.outputs.apps)['gwatch-agent'].selected
+    uses: JX-Holdings-LLC/release-infrastructure/.github/workflows/finish.yml@181636b602317ba703c3f4bf12775c34560f4efb
+    permissions:
+      contents: write
+    with:
+      toolkit-ref: 181636b602317ba703c3f4bf12775c34560f4efb
+      source-sha: ${{ needs.plan.outputs.sha }}
+      app: gwatch-agent
+      security: standard
+      artifact: bundle-gwatch-agent
+      dry-run: ${{ inputs.dry_run }}
+  agent-homebrew-submit:
+    name: Agent Homebrew formula
+    if: needs.plan.outputs.selected == 'true' && fromJSON(needs.plan.outputs.apps)['gwatch-agent'].selected && !inputs.dry_run
+    needs:
+    - plan
+    - publish-gwatch-agent
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO || 'jxburros/homebrew-tap' }}
+      RELEASE_TAG: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].tag }}
+      RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].version }}
+      RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ needs.plan.outputs.sha }}
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: homebrew-formula
+        path: dist/homebrew
+    - name: Push the formula to the tap
+      env:
+        TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      run: |
+        if [ -z "$TAP_TOKEN" ]; then echo "::notice::Tap publishing is not configured; formula retained as an artifact."; exit 0; fi
+        git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" tap
+        mkdir -p tap/Formula
+        cp dist/homebrew/gwatch-agent.rb tap/Formula/gwatch-agent.rb
+        cd tap
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add Formula/gwatch-agent.rb
+        if git diff --cached --quiet; then
+          echo "the tap already has this formula"
+        else
+          git commit -m "gwatch-agent ${AGENT_VERSION}"
+          git push origin HEAD
+        fi
+  agent-winget-submit:
+    name: Agent winget package
+    if: needs.plan.outputs.selected == 'true' && fromJSON(needs.plan.outputs.apps)['gwatch-agent'].selected && !inputs.dry_run
+    needs:
+    - plan
+    - publish-gwatch-agent
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ needs.plan.outputs.sha }}
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: winget-manifests
+        path: dist/winget/manifests
+    - name: Open the winget-pkgs pull request
+      env:
+        WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+      shell: pwsh
+      run: |
+        if (-not $env:WINGET_TOKEN) { Write-Host "::notice::Winget publishing is not configured; manifests retained as artifacts."; exit 0 }
+        Invoke-WebRequest -Uri https://github.com/microsoft/winget-create/releases/download/v1.12.13.0/wingetcreate.exe -OutFile wingetcreate.exe
+        if ((Get-FileHash wingetcreate.exe -Algorithm SHA256).Hash -ne "24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea") { throw "wingetcreate checksum mismatch" }
+        .\wingetcreate.exe submit --prtitle "New version: GWatch.Agent version $env:AGENT_VERSION" --token $env:WINGET_TOKEN "dist\winget\manifests\GWatch.Agent\$env:AGENT_VERSION"
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    env:
+      RELEASE_TAG: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].tag }}
+      RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].version }}
+      RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+  docker-publish:
+    name: Publish container image
+    if: needs.plan.outputs.selected == 'true' && fromJSON(needs.plan.outputs.apps)['gwatch'].selected && !inputs.dry_run
+    needs:
+    - plan
+    - publish-gwatch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/jxburros/gwatch
+      RELEASE_TAG: ${{ fromJSON(needs.plan.outputs.apps)['gwatch'].tag }}
+      RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch'].version }}
+      RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ needs.plan.outputs.sha }}
+    - name: Tag matches VERSION
+      run: |
+        tag="${RELEASE_TAG#v}"
+        file="$(tr -d ' \t\r\n' < VERSION)"
+        if [ "$tag" != "$file" ]; then
+          echo "::error::tag ${RELEASE_TAG} does not match the VERSION file (${file}). Update VERSION, commit, and re-tag."
+          exit 1
+        fi
+        echo "publishing ${IMAGE}:${file}"
+    - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
+    - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+    - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    - uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051
+      id: meta
+      with:
+        images: ${{ env.IMAGE }}
+        tags: |-
+          type=raw,value=${{ fromJSON(needs.plan.outputs.apps)['gwatch'].version }}
+          type=raw,value=latest,enable=${{ inputs.channel == 'stable' }}
+    - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+      with:
+        context: .
+        platforms: linux/amd64,linux/arm64,linux/arm/v7
+        push: true
+        build-args: |
+          VERSION=${{ steps.meta.outputs.version }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+  agent-docker-publish:
+    name: Publish agent container image
+    if: needs.plan.outputs.selected == 'true' && fromJSON(needs.plan.outputs.apps)['gwatch-agent'].selected && !inputs.dry_run
+    needs:
+    - plan
+    - publish-gwatch-agent
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/jxburros/gwatch-agent
+      RELEASE_TAG: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].tag }}
+      RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].version }}
+      RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ needs.plan.outputs.sha }}
+    - name: Tag matches cmd/gwatch-agent/VERSION
+      id: tag
+      run: |
+        tag="${RELEASE_TAG#agent-v}"
+        file="$(tr -d ' \t\r\n' < cmd/gwatch-agent/VERSION)"
+        if [ "$tag" != "$file" ]; then
+          echo "::error::tag ${RELEASE_TAG} does not match cmd/gwatch-agent/VERSION (${file})."
+          exit 1
+        fi
+        echo "version=$file" >> "$GITHUB_OUTPUT"
+        echo "publishing ${IMAGE}:${file}"
+    - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
+    - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+    - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    - uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051
+      id: meta
+      with:
+        images: ${{ env.IMAGE }}
+        tags: |-
+          type=raw,value=${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].version }}
+          type=raw,value=latest,enable=${{ inputs.channel == 'stable' }}
+    - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+      with:
+        context: .
+        file: packaging/docker/Dockerfile.agent
+        platforms: linux/amd64,linux/arm64,linux/arm/v7
+        push: true
+        build-args: |
+          VERSION=${{ steps.tag.outputs.version }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha,scope=agent
+        cache-to: type=gha,mode=max,scope=agent
+env:
+  GOTOOLCHAIN: local
