@@ -9,6 +9,49 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## Unreleased
+
+### Security
+
+- **A remote database connection verifies the server by default.** A PostgreSQL or
+  MySQL/MariaDB configuration that leaves `sslMode` empty now gets `verify-full`
+  (PostgreSQL) or a verified TLS connection (MySQL) when the host is not this machine.
+  `prefer` could be downgraded to plaintext or answered by an impostor by anyone on
+  the network path. A server on `localhost`, a loopback address or a Unix socket keeps
+  `prefer`, and a mode set explicitly — including `prefer`, `require` or `disable` — is
+  honoured as before. See *Upgrade notes*.
+- **Backup restore is bounded.** An upload larger than 2 GiB is refused with 413 before
+  it is stored; the decrypted archive, the number of entries, `config.json` (256 MiB),
+  the decompressed history (32 GiB in all) and its row counts are all limited, and an
+  archive over any limit is refused before anything in the database is changed.
+- **Notification URLs cannot be redirected by a hook caller.** Slack and Teams webhook
+  URLs and the ntfy server now take placeholders only in the path and query, escaped as
+  data, as HTTP actions already did; a placeholder in the scheme, user info, host or
+  port is refused when the action is saved and when it runs. ntfy's bearer token is no
+  longer sent on to a redirect that changes scheme, host or port.
+- **A shared wallboard returns only what it draws.** The view behind a board's projected
+  address is now built on the server from the board's panels: the nodes a *Nodes*
+  panel selects (name, groups, tags and status only), the lists the other panels show,
+  and the service's running state for the *Service* panel and the footer. It no longer
+  carries the whole overview (every node with its checks), incidents, or the Health
+  document's paths, database details and recent errors.
+
+### Upgrade notes
+
+- **Server databases with no `sslMode`.** An install that reaches a remote database
+  through `GWATCH_DB_*` environment variables, `--db-*` flags or a hand-written
+  `database.json` without `sslMode` will now insist on a certificate that verifies
+  against the system trust store and matches the host name. If the server has none,
+  the service will not start: add the server's CA to the trust store, or set
+  `sslMode` (`GWATCH_DB_SSLMODE`, `--db-sslmode`) to the mode you used before,
+  `prefer`, explicitly. A `database.json` saved by the settings page or
+  `gwatch migrate-db` already names its mode and is unaffected.
+- **Notification actions with a placeholder in the host.** A Slack, Teams or ntfy action
+  whose URL or server took its host from a placeholder (`{{query.webhook}}`, say) now
+  fails when it runs and must be edited to name the host. Placeholders later in the
+  URL keep working, but a value is escaped as one path segment, so `/` in it arrives
+  as `%2F`.
+
 ## 0.7.0 — 2026-10-14
 
 ### Added

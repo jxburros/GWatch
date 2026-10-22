@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -176,12 +177,64 @@ func (s *Server) handleShareWallboard(w http.ResponseWriter, r *http.Request) {
 
 // ---- what a board actually shows ----
 
+// wallboardView is the document a board is drawn from. It is built on the
+// server from what the board's panels draw and nothing else: a shared board's
+// address is handed to a television, and whoever reads the address can read
+// this document, so the browser is never sent data for it to filter out. A
+// field is filled only when a panel (or the footer) on this board shows it.
 type wallboardView struct {
-	engine.Overview
-	Wallboard model.Wallboard       `json:"wallboard"`
-	Health    model.Health          `json:"health"`
-	Trends    []model.HistorySeries `json:"trends"`
-	ServerNow time.Time             `json:"serverNow"`
+	Wallboard    model.Wallboard       `json:"wallboard"`
+	Summary      *engine.Summary       `json:"summary,omitempty"`
+	Nodes        []wallNodeView        `json:"nodes"`
+	Groups       []engine.GroupView    `json:"groups"`
+	Attention    []engine.Attention    `json:"attention"`
+	CertWarnings []wallCert            `json:"certWarnings"`
+	Maintenance  []wallMaintenance     `json:"maintenance"`
+	Health       *wallHealth           `json:"health,omitempty"`
+	Trends       []model.HistorySeries `json:"trends"`
+	GeneratedAt  time.Time             `json:"generatedAt"`
+	ServerNow    time.Time             `json:"serverNow"`
+}
+
+// wallNodeView is a node as a nodes panel draws it: a name, a status and
+// what the panel's group and tag filters match on. No host, no checks, no
+// metrics address.
+type wallNodeView struct {
+	Node   wallNode     `json:"node"`
+	Status model.Status `json:"status"`
+}
+
+type wallNode struct {
+	ID     int64    `json:"id"`
+	Name   string   `json:"name"`
+	Group  string   `json:"group"`
+	Groups []string `json:"groups"`
+	Tags   []string `json:"tags"`
+}
+
+// wallCert is a certificate warning without the subject or the error text.
+type wallCert struct {
+	NodeName      string    `json:"nodeName"`
+	CheckName     string    `json:"checkName"`
+	DaysRemaining int       `json:"daysRemaining"`
+	NotAfter      time.Time `json:"notAfter"`
+}
+
+// wallMaintenance is a window in force, as the maintenance panel names it.
+type wallMaintenance struct {
+	Name   string `json:"name"`
+	Group  string `json:"group"`
+	NodeID *int64 `json:"nodeId"`
+}
+
+// wallHealth is the service panel's and the footer's view of GWatch itself:
+// whether it is running and checking. Paths, database details, versions and
+// recent errors are for the Health page, behind a sign-in.
+type wallHealth struct {
+	ServiceRunning   bool       `json:"serviceRunning"`
+	SchedulerRunning bool       `json:"schedulerRunning"`
+	LastCheckAt      *time.Time `json:"lastCheckAt"`
+	ChecksEnabled    int        `json:"checksEnabled"`
 }
 
 // handleWallboardView returns a board and the data it draws in one document,
@@ -190,7 +243,8 @@ type wallboardView struct {
 // It is the only route reachable without a credential that returns monitoring
 // data, and it is reachable only with the token of a board whose sharing is
 // switched on. A signed-in reader needs no token; anyone else needs the one
-// token that names this board.
+// token that names this board. Either way the document holds only what this
+// board draws (projectWallboard).
 func (s *Server) handleWallboardView(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id, err := pathID(r, "id")
@@ -221,19 +275,102 @@ func (s *Server) handleWallboardView(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	doc := wallboardView{
-		// A shared board is meant to live on a TV or an embed, so its view is
-		// masked like every other read path: the signed-in routes pass through
-		// maskOverview and this one must too, or a board's URL would hand out
-		// SNMP communities, metrics tokens and check headers to anyone who
-		// opened it (#87).
-		Overview:  s.maskOverviewFor(r, ov),
-		Wallboard: board,
-		Health:    s.Engine.Health(ctx),
-		Trends:    s.wallboardTrends(r, board, ov),
-		ServerNow: time.Now(),
-	}
+	doc := projectWallboard(board, ov, func() model.Health { return s.Engine.Health(ctx) })
+	doc.Trends = s.wallboardTrends(r, board, ov)
+	doc.ServerNow = time.Now()
 	writeJSON(w, http.StatusOK, doc)
+}
+
+// projectWallboard keeps from ov what board's panels draw (web/wall-render.js
+// reads exactly these fields). No check configuration is carried at all, so
+// there are no credentials to mask. health is called only when something on
+// the board shows the service's state.
+func projectWallboard(board model.Wallboard, ov engine.Overview, health func() model.Health) wallboardView {
+	doc := wallboardView{
+		Wallboard:    board,
+		Nodes:        []wallNodeView{},
+		Groups:       []engine.GroupView{},
+		Attention:    []engine.Attention{},
+		CertWarnings: []wallCert{},
+		Maintenance:  []wallMaintenance{},
+		Trends:       []model.HistorySeries{},
+		GeneratedAt:  ov.GeneratedAt,
+	}
+	shows := map[string]bool{}
+	var nodePanels []wallNodeFilter
+	for _, p := range board.Panels {
+		shows[p.Type] = true
+		if p.Type == "nodes" {
+			var f wallNodeFilter
+			_ = json.Unmarshal(p.Config, &f)
+			nodePanels = append(nodePanels, f)
+		}
+	}
+	footer := !board.Layout.HideChrome
+	if footer || shows["headline"] || shows["counts"] {
+		sum := ov.Summary
+		doc.Summary = &sum
+	}
+	if footer || shows["health"] {
+		h := health()
+		doc.Health = &wallHealth{ServiceRunning: h.ServiceRunning, SchedulerRunning: h.SchedulerRunning, LastCheckAt: h.LastCheckAt, ChecksEnabled: h.ChecksEnabled}
+	}
+	if shows["attention"] && ov.Attention != nil {
+		doc.Attention = ov.Attention
+	}
+	if shows["groups"] && ov.Groups != nil {
+		doc.Groups = ov.Groups
+	}
+	if shows["certs"] {
+		for _, c := range ov.CertWarnings {
+			doc.CertWarnings = append(doc.CertWarnings, wallCert{NodeName: c.NodeName, CheckName: c.CheckName, DaysRemaining: c.DaysRemaining, NotAfter: c.NotAfter})
+		}
+	}
+	if shows["maintenance"] {
+		for _, m := range ov.Maintenance {
+			doc.Maintenance = append(doc.Maintenance, wallMaintenance{Name: m.Name, Group: m.Group, NodeID: m.NodeID})
+		}
+	}
+	for _, nv := range ov.Nodes {
+		for _, f := range nodePanels {
+			if f.matches(nv.Node) {
+				doc.Nodes = append(doc.Nodes, wallNodeView{
+					Node:   wallNode{ID: nv.Node.ID, Name: nv.Node.Name, Group: nv.Node.Group, Groups: nv.Node.Groups, Tags: nv.Node.Tags},
+					Status: nv.Status,
+				})
+				break
+			}
+		}
+	}
+	return doc
+}
+
+// wallNodeFilter is a nodes panel's choice of nodes, matched the way the
+// renderer matches it: by group (case-insensitively), by tag and by id, each
+// one that is set having to hold.
+type wallNodeFilter struct {
+	Group   string  `json:"group"`
+	Tag     string  `json:"tag"`
+	NodeIDs []int64 `json:"nodeIds"`
+}
+
+func (f wallNodeFilter) matches(n model.Node) bool {
+	if want := strings.ToLower(strings.TrimSpace(f.Group)); want != "" {
+		groups := n.Groups
+		if len(groups) == 0 && n.Group != "" {
+			groups = []string{n.Group}
+		}
+		if !slices.ContainsFunc(groups, func(g string) bool { return strings.ToLower(strings.TrimSpace(g)) == want }) {
+			return false
+		}
+	}
+	if f.Tag != "" && !slices.Contains(n.Tags, f.Tag) {
+		return false
+	}
+	if len(f.NodeIDs) > 0 && !slices.Contains(f.NodeIDs, n.ID) {
+		return false
+	}
+	return true
 }
 
 // wallboardTrends collects the history the board's trend panels ask for. A

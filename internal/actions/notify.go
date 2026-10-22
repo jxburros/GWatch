@@ -9,6 +9,7 @@ package actions
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -46,25 +47,52 @@ func notifyMessage(a model.Action, vars Vars) string {
 	return strings.TrimSpace(Expand(m, vars))
 }
 
-// looksLikeHTTPS reports whether s (before placeholder expansion) starts
-// with https:// or still contains a placeholder that might expand into one.
+// looksLikeHTTPS reports whether s is an https:// URL whose scheme and
+// authority are written out in full. Placeholders may appear in the path,
+// query or fragment, where expandURL escapes them as data; one in the
+// scheme, user info, host or port would let whoever supplies the value
+// (a hook caller, a monitored device) choose where the request goes.
 func looksLikeHTTPS(s string) bool {
 	s = strings.TrimSpace(s)
-	if strings.Contains(s, "{{") {
-		return true
+	if !strings.HasPrefix(strings.ToLower(s), "https://") {
+		return false
 	}
-	return strings.HasPrefix(strings.ToLower(s), "https://")
+	_, err := expandURL(s, nil)
+	return err == nil
 }
 
-// looksLikeHTTPURL is like looksLikeHTTPS but also allows http://, used for
-// the optional ntfy server override.
+// looksLikeHTTPURL is like looksLikeHTTPS but also allows http://, and an
+// empty value, used for the optional ntfy server override.
 func looksLikeHTTPURL(s string) bool {
 	s = strings.TrimSpace(s)
-	if s == "" || strings.Contains(s, "{{") {
+	if s == "" {
 		return true
 	}
 	l := strings.ToLower(s)
-	return strings.HasPrefix(l, "http://") || strings.HasPrefix(l, "https://")
+	if !strings.HasPrefix(l, "http://") && !strings.HasPrefix(l, "https://") {
+		return false
+	}
+	_, err := expandURL(s, nil)
+	return err == nil
+}
+
+// sameAuthorityOnly returns c with redirects limited so a credential set on
+// the first request never follows a redirect to another scheme, host or
+// port. The http package already drops Authorization for an unrelated host,
+// but keeps it for a subdomain and across an https → http downgrade.
+func sameAuthorityOnly(c *http.Client) *http.Client {
+	cc := *c
+	cc.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		first := via[0].URL
+		if req.URL.Scheme != first.Scheme || req.URL.Host != first.Host {
+			req.Header.Del("Authorization")
+		}
+		return nil
+	}
+	return &cc
 }
 
 // ValidateNotify checks the fields of a slack/teams/ntfy/pushover action. It
@@ -76,14 +104,14 @@ func ValidateNotify(a model.Action) error {
 			return fmt.Errorf("a Slack webhook URL is required")
 		}
 		if !looksLikeHTTPS(a.WebhookURL) {
-			return fmt.Errorf("the Slack webhook URL must start with https://")
+			return fmt.Errorf("the Slack webhook URL must start with https:// and name its host without placeholders")
 		}
 	case model.ActionTeams:
 		if strings.TrimSpace(a.WebhookURL) == "" {
 			return fmt.Errorf("a Teams webhook URL is required")
 		}
 		if !looksLikeHTTPS(a.WebhookURL) {
-			return fmt.Errorf("the Teams webhook URL must start with https://")
+			return fmt.Errorf("the Teams webhook URL must start with https:// and name its host without placeholders")
 		}
 	case model.ActionNtfy:
 		topic := strings.TrimSpace(a.Topic)
@@ -94,7 +122,7 @@ func ValidateNotify(a model.Action) error {
 			return fmt.Errorf("the ntfy topic may only contain letters, digits, - and _ (max 64 characters)")
 		}
 		if !looksLikeHTTPURL(a.Server) {
-			return fmt.Errorf("the ntfy server must start with http:// or https://")
+			return fmt.Errorf("the ntfy server must start with http:// or https:// and name its host without placeholders")
 		}
 	case model.ActionPushover:
 		if strings.TrimSpace(a.Token) == "" {
@@ -137,12 +165,25 @@ func excerpt(data []byte) string {
 	return s
 }
 
+// webhookURL expands a Slack or Teams webhook URL with the authority fixed
+// as written; placeholders only ever fill the path and query.
+func webhookURL(template string, vars Vars) (string, error) {
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(template)), "https://") {
+		return "", errors.New("must start with https://")
+	}
+	u, err := expandURL(template, vars)
+	if err != nil {
+		return "", errors.New("is invalid: " + err.Error())
+	}
+	return u, nil
+}
+
 // ---- slack ----
 
 func (r *Runner) runSlack(ctx context.Context, a model.Action, vars Vars, res model.ActionResult) model.ActionResult {
-	u := strings.TrimSpace(Expand(a.WebhookURL, vars))
-	if !strings.HasPrefix(strings.ToLower(u), "https://") {
-		res.Error = "the Slack webhook URL must start with https:// (after expanding placeholders): " + u
+	u, err := webhookURL(a.WebhookURL, vars)
+	if err != nil {
+		res.Error = "the Slack webhook URL " + err.Error()
 		return res
 	}
 	msg := notifyMessage(a, vars)
@@ -186,9 +227,9 @@ func adaptiveCard(title, message string) map[string]any {
 }
 
 func (r *Runner) runTeams(ctx context.Context, a model.Action, vars Vars, res model.ActionResult) model.ActionResult {
-	u := strings.TrimSpace(Expand(a.WebhookURL, vars))
-	if !strings.HasPrefix(strings.ToLower(u), "https://") {
-		res.Error = "the Teams webhook URL must start with https:// (after expanding placeholders): " + u
+	u, err := webhookURL(a.WebhookURL, vars)
+	if err != nil {
+		res.Error = "the Teams webhook URL " + err.Error()
 		return res
 	}
 	title := notifyTitle(a, vars)
@@ -218,21 +259,25 @@ func (r *Runner) runTeams(ctx context.Context, a model.Action, vars Vars, res mo
 // ---- ntfy ----
 
 func (r *Runner) runNtfy(ctx context.Context, a model.Action, vars Vars, res model.ActionResult) model.ActionResult {
-	server := strings.TrimSpace(Expand(a.Server, vars))
+	server := strings.TrimRight(strings.TrimSpace(a.Server), "/")
 	if server == "" {
 		server = "https://ntfy.sh"
 	}
-	server = strings.TrimRight(server, "/")
-	if !strings.HasPrefix(strings.ToLower(server), "http://") && !strings.HasPrefix(strings.ToLower(server), "https://") {
-		res.Error = "the ntfy server must start with http:// or https:// (after expanding placeholders): " + server
+	if !looksLikeHTTPURL(server) {
+		res.Error = "the ntfy server must start with http:// or https:// and name its host without placeholders"
 		return res
 	}
-	topic := strings.TrimSpace(Expand(a.Topic, vars))
-	if topic == "" {
+	if strings.TrimSpace(Expand(a.Topic, vars)) == "" {
 		res.Error = "the ntfy topic is empty (after expanding placeholders)"
 		return res
 	}
-	u := server + "/" + topic
+	// The server is used as written (it is where the token goes), and the
+	// topic is expanded as one escaped path segment beneath it.
+	u, err := expandURL(server+"/"+strings.TrimSpace(a.Topic), vars)
+	if err != nil {
+		res.Error = "the ntfy server is invalid: " + err.Error()
+		return res
+	}
 	title := notifyTitle(a, vars)
 	msg := notifyMessage(a, vars)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(msg))
@@ -253,7 +298,7 @@ func (r *Runner) runNtfy(ctx context.Context, a model.Action, vars Vars, res mod
 	if tok := strings.TrimSpace(Expand(a.Token, vars)); tok != "" {
 		req.Header.Set("Authorization", "Bearer "+headerSafe(tok))
 	}
-	resp, err := r.client(a).Do(req)
+	resp, err := sameAuthorityOnly(r.client(a)).Do(req)
 	if err != nil {
 		res.Error = err.Error()
 		return res

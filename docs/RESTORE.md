@@ -87,6 +87,28 @@ new machine's remote-access password is set and you are not calling from
   agents keep their links to nodes that remain in the restored configuration.
   Unsupported archive formats are rejected before any database changes.
 
+## Size limits
+
+A restore reads only archives within these limits, and checks all of them before it
+changes anything in the database, so an archive that is too large is refused whole
+rather than half-restored:
+
+| What | Limit |
+| --- | --- |
+| The archive file (an upload, or one in the backup folder) | 2 GiB |
+| Entries in the archive | 64 |
+| `manifest.json` / `config.json`, decompressed | 1 MiB / 256 MiB |
+| All history files together, decompressed | 32 GiB |
+| Results, rollups or events | 200 million each, and no more than the archive's manifest says it holds |
+
+A backup GWatch wrote is far inside them: the archive is compressed, and two gigabytes of
+it is many months of history for hundreds of checks. An upload over the limit is
+answered **413** before it is stored. If an archive of your own is refused for its
+history, restore it without history (configuration only); if the file itself is over
+the limit, shorten retention on the old machine and take a new backup, or move the data
+with `gwatch migrate-db` ([`DATABASE.md`](DATABASE.md)), which copies database to
+database without an archive.
+
 ## What a restore does not bring over
 
 - **The `gwatch.key` file and update-signing configuration**, if present on the

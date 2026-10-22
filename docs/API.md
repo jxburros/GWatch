@@ -960,9 +960,23 @@ wallboard from across a room.
 - `POST /api/wallboards/{id}/share` body `{ "enabled": true, "rotate": false }` →
   Wallboard. Switching projection on mints the board's address; `rotate` replaces
   it; switching off clears it. Administrator only, and never through an API key.
-- `GET /api/wallboards/{id}/view?token=…` → the board and its data in one
-  document: the overview fields, plus `"wallboard": Wallboard`, `"health": Health`,
-  `"trends": [HistorySeries...]` and `"serverNow"`. This is what a display polls.
+- `GET /api/wallboards/{id}/view?token=…` → the board and the data its panels
+  draw, in one document. This is what a display polls. It is built on the server
+  from the board's panels, and holds nothing they do not show:
+  - `"wallboard"`: the Wallboard (share token redacted), `"generatedAt"`, `"serverNow"`.
+  - `"summary"` (the overview's node counts): only with a `headline` or `counts`
+    panel, or the footer (`hideChrome` false).
+  - `"health"`: `{ serviceRunning, schedulerRunning, lastCheckAt, checksEnabled }`,
+    not the Health document; only with a `health` panel or the footer.
+  - `"nodes"`: `[{ "node": { id, name, group, groups, tags }, "status" }]`, only the
+    nodes some `nodes` panel selects by its `group`, `tag` and `nodeIds`.
+  - `"attention"`, `"groups"`: as in the overview, only with that panel.
+  - `"certWarnings"`: `[{ nodeName, checkName, daysRemaining, notAfter }]`, and
+    `"maintenance"`: `[{ name, group, nodeId }]`, only with that panel.
+  - `"trends"`: `[HistorySeries...]` for the `trends` panels.
+
+  A list no panel needs is `[]`; `summary` and `health` are left out. No check
+  configuration, host, incident or Health detail is ever included.
 
 `layout`: `{ "columns": 4..24, "theme": "signal|contrast|midnight|daylight",
 "scale": 0.6..2, "refreshSeconds": 5..3600, "hideChrome": false }`. A panel's
@@ -991,7 +1005,7 @@ without a credential, and only for a board whose administrator switched
 projection on, and only with that board's own token. The token is stored as it
 is rather than hashed, because the address has to be readable again later — it
 is typed into a display that has no keyboard. It is worth one read-only board
-and nothing else, it is shown only to an administrator (`share.token` comes back
+— exactly the data that board draws — and nothing else, it is shown only to an administrator (`share.token` comes back
 `{"enabled":true,"redacted":true}` for a viewer, and is never included in the
 view document), and switching projection off or rotating the token revokes it.
 Every change is written to the audit trail.
@@ -1026,11 +1040,13 @@ An `Action` is `{ "type": "http|slack|teams|ntfy|pushover|git|script|run_node", 
 | `http` | `method` (auto: POST with body, else GET), `url`, `headers`, `body`, `expectedStatus` (default 200-399), `ignoreTlsErrors` |
 | `slack` | `webhookUrl` (https://, a Slack incoming webhook), `message` |
 | `teams` | `webhookUrl` (https://, a Teams/Power Automate webhook), `title`, `message` |
-| `ntfy` | `server` (default `https://ntfy.sh`), `topic`, `title`, `message`, `priority` (`min\|low\|default\|high\|urgent` or `1`-`5`), `tags`, `token` (optional bearer token) |
+| `ntfy` | `server` (default `https://ntfy.sh`; http:// or https://), `topic`, `title`, `message`, `priority` (`min\|low\|default\|high\|urgent` or `1`-`5`), `tags`, `token` (optional bearer token) |
 | `pushover` | `token` (application token), `userKey`, `title`, `message`, `priority` (`-2`..`2`) |
 | `git` | `repo` (working directory), `gitArgs` (everything after `git`) |
 | `script` | `interpreter` (`sh`, `bash`, `powershell`, `cmd`, `python`, `node`, `custom`), `command` (for custom; `{{file}}` is the script path), `code`, `workDir`, `allowUntrustedInput` |
 | `run_node` | `nodeId` |
+
+A URL is where a request — and for ntfy its bearer token — is sent, so the `url` of an `http` action, the `webhookUrl` of `slack` and `teams`, and the ntfy `server` must spell out their scheme and host (and port, and any user info): a placeholder there is refused with 400 when the action is saved. Placeholders may appear in the path, query and fragment, where each value is escaped as data (path-escaped in the path, query-escaped in the query) and so cannot add a segment, a parameter or another host. The ntfy `topic` is one escaped path segment under `server`. ntfy's `Authorization` header is dropped if the server redirects to another scheme, host or port.
 
 `slack`, `teams`, `ntfy` and `pushover` all default `title` to `"GWatch {{instance}}"` and `message` to `"{{node.name}} is {{status}}: {{message}}"` when left blank; both fields are JSON-safe (or form/header-safe) no matter what characters `{{message}}` expands to, since the payload is built with `encoding/json` (or form-encoding for Pushover, headers for ntfy) instead of string concatenation.
 
@@ -1246,7 +1262,7 @@ stripped from `GET /api/export/config.json` like the SMTP password.
 - `POST /api/backups` body `{ "password": "...", "includeHistory": true }` → BackupInfo. (Manual backups are never pruned.)
 - `GET /api/backups/{fileName}/download` → file (`application/octet-stream`).
 - `DELETE /api/backups/{fileName}` → `{ok:true}`.
-- `POST /api/backups/restore` multipart form: `file`, `password`, `includeHistory` ("true"/"false") → `{ "ok": true, "nodes": n, "checks": n, "results": n }`.
+- `POST /api/backups/restore` multipart form: `file`, `password`, `includeHistory` ("true"/"false") → `{ "ok": true, "nodes": n, "checks": n, "results": n }`. A body over 2 GiB (plus 1 MiB for the form) is refused with 413, as is an archive over any of the limits in [`RESTORE.md`](RESTORE.md#size-limits); either way nothing is changed.
 - `POST /api/backups/restore-existing` body `{ "fileName": "...", "password": "...", "includeHistory": bool }` → same.
 
 See [`RESTORE.md`](RESTORE.md) for the end-to-end restore-to-a-new-machine procedure.

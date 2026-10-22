@@ -82,7 +82,7 @@ settings table — a copy of the file on its own does not give the password away
 | `user`, `password` | The account GWatch signs in as. Save through the settings page or `gwatch install`/`migrate-db` and the password is encrypted for you; a plaintext password in a hand-written file is accepted and encrypted the next time the file is saved |
 | `database` | The database name on the server |
 | `schema` | PostgreSQL only: the schema to keep the tables in. Empty means the user's default search path, normally `public` |
-| `sslMode` | TLS to the server: `disable`, `prefer` (default), `require`, `verify-ca`, `verify-full` — see below |
+| `sslMode` | TLS to the server: `disable`, `prefer`, `require`, `verify-ca`, `verify-full`. Empty means `verify-full` for a server across the network and `prefer` for one on this machine — see below |
 | `dsn` | Optional: a complete connection string in the driver's own syntax, in place of `host`…`sslMode`. For a Unix socket, a PgBouncer, or a driver option not covered above |
 
 Delete the file (or choose *SQLite* on the settings page) to go back to the default at
@@ -95,13 +95,31 @@ the next start.
 | `sslMode` | PostgreSQL | MySQL / MariaDB |
 | --- | --- | --- |
 | `disable` | No TLS | No TLS |
-| `prefer` (default) | TLS if the server offers it | TLS if the server offers it |
+| `prefer` | TLS if the server offers it | TLS if the server offers it |
 | `require` | TLS, certificate not verified | TLS, certificate not verified |
 | `verify-ca`, `verify-full` | TLS, certificate verified (full also checks the host name) | TLS, certificate verified by the system trust store |
 
+**The default depends on where the server is.** Left empty (the settings page's
+*Automatic*), `sslMode` becomes `verify-full` when `host` is anything but this machine,
+and `prefer` when it is `localhost`, a loopback address (`127.0.0.1`, `::1`) or a Unix
+socket directory. Only a verified certificate stops someone on the network path from
+quietly turning `prefer` into plaintext, or from answering in the server's place, and
+the connection carries the database password and every byte of GWatch's data. A mode
+set explicitly is always used as given; the default only fills in a blank, and what
+is saved to `database.json` is the mode it resolved to.
+
+> **Changed after 0.7.0.** Earlier versions defaulted to `prefer` for every host. A
+> `database.json` written by the settings page or `gwatch migrate-db` already names its
+> mode and is unaffected; a configuration from `GWATCH_DB_*` variables, `--db-*` flags or
+> a hand-written file without `sslMode` now needs the server's certificate to verify.
+> If it cannot, set `sslMode` explicitly to the mode you want — `prefer` restores the
+> old behaviour.
+
 A server with a self-signed certificate that you want verified needs the CA added to the
-machine's trust store, or `require` if you accept an unverified connection on a network
-you already trust.
+machine's trust store, or an explicit `require` if you accept an unverified connection on
+a network you already trust. A `dsn` is used as written, TLS settings included: name
+`sslmode` (PostgreSQL) or `tls` (MySQL) in it, since the drivers' own defaults are the
+downgradeable kind.
 
 ## Setting up the server
 

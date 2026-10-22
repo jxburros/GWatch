@@ -50,9 +50,11 @@ type DBConfig struct {
 	// database is a schema.
 	Schema string `json:"schema,omitempty"`
 	// SSLMode is PostgreSQL's sslmode (disable, prefer, require, verify-ca,
-	// verify-full; default prefer) and is mapped onto the MySQL driver's
-	// tls setting: disable → off, prefer → preferred, require → encrypted
-	// without verifying the server, verify-ca/verify-full → verified.
+	// verify-full) and is mapped onto the MySQL driver's tls setting:
+	// disable → off, prefer → preferred, require → encrypted without
+	// verifying the server, verify-ca/verify-full → verified. Left empty it
+	// defaults to verify-full for a server reached over the network and to
+	// prefer for one on this machine (see defaultSSLMode).
 	SSLMode string `json:"sslMode,omitempty"`
 
 	// KeyFile is where the secrets key lives. It is not part of the
@@ -82,7 +84,7 @@ func (c DBConfig) Normalized() DBConfig {
 			c.Host = "localhost"
 		}
 		if c.SSLMode == "" {
-			c.SSLMode = "prefer"
+			c.SSLMode = defaultSSLMode(c.Host)
 		}
 	case "mysql", "mariadb":
 		c.Driver = "mysql"
@@ -93,12 +95,40 @@ func (c DBConfig) Normalized() DBConfig {
 			c.Host = "localhost"
 		}
 		if c.SSLMode == "" {
-			c.SSLMode = "prefer"
+			c.SSLMode = defaultSSLMode(c.Host)
 		}
 	default:
 		c.Driver = strings.ToLower(strings.TrimSpace(c.Driver))
 	}
 	return c
+}
+
+// defaultSSLMode is the TLS mode for a server config that names none. Across
+// a network nothing less than a verified certificate keeps an on-path
+// attacker from downgrading the connection to plaintext or impersonating
+// the server, so that is the default. A server on this machine (a loopback
+// address, or a Unix socket directory for PostgreSQL) keeps the old default
+// of prefer: such servers rarely have a certificate, and the traffic never
+// leaves the host. A weaker mode set explicitly is always honoured.
+func defaultSSLMode(host string) string {
+	if isLocalHost(host) {
+		return "prefer"
+	}
+	return "verify-full"
+}
+
+// isLocalHost reports whether host names this machine.
+func isLocalHost(host string) bool {
+	host = strings.TrimSpace(host)
+	if strings.HasPrefix(host, "/") || strings.HasPrefix(host, "@") {
+		return true // a Unix socket (directory or abstract name)
+	}
+	host = strings.TrimSuffix(strings.Trim(host, "[]"), ".")
+	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // IsServer reports whether the config points at a database server rather

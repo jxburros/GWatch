@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -627,10 +628,19 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request, path, password 
 	}
 	// Verify the archive before touching the database.
 	if _, err := backup.Inspect(path, password); err != nil {
+		if errors.Is(err, backup.ErrArchiveTooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
 		s.fail(w, err)
 		return
 	}
 	sum, err := backup.Restore(r.Context(), s.Store, path, password, includeHistory)
+	if errors.Is(err, backup.ErrArchiveTooLarge) {
+		// Refused before anything was written.
+		writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+		return
+	}
 	if err != nil {
 		s.recordEvent(r.Context(), model.Event{Type: model.EventRestore, Title: "Restore failed", Detail: err.Error()})
 		s.fail(w, err)
@@ -673,11 +683,25 @@ func (s *Server) handleRestoreExisting(w http.ResponseWriter, r *http.Request) {
 	s.restore(w, r, p, body.Password, body.IncludeHistory)
 }
 
+// restoreUploadLimit caps a restore upload: the largest archive a restore
+// accepts plus room for the multipart framing and the password and
+// includeHistory fields beside it. A variable so tests can lower it.
+var restoreUploadLimit = backup.MaxArchiveBytes + 1<<20
+
 func (s *Server) handleRestoreUpload(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseMultipartForm(64 << 20); err != nil {
+	// ParseMultipartForm's argument only decides what is kept in memory
+	// rather than spooled to disk; the body itself is capped here.
+	r.Body = http.MaxBytesReader(w, r.Body, restoreUploadLimit)
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("backup file is larger than the %d MiB limit", backup.MaxArchiveBytes>>20))
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid upload: "+err.Error())
 		return
 	}
+	defer r.MultipartForm.RemoveAll()
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "a backup file is required")
