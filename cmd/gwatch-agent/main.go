@@ -17,11 +17,11 @@
 // token above, which is then kept on this machine and used from then on.
 //
 //	gwatch-agent pair --server https://gwatch.lan:7230 --code XXXX-XXXX
-//	gwatch-agent run --server https://gwatch.lan:7230 --token gwa_…
+//	gwatch-agent run                              report using agent.json
 //	gwatch-agent install --server … --token …     install as a background service
 //	gwatch-agent install --server … --code …      pair, then install the service
 //	gwatch-agent once --server … --token …        send one reading and exit
-//	gwatch-agent serve --listen 0.0.0.0:9713 --token …
+//	GWATCH_AGENT_TOKEN=… gwatch-agent serve --listen 0.0.0.0:9713
 package main
 
 import (
@@ -137,9 +137,10 @@ Usage:
   gwatch-agent config [show|path|validate] [--show-token]
         show every setting and where it came from, print the configuration
         file's location, or check the file for mistakes
-  gwatch-agent serve --token TOKEN [--listen %s]
-        expose readings for GWatch to read, instead of pushing them.
-        This opens a port on this computer; prefer run unless you need it.
+  GWATCH_AGENT_TOKEN=TOKEN gwatch-agent serve [--listen %s]
+        expose readings for GWatch to read, instead of pushing them, to
+        whoever presents TOKEN. This opens a port on this computer; prefer run
+        unless you need it.
   gwatch-agent install [--server URL] [--token TOKEN | --code XXXX-XXXX] [--interval 60s]
         install and start the background service (run as Administrator on
         Windows). With --code the machine is paired first. The service is
@@ -178,7 +179,9 @@ anything.%s
 Environment: GWATCH_SERVER, GWATCH_AGENT_TOKEN, GWATCH_AGENT_CODE,
 GWATCH_AGENT_INTERVAL, GWATCH_AGENT_LISTEN, GWATCH_AGENT_CONFIG,
 GWATCH_AGENT_TOKEN_FILE (moves the whole data directory), GWATCH_AGENT_AUTO_UPDATE,
-GWATCH_AGENT_REPO, GWATCH_HOST_ROOT override the file.
+GWATCH_AGENT_REPO, GWATCH_HOST_ROOT override the file. A token is best kept in
+the file or GWATCH_AGENT_TOKEN: any user of this computer can read a command
+line, so run and serve move a --token off theirs as they start.
 `, version, defaultListen, configFile(), packagedUsage())
 }
 
@@ -203,6 +206,9 @@ func main() {
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		cmd = args[0]
 		args = args[1:]
+	}
+	if cmd == "run" || cmd == "serve" {
+		args = keepTokenOffCommandLine(cmd, args)
 	}
 	// `config show` and friends: the word after config is a subcommand, and
 	// flag parsing would stop at it.
@@ -486,6 +492,80 @@ func configPathFromArgs(args []string) string {
 		}
 	}
 	return ""
+}
+
+// tokenEnv is the environment variable that carries the token, and the one a
+// token given on the command line is moved into.
+const tokenEnv = "GWATCH_AGENT_TOKEN"
+
+// keepTokenOffCommandLine takes a --token out of the command line of the
+// modes that keep running. Any user of the machine can read a process's command
+// line for as long as it runs, and the token is this machine's credential (or,
+// for serve, the one that reads it). Where the operating system can replace
+// the process in place, the agent starts itself again with the token in its
+// environment, which only its own account can read, and nothing else changes:
+// same process, same settings, the token still winning over the file. Where it
+// cannot, it says so and carries on, since a service installed by an older
+// agent was registered with the token as an argument and must keep working.
+func keepTokenOffCommandLine(cmd string, args []string) []string {
+	token, rest, found := splitTokenArg(args)
+	if !found || strings.TrimSpace(token) == "" {
+		return args
+	}
+	advice := fmt.Sprintf("keep the token in %s, or give it in %s", configFile(), tokenEnv)
+	if cmd == "serve" {
+		advice = "give serve's token in " + tokenEnv
+	}
+	exe, err := os.Executable()
+	if err == nil {
+		argv, env := reexecArgs(os.Args[0], cmd, rest, token, os.Environ())
+		fmt.Fprintf(os.Stderr, "note: the token given with --token has been taken off the command line, where other users of this computer could read it; to avoid this step, %s\n", advice)
+		err = reexec(exe, argv, env)
+	}
+	fmt.Fprintf(os.Stderr, "warning: --token leaves the token on the command line, where other users of this computer may be able to read it (%v); %s\n", err, advice)
+	return args
+}
+
+// splitTokenArg finds every --token on a command line (the last one is the one
+// that counts, as with any flag) and returns its value and the command line
+// without them. Nothing after "--" is a flag.
+func splitTokenArg(args []string) (token string, rest []string, found bool) {
+	rest = make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			rest = append(rest, args[i:]...)
+			break
+		}
+		switch {
+		case a == "--token" || a == "-token":
+			found = true
+			if i+1 < len(args) {
+				token = args[i+1]
+				i++
+			}
+		case strings.HasPrefix(a, "--token="):
+			found, token = true, strings.TrimPrefix(a, "--token=")
+		case strings.HasPrefix(a, "-token="):
+			found, token = true, strings.TrimPrefix(a, "-token=")
+		default:
+			rest = append(rest, a)
+		}
+	}
+	return token, rest, found
+}
+
+// reexecArgs is the command line and environment the agent starts itself again
+// with: the same command and flags less the token, which moves to tokenEnv.
+func reexecArgs(argv0, cmd string, rest []string, token string, environ []string) ([]string, []string) {
+	argv := append([]string{argv0, cmd}, rest...)
+	env := make([]string, 0, len(environ)+1)
+	for _, kv := range environ {
+		if !strings.HasPrefix(kv, tokenEnv+"=") {
+			env = append(env, kv)
+		}
+	}
+	return argv, append(env, tokenEnv+"="+token)
 }
 
 // exitNotConfigured is EX_CONFIG from sysexits.h: the agent has no token or no

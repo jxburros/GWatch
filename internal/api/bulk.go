@@ -224,6 +224,20 @@ func (s *Server) handleBulkUpdateNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A bulk edit is held to the same boundary as a single one: an API key
+	// may not edit or switch on a check that runs code, and switching a node
+	// on starts every switched-on check it has.
+	if !req.Check.empty() && s.denyKeyStoredCheck(w, r, selectedChecks...) {
+		return
+	}
+	if req.Node != nil && req.Node.Enabled != nil && *req.Node.Enabled {
+		for _, n := range selectedNodes {
+			if s.denyKeyStoredCheck(w, r, enabledChecks(n)...) {
+				return
+			}
+		}
+	}
+
 	var changes []bulkChange
 	nodesOut := []model.Node{}
 	if !req.Node.empty() {

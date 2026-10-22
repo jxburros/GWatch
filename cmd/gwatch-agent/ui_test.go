@@ -12,9 +12,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/jxburros/GWatch/internal/model"
 )
@@ -35,7 +37,7 @@ func newPanel(t *testing.T) *panel {
 	if len(problems) > 0 {
 		t.Fatal(problems)
 	}
-	ui := newUIServer(cfg, "127.0.0.1:0", "s3cret")
+	ui := newUIServer(cfg, "127.0.0.1:0", "s3cret", "c0de")
 	ts := httptest.NewServer(ui.handler())
 	t.Cleanup(ts.Close)
 	ui.addr = ts.Listener.Addr().String()
@@ -102,7 +104,10 @@ func TestNothingIsServedWithoutTheSecret(t *testing.T) {
 	if resp, _ := p.do("GET", "/?k=wrong", nil, opts{}); resp.StatusCode != 403 {
 		t.Errorf("a wrong secret: %d", resp.StatusCode)
 	}
-	resp, _ := p.do("GET", "/?k=s3cret", nil, opts{})
+	if resp, _ := p.do("GET", "/?k=s3cret", nil, opts{}); resp.StatusCode != 403 {
+		t.Errorf("the session secret is not an address: %d", resp.StatusCode)
+	}
+	resp, _ := p.do("GET", "/?k=c0de", nil, opts{})
 	if resp.StatusCode != 303 || resp.Header.Get("Location") != "/" {
 		t.Fatalf("the secret should be traded for a cookie and dropped from the address: %d %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
@@ -114,6 +119,59 @@ func TestNothingIsServedWithoutTheSecret(t *testing.T) {
 	}
 	if cookie == nil || !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode || cookie.Value != "s3cret" {
 		t.Errorf("cookie %+v", cookie)
+	}
+}
+
+func TestTheAddressWorksOnce(t *testing.T) {
+	p := newPanel(t)
+	redeemed := 0
+	p.ui.onRedeemed = func() { redeemed++ }
+	if resp, _ := p.do("GET", "/?k=c0de", nil, opts{}); resp.StatusCode != 303 {
+		t.Fatalf("first visit: %d", resp.StatusCode)
+	}
+	if resp, _ := p.do("GET", "/?k=c0de", nil, opts{}); resp.StatusCode != 403 {
+		t.Errorf("the same address a second time: %d", resp.StatusCode)
+	}
+	if redeemed != 1 {
+		t.Errorf("onRedeemed ran %d times", redeemed)
+	}
+	// The cookie it bought still works.
+	p.ok("GET", "/api/state", nil)
+
+	q := newPanel(t)
+	q.ui.codeExpires = time.Now().Add(-time.Second)
+	if resp, _ := q.do("GET", "/?k=c0de", nil, opts{}); resp.StatusCode != 403 {
+		t.Errorf("an address past its time: %d", resp.StatusCode)
+	}
+}
+
+func TestTheBrowserIsNeverHandedTheCode(t *testing.T) {
+	link := "http://127.0.0.1:1234/?k=c0dec0dec0de"
+	page, cleanup, err := writeLaunchPage(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, arg := range browserCommand(page).Args {
+		if strings.Contains(arg, "c0dec0dec0de") {
+			t.Errorf("the opener's command line carries the code: %q", arg)
+		}
+	}
+	b, err := os.ReadFile(page)
+	if err != nil || !strings.Contains(string(b), link) {
+		t.Fatalf("the page should lead to the panel: %v %s", err, b)
+	}
+	if runtime.GOOS != "windows" {
+		for _, path := range []string{page, filepath.Dir(page)} {
+			if fi, err := os.Stat(path); err != nil {
+				t.Error(err)
+			} else if fi.Mode().Perm()&0o077 != 0 {
+				t.Errorf("%s should be private to this account: %v", path, fi.Mode())
+			}
+		}
+	}
+	cleanup()
+	if _, err := os.Stat(filepath.Dir(page)); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the page should be gone after cleanup: %v", err)
 	}
 }
 

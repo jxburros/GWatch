@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -627,10 +628,19 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request, path, password 
 	}
 	// Verify the archive before touching the database.
 	if _, err := backup.Inspect(path, password); err != nil {
+		if errors.Is(err, backup.ErrArchiveTooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
 		s.fail(w, err)
 		return
 	}
 	sum, err := backup.Restore(r.Context(), s.Store, path, password, includeHistory)
+	if errors.Is(err, backup.ErrArchiveTooLarge) {
+		// Refused before anything was written.
+		writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+		return
+	}
 	if err != nil {
 		s.recordEvent(r.Context(), model.Event{Type: model.EventRestore, Title: "Restore failed", Detail: err.Error()})
 		s.fail(w, err)
@@ -673,11 +683,25 @@ func (s *Server) handleRestoreExisting(w http.ResponseWriter, r *http.Request) {
 	s.restore(w, r, p, body.Password, body.IncludeHistory)
 }
 
+// restoreUploadLimit caps a restore upload: the largest archive a restore
+// accepts plus room for the multipart framing and the password and
+// includeHistory fields beside it. A variable so tests can lower it.
+var restoreUploadLimit = backup.MaxArchiveBytes + 1<<20
+
 func (s *Server) handleRestoreUpload(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseMultipartForm(64 << 20); err != nil {
+	// ParseMultipartForm's argument only decides what is kept in memory
+	// rather than spooled to disk; the body itself is capped here.
+	r.Body = http.MaxBytesReader(w, r.Body, restoreUploadLimit)
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("backup file is larger than the %d MiB limit", backup.MaxArchiveBytes>>20))
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid upload: "+err.Error())
 		return
 	}
+	defer r.MultipartForm.RemoveAll()
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "a backup file is required")
@@ -706,6 +730,24 @@ func csvWriter(w http.ResponseWriter, name string) *csv.Writer {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name))
 	return csv.NewWriter(w)
+}
+
+// csvText makes a text cell safe to open in a spreadsheet. encoding/csv keeps
+// the file's structure intact, but Excel, LibreOffice and Sheets read a cell
+// that starts with =, +, -, @, a tab or a carriage return as a formula — and
+// node names, check names, event notes, result messages and URLs are text
+// that monitored devices and API keys can choose. A leading apostrophe makes
+// the spreadsheet show the cell as text. Only text columns go through here;
+// numbers GWatch formats itself (a negative latency, say) are left alone.
+func csvText(v string) string {
+	if v == "" {
+		return v
+	}
+	switch v[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + v
+	}
+	return v
 }
 
 func fmtFloat(f *float64) string {
@@ -757,7 +799,7 @@ func (s *Server) handleExportResults(w http.ResponseWriter, r *http.Request) {
 		if res.Details.StatusCode != 0 {
 			code = strconv.Itoa(res.Details.StatusCode)
 		}
-		_ = cw.Write([]string{res.Timestamp.Format(time.RFC3339), strconv.FormatBool(res.Success), string(res.Status), res.Message, res.Error, fmtFloat(res.LatencyMS), fmtFloat(res.MinMS), fmtFloat(res.MaxMS), fmtFloat(res.JitterMS), fmtFloat(res.StdDevMS), fmtFloat(res.LossPct), code, res.Details.FinalURL, strconv.Itoa(res.Attempts)})
+		_ = cw.Write([]string{res.Timestamp.Format(time.RFC3339), strconv.FormatBool(res.Success), csvText(string(res.Status)), csvText(res.Message), csvText(res.Error), fmtFloat(res.LatencyMS), fmtFloat(res.MinMS), fmtFloat(res.MaxMS), fmtFloat(res.JitterMS), fmtFloat(res.StdDevMS), fmtFloat(res.LossPct), code, csvText(res.Details.FinalURL), strconv.Itoa(res.Attempts)})
 	}
 	cw.Flush()
 }
@@ -778,7 +820,7 @@ func (s *Server) handleExportEvents(w http.ResponseWriter, r *http.Request) {
 		if e.CheckID != nil {
 			cid = strconv.FormatInt(*e.CheckID, 10)
 		}
-		_ = cw.Write([]string{e.Timestamp.Format(time.RFC3339), string(e.Type), e.NodeName, e.CheckName, e.Title, e.Detail, nid, cid})
+		_ = cw.Write([]string{e.Timestamp.Format(time.RFC3339), csvText(string(e.Type)), csvText(e.NodeName), csvText(e.CheckName), csvText(e.Title), csvText(e.Detail), nid, cid})
 	}
 	cw.Flush()
 }

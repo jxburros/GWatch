@@ -331,13 +331,20 @@ func prune(dir string, keep int, scheduledOnly bool) ([]string, error) {
 	return removed, nil
 }
 
-// Open decrypts an archive to a temporary file and returns a zip reader.
+// Open decrypts an archive to a temporary file and returns a zip reader. An
+// archive larger than MaxArchiveBytes, or whose ZIP directory is out of
+// bounds (see checkEntries), is refused with ErrArchiveTooLarge.
 func Open(path, password string) (*zip.ReadCloser, func(), error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer f.Close()
+	if fi, err := f.Stat(); err != nil {
+		return nil, nil, err
+	} else if fi.Size() > maxArchiveBytes {
+		return nil, nil, ErrArchiveTooLarge
+	}
 	dec, err := NewDecryptReader(bufio.NewReaderSize(f, 1<<16), password)
 	if err != nil {
 		return nil, nil, err
@@ -346,7 +353,9 @@ func Open(path, password string) (*zip.ReadCloser, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if _, err := io.Copy(tmp, dec); err != nil {
+	// The plaintext is never longer than the ciphertext; the cap is a
+	// backstop should the file grow while it is read.
+	if _, err := io.Copy(tmp, &capReader{r: dec, n: maxArchiveBytes}); err != nil {
 		tmp.Close()
 		os.Remove(tmp.Name())
 		return nil, nil, err
@@ -358,6 +367,10 @@ func Open(path, password string) (*zip.ReadCloser, func(), error) {
 		return nil, nil, fmt.Errorf("backup archive is not readable: %w", err)
 	}
 	cleanup := func() { zr.Close(); os.Remove(tmp.Name()) }
+	if err := checkEntries(&zr.Reader); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
 	return zr, cleanup, nil
 }
 
@@ -368,17 +381,26 @@ func Inspect(path, password string) (Manifest, error) {
 		return Manifest{}, err
 	}
 	defer cleanup()
+	return readManifest(&zr.Reader)
+}
+
+// readManifest reads and checks manifest.json.
+func readManifest(zr *zip.Reader) (Manifest, error) {
 	var m Manifest
-	if err := readJSON(&zr.Reader, "manifest.json", &m); err != nil {
+	if err := readJSON(zr, "manifest.json", maxManifestBytes, &m); err != nil {
 		return m, err
 	}
 	if m.Format < 1 || m.Format > Format {
 		return m, fmt.Errorf("unsupported backup format %d (supported: 1–%d)", m.Format, Format)
 	}
+	if err := checkManifest(m); err != nil {
+		return m, err
+	}
 	return m, nil
 }
 
-func readJSON(zr *zip.Reader, name string, v any) error {
+// readJSON decodes entry name, reading at most max decompressed bytes.
+func readJSON(zr *zip.Reader, name string, max int64, v any) error {
 	for _, f := range zr.File {
 		if f.Name == name {
 			rc, err := f.Open()
@@ -386,7 +408,13 @@ func readJSON(zr *zip.Reader, name string, v any) error {
 				return err
 			}
 			defer rc.Close()
-			return json.NewDecoder(rc).Decode(v)
+			if err := json.NewDecoder(&capReader{r: rc, n: max}).Decode(v); err != nil {
+				if errors.Is(err, ErrArchiveTooLarge) {
+					return fmt.Errorf("%w: %s", ErrArchiveTooLarge, name)
+				}
+				return err
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("backup is missing %s", name)
@@ -411,24 +439,30 @@ func Restore(ctx context.Context, st *store.Store, path, password string, includ
 	}
 	defer cleanup()
 	var sum Summary
-	if err := readJSON(&zr.Reader, "manifest.json", &sum.Manifest); err != nil {
+	if sum.Manifest, err = readManifest(&zr.Reader); err != nil {
 		return sum, err
 	}
-	if sum.Manifest.Format < 1 || sum.Manifest.Format > Format {
-		return sum, fmt.Errorf("unsupported backup format %d (supported: 1–%d)", sum.Manifest.Format, Format)
-	}
 	var cfg Config
-	if err := readJSON(&zr.Reader, "config.json", &cfg); err != nil {
+	if err := readJSON(&zr.Reader, "config.json", maxConfigBytes, &cfg); err != nil {
 		return sum, err
 	}
 	includeHistory = includeHistory && sum.Manifest.IncludeHistory && hasFile(&zr.Reader, "results.jsonl")
 	sum.History = includeHistory
+	// Everything that can make the import fail for size is checked before
+	// the first write, so an oversized archive never leaves a half-restored
+	// installation behind.
+	if includeHistory {
+		if err := preflightHistory(&zr.Reader, sum.Manifest); err != nil {
+			return sum, err
+		}
+	}
 
 	if err := restoreConfig(ctx, st, cfg, &sum, includeHistory); err != nil {
 		return sum, err
 	}
 	if includeHistory {
-		if err := importLines(&zr.Reader, "results.jsonl", batchSize, func(lines [][]byte) error {
+		budget := maxHistoryBytes
+		if err := importLines(&zr.Reader, "results.jsonl", sum.Manifest, &budget, func(lines [][]byte) error {
 			batch := make([]model.Result, 0, len(lines))
 			for _, l := range lines {
 				var r model.Result
@@ -441,7 +475,7 @@ func Restore(ctx context.Context, st *store.Store, path, password string, includ
 		}); err != nil {
 			return sum, err
 		}
-		if err := importLines(&zr.Reader, "rollups.jsonl", batchSize, func(lines [][]byte) error {
+		if err := importLines(&zr.Reader, "rollups.jsonl", sum.Manifest, &budget, func(lines [][]byte) error {
 			batch := make([]model.Rollup, 0, len(lines))
 			for _, l := range lines {
 				var r model.Rollup
@@ -454,7 +488,7 @@ func Restore(ctx context.Context, st *store.Store, path, password string, includ
 		}); err != nil {
 			return sum, err
 		}
-		if err := importLines(&zr.Reader, "events.jsonl", batchSize, func(lines [][]byte) error {
+		if err := importLines(&zr.Reader, "events.jsonl", sum.Manifest, &budget, func(lines [][]byte) error {
 			batch := make([]model.Event, 0, len(lines))
 			for _, l := range lines {
 				var e model.Event
@@ -696,46 +730,26 @@ func Copy(ctx context.Context, src, dst *store.Store, progress func(stage string
 	return sum, nil
 }
 
-func importLines(zr *zip.Reader, name string, batchSize int, fn func([][]byte) error) error {
-	if !hasFile(zr, name) {
+// importLines feeds the lines of entry name to fn in batches of batchSize,
+// within the shared decompressed budget and the record count m claims.
+func importLines(zr *zip.Reader, name string, m Manifest, budget *int64, fn func([][]byte) error) error {
+	var batch [][]byte
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		err := fn(batch)
+		batch = nil
+		return err
+	}
+	if err := scanLines(zr, name, budget, claimed(m, name), func(line []byte) error {
+		batch = append(batch, append([]byte{}, line...))
+		if len(batch) >= batchSize {
+			return flush()
+		}
 		return nil
+	}); err != nil {
+		return err
 	}
-	for _, f := range zr.File {
-		if f.Name != name {
-			continue
-		}
-		rc, err := f.Open()
-		if err != nil {
-			return err
-		}
-		defer rc.Close()
-		sc := bufio.NewScanner(rc)
-		sc.Buffer(make([]byte, 1<<20), 16<<20)
-		var batch [][]byte
-		flush := func() error {
-			if len(batch) == 0 {
-				return nil
-			}
-			err := fn(batch)
-			batch = nil
-			return err
-		}
-		for sc.Scan() {
-			line := append([]byte{}, sc.Bytes()...)
-			if len(strings.TrimSpace(string(line))) == 0 {
-				continue
-			}
-			batch = append(batch, line)
-			if len(batch) >= batchSize {
-				if err := flush(); err != nil {
-					return err
-				}
-			}
-		}
-		if err := sc.Err(); err != nil {
-			return err
-		}
-		return flush()
-	}
-	return nil
+	return flush()
 }

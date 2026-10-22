@@ -551,6 +551,7 @@ jobs:
       contents: read
     env:
       RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+      RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch'].version }}
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
@@ -578,8 +579,8 @@ jobs:
       env:
         GWATCH_SIGNING_KEY: ${{ secrets.GWATCH_SIGNING_KEY }}
       run: |
-        go run ./cmd/gwatch-sign sign dist/gwatch-*
-        go run ./cmd/gwatch-sign verify dist/gwatch-*
+        go run ./cmd/gwatch-sign sign -version "$RELEASE_VERSION" dist/gwatch-*
+        go run ./cmd/gwatch-sign verify -version "$RELEASE_VERSION" dist/gwatch-*
         ls -lh dist
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -671,6 +672,7 @@ jobs:
       contents: read
     env:
       RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+      RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].version }}
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
@@ -698,8 +700,8 @@ jobs:
       env:
         GWATCH_SIGNING_KEY: ${{ secrets.GWATCH_SIGNING_KEY }}
       run: |
-        go run ./cmd/gwatch-sign sign dist/gwatch-agent-*
-        go run ./cmd/gwatch-sign verify dist/gwatch-agent-*
+        go run ./cmd/gwatch-sign sign -version "$RELEASE_VERSION" dist/gwatch-agent-*
+        go run ./cmd/gwatch-sign verify -version "$RELEASE_VERSION" dist/gwatch-agent-*
         ls -lh dist
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -1031,7 +1033,7 @@ jobs:
         if git diff --cached --quiet; then
           echo "the tap already has this formula"
         else
-          git commit -m "gwatch-agent ${AGENT_VERSION}"
+          git commit -m "gwatch-agent ${RELEASE_VERSION}"
           git push origin HEAD
         fi
   agent-winget-submit:
@@ -1064,7 +1066,7 @@ jobs:
         if (-not $env:WINGET_TOKEN) { Write-Host "::notice::Winget publishing is not configured; manifests retained as artifacts."; exit 0 }
         Invoke-WebRequest -Uri https://github.com/microsoft/winget-create/releases/download/v1.12.13.0/wingetcreate.exe -OutFile wingetcreate.exe
         if ((Get-FileHash wingetcreate.exe -Algorithm SHA256).Hash -ne "24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea") { throw "wingetcreate checksum mismatch" }
-        .\wingetcreate.exe submit --prtitle "New version: GWatch.Agent version $env:AGENT_VERSION" --token $env:WINGET_TOKEN "dist\winget\manifests\GWatch.Agent\$env:AGENT_VERSION"
+        .\wingetcreate.exe submit --prtitle "New version: GWatch.Agent version $env:RELEASE_VERSION" --token $env:WINGET_TOKEN "dist\winget\manifests\GWatch.Agent\$env:RELEASE_VERSION"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     env:
       RELEASE_TAG: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].tag }}

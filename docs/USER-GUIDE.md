@@ -935,13 +935,16 @@ gwatch-agent install --server http://<gwatch>:7230 --code XXXX-XXXX --name "Medi
 |---|---|
 | `gwatch-agent print` | Prints this machine's reading as JSON and **contacts nothing**. Run this first if you want to see exactly what would be sent |
 | `gwatch-agent once --server … --token …` | Sends a single reading and exits — the quickest way to prove a token works |
-| `gwatch-agent run --server … --token … [--interval 60s]` | Sends a reading every interval until stopped |
-| `gwatch-agent serve --token …` | The inverse: exposes readings for GWatch to *read*, instead of pushing them. This opens a port on that machine, so prefer `run` unless you need it |
+| `gwatch-agent run [--interval 60s]` | Sends a reading every interval until stopped, using the server and token in `agent.json` |
+| `GWATCH_AGENT_TOKEN=… gwatch-agent serve` | The inverse: exposes readings for GWatch to *read*, instead of pushing them. This opens a port on that machine, so prefer `run` unless you need it |
 | `gwatch-agent install / uninstall / start / stop / restart / status` | The background service |
 
 `GWATCH_SERVER`, `GWATCH_AGENT_TOKEN`, `GWATCH_AGENT_CODE`,
 `GWATCH_AGENT_INTERVAL`, `GWATCH_AGENT_LISTEN` and `GWATCH_AGENT_TOKEN_FILE`
-set the same things from the environment.
+set the same things from the environment. Give `run` and `serve` their token
+through the file or `GWATCH_AGENT_TOKEN` rather than `--token`: they keep
+running, and other users of the machine can read a running process's command
+line, so a `--token` given to either is moved off it as the agent starts.
 
 ### The trust model
 

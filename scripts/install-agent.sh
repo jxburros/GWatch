@@ -47,12 +47,15 @@ expected=$(awk 'NR==1 {print $1}' "$tmp/binary.sha256")
 actual=$(openssl dgst -sha256 "$tmp/binary" | awk '{print $NF}')
 [ "$expected" = "$actual" ] || { echo 'Checksum mismatch' >&2; exit 1; }
 [ "$(head -n 1 "$tmp/binary.sig")" = gwatch-sig-v1 ] || { echo 'Unknown signature format' >&2; exit 1; }
-sed -n 's/^sig: //p' "$tmp/binary.sig" | openssl base64 -d -A > "$tmp/signature"
+# release-sig binds the asset name and the version as well as the digest, so
+# a genuinely signed binary from another release or product is refused.
+sed -n 's/^release-sig: //p' "$tmp/binary.sig" | openssl base64 -d -A > "$tmp/signature"
+[ -s "$tmp/signature" ] || { echo 'The signature does not name its release' >&2; exit 1; }
+printf 'gwatch-release-v1\nasset: %s\nversion: %s\nsha256: %s\n' "$asset" "${version#"$prefix"}" "$actual" > "$tmp/message"
 # ASN.1 SubjectPublicKeyInfo for the pinned Ed25519 key in release_keys.txt.
 printf '\060\052\060\005\006\003\053\145\160\003\041\000' > "$tmp/key.der"
 printf '%s' 'OzN/mY/5zRszwN7DxuhrC718w+3TjL36FuZHbYV/qkk=' | openssl base64 -d -A >> "$tmp/key.der"
-openssl dgst -sha256 -binary "$tmp/binary" > "$tmp/digest"
-openssl pkeyutl -verify -pubin -keyform DER -inkey "$tmp/key.der" -rawin -in "$tmp/digest" -sigfile "$tmp/signature" >/dev/null || { echo 'Release signature verification failed' >&2; exit 1; }
+openssl pkeyutl -verify -pubin -keyform DER -inkey "$tmp/key.der" -rawin -in "$tmp/message" -sigfile "$tmp/signature" >/dev/null || { echo 'Release signature verification failed' >&2; exit 1; }
 chmod 700 "$tmp/binary"
 set -- install --server "$server" --code "$code"
 if "$no_start"; then set -- "$@" --no-start; fi

@@ -9,6 +9,87 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## 0.7.1 — 2026-10-22
+
+0.7.0 was never published; 0.7.1 is the first release to carry its changes
+(below) as well as these security fixes. Agent 0.7.1 is released alongside.
+
+### Security
+
+- **Update signatures name the release they are for.** Each `.sig` now also carries
+  `release-sig`, an ed25519 signature over the asset's name, the release version and
+  its digest. GWatch, the agent and the install scripts check it, so a genuinely signed
+  binary can no longer be republished as a newer release or as another product. The
+  updater checks the signature's release before downloading the executable and stops a
+  download at the size the release declares (512 MiB at most). The agent's own version
+  proof is now an exact comparison. Copies released before this keep verifying the
+  digest-only `sig` line, which is still written so they can install this release.
+- **API keys keep their limits on stored checks.** A read-write key can no longer
+  retarget a check whose credentials would be filled back in from storage (403), get a
+  check's decrypted credentials back from `POST /api/checks/{id}/enable` (responses are
+  now masked), or run, switch on, duplicate or bulk-enable checks that run a command or
+  carry a credential to a URL. Running a disabled check or node with a key answers 409.
+- **Manual node runs share the check concurrency limit**, and a node holds at most 500
+  checks.
+- **Sign-in limits are per account and source.** A successful sign-in resets only the
+  failures against that account from that address; a per-address ceiling (30 a minute)
+  that a success never clears stops spraying. Changing a password now checks the limits
+  and takes a slot of the sign-in concurrency limit before any password hashing.
+  `--trusted-proxies` / `GWATCH_TRUSTED_PROXIES` (empty by default) lets a reverse proxy
+  you name forward the client address the limits use; see
+  [`docs/REMOTE-ACCESS.md`](docs/REMOTE-ACCESS.md).
+- **The last administrator cannot be removed by two requests at once.** The check and
+  the change now happen in one database transaction.
+- **CSV exports neutralise spreadsheet formulas**: a text cell starting with `=`, `+`,
+  `-`, `@`, a tab or a carriage return is prefixed with `'`.
+- **The agent keeps secrets off command lines.** `run` and `serve` started with
+  `--token` move it into `GWATCH_AGENT_TOKEN` and restart themselves in place without
+  it (Windows warns instead); the control panel's address carries a one-time code that
+  expires in five minutes and is no longer handed to the browser opener's arguments.
+- **`gwatch-sign keygen -force`** writes the key as a new 0600 file and refuses to
+  write through a link.
+
+- **A remote database connection verifies the server by default.** A PostgreSQL or
+  MySQL/MariaDB configuration that leaves `sslMode` empty now gets `verify-full`
+  (PostgreSQL) or a verified TLS connection (MySQL) when the host is not this machine.
+  `prefer` could be downgraded to plaintext or answered by an impostor by anyone on
+  the network path. A server on `localhost`, a loopback address or a Unix socket keeps
+  `prefer`, and a mode set explicitly — including `prefer`, `require` or `disable` — is
+  honoured as before. See *Upgrade notes*.
+- **Backup restore is bounded.** An upload larger than 2 GiB is refused with 413 before
+  it is stored; the decrypted archive, the number of entries, `config.json` (256 MiB),
+  the decompressed history (32 GiB in all) and its row counts are all limited, and an
+  archive over any limit is refused before anything in the database is changed.
+- **Notification URLs cannot be redirected by a hook caller.** Slack and Teams webhook
+  URLs and the ntfy server now take placeholders only in the path and query, escaped as
+  data, as HTTP actions already did; a placeholder in the scheme, user info, host or
+  port is refused when the action is saved and when it runs. ntfy's bearer token is no
+  longer sent on to a redirect that changes scheme, host or port.
+- **A shared wallboard returns only what it draws.** The view behind a board's projected
+  address is now built on the server from the board's panels: the nodes a *Nodes*
+  panel selects (name, groups, tags and status only), the lists the other panels show,
+  and the service's running state for the *Service* panel and the footer. It no longer
+  carries the whole overview (every node with its checks), incidents, or the Health
+  document's paths, database details and recent errors.
+
+### Upgrade notes
+
+- **Release tooling.** `gwatch-sign sign` and `verify` require `-version`, the release
+  version the assets are published in; `make sign`/`verify-release` pass `VERSION`.
+- **Server databases with no `sslMode`.** An install that reaches a remote database
+  through `GWATCH_DB_*` environment variables, `--db-*` flags or a hand-written
+  `database.json` without `sslMode` will now insist on a certificate that verifies
+  against the system trust store and matches the host name. If the server has none,
+  the service will not start: add the server's CA to the trust store, or set
+  `sslMode` (`GWATCH_DB_SSLMODE`, `--db-sslmode`) to the mode you used before,
+  `prefer`, explicitly. A `database.json` saved by the settings page or
+  `gwatch migrate-db` already names its mode and is unaffected.
+- **Notification actions with a placeholder in the host.** A Slack, Teams or ntfy action
+  whose URL or server took its host from a placeholder (`{{query.webhook}}`, say) now
+  fails when it runs and must be edited to name the host. Placeholders later in the
+  URL keep working, but a value is escaped as one path segment, so `/` in it arrives
+  as `%2F`.
+
 ## 0.7.0 — 2026-10-14
 
 ### Added

@@ -428,3 +428,36 @@ func TestServeNeedsTheToken(t *testing.T) {
 		})
 	}
 }
+
+// TestTheTokenIsTakenOffTheCommandLine: run and serve keep going, and any user
+// of the machine can read their command line for as long as they do, so a
+// --token there is moved into the environment and the agent starts again
+// without it.
+func TestTheTokenIsTakenOffTheCommandLine(t *testing.T) {
+	for _, tc := range []struct {
+		args  []string
+		token string
+		rest  []string
+		found bool
+	}{
+		{[]string{"--server", "s", "--token", "gwa_x"}, "gwa_x", []string{"--server", "s"}, true},
+		{[]string{"-token=gwa_x", "--listen", "0.0.0.0:9713"}, "gwa_x", []string{"--listen", "0.0.0.0:9713"}, true},
+		{[]string{"--token=a", "--token", "b"}, "b", []string{}, true},
+		{[]string{"--server", "s", "--", "--token", "x"}, "", []string{"--server", "s", "--", "--token", "x"}, false},
+		{[]string{"--interval", "60s"}, "", []string{"--interval", "60s"}, false},
+	} {
+		token, rest, found := splitTokenArg(tc.args)
+		if token != tc.token || found != tc.found || strings.Join(rest, " ") != strings.Join(tc.rest, " ") {
+			t.Errorf("splitTokenArg(%q) = %q %q %v", tc.args, token, rest, found)
+		}
+	}
+
+	argv, env := reexecArgs("/usr/bin/gwatch-agent", "serve", []string{"--listen", "0.0.0.0:9713"}, "gwa_x",
+		[]string{"PATH=/bin", tokenEnv + "=old", "HOME=/root"})
+	if got := strings.Join(argv, " "); got != "/usr/bin/gwatch-agent serve --listen 0.0.0.0:9713" {
+		t.Errorf("argv = %q", got)
+	}
+	if got := strings.Join(env, " "); got != "PATH=/bin HOME=/root "+tokenEnv+"=gwa_x" {
+		t.Errorf("env = %q", got)
+	}
+}

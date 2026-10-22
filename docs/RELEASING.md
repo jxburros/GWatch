@@ -183,8 +183,9 @@ To do the same by hand:
 
 ```sh
 make build                     # or the cross-compile loop from ci.yml
-make sign KEY=release.key      # writes dist/<asset>.sig
+make sign KEY=release.key      # writes dist/<asset>.sig, for release VERSION
 make verify-release            # checks them against release_keys.txt
+# an agent release: add RELEASE_VERSION=$(cat cmd/gwatch-agent/VERSION) to both
 ```
 
 ### Release candidates
@@ -201,13 +202,41 @@ Each asset gets a sibling `<asset>.sig`:
 ```
 gwatch-sig-v1
 key: 1a2b3c4d
-sig: <base64 ed25519 signature>
+sig: <base64 ed25519 signature over the digest>
+asset: gwatch-linux-amd64
+version: 1.2.3
+release-sig: <base64 ed25519 signature over the release message>
 ```
 
 `key` is the first 4 bytes of `sha256(public key)`, in hex — a hint for humans
-and logs, not a credential. The signature covers the **SHA-256 digest** of the
+and logs, not a credential. Both signatures cover the **SHA-256 digest** of the
 asset rather than its bytes, so the signer and the updater both stream the file
 and hold only 32 bytes in memory.
+
+`release-sig` is the signature current builds and the install scripts check. It
+is made over
+
+```
+gwatch-release-v1
+asset: <asset name as published>
+version: <release version, without the tag prefix>
+sha256: <hex digest>
+```
+
+so a signed binary only verifies under the exact name and version it was
+released as: an older agent cannot be republished as a newer one, and an agent
+cannot be renamed as a GWatch build. The updater compares that version with the
+release it was offered, and refuses an asset whose signature names anything
+else — before downloading the asset. `gwatch-sign sign` and `verify` therefore
+take `-version` (the release workflow passes the planned version).
+
+`sig` covers the digest alone. It is still written only so copies released
+before `release-sig` existed (0.7.0 and older) can install the release that
+brings them the check; they ignore the lines they do not know. Once no such
+copies are in use, `sig` can be dropped.
+
+Updates are also capped at 512 MiB and at the size the release declares, so a
+hostile release cannot fill the disk before the signature check.
 
 ## Rotating the key
 

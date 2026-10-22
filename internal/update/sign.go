@@ -7,11 +7,24 @@ package update
 //	key: 1a2b3c4d
 //	sig: <base64 ed25519 signature>
 //
-// The signature is made over the SHA-256 digest of the asset rather than the
+//	asset: gwatch-linux-amd64
+//	version: 1.2.3
+//	release-sig: <base64 ed25519 signature>
+//
+// The signatures are made over the SHA-256 digest of the asset rather than the
 // asset itself, so signer and verifier can both stream a large file and only
 // ever hold 32 bytes in memory. The public keys the running binary trusts are
 // pinned at build time (release_keys.txt, or the releaseKeys ldflags override),
 // so a release signed by anyone else is refused.
+//
+// release-sig is the one this build checks. It covers the asset's name (which
+// names the product and the platform) and the release version alongside the
+// digest, so a genuinely signed binary cannot be republished as something it
+// is not: an old agent relabelled as a new one, or an agent renamed as a
+// GWatch server build. sig covers the digest alone and is kept, first, only
+// so that copies installed before release-sig existed can still verify and
+// install the release that brings them this check; those copies ignore the
+// lines they do not know.
 
 import (
 	"bufio"
@@ -24,6 +37,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -151,11 +165,47 @@ func (c *Client) SigningEnabled() bool { return len(TrustedKeys()) > 0 }
 type Signature struct {
 	KeyID string
 	Sig   []byte
+	// Asset, Version and ReleaseSig are the release binding; a file written
+	// before it existed has none of them.
+	Asset      string
+	Version    string
+	ReleaseSig []byte
 }
 
-// FormatSignature renders a signature file for a signature over digest.
-func FormatSignature(pub ed25519.PublicKey, sig []byte) string {
-	return fmt.Sprintf("%s\nkey: %s\nsig: %s\n", SignatureFormat, KeyID(pub), base64.StdEncoding.EncodeToString(sig))
+// Release names what a release signature vouches for: one asset, under its
+// published name, in one version of its product.
+type Release struct {
+	Asset   string // e.g. gwatch-agent-linux-amd64
+	Version string // e.g. 1.2.3, without the tag's prefix
+}
+
+// releaseDomain separates release signatures from every other message the
+// key signs, the bare digests of the legacy sig line included.
+const releaseDomain = "gwatch-release-v1"
+
+// ReleaseMessage is the exact byte string a release signature covers.
+func ReleaseMessage(rel Release, digest []byte) []byte {
+	return []byte(fmt.Sprintf("%s\nasset: %s\nversion: %s\nsha256: %s\n", releaseDomain, rel.Asset, rel.Version, hex.EncodeToString(digest)))
+}
+
+// validRelease rejects names and versions that could not appear in a
+// release, or that would make the signed message ambiguous.
+func validRelease(rel Release) error {
+	if rel.Asset == "" || rel.Version == "" {
+		return errors.New("a release signature needs both the asset name and the version")
+	}
+	if strings.ContainsAny(rel.Asset+rel.Version, " \t\r\n:/\\") {
+		return fmt.Errorf("asset %q or version %q contains a character a release name cannot", rel.Asset, rel.Version)
+	}
+	return nil
+}
+
+// FormatSignature renders a signature file: the legacy signature over the
+// digest alone and the release signature binding asset, version and digest.
+func FormatSignature(pub ed25519.PublicKey, legacy []byte, rel Release, releaseSig []byte) string {
+	return fmt.Sprintf("%s\nkey: %s\nsig: %s\nasset: %s\nversion: %s\nrelease-sig: %s\n",
+		SignatureFormat, KeyID(pub), base64.StdEncoding.EncodeToString(legacy),
+		rel.Asset, rel.Version, base64.StdEncoding.EncodeToString(releaseSig))
 }
 
 // ParseSignature reads a .sig file. The header line must be exactly the format
@@ -188,6 +238,16 @@ func ParseSignature(text string) (Signature, error) {
 				return out, fmt.Errorf("signature file: sig is not valid base64: %w", err)
 			}
 			out.Sig = raw
+		case "asset":
+			out.Asset = value
+		case "version":
+			out.Version = value
+		case "release-sig":
+			raw, err := base64.StdEncoding.DecodeString(value)
+			if err != nil {
+				return out, fmt.Errorf("signature file: release-sig is not valid base64: %w", err)
+			}
+			out.ReleaseSig = raw
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -199,26 +259,40 @@ func ParseSignature(text string) (Signature, error) {
 	return out, nil
 }
 
-// VerifyDigest checks a .sig file against the SHA-256 digest of the asset it
-// covers. It returns ErrNoSigningKey when keys is empty and ErrBadSignature
-// when no key accepts the signature.
-func VerifyDigest(digest []byte, sigText string, keys []PublicKey) error {
+// VerifyRelease checks a .sig file against the SHA-256 digest of the asset it
+// covers and the release that asset was offered as. Only the release
+// signature counts: a file without one, or one naming a different asset or
+// version, is refused however valid its legacy digest signature is, because
+// that signature says nothing about which product or version the bytes are.
+// It returns ErrNoSigningKey when keys is empty and ErrBadSignature when the
+// file does not vouch for rel.
+func VerifyRelease(digest []byte, sigText string, rel Release, keys []PublicKey) error {
 	if len(keys) == 0 {
 		return ErrNoSigningKey
+	}
+	if err := validRelease(rel); err != nil {
+		return fmt.Errorf("%w: %s", ErrBadSignature, err)
 	}
 	sig, err := ParseSignature(sigText)
 	if err != nil {
 		return fmt.Errorf("%w: %s", ErrBadSignature, err)
 	}
+	if len(sig.ReleaseSig) != ed25519.SignatureSize {
+		return fmt.Errorf("%w: the signature does not name the release it is for (signed with an older gwatch-sign?)", ErrBadSignature)
+	}
+	if sig.Asset != rel.Asset || sig.Version != rel.Version {
+		return fmt.Errorf("%w: the signature is for %s %s, not %s %s", ErrBadSignature, sig.Asset, sig.Version, rel.Asset, rel.Version)
+	}
+	msg := ReleaseMessage(rel, digest)
 	// The key id is a hint, not a credential: try the key it names first, then
 	// every other pinned key, so a re-signed release still verifies.
 	for _, k := range keys {
-		if k.ID == sig.KeyID && ed25519.Verify(k.Key, digest, sig.Sig) {
+		if k.ID == sig.KeyID && ed25519.Verify(k.Key, msg, sig.ReleaseSig) {
 			return nil
 		}
 	}
 	for _, k := range keys {
-		if ed25519.Verify(k.Key, digest, sig.Sig) {
+		if ed25519.Verify(k.Key, msg, sig.ReleaseSig) {
 			return nil
 		}
 	}
@@ -239,27 +313,42 @@ func FileDigest(path string) ([]byte, error) {
 	return h.Sum(nil), nil
 }
 
-// SignDigest signs a SHA-256 digest with priv.
+// SignDigest signs a SHA-256 digest with priv. This is the legacy signature
+// older installed copies check; see VerifyRelease for the one that binds the
+// release.
 func SignDigest(priv ed25519.PrivateKey, digest []byte) []byte {
 	return ed25519.Sign(priv, digest)
 }
 
-// SignFile writes <path>.sig for path, signed with priv.
-func SignFile(priv ed25519.PrivateKey, path string) (string, error) {
+// SignRelease signs the release binding of an asset with priv.
+func SignRelease(priv ed25519.PrivateKey, rel Release, digest []byte) []byte {
+	return ed25519.Sign(priv, ReleaseMessage(rel, digest))
+}
+
+// SignFile writes <path>.sig for path as an asset of the given release
+// version, signed with priv. The asset name is the file's own name, which is
+// the name it is published under.
+func SignFile(priv ed25519.PrivateKey, path, version string) (string, error) {
+	rel := Release{Asset: filepath.Base(path), Version: version}
+	if err := validRelease(rel); err != nil {
+		return "", err
+	}
 	digest, err := FileDigest(path)
 	if err != nil {
 		return "", err
 	}
 	pub, _ := priv.Public().(ed25519.PublicKey)
 	out := path + SignatureExt
-	if err := os.WriteFile(out, []byte(FormatSignature(pub, SignDigest(priv, digest))), 0o644); err != nil {
+	body := FormatSignature(pub, SignDigest(priv, digest), rel, SignRelease(priv, rel, digest))
+	if err := os.WriteFile(out, []byte(body), 0o644); err != nil {
 		return "", err
 	}
 	return out, nil
 }
 
-// VerifyFile checks <path>.sig against path using keys.
-func VerifyFile(path string, keys []PublicKey) error {
+// VerifyFile checks <path>.sig against path, as the asset of that name in the
+// given release version, using keys.
+func VerifyFile(path, version string, keys []PublicKey) error {
 	digest, err := FileDigest(path)
 	if err != nil {
 		return err
@@ -271,7 +360,7 @@ func VerifyFile(path string, keys []PublicKey) error {
 		}
 		return err
 	}
-	return VerifyDigest(digest, string(text), keys)
+	return VerifyRelease(digest, string(text), Release{Asset: filepath.Base(path), Version: version}, keys)
 }
 
 // GenerateKey makes a new release signing key pair.

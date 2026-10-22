@@ -178,3 +178,97 @@ func TestProjectedBoardGrantsNothingElse(t *testing.T) {
 		}
 	}
 }
+
+// shareBoard saves a board with the given panels, shares it and returns the
+// view document a display on the network receives.
+func shareBoard(t *testing.T, ts *httptest.Server, layout map[string]any, panels []map[string]any) string {
+	t.Helper()
+	var b model.Wallboard
+	call(t, ts, "POST", "/api/wallboards", map[string]any{"name": "Board", "layout": layout, "panels": panels}, &b)
+	var shared model.Wallboard
+	if code := call(t, ts, "POST", "/api/wallboards/"+itoa(b.ID)+"/share", map[string]any{"enabled": true}, &shared); code != 200 {
+		t.Fatalf("share: %d", code)
+	}
+	status, body := onTheNetwork(t, ts, "/api/wallboards/"+itoa(b.ID)+"/view?token="+shared.Share.Token)
+	if status != 200 {
+		t.Fatalf("view: %d %s", status, body)
+	}
+	return body
+}
+
+// seedTwoNodes adds a node in group "lobby" and an unrelated one whose
+// hardware check reads a metrics address carrying a credential.
+func seedTwoNodes(t *testing.T, ts *httptest.Server) {
+	t.Helper()
+	for _, n := range []map[string]any{
+		{"name": "Lobby AP", "host": "10.1.1.1", "groups": []string{"lobby"}, "enabled": true, "importance": "normal",
+			"checks": []map[string]any{{"type": "ping", "name": "Ping", "enabled": true, "intervalSeconds": 60, "timeoutSeconds": 5}}},
+		{"name": "Finance DB", "host": "finance-db.internal", "groups": []string{"finance"}, "enabled": true, "importance": "normal",
+			"checks": []map[string]any{{"type": "system", "name": "Hardware", "enabled": true, "intervalSeconds": 60, "timeoutSeconds": 5,
+				"config": map[string]any{"hostSource": "url", "metricsUrl": "http://finance-db.internal:9100/metrics?key=MURLSECRET"}}}},
+	} {
+		if code := call(t, ts, "POST", "/api/nodes", n, nil); code != 201 {
+			t.Fatalf("create node %v: %d", n["name"], code)
+		}
+	}
+}
+
+// A board with only a clock on it hands out nothing but the board: no nodes,
+// no incidents, no host-health paths or errors.
+func TestSharedClockBoardCarriesNoMonitoringData(t *testing.T) {
+	ts, srv := newTestServer(t)
+	allowTestRemote(srv)
+	seedTwoNodes(t, ts)
+	body := shareBoard(t, ts, map[string]any{"hideChrome": true}, []map[string]any{{"type": "clock", "width": 2, "height": 1}})
+	for _, leak := range []string{"Lobby AP", "Finance DB", "finance-db", "MURLSECRET", "incidents", "databasePath", "dataDir", "keyPath", "recentErrors", "summary", `"health"`} {
+		if strings.Contains(body, leak) {
+			t.Errorf("a clock-only board carries %q:\n%s", leak, body)
+		}
+	}
+	var doc struct {
+		Nodes     []any `json:"nodes"`
+		Attention []any `json:"attention"`
+		Groups    []any `json:"groups"`
+	}
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Nodes)+len(doc.Attention)+len(doc.Groups) != 0 {
+		t.Fatalf("a clock-only board carries monitoring data: %s", body)
+	}
+}
+
+// A nodes panel for one group receives that group's nodes, by name and
+// status only; an unrelated node and its metrics address never leave the
+// server. The footer gets the service's running state and nothing else.
+func TestSharedNodesBoardCarriesOnlyItsNodes(t *testing.T) {
+	ts, srv := newTestServer(t)
+	allowTestRemote(srv)
+	seedTwoNodes(t, ts)
+	body := shareBoard(t, ts, map[string]any{}, []map[string]any{{"type": "nodes", "width": 6, "height": 2, "config": map[string]any{"group": "Lobby"}}})
+	for _, leak := range []string{"Finance DB", "finance-db", "MURLSECRET", "metricsUrl", "10.1.1.1", `"checks"`, "databasePath", "dataDir", "recentErrors", "version"} {
+		if strings.Contains(body, leak) {
+			t.Errorf("a one-group board carries %q:\n%s", leak, body)
+		}
+	}
+	var doc struct {
+		Nodes []struct {
+			Node struct {
+				Name string `json:"name"`
+			} `json:"node"`
+			Status string `json:"status"`
+		} `json:"nodes"`
+		Health *struct {
+			ServiceRunning bool `json:"serviceRunning"`
+		} `json:"health"`
+	}
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Nodes) != 1 || doc.Nodes[0].Node.Name != "Lobby AP" || doc.Nodes[0].Status == "" {
+		t.Fatalf("the panel's node should come back with its status: %s", body)
+	}
+	if doc.Health == nil || !doc.Health.ServiceRunning {
+		t.Fatalf("the footer needs the service state: %s", body)
+	}
+}

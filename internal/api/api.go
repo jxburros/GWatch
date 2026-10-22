@@ -12,6 +12,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/netip"
 	"path"
 	"sort"
 	"strconv"
@@ -48,13 +49,19 @@ type Server struct {
 	// Network reports how the server is bound (optional).
 	Network NetworkFunc
 	Restart func()
+	// TrustedProxies are the reverse proxies whose forwarding headers name
+	// the client (see clientIP). Empty, the default, trusts no header.
+	TrustedProxies []netip.Prefix
 
-	// failLimiter counts failed credential attempts per client IP; apiLimiter
-	// is the general ceiling on API-key traffic from off this machine. Both are
-	// created by Handler().
-	loginSlots  chan struct{} // at most two concurrent 64 MiB password checks
-	failLimiter *auth.Limiter
-	apiLimiter  *auth.Limiter
+	// failLimiter counts failed credential attempts per client IP (and, for
+	// sign-in, per account name too); loginSourceLimiter is the wider ceiling
+	// on sign-in attempts from one client across every account name;
+	// apiLimiter is the general ceiling on API-key traffic from off this
+	// machine. All are created by Handler().
+	loginSlots         chan struct{} // at most two concurrent 64 MiB password checks
+	failLimiter        *auth.Limiter
+	loginSourceLimiter *auth.Limiter
+	apiLimiter         *auth.Limiter
 
 	// discoveryJobs holds the subnet sweep in flight and the last one that
 	// finished. It lives here rather than in the store because a sweep is a
@@ -88,6 +95,9 @@ func (s *Server) Handler() http.Handler {
 	}
 	if s.failLimiter == nil {
 		s.failLimiter = auth.NewLimiter(failureLimit, failureWindow)
+	}
+	if s.loginSourceLimiter == nil {
+		s.loginSourceLimiter = auth.NewLimiter(loginSourceLimit, failureWindow)
 	}
 	if s.apiLimiter == nil {
 		s.apiLimiter = auth.NewLimiter(remoteRequestLimit, remoteRequestWindow)
@@ -616,10 +626,7 @@ func maskOverview(ov engine.Overview, stripKeySensitive bool) engine.Overview {
 		for j := range views {
 			views[j].Check = maskCheck(views[j].Check)
 			if stripKeySensitive {
-				views[j].Check.Config.Headers = nil
-				views[j].Check.Config.Body = ""
-				views[j].Check.Config.Env = nil
-				views[j].Check.Config.MetricsURL = ""
+				stripKeySensitiveCheck(&views[j].Check)
 			}
 		}
 		nodes[i].Checks = views
@@ -799,6 +806,148 @@ func restoreCheckSecrets(n *model.Node, existing model.Node) {
 	}
 }
 
+// checkDestination is everything about a check that decides where it sends
+// what it carries: the address it reaches, how it reaches it and the shape of
+// the request that address receives. Two checks with the same destination
+// hand their stored credentials to the same place.
+type checkDestination struct {
+	Type            model.CheckType
+	Target          string
+	Port            int
+	Method          string
+	HostHeader      string
+	FollowRedirects bool
+	IgnoreTLSErrors bool
+	DNSServer       string
+	SNMPPort        int
+	HostSource      model.HostSource
+	AgentID         int64
+	MetricsURL      string
+}
+
+// destinationOf reads a check's destination. The node host stands in for a
+// blank target, because that is where the runner sends such a check, and the
+// defaults normalizeNode fills in are filled in here too, so a body that
+// leaves one out is not mistaken for a retarget.
+func destinationOf(c model.Check, nodeHost string) checkDestination {
+	cfg := c.Config
+	d := checkDestination{
+		Type:            c.Type,
+		Target:          strings.TrimSpace(cfg.Target),
+		Port:            cfg.Port,
+		Method:          strings.ToUpper(strings.TrimSpace(cfg.Method)),
+		FollowRedirects: cfg.FollowRedirects == nil || *cfg.FollowRedirects,
+		IgnoreTLSErrors: cfg.IgnoreTLSErrors,
+		DNSServer:       strings.TrimSpace(cfg.DNSServer),
+		SNMPPort:        cfg.SNMPPort,
+		HostSource:      cfg.HostSource,
+		AgentID:         cfg.AgentID,
+		MetricsURL:      strings.TrimSpace(cfg.MetricsURL),
+	}
+	if d.Target == "" {
+		d.Target = strings.TrimSpace(nodeHost)
+	}
+	if d.Method == "" {
+		d.Method = http.MethodGet
+	}
+	if d.SNMPPort == 0 {
+		d.SNMPPort = 161
+	}
+	if d.Type == model.CheckSystem && d.HostSource == "" {
+		d.HostSource = model.HostSourceLocal
+	}
+	for k, v := range cfg.Headers {
+		if strings.EqualFold(k, "Host") {
+			d.HostHeader = strings.TrimSpace(v)
+		}
+	}
+	return d
+}
+
+// restoresStoredSecret reports whether restoreCheckSecrets would fill any of
+// the incoming configuration's credentials from the stored one — whether the
+// caller is relying on a value it never sent.
+func restoresStoredSecret(incoming, stored model.CheckConfig) bool {
+	for k, v := range incoming.Headers {
+		if v == passwordMask && stored.Headers[k] != "" {
+			return true
+		}
+	}
+	for k, v := range incoming.Env {
+		if v == passwordMask && stored.Env[k] != "" {
+			return true
+		}
+	}
+	before := checkSecretFields(&stored)
+	now := checkSecretFields(&incoming)
+	for j := range now {
+		if (*now[j] == "" || *now[j] == passwordMask) && *before[j] != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// denyKeyRetarget refuses, with a 403, an API key pointing a saved check
+// somewhere new while leaving its stored credentials to be filled back in. A
+// key never reads those credentials — they come back masked or stripped — so
+// "keep the stored value" is its only way to send them, and allowing that
+// after a change of host, target, port, scheme, method or Host header would
+// hand an administrator's secret to an address the key chose. A key that sends
+// every credential afresh relies on nothing stored and may retarget. It returns
+// true when it has written the response, so the caller stops.
+func (s *Server) denyKeyRetarget(w http.ResponseWriter, r *http.Request, n, existing model.Node) bool {
+	if auth.FromContext(r.Context()).Kind != auth.KindAPIKey {
+		return false
+	}
+	stored := map[int64]model.Check{}
+	for _, c := range existing.Checks {
+		stored[c.ID] = c
+	}
+	for _, c := range n.Checks {
+		prev, ok := stored[c.ID]
+		if !ok || destinationOf(c, n.Host) == destinationOf(prev, existing.Host) {
+			continue
+		}
+		if restoresStoredSecret(c.Config, prev.Config) {
+			s.deny(w, r, http.StatusForbidden, fmt.Sprintf("check %q keeps stored credentials, and an API key cannot point it at a new host, target, port, scheme, method or Host header while relying on them; send every credential again, or have an administrator signed in to the web interface retarget it", prev.Name), true)
+			return true
+		}
+	}
+	return false
+}
+
+// denyKeyStoredCheck refuses, with a 403, an API key trying to run, switch on,
+// duplicate or bulk-edit a saved check that runs code — the boundary
+// denyKeyCodeCheck draws around creating one. The key cannot choose the
+// command, but choosing when it runs, or bringing back one an administrator
+// switched off, is still the administrator's act (#85). It returns true when
+// it has written the response, so the caller stops.
+func (s *Server) denyKeyStoredCheck(w http.ResponseWriter, r *http.Request, cs ...model.Check) bool {
+	if auth.FromContext(r.Context()).Kind != auth.KindAPIKey {
+		return false
+	}
+	for _, c := range cs {
+		if checkRunsCode(c) {
+			s.deny(w, r, http.StatusForbidden, fmt.Sprintf("check %q is a custom check or an agentless-URL hardware check; only an administrator signed in to the web interface may run, enable, duplicate or bulk-edit it, never an API key", c.Name), true)
+			return true
+		}
+	}
+	return false
+}
+
+// enabledChecks returns a node's switched-on checks: the ones that start
+// running when the node itself does.
+func enabledChecks(n model.Node) []model.Check {
+	out := make([]model.Check, 0, len(n.Checks))
+	for _, c := range n.Checks {
+		if c.Enabled {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // stripKeySensitiveChecks blanks the check-config fields that are not
 // credentials in their own right but routinely carry them — request headers
 // (Authorization), the request body (a login probe's password), the
@@ -815,13 +964,33 @@ func stripKeySensitiveChecks(n model.Node) model.Node {
 	checks := make([]model.Check, len(n.Checks))
 	copy(checks, n.Checks)
 	for i := range checks {
-		checks[i].Config.Headers = nil
-		checks[i].Config.Body = ""
-		checks[i].Config.Env = nil
-		checks[i].Config.MetricsURL = ""
+		stripKeySensitiveCheck(&checks[i])
 	}
 	n.Checks = checks
 	return n
+}
+
+// stripKeySensitiveCheck blanks one check's credential-carrying fields; see
+// stripKeySensitiveChecks.
+func stripKeySensitiveCheck(c *model.Check) {
+	c.Config.Headers = nil
+	c.Config.Body = ""
+	c.Config.Env = nil
+	c.Config.MetricsURL = ""
+}
+
+// projectCheck is a single check as its reader may see it: credentials
+// masked and, for an API key, the credential-carrying fields stripped too —
+// the same projection decorateNode gives a whole node. Every handler that
+// answers with one stored check goes through here; Store.GetCheck hands back
+// the opened, plaintext configuration, so writing it out directly would give
+// a key every secret it is kept from everywhere else.
+func (s *Server) projectCheck(r *http.Request, c model.Check) model.Check {
+	c = maskCheck(c)
+	if auth.FromContext(r.Context()).Kind == auth.KindAPIKey {
+		stripKeySensitiveCheck(&c)
+	}
+	return c
 }
 
 func (s *Server) decorateNode(r *http.Request, n model.Node, states map[int64]model.CheckState, last map[int64]model.Result) nodeDoc {
@@ -899,6 +1068,11 @@ func normalizeTags(tags []string) []string {
 	return out
 }
 
+// maxChecksPerNode bounds how many checks one node may hold. A real device
+// has a handful; the limit is far above that and is there so that one 4 MiB
+// request cannot store a node whose "run now" is thousands of checks.
+const maxChecksPerNode = 500
+
 // normalizeNode validates and fills defaults on a node and its checks.
 func (s *Server) normalizeNode(n *model.Node) error {
 	settings := s.Engine.Settings()
@@ -929,6 +1103,9 @@ func (s *Server) normalizeNode(n *model.Node) error {
 	}
 	if n.Checks == nil {
 		n.Checks = []model.Check{}
+	}
+	if len(n.Checks) > maxChecksPerNode {
+		return fmt.Errorf("a node can have at most %d checks (this one has %d); split them across several nodes", maxChecksPerNode, len(n.Checks))
 	}
 	for i := range n.Checks {
 		c := &n.Checks[i]
@@ -1081,6 +1258,10 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n.ID = id
+	n.Host = strings.TrimSpace(n.Host)
+	if s.denyKeyRetarget(w, r, n, existing) {
+		return
+	}
 	restoreCheckSecrets(&n, existing)
 	if err := s.normalizeNode(&n); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -1202,6 +1383,17 @@ func (s *Server) handleEnableNode(w http.ResponseWriter, r *http.Request) {
 		writeDecodeError(w, err)
 		return
 	}
+	if body.Enabled {
+		// Switching a node on starts every one of its switched-on checks.
+		before, err := s.Store.GetNode(r.Context(), id)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		if s.denyKeyStoredCheck(w, r, enabledChecks(before)...) {
+			return
+		}
+	}
 	if err := s.Store.SetNodeEnabled(r.Context(), id, body.Enabled); err != nil {
 		s.fail(w, err)
 		return
@@ -1226,6 +1418,11 @@ func (s *Server) handleDuplicateNode(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	// The copy carries the original's command and stored credentials under a
+	// new id, which is as good as creating the check afresh.
+	if s.denyKeyStoredCheck(w, r, n.Checks...) {
+		return
+	}
 	n.ID = 0
 	n.Name = n.Name + " (copy)"
 	n.Enabled = false
@@ -1247,7 +1444,24 @@ func (s *Server) handleRunNode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	results, err := s.Engine.RunNodeNow(r.Context(), id)
+	// An API key runs only what the scheduler would: nothing on a switched-off
+	// node, and none of the checks it could not run one at a time (see
+	// handleRunCheck). Those are skipped rather than failing the whole run, so
+	// "run this node" still does what it can.
+	var allow func(model.Check) bool
+	if auth.FromContext(r.Context()).Kind == auth.KindAPIKey {
+		n, err := s.Store.GetNode(r.Context(), id)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		if !n.Enabled {
+			writeError(w, http.StatusConflict, fmt.Sprintf("node %q is disabled; enable it before running it through an API key", n.Name))
+			return
+		}
+		allow = func(c model.Check) bool { return !checkRunsCode(c) }
+	}
+	results, err := s.Engine.RunNodeChecks(r.Context(), id, allow)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -1375,9 +1589,27 @@ func (s *Server) handleRunCheck(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if _, err := s.Store.GetCheck(r.Context(), id); err != nil {
+	c, err := s.Store.GetCheck(r.Context(), id)
+	if err != nil {
 		s.fail(w, err)
 		return
+	}
+	if s.denyKeyStoredCheck(w, r, c) {
+		return
+	}
+	if auth.FromContext(r.Context()).Kind == auth.KindAPIKey {
+		// The engine runs any check it is asked to, switched on or not; an
+		// administrator uses that to try a check before enabling it. A key
+		// gets no such way round a check someone has switched off.
+		n, err := s.Store.GetNode(r.Context(), c.NodeID)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		if !c.Enabled || !n.Enabled {
+			writeError(w, http.StatusConflict, fmt.Sprintf("check %q is disabled; enable it (and its node) before running it through an API key", c.Name))
+			return
+		}
 	}
 	res, err := s.Engine.RunNow(r.Context(), id)
 	if err != nil {
@@ -1400,6 +1632,16 @@ func (s *Server) handleEnableCheck(w http.ResponseWriter, r *http.Request) {
 		writeDecodeError(w, err)
 		return
 	}
+	if body.Enabled {
+		before, err := s.Store.GetCheck(r.Context(), id)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		if s.denyKeyStoredCheck(w, r, before) {
+			return
+		}
+	}
 	if err := s.Store.SetCheckEnabled(r.Context(), id, body.Enabled); err != nil {
 		s.fail(w, err)
 		return
@@ -1411,7 +1653,9 @@ func (s *Server) handleEnableCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	n, _ := s.Store.GetNode(r.Context(), c.NodeID)
 	s.configChanged(r.Context(), &n, fmt.Sprintf("%s check %s on %s", map[bool]string{true: "Enabled", false: "Disabled"}[body.Enabled], c.Name, n.Name), "")
-	writeJSON(w, http.StatusOK, c)
+	// GetCheck returns the opened configuration; answer with the same masked
+	// (and, for a key, stripped) projection every other read path gives.
+	writeJSON(w, http.StatusOK, s.projectCheck(r, c))
 }
 
 func (s *Server) handleSilenceCheck(w http.ResponseWriter, r *http.Request) {

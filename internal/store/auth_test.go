@@ -140,7 +140,11 @@ func TestSessions(t *testing.T) {
 		t.Fatal("password hash not updated")
 	}
 
-	// Deleting the account cascades to its sessions.
+	// Deleting the account cascades to its sessions. (A second administrator
+	// has to exist first: the store will not delete the only one.)
+	if _, err := s.CreateUser(ctx, "sam", hash, auth.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
 	tok2, _ := auth.NewSessionToken()
 	_ = s.CreateSession(ctx, auth.HashToken(tok2), u.ID, "", time.Now().Add(time.Hour))
 	if err := s.DeleteUser(ctx, u.ID); err != nil {

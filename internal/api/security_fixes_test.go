@@ -92,8 +92,10 @@ func TestSharedWallboardViewMasksSecrets(t *testing.T) {
 	if strings.Contains(body, "s3cretCommunity") {
 		t.Fatalf("the shared wallboard view leaked the community string:\n%s", body)
 	}
-	if !strings.Contains(body, passwordMask) {
-		t.Fatalf("the community should come back masked, not stripped silently:\n%s", body)
+	// The view carries no check configuration at all: a board draws names
+	// and states, so there is nothing left to mask.
+	if strings.Contains(body, "snmpCommunity") || strings.Contains(body, `"checks"`) {
+		t.Fatalf("the shared wallboard view carries check configuration:\n%s", body)
 	}
 }
 

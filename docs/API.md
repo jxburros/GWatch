@@ -51,7 +51,8 @@ has to sign in. The legacy access password keeps working for existing scripts.
 A loopback request that carries a reverse proxy's forwarding headers (`Forwarded`,
 `X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto` or `X-Real-IP`) is not
 `local`: it came through a proxy on this machine on behalf of someone elsewhere, and is
-judged like any other remote client. A signed-in account is always itself, even on the
+judged like any other remote client — whether or not the proxy is listed in
+`--trusted-proxies`, and whatever address it forwards. A signed-in account is always itself, even on the
 computer GWatch runs on — the cookie is resolved before the loopback shortcut.
 
 If the database cannot be asked whether a session cookie or API key is valid, the
@@ -93,7 +94,18 @@ administrator, whatever its scope:
   charts. A key may lay a wallboard out; it may not project one. It may **not**
   create, edit or test a `custom` check, or a `system` check that reads an
   agentless URL: both run code or carry a stored token to a chosen address, so an
-  administrator must create them in the web interface (403, not 401).
+  administrator must create them in the web interface (403, not 401). The same goes
+  for a saved one: a key may not run it, switch it (or a node holding a switched-on
+  one) on, duplicate a node holding one, or touch one in a bulk edit — switching one
+  off is still allowed. `POST /api/nodes/{id}/run` through a key skips such checks and
+  runs the rest; a key cannot run a check or node that is switched off (409).
+  A key also may not point a saved check at a new destination — the node host, the
+  check's target (address, scheme or port), SNMP port, method, `Host` header, type,
+  redirect or TLS setting, DNS server, or hardware source — while leaving any of its
+  credentials (body, masked headers or environment values, SNMP secrets, metrics
+  token) blank or masked to be kept: that would send a secret the key cannot read to
+  an address it chose. Such a `PUT /api/nodes/{id}` is refused with 403; send every
+  credential afresh, or have an administrator retarget the check in the browser.
 
 **Denied to every key, whatever its scope** (403, not 401):
 `GET|PUT /api/settings`, `POST /api/settings/test-email`, `GET|PUT /api/database`,
@@ -130,10 +142,17 @@ send cross-origin without a preflight, so insisting on JSON puts every write beh
 A malformed JSON document is still a `400`. The multipart upload at
 `POST /api/backups/restore` is the one exception, and takes a file rather than a body.
 
-**Rate limits.** Failed credentials (sign-in, API key, access password, agent token and
+**Rate limits.** Failed credentials (API key, access password, agent token and
 custom-endpoint token) are limited to 10 per minute per client IP; API-key requests from
-off this machine are limited to 300 per minute per client IP. Both answer `429` with
-`Retry-After` in seconds. A `/hook/` call that presents the right token gives its budget
+off this machine are limited to 300 per minute per client IP. Password checks — sign-in
+and the current password of `POST /api/auth/change-password` — are limited to 10
+attempts per minute per account name and client IP, which a correct password clears for
+that account only, and to 30 attempts per minute per client IP across all account names,
+which a correct password does not clear. They are refused before the password is checked,
+and at most two run at once; when both are busy the answer is `429` with `Retry-After: 1`.
+All of these answer `429` with `Retry-After` in seconds. The client IP is the connecting
+address, or, when that address is listed in `--trusted-proxies`, the client the proxy
+names in `X-Forwarded-For` / `X-Real-IP` (see [REMOTE-ACCESS.md](REMOTE-ACCESS.md#rate-limiting)). A `/hook/` call that presents the right token gives its budget
 back, so an endpoint called on a schedule is never throttled by its own traffic; an
 unknown slug still answers `404`, but it is charged for, so slugs cannot be enumerated.
 
@@ -168,7 +187,7 @@ route is closed until it is opened on purpose.
 - `POST /api/auth/change-password` body `{ "current", "new" }` → changes your own password and signs every browser of that account out. Any signed-in user; never an API key.
 - `GET /api/users` → `[User]`. `POST /api/users` body `{ "username", "password", "role": "admin"|"viewer" }` → `User` (201). The first account created is always an administrator, and on an install with no accounts a `local` or `password` principal may create it.
 - `PUT /api/users/{id}` body `{ "role"?, "password"? }` → `User`. A new password ends that account's sessions; a new role applies to them from their next request, without signing them out.
-- `DELETE /api/users/{id}` → `{ok:true}`. Deleting or demoting the last administrator is refused with 400.
+- `DELETE /api/users/{id}` → `{ok:true}`. Deleting or demoting the last administrator is refused with 400; the check is made in the same database transaction as the change, so two simultaneous requests removing the last two administrators cannot both succeed.
 - `GET /api/apikeys` → `[APIKey]` (revoked keys included, so the trail keeps their names).
 - `POST /api/apikeys` body `{ "name", "scope": "read"|"readwrite" }` → `{ "key": "gw_…", "apiKey": APIKey }` (201). An omitted scope means `read`. **The key is returned once and cannot be shown again.**
 - `DELETE /api/apikeys/{id}` → `{ok:true}`, revoking it immediately.
@@ -210,7 +229,7 @@ companion that lets an AI assistant use this API with a key, is documented in
 - `DELETE /api/nodes/{id}` → `{ "ok": true }`.
 - `POST /api/nodes/{id}/enable` body `{ "enabled": true|false }` → Node.
 - `POST /api/nodes/{id}/duplicate` → new Node (name suffixed " (copy)", disabled).
-- `POST /api/nodes/{id}/run` → runs all enabled checks of the node now → `[Result]`.
+- `POST /api/nodes/{id}/run` → runs all enabled checks of the node now → `[Result]`. They share the scheduler's `maxConcurrentChecks` limit, so a large node runs a few at a time. A node holds at most 500 checks (400 above that).
 - `POST /api/nodes/{id}/silence` body `{ "minutes": 60 }` (0 = unsilence) → silences every check of the node → Node.
 - `PATCH /api/nodes/bulk` — one change across many nodes and checks. See **Bulk edit** below.
 - `GET /api/templates` → `[NodeTemplate]` (website, home-server, router — shown as "Network device", ping, api, tcp-service, this-computer, agent-machine, dns).
@@ -298,7 +317,7 @@ echoed as written, so an `Authorization` header on an HTTP check is stored in th
   note that SNMP v2c answers a *wrong community* with silence, so a wrong community and
   an unreachable device produce the same timeout — the message says so.
 - `POST /api/checks/{id}/run` → `Result` (recorded and processed through alerting).
-- `POST /api/checks/{id}/enable` body `{ "enabled": bool }` → Check.
+- `POST /api/checks/{id}/enable` body `{ "enabled": bool }` → Check, masked (and for an API key stripped) the same way as in `GET /api/nodes/{id}`.
 - `POST /api/checks/{id}/silence` body `{ "minutes": 60 }` (0 = unsilence) → CheckState.
 - `GET /api/checks/{id}/results?limit=50` → `[Result]` newest first.
 - `GET /api/checks/{id}/state` → CheckState.
@@ -960,9 +979,23 @@ wallboard from across a room.
 - `POST /api/wallboards/{id}/share` body `{ "enabled": true, "rotate": false }` →
   Wallboard. Switching projection on mints the board's address; `rotate` replaces
   it; switching off clears it. Administrator only, and never through an API key.
-- `GET /api/wallboards/{id}/view?token=…` → the board and its data in one
-  document: the overview fields, plus `"wallboard": Wallboard`, `"health": Health`,
-  `"trends": [HistorySeries...]` and `"serverNow"`. This is what a display polls.
+- `GET /api/wallboards/{id}/view?token=…` → the board and the data its panels
+  draw, in one document. This is what a display polls. It is built on the server
+  from the board's panels, and holds nothing they do not show:
+  - `"wallboard"`: the Wallboard (share token redacted), `"generatedAt"`, `"serverNow"`.
+  - `"summary"` (the overview's node counts): only with a `headline` or `counts`
+    panel, or the footer (`hideChrome` false).
+  - `"health"`: `{ serviceRunning, schedulerRunning, lastCheckAt, checksEnabled }`,
+    not the Health document; only with a `health` panel or the footer.
+  - `"nodes"`: `[{ "node": { id, name, group, groups, tags }, "status" }]`, only the
+    nodes some `nodes` panel selects by its `group`, `tag` and `nodeIds`.
+  - `"attention"`, `"groups"`: as in the overview, only with that panel.
+  - `"certWarnings"`: `[{ nodeName, checkName, daysRemaining, notAfter }]`, and
+    `"maintenance"`: `[{ name, group, nodeId }]`, only with that panel.
+  - `"trends"`: `[HistorySeries...]` for the `trends` panels.
+
+  A list no panel needs is `[]`; `summary` and `health` are left out. No check
+  configuration, host, incident or Health detail is ever included.
 
 `layout`: `{ "columns": 4..24, "theme": "signal|contrast|midnight|daylight",
 "scale": 0.6..2, "refreshSeconds": 5..3600, "hideChrome": false }`. A panel's
@@ -991,7 +1024,7 @@ without a credential, and only for a board whose administrator switched
 projection on, and only with that board's own token. The token is stored as it
 is rather than hashed, because the address has to be readable again later — it
 is typed into a display that has no keyboard. It is worth one read-only board
-and nothing else, it is shown only to an administrator (`share.token` comes back
+— exactly the data that board draws — and nothing else, it is shown only to an administrator (`share.token` comes back
 `{"enabled":true,"redacted":true}` for a viewer, and is never included in the
 view document), and switching projection off or rotating the token revokes it.
 Every change is written to the audit trail.
@@ -1026,11 +1059,13 @@ An `Action` is `{ "type": "http|slack|teams|ntfy|pushover|git|script|run_node", 
 | `http` | `method` (auto: POST with body, else GET), `url`, `headers`, `body`, `expectedStatus` (default 200-399), `ignoreTlsErrors` |
 | `slack` | `webhookUrl` (https://, a Slack incoming webhook), `message` |
 | `teams` | `webhookUrl` (https://, a Teams/Power Automate webhook), `title`, `message` |
-| `ntfy` | `server` (default `https://ntfy.sh`), `topic`, `title`, `message`, `priority` (`min\|low\|default\|high\|urgent` or `1`-`5`), `tags`, `token` (optional bearer token) |
+| `ntfy` | `server` (default `https://ntfy.sh`; http:// or https://), `topic`, `title`, `message`, `priority` (`min\|low\|default\|high\|urgent` or `1`-`5`), `tags`, `token` (optional bearer token) |
 | `pushover` | `token` (application token), `userKey`, `title`, `message`, `priority` (`-2`..`2`) |
 | `git` | `repo` (working directory), `gitArgs` (everything after `git`) |
 | `script` | `interpreter` (`sh`, `bash`, `powershell`, `cmd`, `python`, `node`, `custom`), `command` (for custom; `{{file}}` is the script path), `code`, `workDir`, `allowUntrustedInput` |
 | `run_node` | `nodeId` |
+
+A URL is where a request — and for ntfy its bearer token — is sent, so the `url` of an `http` action, the `webhookUrl` of `slack` and `teams`, and the ntfy `server` must spell out their scheme and host (and port, and any user info): a placeholder there is refused with 400 when the action is saved. Placeholders may appear in the path, query and fragment, where each value is escaped as data (path-escaped in the path, query-escaped in the query) and so cannot add a segment, a parameter or another host. The ntfy `topic` is one escaped path segment under `server`. ntfy's `Authorization` header is dropped if the server redirects to another scheme, host or port.
 
 `slack`, `teams`, `ntfy` and `pushover` all default `title` to `"GWatch {{instance}}"` and `message` to `"{{node.name}} is {{status}}: {{message}}"` when left blank; both fields are JSON-safe (or form/header-safe) no matter what characters `{{message}}` expands to, since the payload is built with `encoding/json` (or form-encoding for Pushover, headers for ntfy) instead of string concatenation.
 
@@ -1246,7 +1281,7 @@ stripped from `GET /api/export/config.json` like the SMTP password.
 - `POST /api/backups` body `{ "password": "...", "includeHistory": true }` → BackupInfo. (Manual backups are never pruned.)
 - `GET /api/backups/{fileName}/download` → file (`application/octet-stream`).
 - `DELETE /api/backups/{fileName}` → `{ok:true}`.
-- `POST /api/backups/restore` multipart form: `file`, `password`, `includeHistory` ("true"/"false") → `{ "ok": true, "nodes": n, "checks": n, "results": n }`.
+- `POST /api/backups/restore` multipart form: `file`, `password`, `includeHistory` ("true"/"false") → `{ "ok": true, "nodes": n, "checks": n, "results": n }`. A body over 2 GiB (plus 1 MiB for the form) is refused with 413, as is an archive over any of the limits in [`RESTORE.md`](RESTORE.md#size-limits); either way nothing is changed.
 - `POST /api/backups/restore-existing` body `{ "fileName": "...", "password": "...", "includeHistory": bool }` → same.
 
 See [`RESTORE.md`](RESTORE.md) for the end-to-end restore-to-a-new-machine procedure.
@@ -1256,6 +1291,11 @@ See [`RESTORE.md`](RESTORE.md) for the end-to-end restore-to-a-new-machine proce
 - `GET /api/export/history.csv?checkId=ID&range=30d` → CSV: `timestamp,avg_ms,min_ms,max_ms,jitter_ms,loss_pct,availability_pct,count,failures`.
 - `GET /api/export/results.csv?checkId=ID&limit=5000` → raw results CSV: `timestamp,success,status,message,error,latency_ms,min_ms,max_ms,jitter_ms,stddev_ms,loss_pct,http_status,final_url,attempts`.
 - `GET /api/export/events.csv?nodeId=&limit=5000&type=&q=&since=&until=` → events CSV (same filters as `/api/events`).
+- In the CSV exports, a text cell (names, titles, notes, messages, errors, URLs) that
+  begins with `=`, `+`, `-`, `@`, a tab or a carriage return is written with a leading
+  `'`, so a spreadsheet shows it as text rather than evaluating it as a formula. Numeric
+  columns are written as they are. Use `/api/events` or `/api/checks/{id}/results` for
+  the raw values.
 - `GET /api/export/logs.txt?limit=1000` → the recent service log as text.
 - `GET /api/export/config.json` → nodes+checks+dashboards+maintenance+triggers+endpoints+saved charts as JSON (no passwords).
 

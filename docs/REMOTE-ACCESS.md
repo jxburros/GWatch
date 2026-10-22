@@ -114,16 +114,60 @@ Three things to do if you go this way:
 
 GWatch limits, per client IP:
 
-- **failed credentials** — sign-ins, API keys and access-password attempts — to 10 per
+- **sign-in attempts** to 10 per minute for each account name, and to 30 per minute
+  across all account names together. A correct password clears the first budget for
+  that one account; it never clears the second, so signing in to your own account
+  between guesses at someone else's buys nothing. Changing your password spends from
+  the same budgets;
+- **other failed credentials** — API keys and access-password attempts — to 10 per
   minute; and
 - **API-key requests from off the machine** to 300 per minute.
 
-Both answer `429` with `Retry-After`. The counters live in memory and reset when the
+All answer `429` with `Retry-After`. The counters live in memory and reset when the
 service restarts, which is the right trade-off for a single-machine service: they blunt
 a brute-force attempt without ever locking you out of your own monitor for good.
 
 They are a backstop, not a perimeter. A credential on a public hostname is still a
 credential on a public hostname.
+
+### Behind a reverse proxy: `--trusted-proxies`
+
+By default the "client IP" is the address that opened the connection to GWatch, and
+forwarding headers are ignored — anyone can write an `X-Forwarded-For` header, and
+believing it would let a guesser pick a fresh identity for every attempt. Behind a
+reverse proxy, though, every visitor connects from the proxy's address, so they all
+share one set of budgets: one person spending the sign-in budget gets `429` for
+everybody coming through that proxy.
+
+If GWatch sits behind a proxy you run, tell it which addresses are that proxy:
+
+```sh
+gwatch run --trusted-proxies 127.0.0.1,::1          # a proxy on the same machine
+gwatch run --trusted-proxies 10.0.0.0/24            # a proxy elsewhere on the LAN
+GWATCH_TRUSTED_PROXIES=127.0.0.1 gwatch run         # the same, from the environment
+```
+
+The value is a list of addresses and CIDR ranges, separated by commas. `gwatch install`
+passes it on to the service (in `/etc/gwatch/gwatch.env` on Linux, when that file is
+first written; add `GWATCH_TRUSTED_PROXIES=…` there yourself on an existing install).
+
+Only for a request whose connection comes from one of those addresses does GWatch read
+`X-Forwarded-For`, from the right: each proxy appends the address it was connected
+from, so the rightmost entry that is not itself one of your trusted proxies is the
+visitor. Entries further left were written by the visitor and are ignored. Without
+`X-Forwarded-For`, `X-Real-IP` is used. If the header cannot be read, the proxy's own
+address is used, as it is without the setting. Make sure the proxy appends to
+`X-Forwarded-For` (Caddy and `tailscale serve` do; for nginx use
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`, or set `X-Real-IP` to
+`$remote_addr`) and that nothing else can connect to GWatch from a trusted address.
+
+The visitor's address is then what the rate limits count and what the audit log
+records for a failed sign-in. It does not make anyone an administrator: a request that
+came through a proxy is never treated as "someone at this computer", whatever address
+it names.
+
+List only proxies you control. Trusting an address that ordinary clients can connect
+from lets them choose their own identity, and with it a fresh budget each time.
 
 ## If a key or password leaks
 

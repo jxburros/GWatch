@@ -32,23 +32,37 @@ key=$(tail -c 32 "$fixture/public.der" | openssl base64 -A)
 # The generated executable reads the exported fixture path when it runs.
 # shellcheck disable=SC2016
 printf '#!/bin/sh\nprintf verified > "$fixture/executed"\n' > "$fixture/binary"
-openssl dgst -sha256 -binary "$fixture/binary" > "$fixture/digest"
-openssl pkeyutl -sign -inkey "$fixture/private.pem" -rawin -in "$fixture/digest" -out "$fixture/signature"
-printf 'gwatch-sig-v1\nkey: test\nsig: ' > "$fixture/binary.sig"
-openssl base64 -A -in "$fixture/signature" >> "$fixture/binary.sig"
-printf '\n' >> "$fixture/binary.sig"
+# sign NAME writes binary.sig as gwatch-sign would for asset NAME, version 1.0.0.
+sign() {
+ sum=$(openssl dgst -sha256 "$fixture/binary" | awk '{print $NF}')
+ printf 'gwatch-release-v1\nasset: %s\nversion: 1.0.0\nsha256: %s\n' "$1" "$sum" > "$fixture/message"
+ openssl pkeyutl -sign -inkey "$fixture/private.pem" -rawin -in "$fixture/message" -out "$fixture/signature"
+ printf 'gwatch-sig-v1\nkey: test\nsig: AAAA\nasset: %s\nversion: 1.0.0\nrelease-sig: ' "$1" > "$fixture/binary.sig"
+ openssl base64 -A -in "$fixture/signature" >> "$fixture/binary.sig"
+ printf '\n' >> "$fixture/binary.sig"
+}
 openssl dgst -sha256 "$fixture/binary" | awk '{print $NF}' > "$fixture/binary.sha256"
 cp "$fixture/binary" "$fixture/original"
 for script in scripts/install.sh scripts/install-agent.sh; do
  set -- --version 1.0.0 --no-start
  if [ "$script" = scripts/install-agent.sh ]; then
   set -- "$@" --server https://example.invalid --code TEST-CODE
+  asset=gwatch-agent-linux-amd64 other=gwatch-linux-amd64
  else
   set -- "$@" --listen 127.0.0.1:7230
+  asset=gwatch-linux-amd64 other=gwatch-agent-linux-amd64
  fi
  cp "$fixture/original" "$fixture/binary"
  openssl dgst -sha256 "$fixture/binary" | awk '{print $NF}' > "$fixture/binary.sha256"
  sed "s|OzN/mY/5zRszwN7DxuhrC718w+3TjL36FuZHbYV/qkk=|$key|" "$script" > "$fixture/install.sh"
+ # Authentic bytes signed for the other product never execute.
+ sign "$other"
+ if PATH="$fixture/bin:$PATH" sh "$fixture/install.sh" "$@"; then
+  echo 'a binary signed for another product was accepted' >&2
+  exit 1
+ fi
+ test ! -f "$fixture/executed"
+ sign "$asset"
  PATH="$fixture/bin:$PATH" sh "$fixture/install.sh" "$@"
  test -f "$fixture/executed"
  rm "$fixture/executed"
