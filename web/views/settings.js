@@ -1007,8 +1007,11 @@ export async function mount(root, ctx) {
     { value: 'postgres', label: 'PostgreSQL server' },
     { value: 'mysql', label: 'MySQL or MariaDB server' },
   ];
+  // An empty mode lets the service choose: verify-full for a server across
+  // the network, prefer for one on this machine (docs/DATABASE.md).
   const DB_TLS = [
-    { value: 'prefer', label: 'Prefer (encrypt when the server offers it)' },
+    { value: '', label: 'Automatic (verify the certificate unless the server is on this machine)' },
+    { value: 'prefer', label: 'Prefer (encrypt when the server offers it; can be downgraded)' },
     { value: 'require', label: 'Require (encrypt, do not verify the certificate)' },
     { value: 'verify-ca', label: 'Verify CA' },
     { value: 'verify-full', label: 'Verify CA and host name' },
@@ -1018,7 +1021,7 @@ export async function mount(root, ctx) {
     const status = await api.get('/api/database');
     const cfg = { ...status.saved };
     if (!cfg.driver) cfg.driver = 'sqlite';
-    if (!cfg.sslMode) cfg.sslMode = 'prefer';
+    if (!cfg.sslMode) cfg.sslMode = '';
     const wrap = h('div', { class: 'stack' });
     const active = status.active || {};
     const activeCard = h('section', { class: 'card' }, h('h2', null, 'Database in use'),
@@ -1056,7 +1059,7 @@ export async function mount(root, ctx) {
     syncServerFields();
 
     const result = h('div', { role: 'status' });
-    const payload = () => ({ driver: cfg.driver, host: cfg.host || '', port: Number(cfg.port) || 0, user: cfg.user || '', password: cfg.password || '', database: cfg.database || '', schema: cfg.driver === 'postgres' ? (cfg.schema || '') : '', sslMode: cfg.sslMode || 'prefer' });
+    const payload = () => ({ driver: cfg.driver, host: cfg.host || '', port: Number(cfg.port) || 0, user: cfg.user || '', password: cfg.password || '', database: cfg.database || '', schema: cfg.driver === 'postgres' ? (cfg.schema || '') : '', sslMode: cfg.sslMode || '' });
     const testBtn = h('button', { class: 'btn', type: 'button', onclick: async () => {
       const done = busy(testBtn, 'Connecting\u2026');
       try { const r = await api.post('/api/database/test', payload()); replace(result, banner('up', r.message || `Connected (${r.serverVersion}).`)); }

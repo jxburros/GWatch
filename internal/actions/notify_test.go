@@ -26,6 +26,15 @@ func TestValidateNotify(t *testing.T) {
 		{Type: model.ActionPushover},
 		{Type: model.ActionPushover, Token: "t"},
 		{Type: model.ActionPushover, UserKey: "u"},
+		// A placeholder in the scheme or authority lets the caller choose
+		// where the notification (and the ntfy token) goes.
+		{Type: model.ActionSlack, WebhookURL: "{{query.webhook}}"},
+		{Type: model.ActionSlack, WebhookURL: "https://{{query.host}}/services/x"},
+		{Type: model.ActionTeams, WebhookURL: "https://example.webhook.office.com{{body}}/x"},
+		{Type: model.ActionTeams, WebhookURL: "https://{{query.user}}@example.webhook.office.com/x"},
+		{Type: model.ActionNtfy, Topic: "ok", Server: "{{body}}"},
+		{Type: model.ActionNtfy, Topic: "ok", Server: "https://{{query.host}}"},
+		{Type: model.ActionNtfy, Topic: "ok", Server: "https://ntfy.example.com:{{query.port}}"},
 	}
 	for i, a := range bad {
 		if err := Validate(a); err == nil {
@@ -34,8 +43,10 @@ func TestValidateNotify(t *testing.T) {
 	}
 	good := []model.Action{
 		{Type: model.ActionSlack, WebhookURL: "https://hooks.slack.com/services/x"},
-		{Type: model.ActionSlack, WebhookURL: "{{query.webhook}}"},
+		{Type: model.ActionSlack, WebhookURL: "https://hooks.slack.com/services/{{query.path}}"},
 		{Type: model.ActionTeams, WebhookURL: "https://example.webhook.office.com/x"},
+		{Type: model.ActionTeams, WebhookURL: "https://example.webhook.office.com/x?channel={{node.group}}"},
+		{Type: model.ActionNtfy, Topic: "{{node.group}}", Server: "https://ntfy.example.com/base"},
 		{Type: model.ActionNtfy, Topic: "gwatch-alerts"},
 		{Type: model.ActionNtfy, Topic: "gwatch-alerts", Server: "https://ntfy.example.com"},
 		{Type: model.ActionPushover, Token: "tok", UserKey: "user"},
@@ -223,5 +234,77 @@ func TestRunPushoverNonSuccessStatus(t *testing.T) {
 	res := r.Run(context.Background(), model.Action{Type: model.ActionPushover, Token: "bad", UserKey: "user"}, Vars{})
 	if res.OK {
 		t.Fatal("expected failure on status != 1")
+	}
+}
+
+// A stored action whose authority came from a placeholder (saved before
+// validation refused it) still never sends: the run refuses it before any
+// request is made, rather than connecting wherever the value points.
+func TestNotifyAuthorityIsNotTakenFromPlaceholders(t *testing.T) {
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }))
+	defer srv.Close()
+	host := strings.TrimPrefix(srv.URL, "http://")
+	vars := Vars{"body": srv.URL, "query.host": host}
+	r := &Runner{}
+	for _, a := range []model.Action{
+		{Type: model.ActionSlack, WebhookURL: "{{body}}"},
+		{Type: model.ActionTeams, WebhookURL: "https://{{query.host}}/x"},
+		{Type: model.ActionNtfy, Topic: "x", Server: "{{body}}", Token: "secret"},
+		{Type: model.ActionNtfy, Topic: "x", Server: "http://{{query.host}}", Token: "secret"},
+	} {
+		if res := r.Run(context.Background(), a, vars); res.OK || res.Error == "" {
+			t.Errorf("%s with a templated authority ran: %+v", a.Type, res)
+		}
+	}
+	if hit {
+		t.Fatal("a request reached the caller-chosen host")
+	}
+}
+
+// The ntfy topic is data under the configured server: it cannot climb out of
+// its path segment into another host.
+func TestNtfyTopicPlaceholderStaysInThePath(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { gotPath = r.URL.EscapedPath() }))
+	defer srv.Close()
+	r := &Runner{}
+	a := model.Action{Type: model.ActionNtfy, Server: srv.URL, Topic: "{{body}}"}
+	if res := r.Run(context.Background(), a, Vars{"body": "../@evil.example/x?y"}); !res.OK {
+		t.Fatalf("expected OK, got %+v", res)
+	}
+	if gotPath != "/..%2F@evil.example%2Fx%3Fy" {
+		t.Fatalf("path = %q", gotPath)
+	}
+}
+
+// The ntfy bearer token goes to the configured server only: a redirect to
+// another host or port arrives without it.
+func TestNtfyTokenIsNotForwardedAcrossRedirects(t *testing.T) {
+	var leaked string
+	reached := false
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		leaked = r.Header.Get("Authorization")
+		w.WriteHeader(200)
+	}))
+	defer other.Close()
+	var first string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		first = r.Header.Get("Authorization")
+		http.Redirect(w, r, other.URL+"/stolen", http.StatusTemporaryRedirect)
+	}))
+	defer srv.Close()
+	r := &Runner{}
+	a := model.Action{Type: model.ActionNtfy, Server: srv.URL, Topic: "alerts", Token: "tk123"}
+	r.Run(context.Background(), a, Vars{})
+	if first != "Bearer tk123" {
+		t.Fatalf("configured server got %q", first)
+	}
+	if !reached {
+		t.Fatal("redirect was not followed")
+	}
+	if leaked != "" {
+		t.Fatalf("token forwarded to the redirect target: %q", leaked)
 	}
 }
