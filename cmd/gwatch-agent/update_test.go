@@ -325,3 +325,32 @@ func TestApplyUpdateRefusesAReleaseWithNoBuildForThisPlatform(t *testing.T) {
 		t.Errorf("the refusal should name the platform it looked for: %v", err)
 	}
 }
+
+// TestReportedVersionIsExact keeps the version proof from being a substring
+// test: an older binary whose platform happens to contain the wanted version
+// must not pass for it.
+func TestReportedVersionIsExact(t *testing.T) {
+	cases := map[string]string{
+		"gwatch-agent 0.5.0 (linux/amd64)\n":              "0.5.0",
+		"gwatch-agent 0.5.0 (linux/amd64; deb package)\n": "0.5.0",
+		"gwatch 0.5.0 (linux/amd64)":                      "",
+		"something else entirely":                         "",
+		"":                                                "",
+	}
+	for out, want := range cases {
+		if got := reportedVersion(out); got != want {
+			t.Errorf("reportedVersion(%q) = %q, want %q", out, got, want)
+		}
+	}
+	dir := t.TempDir()
+	old := fakeAgent(t, dir, "old", "0.4.0", 0)
+	if err := verifyRuns(context.Background(), old, "64"); err == nil {
+		t.Fatal("a version found only inside the platform was accepted")
+	}
+	if err := verifyRuns(context.Background(), old, "0.4"); err == nil {
+		t.Fatal("a prefix of the reported version was accepted")
+	}
+	if err := verifyRuns(context.Background(), old, "0.4.0"); err != nil {
+		t.Fatalf("the exact version was refused: %v", err)
+	}
+}

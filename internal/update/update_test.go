@@ -62,21 +62,28 @@ func pinKeys(t *testing.T, pubs ...ed25519.PublicKey) {
 	t.Cleanup(func() { releaseKeys, embeddedReleaseKeys = oldOverride, oldEmbedded })
 }
 
-// testKey returns a fresh signing key plus a signature file for payload.
-func testKey(t *testing.T, payload []byte) (ed25519.PublicKey, ed25519.PrivateKey, string) {
+// testKey returns a fresh signing key plus a signature file for payload,
+// published as rel.
+func testKey(t *testing.T, payload []byte, rel Release) (ed25519.PublicKey, ed25519.PrivateKey, string) {
 	t.Helper()
 	pub, priv, err := GenerateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
+	return pub, priv, sigFor(pub, priv, payload, rel)
+}
+
+// sigFor renders the signature file gwatch-sign would write for payload
+// published as rel.
+func sigFor(pub ed25519.PublicKey, priv ed25519.PrivateKey, payload []byte, rel Release) string {
 	digest := sha256.Sum256(payload)
-	return pub, priv, FormatSignature(pub, SignDigest(priv, digest[:]))
+	return FormatSignature(pub, SignDigest(priv, digest[:]), rel, SignRelease(priv, rel, digest[:]))
 }
 
 func TestCheckDownloadSwap(t *testing.T) {
 	payload := []byte("#!/bin/sh\necho new\n")
 	sum := sha256.Sum256(payload)
-	pub, _, sigText := testKey(t, payload)
+	pub, priv, sigText := testKey(t, payload, Release{Asset: "gwatch-linux-amd64", Version: "2.5.0"})
 	pinKeys(t, pub)
 	mux := http.NewServeMux()
 	var srvURL string
@@ -201,6 +208,9 @@ func TestCheckDownloadSwap(t *testing.T) {
 	bad.AssetSize = 0
 	mux.HandleFunc("/dl/win", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("hello")) })
 	mux.HandleFunc("/dl/win.sha256", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(strings.Repeat("0", 64))) })
+	mux.HandleFunc("/dl/win.sig", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(sigFor(pub, priv, []byte("hello"), Release{Asset: "gwatch-linux-amd64", Version: "2.5.0"})))
+	})
 	if _, err := c.Download(context.Background(), bad, dir); err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("expected checksum error, got %v", err)
 	}
@@ -215,10 +225,16 @@ func TestCheckDownloadSwap(t *testing.T) {
 func TestDownloadRequiresSignature(t *testing.T) {
 	payload := []byte("#!/bin/sh\necho signed\n")
 	sum := sha256.Sum256(payload)
-	pub, _, goodSig := testKey(t, payload)
-	otherPub, otherPriv, _ := testKey(t, []byte("something else"))
-	wrongDigest := sha256.Sum256([]byte("a different binary"))
-	wrongSig := FormatSignature(otherPub, SignDigest(otherPriv, wrongDigest[:]))
+	pub, priv, goodSig := testKey(t, payload, Release{Asset: "asset", Version: "1.0.0"})
+	otherPub, otherPriv, _ := testKey(t, []byte("something else"), Release{Asset: "asset", Version: "1.0.0"})
+	wrongSig := sigFor(otherPub, otherPriv, []byte("a different binary"), Release{Asset: "wrongsig", Version: "1.0.0"})
+	badsumSig := sigFor(pub, priv, payload, Release{Asset: "badsum", Version: "1.0.0"})
+	// Genuinely signed bytes offered as something they are not: another
+	// version, another product, or a signature that binds no release at all.
+	digest := sha256.Sum256(payload)
+	replayedSig := sigFor(pub, priv, payload, Release{Asset: "replayed", Version: "0.9.0"})
+	renamedSig := sigFor(pub, priv, payload, Release{Asset: "gwatch-agent-linux-amd64", Version: "1.0.0"})
+	legacySig := SignatureFormat + "\nkey: " + KeyID(pub) + "\nsig: " + base64.StdEncoding.EncodeToString(SignDigest(priv, digest[:])) + "\n"
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/dl/asset", func(w http.ResponseWriter, r *http.Request) { w.Write(payload) })
@@ -236,13 +252,31 @@ func TestDownloadRequiresSignature(t *testing.T) {
 	mux.HandleFunc("/dl/badsum.sha256", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(strings.Repeat("0", 64) + "  badsum\n"))
 	})
-	mux.HandleFunc("/dl/badsum.sig", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(goodSig)) })
+	mux.HandleFunc("/dl/badsum.sig", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(badsumSig)) })
+	for name, sig := range map[string]string{"replayed": replayedSig, "renamed": renamedSig, "legacy": legacySig} {
+		sig := sig
+		mux.HandleFunc("/dl/"+name, func(w http.ResponseWriter, r *http.Request) { w.Write(payload) })
+		mux.HandleFunc("/dl/"+name+".sig", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(sig)) })
+	}
+	// A body far longer than the release declares must be cut off, not
+	// written out in full and refused afterwards.
+	mux.HandleFunc("/dl/huge", func(w http.ResponseWriter, r *http.Request) {
+		chunk := make([]byte, 64<<10)
+		for i := 0; i < 64; i++ {
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+		}
+	})
+	mux.HandleFunc("/dl/huge.sig", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(sigFor(pub, priv, payload, Release{Asset: "huge", Version: "1.0.0"})))
+	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
 	c := &Client{APIBase: srv.URL, HTTP: srv.Client(), GOOS: "linux", GOARCH: "amd64"}
 	info := func(name string) model.UpdateInfo {
-		return model.UpdateInfo{AssetName: name, AssetURL: srv.URL + "/dl/" + name, AssetSize: int64(len(payload))}
+		return model.UpdateInfo{LatestVersion: "1.0.0", AssetName: name, AssetURL: srv.URL + "/dl/" + name, AssetSize: int64(len(payload))}
 	}
 	countFiles := func(dir string) int {
 		ents, err := os.ReadDir(dir)
@@ -276,6 +310,10 @@ func TestDownloadRequiresSignature(t *testing.T) {
 		{"signature from another key", "wrongsig", "signature verification failed"},
 		{"unparseable signature", "junksig", "signature verification failed"},
 		{"sha256 sidecar mismatch", "badsum", "checksum mismatch"},
+		{"older release relabelled as this one", "replayed", "signed as"},
+		{"another product renamed", "renamed", "signed as"},
+		{"signature binding no release", "legacy", "signed as"},
+		{"body longer than declared", "huge", "larger than"},
 	}
 	for _, tc := range cases {
 		dir := t.TempDir()
@@ -286,6 +324,20 @@ func TestDownloadRequiresSignature(t *testing.T) {
 		if n := countFiles(dir); n != 0 {
 			t.Errorf("%s: %d temp files left behind", tc.name, n)
 		}
+	}
+
+	// A declared size past the ceiling is refused before anything is fetched.
+	dir = t.TempDir()
+	tooBig := info("asset")
+	tooBig.AssetSize = MaxAssetSize + 1
+	if _, err := c.Download(context.Background(), tooBig, dir); err == nil || !strings.Contains(err.Error(), "more than") {
+		t.Fatalf("oversized declared asset: %v", err)
+	}
+	// The same bytes, offered as another version, are refused too.
+	other := info("asset")
+	other.LatestVersion = "2.0.0"
+	if _, err := c.Download(context.Background(), other, dir); !errors.Is(err, ErrBadSignature) {
+		t.Fatalf("version relabel: %v", err)
 	}
 
 	dir = t.TempDir()
@@ -368,18 +420,24 @@ func TestSignRoundTrip(t *testing.T) {
 	if err := os.WriteFile(file, []byte("binary contents"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyFile(file, keys); !errors.Is(err, ErrUnsigned) {
+	if err := VerifyFile(file, "1.2.3", keys); !errors.Is(err, ErrUnsigned) {
 		t.Fatalf("unsigned file: %v", err)
 	}
-	sigPath, err := SignFile(seeded, file)
+	sigPath, err := SignFile(seeded, file, "1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if sigPath != file+SignatureExt {
 		t.Fatalf("signature path %q", sigPath)
 	}
-	if err := VerifyFile(file, keys); err != nil {
+	if err := VerifyFile(file, "1.2.3", keys); err != nil {
 		t.Fatalf("freshly signed file should verify: %v", err)
+	}
+	if err := VerifyFile(file, "1.2.4", keys); !errors.Is(err, ErrBadSignature) {
+		t.Fatalf("a signature for 1.2.3 must not verify as 1.2.4: %v", err)
+	}
+	if _, err := SignFile(seeded, file, ""); err == nil {
+		t.Fatal("signing without a version should fail")
 	}
 
 	raw, _ := os.ReadFile(sigPath)
@@ -387,7 +445,7 @@ func TestSignRoundTrip(t *testing.T) {
 		t.Fatalf("signature header: %q", raw)
 	}
 	sig, err := ParseSignature(string(raw))
-	if err != nil || sig.KeyID != KeyID(pub) || len(sig.Sig) != ed25519.SignatureSize {
+	if err != nil || sig.KeyID != KeyID(pub) || len(sig.Sig) != ed25519.SignatureSize || sig.Asset != "gwatch-linux-amd64" || sig.Version != "1.2.3" || len(sig.ReleaseSig) != ed25519.SignatureSize {
 		t.Fatalf("ParseSignature: %+v %v", sig, err)
 	}
 	// Lenient on whitespace, strict on the header line.
@@ -406,10 +464,10 @@ func TestSignRoundTrip(t *testing.T) {
 	if err := os.WriteFile(file, []byte("binary contents, patched"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyFile(file, keys); !errors.Is(err, ErrBadSignature) {
+	if err := VerifyFile(file, "1.2.3", keys); !errors.Is(err, ErrBadSignature) {
 		t.Fatalf("tampered file: %v", err)
 	}
-	if err := VerifyFile(file, nil); !errors.Is(err, ErrNoSigningKey) {
+	if err := VerifyFile(file, "1.2.3", nil); !errors.Is(err, ErrNoSigningKey) {
 		t.Fatalf("no keys: %v", err)
 	}
 }

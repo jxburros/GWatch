@@ -7,8 +7,8 @@
 //
 //	gwatch-sign keygen -out release.key      generate a key pair
 //	gwatch-sign pubkey -key release.key      print the ed25519:... line
-//	gwatch-sign sign -key release.key FILE…  write FILE.sig for each file
-//	gwatch-sign verify -pub ed25519:… FILE…  check FILE against FILE.sig
+//	gwatch-sign sign -version V FILE…        write FILE.sig for each file
+//	gwatch-sign verify -version V FILE…      check FILE against FILE.sig
 //
 // The private key may also come from the GWATCH_SIGNING_KEY environment
 // variable (a base64 32-byte seed), which is how CI reads it from a repository
@@ -21,6 +21,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/jxburros/GWatch/internal/update"
@@ -32,8 +34,14 @@ const usage = `gwatch-sign — sign GWatch release assets
 
   gwatch-sign keygen -out release.key        generate a signing key pair
   gwatch-sign pubkey [-key release.key]      print the ed25519:... line for release_keys.txt
-  gwatch-sign sign [-key release.key] FILE…  write FILE` + update.SignatureExt + ` next to each FILE
-  gwatch-sign verify -pub ed25519:... FILE…  verify FILE against FILE` + update.SignatureExt + `
+  gwatch-sign sign -version V [-key release.key] FILE…
+                                             write FILE` + update.SignatureExt + ` next to each FILE
+  gwatch-sign verify -version V [-pub ed25519:...] FILE…
+                                             verify FILE against FILE` + update.SignatureExt + `
+
+-version is the release the files are published in (1.2.3, no tag prefix).
+Each signature names its file and that version, and an updater refuses one
+offered under any other name or version.
 
 The private key is read from -key, or from the ` + envKey + ` environment
 variable (base64 32-byte seed) when -key is not given.
@@ -77,8 +85,13 @@ func keygen(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if _, err := os.Stat(*out); err == nil && !*force {
-		return fmt.Errorf("%s already exists; refusing to overwrite a signing key (use -force if you really mean it)", *out)
+	if st, err := os.Lstat(*out); err == nil {
+		if !*force {
+			return fmt.Errorf("%s already exists; refusing to overwrite a signing key (use -force if you really mean it)", *out)
+		}
+		if !st.Mode().IsRegular() {
+			return fmt.Errorf("%s is not a regular file (a link or a device?); refusing to write a signing key through it", *out)
+		}
 	}
 	pub, priv, err := update.GenerateKey()
 	if err != nil {
@@ -87,13 +100,54 @@ func keygen(args []string) error {
 	body := "# GWatch release signing key — keep this file secret and offline.\n" +
 		"# Public key: " + update.FormatPublicKey(pub) + "\n" +
 		update.EncodeSeed(priv) + "\n"
-	if err := os.WriteFile(*out, []byte(body), 0o600); err != nil {
+	if err := writePrivate(*out, []byte(body)); err != nil {
 		return err
 	}
 	fmt.Printf("wrote %s (mode 0600) — keep it offline, it is the only thing that can sign a release\n", *out)
 	fmt.Printf("key id: %s\n", update.KeyID(pub))
 	fmt.Printf("\nPaste this line into internal/update/release_keys.txt:\n\n%s\n", update.FormatPublicKey(pub))
 	fmt.Printf("\nAnd store this value as the %s repository secret:\n\n%s\n", envKey, update.EncodeSeed(priv))
+	return nil
+}
+
+// writePrivate writes a secret file that only its owner can read. The bytes go
+// to a new 0600 file beside the destination, which is then renamed over it:
+// os.WriteFile's mode applies only when it creates a file, so overwriting an
+// existing, more permissive one in place would keep that file's mode.
+func writePrivate(path string, body []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".gwatch-sign-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name) // a no-op once renamed
+	if err := tmp.Chmod(0o600); err != nil && runtime.GOOS != "windows" {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(body); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(name, path); err != nil {
+		return err
+	}
+	if runtime.GOOS != "windows" {
+		st, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		if st.Mode().Perm() != 0o600 {
+			return fmt.Errorf("%s ended up with mode %v, not 0600; fix its permissions before using it", path, st.Mode().Perm())
+		}
+	}
 	return nil
 }
 
@@ -115,12 +169,16 @@ func pubkey(args []string) error {
 func sign(args []string) error {
 	fs := flag.NewFlagSet("sign", flag.ContinueOnError)
 	keyFile := fs.String("key", "", "private key file (default: the "+envKey+" environment variable)")
+	version := fs.String("version", "", "the release version the files are published in, e.g. 1.2.3 (required)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	files := fs.Args()
 	if len(files) == 0 {
 		return errors.New("sign: no files given")
+	}
+	if strings.TrimSpace(*version) == "" {
+		return errors.New("sign: -version is required: each signature names the release it belongs to")
 	}
 	priv, err := loadKey(*keyFile)
 	if err != nil {
@@ -139,7 +197,7 @@ func sign(args []string) error {
 		if st.IsDir() {
 			continue
 		}
-		out, err := update.SignFile(priv, f)
+		out, err := update.SignFile(priv, f, strings.TrimSpace(*version))
 		if err != nil {
 			return err
 		}
@@ -155,12 +213,16 @@ func sign(args []string) error {
 func verify(args []string) error {
 	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
 	pubs := fs.String("pub", "", "trusted public key(s), ed25519:<base64>, comma-separated (default: the keys pinned in this build)")
+	version := fs.String("version", "", "the release version the files are published in, e.g. 1.2.3 (required)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	files := fs.Args()
 	if len(files) == 0 {
 		return errors.New("verify: no files given")
+	}
+	if strings.TrimSpace(*version) == "" {
+		return errors.New("verify: -version is required: a signature is only valid for the release it names")
 	}
 	keys := update.TrustedKeys()
 	if strings.TrimSpace(*pubs) != "" {
@@ -178,7 +240,7 @@ func verify(args []string) error {
 		if skipSidecar(f) {
 			continue
 		}
-		if err := update.VerifyFile(f, keys); err != nil {
+		if err := update.VerifyFile(f, strings.TrimSpace(*version), keys); err != nil {
 			return fmt.Errorf("%s: %w", f, err)
 		}
 		fmt.Printf("ok %s\n", f)

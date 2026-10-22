@@ -35,14 +35,14 @@ func TestDownloadedWindowsExecutableRuns(t *testing.T) {
 		case "/agent.exe":
 			w.Write(binary)
 		case "/agent.exe.sig":
-			fmt.Fprint(w, FormatSignature(pub, SignDigest(priv, digest[:])))
+			fmt.Fprint(w, sigFor(pub, priv, binary, Release{Asset: "agent.exe", Version: "1.0.0"}))
 		case "/agent.exe.sha256":
 			fmt.Fprintf(w, "%x", digest)
 		}
 	}))
 	defer server.Close()
 	client := &Client{HTTP: server.Client()}
-	path, err := client.Download(context.Background(), model.UpdateInfo{AssetName: "agent.exe", AssetURL: server.URL + "/agent.exe", AssetSize: int64(len(binary))}, t.TempDir())
+	path, err := client.Download(context.Background(), model.UpdateInfo{LatestVersion: "1.0.0", AssetName: "agent.exe", AssetURL: server.URL + "/agent.exe", AssetSize: int64(len(binary))}, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -164,14 +164,19 @@ KEYARG := $(if $(KEY),-key $(KEY),)
 keygen:
 	go run ./cmd/gwatch-sign keygen -out $(KEY)
 
+# Each signature names the release version its asset is published in, which is
+# VERSION unless overridden (an agent release signs with
+# RELEASE_VERSION=$(cat cmd/gwatch-agent/VERSION)).
+RELEASE_VERSION ?= $(VERSION)
+
 # Writes dist/<asset>.sig next to every built binary.
 sign:
-	go run ./cmd/gwatch-sign sign $(KEYARG) dist/gwatch-*
+	go run ./cmd/gwatch-sign sign -version $(RELEASE_VERSION) $(KEYARG) dist/gwatch-*
 
 # Verifies those signatures with the keys pinned in release_keys.txt, i.e. what
 # an installed GWatch will do before it replaces itself.
 verify-release:
-	go run ./cmd/gwatch-sign verify dist/gwatch-*
+	go run ./cmd/gwatch-sign verify -version $(RELEASE_VERSION) dist/gwatch-*
 
 # ---- Agent packages (docs/RELEASING.md#the-agent-packages) ----
 #

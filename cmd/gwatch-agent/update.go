@@ -220,10 +220,25 @@ func verifyRuns(ctx context.Context, path, want string) error {
 	if err != nil {
 		return fmt.Errorf("it would not run: %v: %s", err, strings.TrimSpace(string(out)))
 	}
-	if want != "" && !strings.Contains(string(out), want) {
-		return fmt.Errorf("it reports %q, but the release says %s", strings.TrimSpace(string(out)), want)
+	if want != "" {
+		if got := reportedVersion(string(out)); got != want {
+			return fmt.Errorf("it reports %q, but the release says %s", strings.TrimSpace(string(out)), want)
+		}
 	}
 	return nil
+}
+
+// reportedVersion is the version in a `gwatch-agent version` line,
+// "gwatch-agent 1.2.3 (linux/amd64)", or "" when the output is not one. The
+// version is compared whole: finding the wanted string anywhere in the output
+// would let "64" match an older binary's "linux/amd64".
+func reportedVersion(out string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(out), "\n")
+	fields := strings.Fields(line)
+	if len(fields) < 2 || fields[0] != "gwatch-agent" {
+		return ""
+	}
+	return fields[1]
 }
 
 // verifyReports checks that a binary can take a reading on this machine and

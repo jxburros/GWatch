@@ -402,12 +402,23 @@ func pickAsset(assets []ghAsset, prefix, goos, goarch string) *ghAsset {
 // ErrNoAsset is returned when the release has no binary for this platform.
 var ErrNoAsset = errors.New("the release has no executable for this platform")
 
+// MaxAssetSize is the most an update download may be. Release executables are
+// a few tens of megabytes; the ceiling is far above that and still keeps a
+// hostile or broken release from filling the disk the executable lives on.
+const MaxAssetSize = 512 << 20
+
 // Download fetches the asset into dir and verifies its ed25519 signature
 // against the release signing keys pinned into this build. Verification is
 // mandatory: there is no path on which this returns a file that was not signed
-// by a pinned key. The sibling <name>.sha256 asset is still checked when the
-// release publishes one, as a cheap guard against transit corruption, but it
-// never stands in for the signature. It returns the downloaded path.
+// by a pinned key for exactly this asset name and this version. The sibling
+// <name>.sha256 asset is still checked when the release publishes one, as a
+// cheap guard against transit corruption, but it never stands in for the
+// signature. It returns the downloaded path.
+//
+// The small signature file is fetched and checked against the release first,
+// so a release that is unsigned or signed for something else is refused
+// before the executable is downloaded at all, and the download itself stops at
+// the size the release declares.
 func (c *Client) Download(ctx context.Context, info model.UpdateInfo, dir string) (string, error) {
 	if info.AssetURL == "" {
 		return "", ErrNoAsset
@@ -415,6 +426,23 @@ func (c *Client) Download(ctx context.Context, info model.UpdateInfo, dir string
 	keys := TrustedKeys()
 	if len(keys) == 0 {
 		return "", ErrNoSigningKey
+	}
+	rel := Release{Asset: info.AssetName, Version: info.LatestVersion}
+	sigText, err := c.fetchSignature(ctx, info.AssetURL)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s has no %s asset, so it cannot be verified", ErrUnsigned, info.AssetName, SignatureExt)
+	}
+	if sig, err := ParseSignature(sigText); err != nil {
+		return "", fmt.Errorf("%w: %s", ErrBadSignature, err)
+	} else if sig.Asset != rel.Asset || sig.Version != rel.Version {
+		return "", fmt.Errorf("%w: %s is signed as %q version %q, not as %s %s", ErrBadSignature, info.AssetName, sig.Asset, sig.Version, rel.Asset, rel.Version)
+	}
+	limit := int64(MaxAssetSize)
+	if info.AssetSize > limit {
+		return "", fmt.Errorf("download refused: the release says %s is %d bytes, more than the %d an update may be", info.AssetName, info.AssetSize, limit)
+	}
+	if info.AssetSize > 0 {
+		limit = info.AssetSize
 	}
 	req, err := http.NewRequestWithContext(ctx, "GET", info.AssetURL, nil)
 	if err != nil {
@@ -429,6 +457,9 @@ func (c *Client) Download(ctx context.Context, info model.UpdateInfo, dir string
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("download failed: %s", resp.Status)
 	}
+	if resp.ContentLength > limit {
+		return "", fmt.Errorf("download refused: %s is %d bytes, expected at most %d", info.AssetName, resp.ContentLength, limit)
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
@@ -441,11 +472,17 @@ func (c *Client) Download(ctx context.Context, info model.UpdateInfo, dir string
 		return "", err
 	}
 	hash := sha256.New()
-	n, err := io.Copy(io.MultiWriter(tmp, hash), resp.Body)
+	// One byte past the limit is read so that an oversized body is seen as
+	// one, rather than silently cut to a size that happens to match.
+	n, err := io.Copy(io.MultiWriter(tmp, hash), io.LimitReader(resp.Body, limit+1))
 	tmp.Close()
 	if err != nil {
 		os.Remove(tmp.Name())
 		return "", fmt.Errorf("download: %w", err)
+	}
+	if n > limit {
+		os.Remove(tmp.Name())
+		return "", fmt.Errorf("download refused: %s is larger than the %d bytes expected", info.AssetName, limit)
 	}
 	if n == 0 || (info.AssetSize > 0 && n != info.AssetSize) {
 		os.Remove(tmp.Name())
@@ -458,14 +495,9 @@ func (c *Client) Download(ctx context.Context, info model.UpdateInfo, dir string
 			return "", fmt.Errorf("checksum mismatch: downloaded file is %s, release says %s", got, sum)
 		}
 	}
-	sigText, err := c.fetchSignature(ctx, info.AssetURL)
-	if err != nil {
+	if err := VerifyRelease(digest, sigText, rel, keys); err != nil {
 		os.Remove(tmp.Name())
-		return "", fmt.Errorf("%w: %s has no %s asset, so it cannot be verified", ErrUnsigned, info.AssetName, SignatureExt)
-	}
-	if err := VerifyDigest(digest, sigText, keys); err != nil {
-		os.Remove(tmp.Name())
-		return "", fmt.Errorf("%w: %s was not signed by a release key this build trusts (%s)", err, info.AssetName, strings.Join(KeyIDs(), ", "))
+		return "", fmt.Errorf("%w: %s was not signed as %s %s by a release key this build trusts (%s)", err, info.AssetName, rel.Asset, rel.Version, strings.Join(KeyIDs(), ", "))
 	}
 	if err := os.Chmod(tmp.Name(), 0o755); err != nil {
 		os.Remove(tmp.Name())
