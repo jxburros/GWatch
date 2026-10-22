@@ -9,10 +9,20 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
-## 0.7.1 — 2026-10-22
+## 0.7.2 — 2026-10-22
 
-0.7.0 was never published; 0.7.1 is the first release to carry its changes
-(below) as well as these security fixes. Agent 0.7.1 is released alongside.
+The first published release since 0.6.2: 0.7.0 and 0.7.1 were never published, so
+everything under them below ships in 0.7.2. Agent 0.7.2 is released alongside.
+
+### Changed
+
+- **Release publishing.** The shared release tooling is pinned to a version that finds
+  a newly created draft release in the release list; the 0.7.1 run stopped there,
+  before anything was published. No change to GWatch or the agent themselves.
+
+## 0.7.1 — 2026-10-22 (not published)
+
+Security fixes on top of 0.7.0.
 
 ### Security
 
@@ -90,7 +100,7 @@ disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
   URL keep working, but a value is escaped as one path segment, so `/` in it arrives
   as `%2F`.
 
-## 0.7.0 — 2026-10-14
+## 0.7.0 — 2026-10-14 (not published)
 
 ### Added
 
