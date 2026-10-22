@@ -93,7 +93,18 @@ administrator, whatever its scope:
   charts. A key may lay a wallboard out; it may not project one. It may **not**
   create, edit or test a `custom` check, or a `system` check that reads an
   agentless URL: both run code or carry a stored token to a chosen address, so an
-  administrator must create them in the web interface (403, not 401).
+  administrator must create them in the web interface (403, not 401). The same goes
+  for a saved one: a key may not run it, switch it (or a node holding a switched-on
+  one) on, duplicate a node holding one, or touch one in a bulk edit — switching one
+  off is still allowed. `POST /api/nodes/{id}/run` through a key skips such checks and
+  runs the rest; a key cannot run a check or node that is switched off (409).
+  A key also may not point a saved check at a new destination — the node host, the
+  check's target (address, scheme or port), SNMP port, method, `Host` header, type,
+  redirect or TLS setting, DNS server, or hardware source — while leaving any of its
+  credentials (body, masked headers or environment values, SNMP secrets, metrics
+  token) blank or masked to be kept: that would send a secret the key cannot read to
+  an address it chose. Such a `PUT /api/nodes/{id}` is refused with 403; send every
+  credential afresh, or have an administrator retarget the check in the browser.
 
 **Denied to every key, whatever its scope** (403, not 401):
 `GET|PUT /api/settings`, `POST /api/settings/test-email`, `GET|PUT /api/database`,
@@ -210,7 +221,7 @@ companion that lets an AI assistant use this API with a key, is documented in
 - `DELETE /api/nodes/{id}` → `{ "ok": true }`.
 - `POST /api/nodes/{id}/enable` body `{ "enabled": true|false }` → Node.
 - `POST /api/nodes/{id}/duplicate` → new Node (name suffixed " (copy)", disabled).
-- `POST /api/nodes/{id}/run` → runs all enabled checks of the node now → `[Result]`.
+- `POST /api/nodes/{id}/run` → runs all enabled checks of the node now → `[Result]`. They share the scheduler's `maxConcurrentChecks` limit, so a large node runs a few at a time. A node holds at most 500 checks (400 above that).
 - `POST /api/nodes/{id}/silence` body `{ "minutes": 60 }` (0 = unsilence) → silences every check of the node → Node.
 - `PATCH /api/nodes/bulk` — one change across many nodes and checks. See **Bulk edit** below.
 - `GET /api/templates` → `[NodeTemplate]` (website, home-server, router — shown as "Network device", ping, api, tcp-service, this-computer, agent-machine, dns).
@@ -298,7 +309,7 @@ echoed as written, so an `Authorization` header on an HTTP check is stored in th
   note that SNMP v2c answers a *wrong community* with silence, so a wrong community and
   an unreachable device produce the same timeout — the message says so.
 - `POST /api/checks/{id}/run` → `Result` (recorded and processed through alerting).
-- `POST /api/checks/{id}/enable` body `{ "enabled": bool }` → Check.
+- `POST /api/checks/{id}/enable` body `{ "enabled": bool }` → Check, masked (and for an API key stripped) the same way as in `GET /api/nodes/{id}`.
 - `POST /api/checks/{id}/silence` body `{ "minutes": 60 }` (0 = unsilence) → CheckState.
 - `GET /api/checks/{id}/results?limit=50` → `[Result]` newest first.
 - `GET /api/checks/{id}/state` → CheckState.
@@ -1256,6 +1267,11 @@ See [`RESTORE.md`](RESTORE.md) for the end-to-end restore-to-a-new-machine proce
 - `GET /api/export/history.csv?checkId=ID&range=30d` → CSV: `timestamp,avg_ms,min_ms,max_ms,jitter_ms,loss_pct,availability_pct,count,failures`.
 - `GET /api/export/results.csv?checkId=ID&limit=5000` → raw results CSV: `timestamp,success,status,message,error,latency_ms,min_ms,max_ms,jitter_ms,stddev_ms,loss_pct,http_status,final_url,attempts`.
 - `GET /api/export/events.csv?nodeId=&limit=5000&type=&q=&since=&until=` → events CSV (same filters as `/api/events`).
+- In the CSV exports, a text cell (names, titles, notes, messages, errors, URLs) that
+  begins with `=`, `+`, `-`, `@`, a tab or a carriage return is written with a leading
+  `'`, so a spreadsheet shows it as text rather than evaluating it as a formula. Numeric
+  columns are written as they are. Use `/api/events` or `/api/checks/{id}/results` for
+  the raw values.
 - `GET /api/export/logs.txt?limit=1000` → the recent service log as text.
 - `GET /api/export/config.json` → nodes+checks+dashboards+maintenance+triggers+endpoints+saved charts as JSON (no passwords).
 

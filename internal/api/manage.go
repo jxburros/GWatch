@@ -708,6 +708,24 @@ func csvWriter(w http.ResponseWriter, name string) *csv.Writer {
 	return csv.NewWriter(w)
 }
 
+// csvText makes a text cell safe to open in a spreadsheet. encoding/csv keeps
+// the file's structure intact, but Excel, LibreOffice and Sheets read a cell
+// that starts with =, +, -, @, a tab or a carriage return as a formula — and
+// node names, check names, event notes, result messages and URLs are text
+// that monitored devices and API keys can choose. A leading apostrophe makes
+// the spreadsheet show the cell as text. Only text columns go through here;
+// numbers GWatch formats itself (a negative latency, say) are left alone.
+func csvText(v string) string {
+	if v == "" {
+		return v
+	}
+	switch v[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + v
+	}
+	return v
+}
+
 func fmtFloat(f *float64) string {
 	if f == nil {
 		return ""
@@ -757,7 +775,7 @@ func (s *Server) handleExportResults(w http.ResponseWriter, r *http.Request) {
 		if res.Details.StatusCode != 0 {
 			code = strconv.Itoa(res.Details.StatusCode)
 		}
-		_ = cw.Write([]string{res.Timestamp.Format(time.RFC3339), strconv.FormatBool(res.Success), string(res.Status), res.Message, res.Error, fmtFloat(res.LatencyMS), fmtFloat(res.MinMS), fmtFloat(res.MaxMS), fmtFloat(res.JitterMS), fmtFloat(res.StdDevMS), fmtFloat(res.LossPct), code, res.Details.FinalURL, strconv.Itoa(res.Attempts)})
+		_ = cw.Write([]string{res.Timestamp.Format(time.RFC3339), strconv.FormatBool(res.Success), csvText(string(res.Status)), csvText(res.Message), csvText(res.Error), fmtFloat(res.LatencyMS), fmtFloat(res.MinMS), fmtFloat(res.MaxMS), fmtFloat(res.JitterMS), fmtFloat(res.StdDevMS), fmtFloat(res.LossPct), code, csvText(res.Details.FinalURL), strconv.Itoa(res.Attempts)})
 	}
 	cw.Flush()
 }
@@ -778,7 +796,7 @@ func (s *Server) handleExportEvents(w http.ResponseWriter, r *http.Request) {
 		if e.CheckID != nil {
 			cid = strconv.FormatInt(*e.CheckID, 10)
 		}
-		_ = cw.Write([]string{e.Timestamp.Format(time.RFC3339), string(e.Type), e.NodeName, e.CheckName, e.Title, e.Detail, nid, cid})
+		_ = cw.Write([]string{e.Timestamp.Format(time.RFC3339), csvText(string(e.Type)), csvText(e.NodeName), csvText(e.CheckName), csvText(e.Title), csvText(e.Detail), nid, cid})
 	}
 	cw.Flush()
 }

@@ -510,22 +510,45 @@ func (e *Engine) RunNow(ctx context.Context, checkID int64) (model.Result, error
 
 // RunNodeNow runs all enabled checks of a node.
 func (e *Engine) RunNodeNow(ctx context.Context, nodeID int64) ([]model.Result, error) {
+	return e.RunNodeChecks(ctx, nodeID, nil)
+}
+
+// RunNodeChecks runs the enabled checks of a node that allow accepts (all of
+// them when allow is nil) and returns their results.
+//
+// Each run takes a slot of the same semaphore the scheduler uses, so a node
+// with hundreds of checks runs at most MaxConcurrentChecks of them at once,
+// alongside — not on top of — whatever the schedule has in flight. A caller
+// that gives up while waiting for a slot gets the results finished so far.
+func (e *Engine) RunNodeChecks(ctx context.Context, nodeID int64, allow func(model.Check) bool) ([]model.Result, error) {
 	e.mu.Lock()
 	n, ok := e.nodes[nodeID]
+	sem := e.sem
 	e.mu.Unlock()
 	if !ok {
 		return nil, store.ErrNotFound
 	}
+	if sem == nil {
+		// Not loaded yet (no ReloadConfig): bound the run on its own.
+		sem = make(chan struct{}, model.DefaultSettings().General.MaxConcurrentChecks)
+	}
 	var out []model.Result
 	var wg sync.WaitGroup
 	var omu sync.Mutex
+admit:
 	for _, c := range n.Checks {
-		if !c.Enabled {
+		if !c.Enabled || (allow != nil && !allow(c)) {
 			continue
+		}
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			break admit
 		}
 		wg.Add(1)
 		go func(id int64) {
 			defer wg.Done()
+			defer func() { <-sem }()
 			r, err := e.runAndProcess(ctx, id, 0)
 			if err == nil {
 				omu.Lock()
