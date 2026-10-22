@@ -111,10 +111,63 @@ func (s *Store) CountAdmins(ctx context.Context) (int, error) {
 	return n, err
 }
 
-// UpdateUserRole changes an account's role.
+// ErrLastAdmin is returned by UpdateUserRole and DeleteUser when the change
+// would leave the install with no administrator account.
+var ErrLastAdmin = errors.New("it is the only administrator account")
+
+// UpdateUserRole changes an account's role. Demoting the only administrator
+// is refused with ErrLastAdmin.
 func (s *Store) UpdateUserRole(ctx context.Context, id int64, role auth.Role) error {
-	res, err := s.exec(ctx, "UPDATE users SET role = ?, updated_at = ? WHERE id = ?", string(role), fmtTime(time.Now()), id)
-	return affected(res, err)
+	return s.writeTx(ctx, func(tx *wtx) error {
+		if role != auth.RoleAdmin {
+			if err := s.keepAnAdmin(ctx, tx, id); err != nil {
+				return err
+			}
+		}
+		res, err := tx.exec(ctx, "UPDATE users SET role = ?, updated_at = ? WHERE id = ?", string(role), fmtTime(time.Now()), id)
+		return affected(res, err)
+	})
+}
+
+// keepAnAdmin refuses, inside a write transaction, a change that takes the
+// admin role away from account id when no other administrator exists. The
+// check and the change it guards commit together, so two requests demoting or
+// deleting two different administrators at once can no longer both see
+// "there is another one" and leave none, as they could when the check was a
+// separate COUNT ahead of the write. Every write already goes through s.wmu,
+// which serialises them within this process; on a server database the admin
+// rows are locked as well, so a second process sharing it is held to the same
+// rule. SQLite has no FOR UPDATE and needs none: its write transactions are
+// BEGIN IMMEDIATE and run one at a time.
+func (s *Store) keepAnAdmin(ctx context.Context, tx *wtx, id int64) error {
+	q := "SELECT id FROM users WHERE role = ?"
+	if s.d.name() != "sqlite" {
+		q += " FOR UPDATE"
+	}
+	rows, err := tx.query(ctx, q, string(auth.RoleAdmin))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	target, others := false, 0
+	for rows.Next() {
+		var aid int64
+		if err := rows.Scan(&aid); err != nil {
+			return err
+		}
+		if aid == id {
+			target = true
+		} else {
+			others++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if target && others == 0 {
+		return ErrLastAdmin
+	}
+	return nil
 }
 
 // SetUserPassword replaces an account's password hash and signs the account
@@ -133,10 +186,16 @@ func (s *Store) TouchUserLogin(ctx context.Context, id int64) error {
 	return err
 }
 
-// DeleteUser removes an account and its sessions.
+// DeleteUser removes an account and its sessions. Deleting the only
+// administrator is refused with ErrLastAdmin.
 func (s *Store) DeleteUser(ctx context.Context, id int64) error {
-	res, err := s.exec(ctx, "DELETE FROM users WHERE id = ?", id)
-	return affected(res, err)
+	return s.writeTx(ctx, func(tx *wtx) error {
+		if err := s.keepAnAdmin(ctx, tx, id); err != nil {
+			return err
+		}
+		res, err := tx.exec(ctx, "DELETE FROM users WHERE id = ?", id)
+		return affected(res, err)
+	})
 }
 
 func affected(res sql.Result, err error) error {

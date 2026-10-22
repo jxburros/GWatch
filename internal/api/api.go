@@ -12,6 +12,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/netip"
 	"path"
 	"sort"
 	"strconv"
@@ -48,13 +49,19 @@ type Server struct {
 	// Network reports how the server is bound (optional).
 	Network NetworkFunc
 	Restart func()
+	// TrustedProxies are the reverse proxies whose forwarding headers name
+	// the client (see clientIP). Empty, the default, trusts no header.
+	TrustedProxies []netip.Prefix
 
-	// failLimiter counts failed credential attempts per client IP; apiLimiter
-	// is the general ceiling on API-key traffic from off this machine. Both are
-	// created by Handler().
-	loginSlots  chan struct{} // at most two concurrent 64 MiB password checks
-	failLimiter *auth.Limiter
-	apiLimiter  *auth.Limiter
+	// failLimiter counts failed credential attempts per client IP (and, for
+	// sign-in, per account name too); loginSourceLimiter is the wider ceiling
+	// on sign-in attempts from one client across every account name;
+	// apiLimiter is the general ceiling on API-key traffic from off this
+	// machine. All are created by Handler().
+	loginSlots         chan struct{} // at most two concurrent 64 MiB password checks
+	failLimiter        *auth.Limiter
+	loginSourceLimiter *auth.Limiter
+	apiLimiter         *auth.Limiter
 
 	// discoveryJobs holds the subnet sweep in flight and the last one that
 	// finished. It lives here rather than in the store because a sweep is a
@@ -88,6 +95,9 @@ func (s *Server) Handler() http.Handler {
 	}
 	if s.failLimiter == nil {
 		s.failLimiter = auth.NewLimiter(failureLimit, failureWindow)
+	}
+	if s.loginSourceLimiter == nil {
+		s.loginSourceLimiter = auth.NewLimiter(loginSourceLimit, failureWindow)
 	}
 	if s.apiLimiter == nil {
 		s.apiLimiter = auth.NewLimiter(remoteRequestLimit, remoteRequestWindow)

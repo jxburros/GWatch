@@ -175,3 +175,41 @@ func TestLimiter(t *testing.T) {
 		t.Fatal("zero limiter must allow")
 	}
 }
+
+// Refund hands back one token and no more: unlike Reset it cannot erase the
+// attempts spent before it, and it never lifts a bucket above its burst.
+func TestLimiterRefund(t *testing.T) {
+	l := NewLimiter(3, time.Minute)
+	defer l.Close()
+	now := time.Now()
+	l.now = func() time.Time { return now }
+	for i := 0; i < 3; i++ {
+		l.Allow("k")
+	}
+	l.Refund("k")
+	if ok, _ := l.Allow("k"); !ok {
+		t.Fatal("the refunded token should be usable")
+	}
+	if ok, _ := l.Allow("k"); ok {
+		t.Fatal("a refund must give back one token, not the whole bucket")
+	}
+	// Refunding a full or unknown bucket does not raise it past the burst.
+	for i := 0; i < 5; i++ {
+		l.Refund("fresh")
+	}
+	l.Allow("fresh")
+	for i := 0; i < 5; i++ {
+		l.Refund("fresh")
+	}
+	allowed := 0
+	for i := 0; i < 10; i++ {
+		if ok, _ := l.Allow("fresh"); ok {
+			allowed++
+		}
+	}
+	if allowed != 3 {
+		t.Fatalf("%d allowed after refunds, want the burst of 3", allowed)
+	}
+	var off *Limiter
+	off.Refund("x") // must not panic
+}
