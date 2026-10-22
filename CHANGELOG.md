@@ -9,9 +9,45 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
-## Unreleased
+## 0.7.1 — 2026-10-22
+
+0.7.0 was never published; 0.7.1 is the first release to carry its changes
+(below) as well as these security fixes. Agent 0.7.1 is released alongside.
 
 ### Security
+
+- **Update signatures name the release they are for.** Each `.sig` now also carries
+  `release-sig`, an ed25519 signature over the asset's name, the release version and
+  its digest. GWatch, the agent and the install scripts check it, so a genuinely signed
+  binary can no longer be republished as a newer release or as another product. The
+  updater checks the signature's release before downloading the executable and stops a
+  download at the size the release declares (512 MiB at most). The agent's own version
+  proof is now an exact comparison. Copies released before this keep verifying the
+  digest-only `sig` line, which is still written so they can install this release.
+- **API keys keep their limits on stored checks.** A read-write key can no longer
+  retarget a check whose credentials would be filled back in from storage (403), get a
+  check's decrypted credentials back from `POST /api/checks/{id}/enable` (responses are
+  now masked), or run, switch on, duplicate or bulk-enable checks that run a command or
+  carry a credential to a URL. Running a disabled check or node with a key answers 409.
+- **Manual node runs share the check concurrency limit**, and a node holds at most 500
+  checks.
+- **Sign-in limits are per account and source.** A successful sign-in resets only the
+  failures against that account from that address; a per-address ceiling (30 a minute)
+  that a success never clears stops spraying. Changing a password now checks the limits
+  and takes a slot of the sign-in concurrency limit before any password hashing.
+  `--trusted-proxies` / `GWATCH_TRUSTED_PROXIES` (empty by default) lets a reverse proxy
+  you name forward the client address the limits use; see
+  [`docs/REMOTE-ACCESS.md`](docs/REMOTE-ACCESS.md).
+- **The last administrator cannot be removed by two requests at once.** The check and
+  the change now happen in one database transaction.
+- **CSV exports neutralise spreadsheet formulas**: a text cell starting with `=`, `+`,
+  `-`, `@`, a tab or a carriage return is prefixed with `'`.
+- **The agent keeps secrets off command lines.** `run` and `serve` started with
+  `--token` move it into `GWATCH_AGENT_TOKEN` and restart themselves in place without
+  it (Windows warns instead); the control panel's address carries a one-time code that
+  expires in five minutes and is no longer handed to the browser opener's arguments.
+- **`gwatch-sign keygen -force`** writes the key as a new 0600 file and refuses to
+  write through a link.
 
 - **A remote database connection verifies the server by default.** A PostgreSQL or
   MySQL/MariaDB configuration that leaves `sslMode` empty now gets `verify-full`
@@ -38,6 +74,8 @@ disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ### Upgrade notes
 
+- **Release tooling.** `gwatch-sign sign` and `verify` require `-version`, the release
+  version the assets are published in; `make sign`/`verify-release` pass `VERSION`.
 - **Server databases with no `sslMode`.** An install that reaches a remote database
   through `GWATCH_DB_*` environment variables, `--db-*` flags or a hand-written
   `database.json` without `sslMode` will now insist on a certificate that verifies
