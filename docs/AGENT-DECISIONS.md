@@ -134,7 +134,10 @@ readings, and it is the only thing the two processes share besides the
 configuration file.
 
 **What guards it:** loopback only; a Host check against DNS rebinding; a random
-secret in the address, traded for a cookie and dropped from the address bar;
+one-time code in the address, traded for a separate cookie and dropped from the
+address bar, and never put on a command line (the browser is opened on a private
+temporary page that leads on to the panel, since another user can read the
+opener's command line and a panel run under sudo is worth reading);
 a custom header and an Origin check on anything that changes something; a
 strict content-security policy; the token absent from the page until someone
 presses Show (the file editor is shown a mask where it is).
