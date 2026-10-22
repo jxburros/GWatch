@@ -145,6 +145,13 @@ installed by an older agent still carries its settings on its command line, and
 those still win over the file; `config show` says so. Run `gwatch-agent
 uninstall` then `install` to move onto the file.)
 
+Keep the token in the file, or in `GWATCH_AGENT_TOKEN`, rather than on a command
+line. `run` and `serve` keep going, and any user of the machine can read a
+running process's command line, so when either is started with `--token` it
+moves the token into its own environment, which only its account can read, and
+starts itself again without it (same process, same settings) — saying so as it
+does. Windows cannot do that; there the agent warns and carries on.
+
 Agents paired by an older version are migrated: the first time one starts it
 writes `agent.json` from the old `agent-token` and `agent-settings.json`, which
 are left where they were so a rollback still finds them.
@@ -244,8 +251,13 @@ from an Administrator terminal; otherwise it opens read-only and says so.
 
 What protects it: it listens on a loopback address and refuses any other host
 name in the request, so a web page cannot reach it by rebinding a DNS name; it is
-opened with a random secret in the address that becomes a cookie and is then
-dropped from the address bar; anything that changes something needs a header a
+opened with a random code in the address that works once, for a few minutes, and
+is traded for a separate cookie and then dropped from the address bar; the code
+is never put on a command line (another user of the machine could read it there,
+which matters when the panel runs under `sudo`), so the browser is opened on a
+small page in a private temporary folder that leads to the panel and is deleted
+as soon as it has been used — if your browser cannot open it, use the address
+the panel prints instead; anything that changes something needs a header a
 page on another origin cannot set and a matching `Origin`; the token is never in
 the page until you press **Show**. The service writes a small status file for it
 to read, which holds no token and no readings.
@@ -408,7 +420,7 @@ GWatch, or because you already collect metrics centrally — run the agent in
 serve mode:
 
 ```
-gwatch-agent serve --token <any secret you choose> --listen 0.0.0.0:9713
+GWATCH_AGENT_TOKEN=<any secret you choose> gwatch-agent serve --listen 0.0.0.0:9713
 ```
 
 Then add a **Hardware health** check with its source set to **A metrics

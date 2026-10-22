@@ -19,8 +19,12 @@
 // What guards it, since it can change settings and show the token:
 //   - it listens only on a loopback address, and refuses any other host name in
 //     the request (so a web page cannot reach it by rebinding a DNS name);
-//   - it is opened with a random secret in the address, which becomes a cookie
-//     and is then dropped from the address bar; nothing is served without it;
+//   - it is opened with a random one-time code in the address, which is traded
+//     for a separate session cookie and then dropped from the address bar and
+//     forgotten; nothing is served without the cookie. The code is never put on
+//     a command line (the browser is pointed at a private file that holds it),
+//     because another user of the machine can read command lines, and a panel
+//     run with sudo is worth their reading;
 //   - anything that changes something needs a header a web page on another
 //     origin cannot set, and an Origin that matches;
 //   - it exits after half an hour of nobody using it.
@@ -35,6 +39,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io/fs"
 	"net"
 	"net/http"
@@ -45,6 +50,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -63,6 +69,9 @@ const (
 	uiHeader      = "X-GWatch-Panel"
 	uiIdleTimeout = 30 * time.Minute
 	maxUIBody     = 256 << 10
+	// uiCodeLifetime is how long the address printed for the panel works if
+	// nobody uses it. It is good for one visit either way.
+	uiCodeLifetime = 5 * time.Minute
 )
 
 // runUI serves the panel until interrupted or idle.
@@ -91,7 +100,11 @@ func runUI(cfg config, addr string, openBrowser bool) error {
 	if err != nil {
 		return err
 	}
-	srv := newUIServer(cfg, ln.Addr().String(), secret)
+	code, err := randomHex(24)
+	if err != nil {
+		return err
+	}
+	srv := newUIServer(cfg, ln.Addr().String(), secret, code)
 	httpSrv := &http.Server{
 		Handler:           srv.handler(),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -100,11 +113,22 @@ func runUI(cfg config, addr string, openBrowser bool) error {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	link := "http://" + ln.Addr().String() + "/?k=" + secret
+	link := "http://" + ln.Addr().String() + "/?k=" + code
 	fmt.Printf("GWatch agent control panel: %s\n", link)
-	fmt.Println("It runs with your account's rights, only on this machine, and stops by itself after half an hour of not being used. Press Ctrl-C to stop it now.")
+	fmt.Println("The address works once, for the first browser to open it. The panel runs with your account's rights, only on this machine, and stops by itself after half an hour of not being used. Press Ctrl-C to stop it now.")
 	if openBrowser {
-		openInBrowser(link)
+		// The browser is handed the name of a file that only this account can
+		// read, not the address: the address would be on the opener's command
+		// line, where any user of the machine can see it.
+		page, cleanup, err := writeLaunchPage(link)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "note: could not open a browser:", err)
+		} else {
+			defer cleanup()
+			srv.onRedeemed = cleanup
+			time.AfterFunc(uiCodeLifetime, cleanup)
+			openInBrowser(page)
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -160,18 +184,47 @@ func randomHex(n int) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// openInBrowser asks the desktop to show a page. Failing is fine: the address
-// has been printed.
-func openInBrowser(link string) {
-	var cmd *exec.Cmd
+// writeLaunchPage writes a page that sends the browser on to link, in a
+// directory of its own that only this account can open, and returns its path
+// and a function that removes it. The path is safe to show anyone; what it
+// leads to is not.
+func writeLaunchPage(link string) (string, func(), error) {
+	dir, err := os.MkdirTemp("", "gwatch-panel-")
+	if err != nil {
+		return "", nil, err
+	}
+	var once sync.Once
+	cleanup := func() { once.Do(func() { _ = os.RemoveAll(dir) }) }
+	page := filepath.Join(dir, "open-panel.html")
+	esc := html.EscapeString(link)
+	body := `<!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer">` +
+		`<meta http-equiv="refresh" content="0;url=` + esc + `"><title>GWatch agent</title>` +
+		`<p>Opening the GWatch agent control panel… <a href="` + esc + `">continue</a></p>`
+	if err := os.WriteFile(page, []byte(body), 0o600); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return page, cleanup, nil
+}
+
+// browserCommand is the command that asks the desktop to show target, a file
+// or an address. Whatever is passed here is on a command line other users of
+// the machine can read, so it must never carry a secret.
+func browserCommand(target string) *exec.Cmd {
 	switch runtime.GOOS {
 	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", link)
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", target)
 	case "darwin":
-		cmd = exec.Command("open", link)
+		return exec.Command("open", target)
 	default:
-		cmd = exec.Command("xdg-open", link)
+		return exec.Command("xdg-open", target)
 	}
+}
+
+// openInBrowser asks the desktop to show a page. Failing is fine: the address
+// has been printed.
+func openInBrowser(target string) {
+	cmd := browserCommand(target)
 	if cmd.Start() == nil {
 		go func() { _ = cmd.Wait() }()
 	}
@@ -180,10 +233,19 @@ func openInBrowser(link string) {
 // ---- the server ----
 
 type uiServer struct {
-	cfg      config
-	addr     string
-	secret   string
-	lastUsed atomic.Int64
+	cfg  config
+	addr string
+	// secret is the session cookie. It is never shown to anyone: the address
+	// carries code instead, which is good for one visit before codeExpires and
+	// is cleared once traded for the cookie.
+	secret      string
+	codeMu      sync.Mutex
+	code        string
+	codeExpires time.Time
+	// onRedeemed runs once the code has been used, to remove the page that
+	// carried it to the browser.
+	onRedeemed func()
+	lastUsed   atomic.Int64
 	// Seams for tests: how the service is controlled and asked after.
 	control func(action string) error
 	state   func() serviceState
@@ -205,8 +267,8 @@ type serviceState struct {
 	Error   string `json:"error,omitempty"`
 }
 
-func newUIServer(cfg config, addr, secret string) *uiServer {
-	s := &uiServer{cfg: cfg, addr: addr, secret: secret}
+func newUIServer(cfg config, addr, secret, code string) *uiServer {
+	s := &uiServer{cfg: cfg, addr: addr, secret: secret, code: code, codeExpires: time.Now().Add(uiCodeLifetime)}
 	s.lastUsed.Store(time.Now().Unix())
 	s.control = s.controlService
 	s.save = (*configDoc).save
@@ -262,11 +324,11 @@ func (s *uiServer) guard(next http.Handler) http.Handler {
 		}
 		s.lastUsed.Store(time.Now().Unix())
 
-		// The first visit carries the secret in the address. Trade it for a
-		// cookie and take it out of the address bar and the history.
+		// The first visit carries the one-time code in the address. Trade it
+		// for the cookie and take it out of the address bar and the history.
 		if k := r.URL.Query().Get("k"); k != "" {
-			if !secretEqual(k, s.secret) {
-				http.Error(w, "that address is not valid; run `gwatch-agent ui` again for a fresh one", http.StatusForbidden)
+			if !s.redeem(k) {
+				http.Error(w, "that address is not valid, or has already been used; run `gwatch-agent ui` again for a fresh one", http.StatusForbidden)
 				return
 			}
 			http.SetCookie(w, &http.Cookie{Name: uiCookie, Value: s.secret, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
@@ -298,6 +360,22 @@ func (s *uiServer) guard(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// redeem reports whether k is the panel's code, still unused and in date, and
+// spends it if so: the address works for one browser, once.
+func (s *uiServer) redeem(k string) bool {
+	s.codeMu.Lock()
+	ok := s.code != "" && time.Now().Before(s.codeExpires) && secretEqual(k, s.code)
+	if ok {
+		s.code = ""
+	}
+	done := s.onRedeemed
+	s.codeMu.Unlock()
+	if ok && done != nil {
+		done()
+	}
+	return ok
 }
 
 func secretEqual(a, b string) bool {
