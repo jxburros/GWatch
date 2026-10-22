@@ -51,7 +51,8 @@ has to sign in. The legacy access password keeps working for existing scripts.
 A loopback request that carries a reverse proxy's forwarding headers (`Forwarded`,
 `X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto` or `X-Real-IP`) is not
 `local`: it came through a proxy on this machine on behalf of someone elsewhere, and is
-judged like any other remote client. A signed-in account is always itself, even on the
+judged like any other remote client — whether or not the proxy is listed in
+`--trusted-proxies`, and whatever address it forwards. A signed-in account is always itself, even on the
 computer GWatch runs on — the cookie is resolved before the loopback shortcut.
 
 If the database cannot be asked whether a session cookie or API key is valid, the
@@ -141,10 +142,17 @@ send cross-origin without a preflight, so insisting on JSON puts every write beh
 A malformed JSON document is still a `400`. The multipart upload at
 `POST /api/backups/restore` is the one exception, and takes a file rather than a body.
 
-**Rate limits.** Failed credentials (sign-in, API key, access password, agent token and
+**Rate limits.** Failed credentials (API key, access password, agent token and
 custom-endpoint token) are limited to 10 per minute per client IP; API-key requests from
-off this machine are limited to 300 per minute per client IP. Both answer `429` with
-`Retry-After` in seconds. A `/hook/` call that presents the right token gives its budget
+off this machine are limited to 300 per minute per client IP. Password checks — sign-in
+and the current password of `POST /api/auth/change-password` — are limited to 10
+attempts per minute per account name and client IP, which a correct password clears for
+that account only, and to 30 attempts per minute per client IP across all account names,
+which a correct password does not clear. They are refused before the password is checked,
+and at most two run at once; when both are busy the answer is `429` with `Retry-After: 1`.
+All of these answer `429` with `Retry-After` in seconds. The client IP is the connecting
+address, or, when that address is listed in `--trusted-proxies`, the client the proxy
+names in `X-Forwarded-For` / `X-Real-IP` (see [REMOTE-ACCESS.md](REMOTE-ACCESS.md#rate-limiting)). A `/hook/` call that presents the right token gives its budget
 back, so an endpoint called on a schedule is never throttled by its own traffic; an
 unknown slug still answers `404`, but it is charged for, so slugs cannot be enumerated.
 
@@ -179,7 +187,7 @@ route is closed until it is opened on purpose.
 - `POST /api/auth/change-password` body `{ "current", "new" }` → changes your own password and signs every browser of that account out. Any signed-in user; never an API key.
 - `GET /api/users` → `[User]`. `POST /api/users` body `{ "username", "password", "role": "admin"|"viewer" }` → `User` (201). The first account created is always an administrator, and on an install with no accounts a `local` or `password` principal may create it.
 - `PUT /api/users/{id}` body `{ "role"?, "password"? }` → `User`. A new password ends that account's sessions; a new role applies to them from their next request, without signing them out.
-- `DELETE /api/users/{id}` → `{ok:true}`. Deleting or demoting the last administrator is refused with 400.
+- `DELETE /api/users/{id}` → `{ok:true}`. Deleting or demoting the last administrator is refused with 400; the check is made in the same database transaction as the change, so two simultaneous requests removing the last two administrators cannot both succeed.
 - `GET /api/apikeys` → `[APIKey]` (revoked keys included, so the trail keeps their names).
 - `POST /api/apikeys` body `{ "name", "scope": "read"|"readwrite" }` → `{ "key": "gw_…", "apiKey": APIKey }` (201). An omitted scope means `read`. **The key is returned once and cannot be shown again.**
 - `DELETE /api/apikeys/{id}` → `{ok:true}`, revoking it immediately.

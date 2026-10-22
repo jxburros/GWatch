@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -69,6 +70,11 @@ type config struct {
 	rollback bool
 	dataDir  string
 	listen   string
+	// trustedProxies is --trusted-proxies as given; proxies is it parsed.
+	// See docs/REMOTE-ACCESS.md: the reverse proxies whose X-Forwarded-For
+	// GWatch believes when it rate-limits and audits sign-ins.
+	trustedProxies string
+	proxies        []netip.Prefix
 	// db holds the --db-* flags. Empty fields were not given; the database
 	// is decided by dbconfig.Resolve (flags over environment over
 	// database.json over the SQLite default).
@@ -100,7 +106,11 @@ Database (docs/DATABASE.md): GWatch uses the SQLite file gwatch.db in the data d
   The same settings can be saved in database.json in the data directory (Settings › Database does this),
   which is how the background service finds them; flags and GWATCH_DB_* variables override the file.
 
-Environment: GWATCH_DATA_DIR, GWATCH_LISTEN, GWATCH_DB_* override the defaults.
+Reverse proxy (docs/REMOTE-ACCESS.md):
+  --trusted-proxies 127.0.0.1,::1   believe X-Forwarded-For / X-Real-IP from these proxies (addresses or CIDR ranges)
+                                    when rate-limiting and auditing sign-ins; empty (the default) trusts none
+
+Environment: GWATCH_DATA_DIR, GWATCH_LISTEN, GWATCH_TRUSTED_PROXIES, GWATCH_DB_* override the defaults.
 `, version)
 }
 
@@ -118,6 +128,7 @@ func main() {
 	fs.BoolVar(&cfg.rollback, "rollback", false, "update: restore the previous executable")
 	fs.StringVar(&cfg.dataDir, "data-dir", envOr("GWATCH_DATA_DIR", defaultDataDir()), "directory for the database, logs and backups")
 	fs.StringVar(&cfg.listen, "listen", envOr("GWATCH_LISTEN", "127.0.0.1:7230"), "address to serve the web interface on (127.0.0.1:7230 = this computer only, 0.0.0.0:7230 = whole network)")
+	fs.StringVar(&cfg.trustedProxies, "trusted-proxies", envOr("GWATCH_TRUSTED_PROXIES", ""), "reverse proxies (addresses or CIDR ranges, comma-separated) whose X-Forwarded-For names the client; empty trusts none")
 	fs.StringVar(&cfg.db.Driver, "db-driver", "", "database to use: sqlite (default), postgres or mysql")
 	fs.StringVar(&cfg.db.Host, "db-host", "", "database server host")
 	fs.StringVar(&cfg.db.Port, "db-port", "", "database server port (5432 for PostgreSQL, 3306 for MySQL)")
@@ -176,6 +187,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(2)
 	}
+	proxies, err := api.ParseTrustedProxies(cfg.trustedProxies)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error: --trusted-proxies:", err)
+		os.Exit(2)
+	}
+	cfg.proxies = proxies
 
 	prg := &program{cfg: cfg}
 	svcConfig := &service.Config{
@@ -185,6 +202,9 @@ func main() {
 		Arguments:   []string{"run", "--data-dir", cfg.dataDir, "--listen", cfg.listen},
 		Option:      service.KeyValue{"StartType": "automatic", "OnFailure": "restart", "OnFailureDelayDuration": "5s", "SystemdScript": serviceinstall.SystemdScript},
 	}
+	if cfg.trustedProxies != "" {
+		svcConfig.Arguments = append(svcConfig.Arguments, "--trusted-proxies", cfg.trustedProxies)
+	}
 	if cmd == "install" && runtime.GOOS == "linux" {
 		if err := permissions.EnsurePrivateDir("/etc/gwatch"); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -192,6 +212,9 @@ func main() {
 		}
 		if _, err := os.Stat("/etc/gwatch/gwatch.env"); os.IsNotExist(err) {
 			data := fmt.Sprintf("GWATCH_DATA_DIR=%q\nGWATCH_LISTEN=%q\n", cfg.dataDir, cfg.listen)
+			if cfg.trustedProxies != "" {
+				data += fmt.Sprintf("GWATCH_TRUSTED_PROXIES=%q\n", cfg.trustedProxies)
+			}
 			if err := os.WriteFile("/etc/gwatch/gwatch.env", []byte(data), 0600); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
@@ -461,7 +484,7 @@ func runApp(ctx context.Context, cfg config, mode string, requestRestart func())
 	// service. Whether they run at all is a setting (Settings › Updates).
 	go updater.Run(ctx)
 	srv := &api.Server{Engine: eng, Store: st, Log: log, Web: webFS, Skill: skillFS, BackupDir: filepath.Join(cfg.dataDir, "backups"), DataDir: cfg.dataDir, Version: version,
-		Updater: updater, Restart: requestRestart,
+		Updater: updater, Restart: requestRestart, TrustedProxies: cfg.proxies,
 		Network: func() model.NetworkInfo { return lm.info(eng.Settings().General) },
 	}
 	httpServer := &http.Server{

@@ -30,6 +30,13 @@ const (
 	// make per failureWindow before it is asked to wait.
 	failureLimit  = 10
 	failureWindow = time.Minute
+	// loginSourceLimit is how many sign-in attempts one client may make per
+	// failureWindow across every account name together. failureLimit applies
+	// to each (account name, client) pair and is cleared when that pair signs
+	// in; this wider ceiling is never cleared by a success, so neither a
+	// spray across many names nor a guesser's own good sign-ins between
+	// guesses gets past it.
+	loginSourceLimit = 30
 	// remoteRequestLimit is the general per-IP ceiling for API-key traffic from
 	// off this machine (ROADMAP 2.5 "rate limiting").
 	remoteRequestLimit  = 300
@@ -38,15 +45,23 @@ const (
 
 // ---- principal resolution ----
 
-// clientIP is the address the limiters and the audit log key on. It is the
-// socket peer, never a forwarded header: GWatch may sit behind a reverse proxy
-// the user controls, but trusting X-Forwarded-For by default would let any
-// caller invent its own identity and dodge the rate limits.
+// clientIP is the address the limiters and the audit log key on. By default
+// it is the socket peer, never a forwarded header: GWatch may sit behind a
+// reverse proxy the user controls, but trusting X-Forwarded-For by default
+// would let any caller invent its own identity and dodge the rate limits.
+// When the peer is one of the configured TrustedProxies, the client that proxy
+// names in its forwarding headers is used instead (see forwardedClient), so
+// that everyone behind one proxy no longer shares one budget.
 func (s *Server) clientIP(r *http.Request) string {
 	addr := s.remoteAddr(r)
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		return addr
+		host = addr
+	}
+	if s.trustedProxy(host) {
+		if client, ok := s.forwardedClient(r); ok {
+			return client
+		}
 	}
 	return host
 }
@@ -96,6 +111,81 @@ func limiterIPKey(ip string) string {
 		return v4.String()
 	}
 	return parsed.Mask(net.CIDRMask(64, 128)).String() + "/64"
+}
+
+// loginTargetKey is the failed-attempt bucket for one account name tried from
+// one client. Sign-in failures used to share a bucket per client, which any
+// successful sign-in cleared: someone holding one account could alternate a
+// guess at another account with a good sign-in of their own and never run out
+// of guesses. Keyed by the name as well, a success clears only the budget of
+// the account that signed in. The name is folded the way the store matches it
+// (case-insensitively) and capped at the longest name an account can have,
+// so a spray of long names cannot inflate the limiter's memory.
+func loginTargetKey(username, ip string) string {
+	name := strings.ToLower(strings.TrimSpace(username))
+	if len(name) > 64 {
+		name = name[:64]
+	}
+	// The address has no "|" in it, so putting the free-form name last keeps
+	// every (name, address) pair a distinct key.
+	return limiterLogin + "|" + limiterIPKey(ip) + "|" + name
+}
+
+// loginSourceKey is the bucket for every sign-in attempt from one client,
+// whatever account name it tries; see loginSourceLimit.
+func loginSourceKey(ip string) string {
+	return limiterLogin + "|" + limiterIPKey(ip)
+}
+
+// admitPasswordCheck spends one attempt from both sign-in budgets before an
+// account password is verified: the (account name, client) budget and the
+// client-wide ceiling. It reports whether the check may go ahead and, if not,
+// how long the client should wait. A refused attempt costs nothing, so the
+// first budget's token is handed back when the second refuses.
+func (s *Server) admitPasswordCheck(username, ip string) (bool, time.Duration) {
+	target := loginTargetKey(username, ip)
+	if ok, wait := s.failLimiter.Allow(target); !ok {
+		return false, wait
+	}
+	if ok, wait := s.loginSourceLimiter.Allow(loginSourceKey(ip)); !ok {
+		s.failLimiter.Refund(target)
+		return false, wait
+	}
+	return true, 0
+}
+
+// passwordCheckPassed clears the (account name, client) budget after a correct
+// password and hands back the attempt the client-wide ceiling was charged. It
+// does not clear that ceiling: the failures before this success still count.
+func (s *Server) passwordCheckPassed(username, ip string) {
+	s.failLimiter.Reset(loginTargetKey(username, ip))
+	s.loginSourceLimiter.Refund(loginSourceKey(ip))
+}
+
+// passwordCheckNotRun hands both tokens back when an admitted attempt never
+// reached the password check (every verification slot was busy).
+func (s *Server) passwordCheckNotRun(username, ip string) {
+	s.failLimiter.Refund(loginTargetKey(username, ip))
+	s.loginSourceLimiter.Refund(loginSourceKey(ip))
+}
+
+// verifyPassword is auth.VerifyPassword. It is a variable only so the tests
+// can count and time the 64 MiB Argon2 checks the handlers start.
+var verifyPassword = auth.VerifyPassword
+
+// acquirePasswordSlot takes one of the loginSlots that bound how many Argon2
+// verifications run at once, across sign-in and password changes alike. It
+// never waits: when every slot is busy it answers 429 itself and returns
+// false. On true the caller must call the returned release.
+func (s *Server) acquirePasswordSlot(w http.ResponseWriter, busy string) (release func(), ok bool) {
+	select {
+	case s.loginSlots <- struct{}{}:
+		return func() { <-s.loginSlots }, true
+	default:
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusTooManyRequests, busy)
+		return nil, false
+	}
 }
 
 // presentedAPIKey returns the API key a request carries, if any.
@@ -250,8 +340,9 @@ var forwardingHeaders = []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Ho
 // every such visitor was an administrator with no sign-in at all, and a
 // signed-in viewer became one the moment their session was not recognised.
 // A proxied request says so in the headers it adds, and is then judged like
-// any other remote client. Only this shortcut looks at those headers; the
-// address the rate limits and the audit log use is still the socket peer.
+// any other remote client. Here the mere presence of a header is enough to
+// refuse, whoever sent it and whatever TrustedProxies says: a forwarded request
+// is never a local one, and a header can only ever take this principal away.
 func (s *Server) isLocalClient(r *http.Request) bool {
 	if !s.isLoopback(r) {
 		return false
@@ -582,21 +673,19 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip := s.clientIP(r)
-	if ok, wait := s.failLimiter.Allow(limiterKey(limiterLogin, ip)); !ok {
+	username := strings.TrimSpace(body.Username)
+	if ok, wait := s.admitPasswordCheck(username, ip); !ok {
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds()+0.999)))
 		writeError(w, http.StatusTooManyRequests, "too many sign-in attempts; try again shortly")
 		return
 	}
 	// Bound Argon2 memory across all clients, including unknown usernames.
-	select {
-	case s.loginSlots <- struct{}{}:
-		defer func() { <-s.loginSlots }()
-	default:
-		w.Header().Set("Retry-After", "1")
-		writeError(w, http.StatusTooManyRequests, "sign-in is busy; try again shortly")
+	release, ok := s.acquirePasswordSlot(w, "sign-in is busy; try again shortly")
+	if !ok {
+		s.passwordCheckNotRun(username, ip)
 		return
 	}
-	username := strings.TrimSpace(body.Username)
+	defer release()
 	u, hash, err := s.Store.GetUserByName(ctx, username)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		// The database did not answer: that is not a wrong password, so it
@@ -610,14 +699,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// quickly it is rejected (#91).
 		auth.SpendVerifyTime(body.Password)
 	}
-	if err != nil || auth.VerifyPassword(hash, body.Password) != nil {
+	if err != nil || verifyPassword(hash, body.Password) != nil {
 		s.auditAuthFailure(ctx, "Sign-in failed", fmt.Sprintf("Wrong user name or password for %q.", username), ip)
 		// One message for both cases: a different answer for "no such user"
 		// would let anyone enumerate the account names.
 		writeError(w, http.StatusUnauthorized, "incorrect user name or password")
 		return
 	}
-	s.failLimiter.Reset(limiterKey(limiterLogin, ip))
+	s.passwordCheckPassed(username, ip)
 
 	token, err := auth.NewSessionToken()
 	if err != nil {
@@ -697,20 +786,34 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeDecodeError(w, err)
 		return
 	}
+	// Checking the current password is a sign-in by another name, so it spends
+	// from the same budgets and takes one of the same verification slots, and
+	// both are settled before any Argon2 work is done: a signed-in account
+	// sending wrong passwords in parallel could otherwise start one 64 MiB
+	// check per request, however many it had already got wrong.
+	ip := s.clientIP(r)
+	if ok, wait := s.admitPasswordCheck(p.Name, ip); !ok {
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds()+0.999)))
+		writeError(w, http.StatusTooManyRequests, "too many attempts; try again shortly")
+		return
+	}
+	release, ok := s.acquirePasswordSlot(w, "GWatch is busy checking passwords; try again shortly")
+	if !ok {
+		s.passwordCheckNotRun(p.Name, ip)
+		return
+	}
+	// Held until the new password is hashed too, which costs the same again.
+	defer release()
 	u, hash, err := s.Store.GetUserByName(ctx, p.Name)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	if err := auth.VerifyPassword(hash, body.Current); err != nil {
-		if ok, wait := s.failLimiter.Allow(limiterKey(limiterLogin, s.clientIP(r))); !ok {
-			w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds()+0.999)))
-			writeError(w, http.StatusTooManyRequests, "too many attempts; try again shortly")
-			return
-		}
+	if err := verifyPassword(hash, body.Current); err != nil {
 		writeError(w, http.StatusUnauthorized, "the current password is not correct")
 		return
 	}
+	s.passwordCheckPassed(p.Name, ip)
 	if err := auth.ValidatePassword(body.New); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -818,13 +921,13 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	if body.Role != nil {
 		role := auth.ParseRole(*body.Role)
 		if role != auth.ParseRole(u.Role) {
-			if role != auth.RoleAdmin {
-				if err := s.guardLastAdmin(ctx, u, "change the role of"); err != nil {
-					writeError(w, http.StatusBadRequest, err.Error())
+			// The store refuses to demote the last administrator, in the same
+			// transaction as the change (see lastAdminError).
+			if err := s.Store.UpdateUserRole(ctx, id, role); err != nil {
+				if errors.Is(err, store.ErrLastAdmin) {
+					writeError(w, http.StatusBadRequest, lastAdminError(u, "change the role of"))
 					return
 				}
-			}
-			if err := s.Store.UpdateUserRole(ctx, id, role); err != nil {
 				s.fail(w, err)
 				return
 			}
@@ -877,11 +980,11 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	if err := s.guardLastAdmin(ctx, u, "delete"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
 	if err := s.Store.DeleteUser(ctx, id); err != nil {
+		if errors.Is(err, store.ErrLastAdmin) {
+			writeError(w, http.StatusBadRequest, lastAdminError(u, "delete"))
+			return
+		}
 		s.fail(w, err)
 		return
 	}
@@ -889,20 +992,13 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// guardLastAdmin refuses a change that would leave the install with no
-// administrator — including an admin demoting themselves.
-func (s *Server) guardLastAdmin(ctx context.Context, u model.User, verb string) error {
-	if auth.ParseRole(u.Role) != auth.RoleAdmin {
-		return nil
-	}
-	n, err := s.Store.CountAdmins(ctx)
-	if err != nil {
-		return err
-	}
-	if n <= 1 {
-		return fmt.Errorf("you cannot %s %s: it is the only administrator account, and GWatch would have no one able to manage it", verb, u.Username)
-	}
-	return nil
+// lastAdminError explains the refusal of a change that would leave the
+// install with no administrator — including an admin demoting themselves.
+// The check itself lives in the store (UpdateUserRole, DeleteUser), inside the
+// transaction that makes the change: counting first and writing afterwards let
+// two requests removing two different administrators at once both pass.
+func lastAdminError(u model.User, verb string) string {
+	return fmt.Sprintf("you cannot %s %s: it is the only administrator account, and GWatch would have no one able to manage it", verb, u.Username)
 }
 
 func validateUsername(name string) error {

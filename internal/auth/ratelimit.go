@@ -95,6 +95,25 @@ func (l *Limiter) Reset(key string) {
 	l.mu.Unlock()
 }
 
+// Refund gives back the one token an Allow for key took, without touching any
+// other the bucket has spent. The API uses it where an attempt turns out not
+// to count against a budget — a sign-in that succeeded, against the
+// source-wide ceiling — so that unlike Reset it cannot erase the failures
+// that came before it.
+func (l *Limiter) Refund(key string) {
+	if l == nil || l.burst <= 0 {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if b := l.seen[key]; b != nil {
+		b.tokens++
+		if b.tokens > l.burst {
+			b.tokens = l.burst
+		}
+	}
+}
+
 // Close stops the background cleanup goroutine.
 func (l *Limiter) Close() {
 	if l == nil {
