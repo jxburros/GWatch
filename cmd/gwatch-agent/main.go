@@ -796,7 +796,7 @@ func (p *program) report(ctx context.Context) {
 		// for as long as they run, turning a fleet into a spike the server
 		// sees and the network feels.
 		wait := jittered(p.cfg.interval, p.cfg.interval/10)
-		metrics, err := collect(ctx, p.cfg, collector)
+		metrics, err := takeReading(ctx, p.cfg, collector)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -927,6 +927,11 @@ func newCollector(cfg config) *sysmetrics.Collector {
 	c.AgentVersion = version
 	return c
 }
+
+// takeReading is how the reporting loop takes each reading. It is collect;
+// tests replace it so that what they time is the loop, not this machine's
+// hardware.
+var takeReading = collect
 
 // collect takes a reading and applies the one thing the agent overrides: the
 // name this machine reports itself under, for the case where the system

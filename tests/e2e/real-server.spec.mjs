@@ -7,7 +7,9 @@ test('real service: accounts, sign-in, keys and masked check credentials', async
   const settings = await (await request.get('/api/settings')).json();
   settings.updates = { ...settings.updates, checkAutomatically: false, promptOnOpen: false };
   expect((await request.put('/api/settings', { data: settings })).ok()).toBeTruthy();
-  const account = { username: 'browser-admin', password: 'browser-test-password-2026', role: 'admin' };
+  // A fresh account per attempt: the first attempt's account outlives it on the
+  // same server, so reusing the name would fail a CI retry before it began.
+  const account = { username: `browser-admin-${test.info().repeatEachIndex}-${test.info().retry}`, password: 'browser-test-password-2026', role: 'admin' };
   expect((await request.post('/api/users', { data: account })).ok()).toBeTruthy();
   await page.goto('/#/login');
   await page.getByLabel('User name', { exact: true }).fill(account.username);
@@ -36,6 +38,9 @@ test('real service: accounts, sign-in, keys and masked check credentials', async
   const templates = await (await request.get('/api/templates')).json();
   expect(templates.map((t) => t.id)).toContain('this-computer');
   await page.goto('/?mock=1#/nodes');
+  // The nodes list itself first, so a failure says whether the page or the
+  // node is what is missing.
+  await expect(page.getByRole('region', { name: 'Filter nodes' })).toBeVisible();
   await expect(page.locator('#gwatch-mock-banner')).toHaveCount(0);
-  await expect(page.getByText('Credential regression', { exact: true }).first()).toBeVisible();
+  await expect(page.locator('.node-list').getByText('Credential regression', { exact: true }).first()).toBeVisible();
 });

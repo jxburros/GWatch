@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jxburros/GWatch/internal/model"
+	"github.com/jxburros/GWatch/internal/sysmetrics"
 )
 
 const (
@@ -309,19 +310,36 @@ func TestStatusFileCarriesNoSecretsAndNoReadings(t *testing.T) {
 // reading, and held one per attempt.)
 func TestAnOutageHoldsAReadingPerIntervalAndDeliversThemInOrder(t *testing.T) {
 	isolate(t)
+	// Readings are stubbed so the test times the loop rather than this
+	// machine's hardware, which on a busy CI runner can take longer than the
+	// whole outage.
+	old := takeReading
+	takeReading = func(context.Context, config, *sysmetrics.Collector) (model.HostMetrics, error) {
+		return model.HostMetrics{Hostname: "outage-test", Timestamp: time.Now()}, nil
+	}
+	t.Cleanup(func() { takeReading = old })
+
+	// The outage is the first failedAttempts deliveries, not a stretch of wall
+	// clock, so a slow machine lengthens it rather than shortening it.
+	const failedAttempts = 5
 	var mu sync.Mutex
 	var got []time.Time
-	failUntil := time.Now().Add(1200 * time.Millisecond)
+	var attempts int
+	var recovered time.Time
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if time.Now().Before(failUntil) {
+		mu.Lock()
+		defer mu.Unlock()
+		if attempts < failedAttempts {
+			attempts++
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
+		if recovered.IsZero() {
+			recovered = time.Now()
+		}
 		var m model.HostMetrics
 		if json.NewDecoder(r.Body).Decode(&m) == nil {
-			mu.Lock()
 			got = append(got, m.Timestamp)
-			mu.Unlock()
 		}
 		w.WriteHeader(http.StatusAccepted)
 	}))
@@ -334,7 +352,25 @@ func TestAnOutageHoldsAReadingPerIntervalAndDeliversThemInOrder(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { p.report(ctx); close(done) }()
-	time.Sleep(2400 * time.Millisecond)
+
+	// Delivery backs off 30, 60, 120, 240 and 480ms after the five failures,
+	// close to a second in which a reading is taken every 30ms. Wait until
+	// the agent has recovered and delivered well past what it held.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		mu.Lock()
+		n, back := len(got), !recovered.IsZero()
+		mu.Unlock()
+		if back && n >= 40 {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatalf("the agent delivered %d readings in 30s (recovered: %v)", n, back)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	cancel()
 	<-done
 
@@ -345,15 +381,15 @@ func TestAnOutageHoldsAReadingPerIntervalAndDeliversThemInOrder(t *testing.T) {
 		if i > 0 && ts.Before(got[i-1]) {
 			t.Fatalf("readings must be delivered oldest first: %v before %v", got[i-1], ts)
 		}
-		if ts.Before(failUntil) {
+		if ts.Before(recovered) {
 			before++
 		}
 	}
-	// The first reading alone takes the collector 300ms to prime, leaving about
-	// 900ms of outage at a 30ms interval: a dozen or more readings. Delivery
-	// backs off 30, 60, 120, 240, 480ms…, so a loop that took one reading per
-	// attempt would have held five or six.
-	if before < 9 {
+	// A loop that took one reading per attempt would hold one per failure plus
+	// the one delivered on recovery, six in all; taking one every interval
+	// through the backoff holds about thirty. Twice the failures is far from
+	// both.
+	if before < 2*failedAttempts {
 		t.Errorf("only %d readings from the outage were delivered (%d in all); the agent stopped taking readings while it waited", before, len(got))
 	}
 }

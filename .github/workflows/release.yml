@@ -287,6 +287,14 @@ jobs:
         go run tests/e2e/generate-fixtures.go
         git diff --exit-code -- web/mock-templates.js
         GWATCH_REAL=1 npx playwright test
+    - name: Keep the real-server browser traces
+      if: failure()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: real-server-playwright-traces
+        path: test-results/
+        if-no-files-found: ignore
+        retention-days: 14
     needs:
     - plan
     if: needs.plan.outputs.selected == 'true'
