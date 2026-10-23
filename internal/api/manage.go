@@ -729,6 +729,10 @@ func (s *Server) handleRestoreUpload(w http.ResponseWriter, r *http.Request) {
 func csvWriter(w http.ResponseWriter, name string) *csv.Writer {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name))
+	// A byte-order mark first: without it Excel opens a UTF-8 file as the
+	// system code page, and every em dash, accent and › in a node name or
+	// message comes out garbled. Other spreadsheets ignore it.
+	_, _ = io.WriteString(w, "\uFEFF")
 	return csv.NewWriter(w)
 }
 

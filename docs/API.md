@@ -1291,6 +1291,7 @@ See [`RESTORE.md`](RESTORE.md) for the end-to-end restore-to-a-new-machine proce
 - `GET /api/export/history.csv?checkId=ID&range=30d` → CSV: `timestamp,avg_ms,min_ms,max_ms,jitter_ms,loss_pct,availability_pct,count,failures`.
 - `GET /api/export/results.csv?checkId=ID&limit=5000` → raw results CSV: `timestamp,success,status,message,error,latency_ms,min_ms,max_ms,jitter_ms,stddev_ms,loss_pct,http_status,final_url,attempts`.
 - `GET /api/export/events.csv?nodeId=&limit=5000&type=&q=&since=&until=` → events CSV (same filters as `/api/events`).
+- Every CSV is UTF-8 and starts with a byte-order mark, so Excel shows accents and dashes as written; strip the leading `\uFEFF` if a tool of yours does not expect it.
 - In the CSV exports, a text cell (names, titles, notes, messages, errors, URLs) that
   begins with `=`, `+`, `-`, `@`, a tab or a carriage return is written with a leading
   `'`, so a spreadsheet shows it as text rather than evaluating it as a formula. Numeric

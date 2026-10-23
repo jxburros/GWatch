@@ -184,7 +184,7 @@ func TestNodeLifecycleAndHistory(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != 200 || !strings.HasPrefix(string(body), "timestamp,avg_ms") || !strings.Contains(resp.Header.Get("Content-Type"), "text/csv") {
+	if resp.StatusCode != 200 || !strings.HasPrefix(string(body), "\uFEFFtimestamp,avg_ms") || !strings.Contains(resp.Header.Get("Content-Type"), "text/csv") {
 		t.Fatalf("csv: %d %q", resp.StatusCode, body)
 	}
 	// static app shell + fallback

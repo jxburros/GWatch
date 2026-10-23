@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -306,5 +307,27 @@ func TestNtfyTokenIsNotForwardedAcrossRedirects(t *testing.T) {
 	}
 	if leaked != "" {
 		t.Fatalf("token forwarded to the redirect target: %q", leaked)
+	}
+}
+
+// ntfy reads headers as Latin-1, so a title that is not plain ASCII goes as an
+// RFC 2047 encoded word and arrives as written.
+func TestNtfyNonASCIITitleIsEncoded(t *testing.T) {
+	var title, tags string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		title, tags = r.Header.Get("Title"), r.Header.Get("Tags")
+	}))
+	defer srv.Close()
+	r := &Runner{}
+	a := model.Action{Type: model.ActionNtfy, Server: srv.URL, Topic: "alerts", Title: "Café — down", Tags: "warning"}
+	if res := r.Run(context.Background(), a, Vars{}); !res.OK {
+		t.Fatalf("expected OK, got %+v", res)
+	}
+	got, err := new(mime.WordDecoder).DecodeHeader(title)
+	if err != nil || got != "Café — down" || title == got {
+		t.Fatalf("title header = %q (decodes to %q, %v)", title, got, err)
+	}
+	if tags != "warning" {
+		t.Fatalf("an ASCII header was changed: %q", tags)
 	}
 }

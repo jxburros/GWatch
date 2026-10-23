@@ -13,20 +13,36 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const webDir = join(root, 'web');
-const binary = new Set(['.png', '.jpg', '.jpeg', '.gif', '.ico', '.webp', '.woff', '.woff2', '.ttf', '.otf']);
+const binary = new Set(['.png', '.jpg', '.jpeg', '.gif', '.ico', '.webp', '.woff', '.woff2', '.ttf', '.otf', '.syso', '.exe', '.bmp', '.zip', '.gz', '.db']);
 const mojibake = Buffer.from('â€', 'utf8');
 
 function* textFiles(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
-    if (entry.isDirectory()) yield* textFiles(path);
+    if (entry.isDirectory()) { if (!skipDirs.has(entry.name)) yield* textFiles(path); }
     else if (!binary.has(extname(entry.name).toLowerCase())) yield path;
   }
 }
 
-test('no file under web/ contains double-encoded UTF-8 ("â€")', () => {
+// The rest of the source: documentation, Go strings that reach the screen,
+// e-mails and logs, scripts and packaging. (marketing/ is left out: it quotes
+// the mangled text on purpose, to describe what was fixed.)
+const otherDirs = ['docs', 'internal', 'cmd', 'scripts', 'packaging', 'mcp', 'skill'].map(d => join(root, d));
+const skipDirs = new Set(['node_modules', '.git', 'dist']);
+
+function* sourceFiles() {
+  yield* textFiles(webDir);
+  for (const dir of otherDirs) {
+    try { yield* textFiles(dir); } catch { /* not in this checkout */ }
+  }
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (entry.isFile() && extname(entry.name).toLowerCase() === '.md') yield join(root, entry.name);
+  }
+}
+
+test('no source file contains double-encoded UTF-8 ("â€")', () => {
   const hits = [];
-  for (const path of textFiles(webDir)) {
+  for (const path of sourceFiles()) {
     const bytes = readFileSync(path);
     if (!bytes.includes(mojibake)) continue;
     bytes.toString('utf8').split('\n').forEach((line, i) => {

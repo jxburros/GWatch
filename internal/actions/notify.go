@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -287,13 +288,13 @@ func (r *Runner) runNtfy(ctx context.Context, a model.Action, vars Vars, res mod
 	}
 	req.Header.Set("User-Agent", "GWatch-automation")
 	if title != "" {
-		req.Header.Set("Title", headerSafe(title))
+		req.Header.Set("Title", ntfyHeader(title))
 	}
 	if p := strings.TrimSpace(Expand(a.Priority, vars)); p != "" {
 		req.Header.Set("Priority", headerSafe(p))
 	}
 	if tags := strings.TrimSpace(Expand(a.Tags, vars)); tags != "" {
-		req.Header.Set("Tags", headerSafe(tags))
+		req.Header.Set("Tags", ntfyHeader(tags))
 	}
 	if tok := strings.TrimSpace(Expand(a.Token, vars)); tok != "" {
 		req.Header.Set("Authorization", "Bearer "+headerSafe(tok))
@@ -313,6 +314,20 @@ func (r *Runner) runNtfy(ctx context.Context, a model.Action, vars Vars, res mod
 	}
 	res.OK = true
 	return res
+}
+
+// ntfyHeader makes a header value ntfy reads as the text it was. HTTP headers
+// are Latin-1 to ntfy, so a title with an accent, an em dash or an emoji in it
+// arrived garbled; ntfy decodes RFC 2047 encoded words, so any
+// value that is not plain ASCII is sent as one.
+func ntfyHeader(v string) string {
+	v = headerSafe(v)
+	for i := 0; i < len(v); i++ {
+		if v[i] >= 0x80 {
+			return mime.BEncoding.Encode("utf-8", v)
+		}
+	}
+	return v
 }
 
 // ---- pushover ----
