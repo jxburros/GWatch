@@ -9,6 +9,51 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## Unreleased
+
+### Fixed
+
+- **The agent comes back after a power cut** (#170). A power cut while `agent.json` was
+  being written could leave it empty, zeroed or cut off, and the agent then refused to
+  start (exit 78, which the packaged service never restarts). Every save now also keeps
+  `agent.json.bak`, both written atomically, and a damaged file falls back to the copy
+  with a warning. Serve mode keeps trying to listen when its address is not there yet,
+  as on a machine that boots before DHCP answers, instead of serving nothing.
+- **Garbled text in CSV exports and ntfy titles** (#178). CSV exports start with a
+  byte-order mark so Excel reads them as UTF-8, and ntfy titles and tags that are not
+  plain ASCII are sent as RFC 2047 encoded words.
+- **Engine and hardware correctness** (#161): Windows network counters are 64-bit
+  (GetIfTable2Ex), so fast links no longer wrap every interval; deleting a node or check
+  takes it out of the rules that named it (an emptied rule is switched off); a system
+  ping stopped before its summary no longer reports phantom loss; sleep detection uses
+  the wall clock; a hung network mount no longer blocks the hardware sampler.
+- **Filters stay in the address** (#113). The Nodes list and the incident event feed
+  write their filters into the URL, the event feed's Export CSV follows the filters
+  (type included), and a slow answer for an earlier filter can no longer land last.
+- **Dashboards stop re-downloading history on every live update, and share one event
+  stream** (#114).
+- **Bounded shutdown** (#105). Stopping gives in-flight work 15 s, cancels it, and
+  returns within 20 s, inside the Windows SCM and systemd stop timeouts.
+  `gwatch migrate-db` refuses to copy while GWatch is running, and a failed copy says
+  to re-run with `--replace`.
+- **Safer restores** (#148). A restore first takes a full backup of what it replaces,
+  runs to the end even if the browser goes away, leaves out accounts and agents deleted
+  since the backup unless asked to re-create them, and keeps agents linked to their nodes.
+- **Startup no longer stalls result writes** (#107). The rollup backfill runs in
+  day-sized chunks and, after the first, only catches up from where the last one got to.
+- **Alert e-mails** (#99): at most three are sent at once, and a failed one is retried
+  once after 15 s before the alert is re-armed.
+- **Documentation accuracy** (#165): API routes, the config export, Settings tabs,
+  retention, privacy (what is encrypted, what GWatch contacts), ROADMAP and the brief.
+
+### Added
+
+- **Disk activity on macOS** (#185). The agent and the local hardware check read disk
+  throughput, operations and busy % on macOS from the I/O Registry, as on Linux and
+  Windows.
+- **Discovery describes responders 16 at a time** (#110), so a busy /24 is described in
+  seconds rather than over a minute.
+
 ## 0.7.2 — 2026-10-22
 
 The first published release since 0.6.2: 0.7.0 and 0.7.1 were never published, so
