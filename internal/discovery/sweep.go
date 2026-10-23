@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -63,6 +64,17 @@ type Responder struct {
 	OpenPorts []int   `json:"openPorts"`
 	Template  string  `json:"template"`
 	Note      string  `json:"note,omitempty"`
+	// MAC is the hardware address this machine's neighbour table holds for
+	// the responder, and Vendor the maker of its network card as the IEEE
+	// registry names it (or RandomisedMAC). Both are empty for a device on
+	// another network, which is reached through a router and never has its
+	// own entry here.
+	MAC    string `json:"mac,omitempty"`
+	Vendor string `json:"vendor,omitempty"`
+	// NoPing is set for a device found only in the neighbour table: it
+	// answered ARP during the sweep but not the ping, so it is there, and a
+	// ping check would nonetheless report it as down. RTTMS is 0 for it.
+	NoPing bool `json:"noPing,omitempty"`
 }
 
 // Name is what the responder should be called if nobody types anything: its
@@ -153,13 +165,48 @@ feed:
 	close(queue)
 	wg.Wait()
 
+	hits = withNeighbours(hits, addrs, readNeighbours())
 	sort.Slice(hits, func(i, j int) bool { return hits[i].addr.Less(hits[j].addr) })
 	return describe(ctx, hits, ports)
 }
 
 type hit struct {
-	addr netip.Addr
-	rtt  time.Duration
+	addr   netip.Addr
+	rtt    time.Duration
+	mac    string
+	noPing bool
+}
+
+// withNeighbours folds the neighbour table into the ping results: every
+// responder gets its MAC address, and an address in the swept range that
+// resolved but did not answer the ping is a responder too. Addresses outside
+// the range are ignored, however recently this machine talked to them — the
+// person asked about these addresses and no others.
+func withNeighbours(hits []hit, addrs []netip.Addr, table []neighbour) []hit {
+	if len(table) == 0 {
+		return hits
+	}
+	inRange := make(map[netip.Addr]bool, len(addrs))
+	for _, a := range addrs {
+		inRange[a] = true
+	}
+	macs := map[netip.Addr]string{}
+	for _, n := range table {
+		if inRange[n.addr] && n.mac != "" {
+			macs[n.addr] = n.mac
+		}
+	}
+	answered := make(map[netip.Addr]bool, len(hits))
+	for i := range hits {
+		answered[hits[i].addr] = true
+		hits[i].mac = macs[hits[i].addr]
+	}
+	for a, mac := range macs {
+		if !answered[a] {
+			hits = append(hits, hit{addr: a, mac: mac, noPing: true})
+		}
+	}
+	return hits
 }
 
 // pingOnce sends a single echo request, and sends a second one if the first
@@ -220,13 +267,24 @@ func describeOne(ctx context.Context, h hit, ports []int) Responder {
 		IP:        ip,
 		RTTMS:     float64(h.rtt) / float64(time.Millisecond),
 		OpenPorts: []int{},
+		MAC:       h.mac,
+		NoPing:    h.noPing,
+	}
+	if h.mac != "" {
+		r.Vendor = Vendor(h.mac)
 	}
 	if ctx.Err() == nil {
 		r.Hostname = reverseName(ctx, ip)
 		r.OpenPorts = probePorts(ctx, ip, ports)
 	}
-	s := Suggest(r.OpenPorts)
+	s := SuggestFor(r.OpenPorts, r.Vendor)
 	r.Template, r.Note = s.Template, s.Note
+	if r.NoPing {
+		// The suggestion still stands — it is about what the device is — but
+		// a ping check on it would read as down from the first run, so say
+		// so where the choice is made.
+		r.Note = strings.TrimSpace(r.Note + " It did not answer a ping (it was found in this machine's neighbour table), so a ping check would show it as down; watch one of its ports instead.")
+	}
 	return r
 }
 

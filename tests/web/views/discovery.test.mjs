@@ -35,13 +35,20 @@ test('discovery finds the mock devices and adds the ones that are ticked', async
     const found = modal()?.querySelectorAll('.table tbody tr');
     return found && found.length ? found : null;
   }, { timeout: 8000 });
-  assert.equal(rows.length, 3, 'the mock network has three devices on it');
+  assert.equal(rows.length, 4, 'the mock network has four devices on it, one of which ignores pings');
 
   // Each row names the device, times it and suggests somewhere to start.
   const first = rows[0];
   assert.equal(first.querySelector('td.mono').textContent, '192.168.1.1');
   assert.equal(first.querySelector('input[type="text"]').value, 'gateway.lan');
   assert.ok(first.querySelector('select'), 'each row offers a template to start from');
+  // The neighbour table gives each device its MAC address and the maker of
+  // its network card (#133), and finds the one that ignored the ping.
+  assert.match(first.textContent, /24:a4:3c:01:02:03/);
+  assert.match(first.textContent, /Ubiquiti/);
+  assert.match(rows[3].textContent, /no ping/);
+  assert.match(rows[3].textContent, /ASUSTek/);
+  assert.match(modal().querySelector('thead').textContent, /MAC address/);
 
   // Nothing is ticked yet, so there is nothing to add.
   assert.ok(buttonNamed('Add selected').disabled, 'adding should wait until something is ticked');
@@ -59,8 +66,8 @@ test('discovery finds the mock devices and adds the ones that are ticked', async
 
   await waitFor(() => window.__gwatchMockDiscoveryAdds.length > 0, { timeout: 8000 });
   const sent = window.__gwatchMockDiscoveryAdds[0];
-  assert.equal(sent.items.length, 3);
-  assert.deepEqual(sent.items.map((i) => i.ip).sort(), ['192.168.1.1', '192.168.1.23', '192.168.1.64']);
+  assert.equal(sent.items.length, 4);
+  assert.deepEqual(sent.items.map((i) => i.ip).sort(), ['192.168.1.1', '192.168.1.23', '192.168.1.64', '192.168.1.80']);
   // Both spellings of the group go out, so this works either side of the
   // change that turns a node's group into a list of them.
   assert.equal(sent.group, 'Discovered');

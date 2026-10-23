@@ -223,7 +223,9 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   // instance's own entry first, then its family's.
   function systemMetricUnit(key) {
     const [family, instance = ''] = key.includes(':') ? [key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1)] : [key];
-    if (['cpu', 'memory', 'swap', 'disk', 'inodes'].includes(family)) return '%';
+    if (['cpu', 'memory', 'swap', 'disk', 'inodes', 'psi'].includes(family)) return '%';
+    if (family === 'temp') return '°C';
+    if (family === 'pool') return 'state';
     if (family === 'net') return 'B/s';
     if (family === 'diskio') return instance.endsWith('.busy') ? '%' : 'B/s';
     return '';
@@ -237,10 +239,10 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
       if (colon < 0) return null;
       const family = key.slice(0, colon), instance = key.slice(colon + 1);
       const dot = instance.lastIndexOf('.');
-      if (dot > 0 && (family === 'net' || family === 'diskio')) { const whole = find(`${family}:${instance.slice(0, dot)}`); if (whole) return whole; }
+      if (dot > 0 && (family === 'net' || family === 'diskio' || family === 'psi')) { const whole = find(`${family}:${instance.slice(0, dot)}`); if (whole) return whole; }
       return find(family) || null;
     };
-    const fmt = (v, unit) => (unit === '%' ? `${Math.round(v)}%` : unit === 'B/s' ? `${Math.round(v / 1000)} kB/s` : v.toFixed(2));
+    const fmt = (v, unit) => (unit === '%' ? `${Math.round(v)}%` : unit === 'B/s' ? `${Math.round(v / 1000)} kB/s` : unit === '°C' ? `${Math.round(v)} °C` : unit === 'state' ? (v >= 2 ? 'faulted' : v >= 1 ? 'degraded' : 'healthy') : v.toFixed(2));
     const out = [];
     const add = (key, label, value) => {
       if (value == null) return;
@@ -261,6 +263,9 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     for (const fs of m.filesystems || []) { add(`disk:${fs.mount}`, `Disk ${fs.mount}`, fs.usedPct); add(`inodes:${fs.mount}`, `Inodes on ${fs.mount}`, fs.inodesUsedPct); }
     for (const n of m.interfaces || []) { add(`net:${n.name}.rx`, `Network ${n.name} received`, n.rxBytesPerSec); add(`net:${n.name}.tx`, `Network ${n.name} sent`, n.txBytesPerSec); }
     for (const d of m.disks || []) { add(`diskio:${d.name}.read`, `Disk ${d.name} read`, d.readBytesPerSec); add(`diskio:${d.name}.write`, `Disk ${d.name} write`, d.writeBytesPerSec); add(`diskio:${d.name}.busy`, `Disk ${d.name} busy`, d.busyPct); }
+    for (const t of m.temperatures || []) add(`temp:${t.name}`, `Temperature ${t.name}`, t.celsius);
+    for (const p of m.pressure || []) { add(`psi:${p.resource}.avg10`, `Pressure on ${p.resource} (10 s)`, p.avg10); add(`psi:${p.resource}.avg60`, `Pressure on ${p.resource} (60 s)`, p.avg60); }
+    for (const p of m.pools || []) add(`pool:${p.name}`, `Pool ${p.name}`, p.health === 'ONLINE' ? 0 : p.health === 'DEGRADED' ? 1 : 2);
     return out;
   }
 
@@ -1065,9 +1070,11 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   // drives it can simply wait.
   const DISCOVERY_MS = 2000;
   const DISCOVERY_FOUND = [
-    { ip: '192.168.1.1', hostname: 'gateway.lan', rttMs: 1.8, openPorts: [80, 443], template: 'router', note: 'Only a web interface answered — looks like a router, switch or access point.' },
-    { ip: '192.168.1.23', hostname: 'pi.lan', rttMs: 0.9, openPorts: [22, 80], template: 'home-server', note: 'SSH and a web interface — looks like a server or NAS.' },
-    { ip: '192.168.1.64', hostname: '', rttMs: 5.4, openPorts: [9100], template: 'tcp-service', note: 'Port 9100 is open — this looks like a network printer.' },
+    { ip: '192.168.1.1', hostname: 'gateway.lan', rttMs: 1.8, openPorts: [80, 443], template: 'router', note: 'Only a web interface answered, and the maker is Ubiquiti — a router, switch or access point.', mac: '24:a4:3c:01:02:03', vendor: 'Ubiquiti' },
+    { ip: '192.168.1.23', hostname: 'pi.lan', rttMs: 0.9, openPorts: [22, 80], template: 'home-server', note: 'SSH and a web interface — looks like a server or NAS — a Raspberry Pi.', mac: 'dc:a6:32:01:02:03', vendor: 'Raspberry Pi Trading' },
+    { ip: '192.168.1.64', hostname: '', rttMs: 5.4, openPorts: [9100], template: 'tcp-service', note: 'Port 9100 is open — this looks like a network printer.', mac: '3c:2a:f4:00:00:01', vendor: 'Brother Industries' },
+    // Found through the neighbour table only: it answered ARP, not the ping.
+    { ip: '192.168.1.80', hostname: 'desktop.lan', rttMs: 0, openPorts: [3389], template: 'ping', note: 'Remote desktop is open — this looks like a Windows machine. Install the agent on it for hardware health. It did not answer a ping (it was found in this machine\'s neighbour table), so a ping check would show it as down; watch one of its ports instead.', mac: 'a8:5e:45:00:00:01', vendor: 'ASUSTek COMPUTER', noPing: true },
   ];
   let discoveryJob = null;
   // The last add, so a test can prove the request was made.
@@ -1249,6 +1256,7 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
         : [
           { mount: '/', device: '/dev/mmcblk0p2', fsType: 'ext4', totalBytes: 62914560000, usedBytes: 24159191040, freeBytes: 38755368960, usedPct: 38.4 },
           { mount: '/srv/media', device: '/dev/sda1', fsType: 'ext4', totalBytes: rootTotal, usedBytes: rootUsed, freeBytes: rootTotal - rootUsed, usedPct: Math.round((rootUsed / rootTotal) * 1000) / 10 },
+          { mount: '/tank', device: 'tank', fsType: 'zfs', totalBytes: 2611340115968, usedBytes: 1288490188800, freeBytes: 1322849927168, usedPct: 49.3, datasets: 4 },
         ],
       interfaces: [{
         name: key === 'local' ? 'Ethernet' : 'eth0', up: true, speedMbit: 1000,
@@ -1267,6 +1275,20 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
         writeOpsPerSec: Math.round(2 + 40 * wave(31 * MIN, 0.7)),
         busyPct: Math.round(60 * wave(11 * MIN, 2.4) * 10) / 10,
       }],
+      // The Linux machine also has what only Linux reports: its sensors, the
+      // kernel's pressure figures and a ZFS pool (#132).
+      ...(key === 'local' ? {} : {
+        temperatures: [
+          { name: 'cpu_thermal/temp1', celsius: Math.round((48 + 14 * wave(23 * MIN, 0.4)) * 10) / 10, critCelsius: 90 },
+          { name: 'drivetemp/temp1', celsius: 36, highCelsius: 55, critCelsius: 65 },
+        ],
+        pressure: [
+          { resource: 'cpu', avg10: Math.round(8 * wave(23 * MIN, 0.4) * 100) / 100, avg60: 3.1 },
+          { resource: 'memory', avg10: 0, avg60: 0, fullAvg10: 0, fullAvg60: 0 },
+          { resource: 'io', avg10: Math.round(12 * wave(11 * MIN, 2.4) * 100) / 100, avg60: 4.2, fullAvg10: 1.1, fullAvg60: 0.6 },
+        ],
+        pools: [{ name: 'tank', health: 'ONLINE', sizeBytes: 3985729650688, allocBytes: 1979120929996, freeBytes: 2006608720692 }],
+      }),
       warnings: key === 'local' ? [] : [],
     };
   }
@@ -1339,7 +1361,7 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   });
   on('PUT', /^\/api\/agents\/(\d+)\/collect$/, (m, body) => {
     const a = agentById(m[1]);
-    const bad = (body?.metrics || []).find((x) => !['cpu', 'memory', 'swap', 'load', 'disk', 'inodes', 'net', 'diskio'].includes(x));
+    const bad = (body?.metrics || []).find((x) => !['cpu', 'memory', 'swap', 'load', 'disk', 'inodes', 'net', 'diskio', 'temp', 'psi', 'pool'].includes(x));
     if (bad) throw err(400, `"${bad}" is not a metric family`);
     a.collect = { metrics: body?.metrics || [], interfaces: body?.interfaces || [], disks: body?.disks || [], mounts: body?.mounts || [] };
     return clone(a);

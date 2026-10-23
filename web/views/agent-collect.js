@@ -20,6 +20,9 @@ export const COLLECT_FAMILIES = [
   { key: 'inodes', label: 'Inodes', help: 'Needs disk space' },
   { key: 'net', label: 'Network throughput' },
   { key: 'diskio', label: 'Disk throughput' },
+  { key: 'temp', label: 'Temperatures', help: 'Linux' },
+  { key: 'psi', label: 'Pressure stall', help: 'Linux' },
+  { key: 'pool', label: 'ZFS pool health', help: 'Linux' },
 ];
 
 const INSTANCE_KINDS = [

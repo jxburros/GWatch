@@ -80,6 +80,21 @@ type HostMetrics struct {
 	Interfaces  []HostInterface  `json:"interfaces,omitempty"`
 	Disks       []HostDiskIO     `json:"disks,omitempty"`
 
+	// Temperatures, Pressure and Pools are Linux readings: every hardware
+	// monitoring chip and thermal zone the kernel exposes, the kernel's
+	// pressure-stall figures, and the health of each ZFS pool. A platform or
+	// a machine without them simply leaves them out.
+	Temperatures []HostTemperature `json:"temperatures,omitempty"`
+	Pressure     []HostPressure    `json:"pressure,omitempty"`
+	Pools        []HostPool        `json:"pools,omitempty"`
+
+	// Container is set when the reading was taken inside a container that has
+	// its own memory or processor limit. Memory and processor use are then
+	// measured against that limit rather than the host's totals: a container
+	// capped at 2 GiB is out of memory at 2 GiB, whatever the machine around
+	// it has spare.
+	Container *HostContainer `json:"container,omitempty"`
+
 	// Warnings records collector problems — a counter this platform does not
 	// expose, a filesystem that could not be stat'ed. A partial reading is
 	// still worth having, so these never fail the whole collection.
@@ -131,6 +146,78 @@ type HostFilesystem struct {
 	InodesTotal   uint64   `json:"inodesTotal,omitempty"`
 	InodesUsed    uint64   `json:"inodesUsed,omitempty"`
 	InodesUsedPct *float64 `json:"inodesUsedPct,omitempty"`
+	// Datasets is how many ZFS datasets were folded into this entry. Every
+	// dataset of a pool is its own mount sharing the pool's free space, so
+	// listing them separately shows the same free figure a dozen times; they
+	// are reported once, as the pool, under the dataset mounted closest to the
+	// root. Zero for anything that is not ZFS.
+	Datasets int `json:"datasets,omitempty"`
+}
+
+// HostTemperature is one temperature sensor. Name is the sensor's metric
+// instance ("coretemp/Package id 0", "nvme/Composite", "thermal/acpitz"): the
+// chip or zone it belongs to, then the sensor's own label.
+type HostTemperature struct {
+	Name    string  `json:"name"`
+	Celsius float64 `json:"celsius"`
+	// HighCelsius and CritCelsius are the limits the chip itself declares,
+	// shown beside the reading. They are not thresholds: the hardware check's
+	// configuration decides what alerts, and plenty of chips declare limits
+	// that are nonsense.
+	HighCelsius *float64 `json:"highCelsius,omitempty"`
+	CritCelsius *float64 `json:"critCelsius,omitempty"`
+}
+
+// HostPressure is the kernel's pressure-stall information for one resource
+// (cpu, memory or io): the share of recent wall-clock time in which at least
+// one task was stalled waiting for it ("some"), and — for memory and io —
+// the share in which every task was ("full"). Averaged over 10 and 60
+// seconds, 0..100.
+type HostPressure struct {
+	Resource  string   `json:"resource"`
+	Avg10     float64  `json:"avg10"`
+	Avg60     float64  `json:"avg60"`
+	FullAvg10 *float64 `json:"fullAvg10,omitempty"`
+	FullAvg60 *float64 `json:"fullAvg60,omitempty"`
+}
+
+// HostPool is one ZFS pool as zpool reports it. The sizes are the pool's raw
+// figures, parity and all, which is why usable space is read from the
+// filesystem instead and these are only shown beside it.
+type HostPool struct {
+	Name       string `json:"name"`
+	Health     string `json:"health"` // ONLINE, DEGRADED, FAULTED, UNAVAIL, ...
+	SizeBytes  uint64 `json:"sizeBytes,omitempty"`
+	AllocBytes uint64 `json:"allocBytes,omitempty"`
+	FreeBytes  uint64 `json:"freeBytes,omitempty"`
+}
+
+// PoolHealthValue turns a pool's state into the number its metric carries: 0
+// for a healthy pool, 1 for one still serving data with its redundancy gone
+// (DEGRADED), 2 for one that is not serving it (FAULTED, UNAVAIL, SUSPENDED,
+// and anything else zpool may print). A threshold of warn 1, crit 2 then
+// reads "tell me when a disk drops out, and shout when the pool goes".
+func PoolHealthValue(health string) float64 {
+	switch strings.ToUpper(strings.TrimSpace(health)) {
+	case "ONLINE":
+		return 0
+	case "DEGRADED":
+		return 1
+	}
+	return 2
+}
+
+// HostContainer describes the container a reading was taken in and the
+// limits it was measured against. A limit left at zero (or nil) is no limit
+// of that kind, and that reading is the host's.
+type HostContainer struct {
+	Kind             string   `json:"kind"` // docker, podman, lxc, kubernetes, container
+	MemoryLimitBytes uint64   `json:"memoryLimitBytes,omitempty"`
+	CPULimitCores    *float64 `json:"cpuLimitCores,omitempty"`
+	// HostMemoryBytes and HostCores are what the machine itself has, kept so
+	// a limit can be shown in proportion to it.
+	HostMemoryBytes uint64 `json:"hostMemoryBytes,omitempty"`
+	HostCores       int    `json:"hostCores,omitempty"`
 }
 
 // HostInterface is throughput and error counts for one network interface.

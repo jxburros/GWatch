@@ -106,7 +106,7 @@ test('what an agent collects is chosen from what the machine says it has', async
   section.querySelector('input[id$="-interfaces-only"]').click();
   docker0.checked = true;
   eth0.checked = false;
-  for (const fam of ['memory', 'swap', 'load', 'disk', 'inodes', 'diskio']) section.querySelector(`input[id$="-${fam}"]`).checked = false;
+  for (const fam of ['memory', 'swap', 'load', 'disk', 'inodes', 'diskio', 'temp', 'psi', 'pool']) section.querySelector(`input[id$="-${fam}"]`).checked = false;
   button(section, 'Save what to collect').click();
   await waitFor(() => {
     const a = window.__gwatchMock.agents?.[0];
@@ -188,12 +188,12 @@ test('adding a machine takes a name and what to monitor, then shows the code', a
   // The choice rode with the code and reaches the agent when it arrives.
   const pairings = await (await fetch('/api/agents/pairings')).json();
   const mine = pairings.find((p) => p.name === 'Garage Pi');
-  assert.deepEqual(mine.collect.metrics.sort(), ['cpu', 'disk', 'diskio', 'load', 'memory', 'net']);
+  assert.deepEqual(mine.collect.metrics.sort(), ['cpu', 'disk', 'diskio', 'load', 'memory', 'net', 'pool', 'psi', 'temp']);
   const status = document.querySelector('.modal [role="status"]');
   await waitFor(() => /is paired and reporting/.test(status.textContent), { timeout: 5000 });
   const agents = await (await fetch('/api/agents')).json();
   const agent = agents.find((a) => a.name === 'Garage Pi');
-  assert.deepEqual(agent.collect.metrics.sort(), ['cpu', 'disk', 'diskio', 'load', 'memory', 'net']);
+  assert.deepEqual(agent.collect.metrics.sort(), ['cpu', 'disk', 'diskio', 'load', 'memory', 'net', 'pool', 'psi', 'temp']);
 });
 
 /* ---------- the picker on its own ---------- */
@@ -204,19 +204,30 @@ test('the collection picker writes nothing it was not asked to', () => {
   assert.equal(picker.summary(), 'everything, with virtual interfaces left out');
 
   picker.el.querySelector('input[id$="-cpu"]').checked = false;
-  assert.deepEqual(picker.value().metrics.length, 7);
-  assert.match(picker.summary(), /7 of 8 kinds of reading/);
+  assert.deepEqual(picker.value().metrics.length, 10);
+  assert.match(picker.summary(), /10 of 11 kinds of reading/);
 });
 
 test('a name that was chosen but is not on the machine now is kept, not forgotten', () => {
   const picker = collectionPicker({ value: { mounts: ['/', '/mnt/usb'] }, inventory: { mounts: [{ name: '/', auto: true }, { name: '/data', auto: true }] } });
   assert.match(picker.el.textContent, /not seen now/);
   assert.deepEqual(picker.value().mounts.sort(), ['/', '/mnt/usb']);
-  assert.match(describeSelection({ mounts: ['/'], metrics: ['cpu'] }), /1 of 8 kinds of reading, 1 filesystems/);
+  assert.match(describeSelection({ mounts: ['/'], metrics: ['cpu'] }), /1 of 11 kinds of reading, 1 filesystems/);
 });
 
 test('kinds only: no instance lists before the machine has reported', () => {
   const picker = collectionPicker({ instances: false });
   assert.doesNotMatch(picker.el.textContent, /Network interfaces|Filesystems/);
   assert.deepEqual(Object.keys(picker.value()), ['metrics']);
+});
+
+// #132: a Linux machine's sensors, pressure figures and ZFS pool are shown
+// with its other readings, and the pool is one filesystem, not one per dataset.
+test('a Linux machine shows its temperatures, pressure and ZFS pool', async (t) => {
+  const { root } = await mountNas(t);
+  await waitFor(() => /cpu_thermal\/temp1/.test(root.textContent), { timeout: 5000 });
+  assert.match(root.textContent, /Pressure stall/);
+  assert.match(root.textContent, /ZFS pools/);
+  assert.match(root.textContent, /ONLINE/);
+  assert.match(root.textContent, /zfs · 4 datasets/);
 });

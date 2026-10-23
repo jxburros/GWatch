@@ -477,15 +477,27 @@ answers, tries a few ports on it, and offers the lot as a list you can tick.
 - **Put them in a group** — everything you add lands in that group.
 
 Each responder comes back with its address, its name, its round-trip time, its
-open ports and a **suggested template**. Tick the ones you want and add them in
-one go. Progress is live, and a sweep can be cancelled while it runs.
+open ports, its **MAC address and the maker** of its network card, and a
+**suggested template**. Tick the ones you want and add them in one go. Progress
+is live, and a sweep can be cancelled while it runs.
+
+After pinging, GWatch reads this computer's own neighbour (ARP) table, so a
+device that ignored the ping but answered the network's address lookup — a
+firewalled PC, a phone — is listed too, marked **no ping**; a ping check on it
+would show it as down, so watch one of its ports instead. The maker comes from
+the IEEE's public registry, built into GWatch: "Brother Industries" turns an
+unnamed address into the printer, and a phone using a private, randomised
+address says so. Devices on other networks, reached through a router, have no
+MAC address here. (Linux and Windows; macOS lists what answered the ping
+only.)
 
 Nothing is installed and no `nmap` is involved — it is ICMP plus a few TCP
 connects.
 
 > **Inside Docker with the default bridge network, discovery sees Docker's
-> own subnet, not your LAN.** Host or macvlan networking is what makes it
-> useful there. See [`DOCKER.md`](DOCKER.md).
+> own subnet, not your LAN**, and no MAC addresses or makers — the results say
+> so. Host or macvlan networking is what makes it useful there. See
+> [`DOCKER.md`](DOCKER.md).
 
 ---
 

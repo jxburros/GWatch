@@ -211,6 +211,19 @@ func Apply(m model.HostMetrics, sel model.CollectSelection, automatic bool) mode
 		}
 		out.Disks = ds
 	}
+
+	// Temperatures, pressure and pool health are whole families with no
+	// instance list of their own: a machine with one noisy sensor turns the
+	// family off, or leaves the sensor charted without a threshold.
+	if !has(model.MetricTemp) {
+		out.Temperatures = nil
+	}
+	if !has(model.MetricPSI) {
+		out.Pressure = nil
+	}
+	if !has(model.MetricPool) {
+		out.Pools = nil
+	}
 	return out
 }
 

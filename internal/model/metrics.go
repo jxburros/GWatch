@@ -17,7 +17,8 @@ import (
 // A key is the family on its own for the readings a machine has exactly one
 // of ("cpu", "memory", "swap", "load"), or family:instance for the ones it may
 // have several of: "disk:/srv", "inodes:/srv", "net:eth0.rx", "net:eth0.tx",
-// "diskio:sda.read", "diskio:sda.write", "diskio:sda.busy".
+// "diskio:sda.read", "diskio:sda.write", "diskio:sda.busy",
+// "temp:coretemp/Package id 0", "psi:memory.avg10", "pool:tank".
 
 // The metric families a hardware check reports.
 const (
@@ -29,10 +30,13 @@ const (
 	MetricInodes = "inodes" // filesystem inodes used, % — one instance per mount
 	MetricNet    = "net"    // interface throughput, bytes/s — instances <name>.rx and <name>.tx
 	MetricDiskIO = "diskio" // block device throughput — instances <name>.read, <name>.write (bytes/s) and <name>.busy (%)
+	MetricTemp   = "temp"   // sensor temperature, °C — one instance per sensor (Linux)
+	MetricPSI    = "psi"    // pressure stall, % — instances <cpu|memory|io>.avg10 and .avg60 (Linux)
+	MetricPool   = "pool"   // ZFS pool health — one instance per pool: 0 healthy, 1 degraded, 2 faulted (Linux)
 )
 
 // MetricFamilies lists every family, in the order the editor shows them.
-var MetricFamilies = []string{MetricCPU, MetricMemory, MetricSwap, MetricLoad, MetricDisk, MetricInodes, MetricNet, MetricDiskIO}
+var MetricFamilies = []string{MetricCPU, MetricMemory, MetricSwap, MetricLoad, MetricDisk, MetricInodes, MetricNet, MetricDiskIO, MetricTemp, MetricPSI, MetricPool}
 
 // MetricFamilyLabel is the family's name as a person reads it.
 func MetricFamilyLabel(family string) string {
@@ -53,6 +57,12 @@ func MetricFamilyLabel(family string) string {
 		return "Network"
 	case MetricDiskIO:
 		return "Disk I/O"
+	case MetricTemp:
+		return "Temperature"
+	case MetricPSI:
+		return "Pressure stall"
+	case MetricPool:
+		return "Storage pool health"
 	}
 	return family
 }
@@ -61,7 +71,7 @@ func MetricFamilyLabel(family string) string {
 // interface or device rather than being one reading for the whole machine.
 func MetricFamilyHasInstances(family string) bool {
 	switch family {
-	case MetricDisk, MetricInodes, MetricNet, MetricDiskIO:
+	case MetricDisk, MetricInodes, MetricNet, MetricDiskIO, MetricTemp, MetricPSI, MetricPool:
 		return true
 	}
 	return false
@@ -88,8 +98,13 @@ func MetricKey(family, instance string) string {
 func SystemMetricUnit(key string) string {
 	family, instance := SplitMetricKey(key)
 	switch family {
-	case MetricCPU, MetricMemory, MetricSwap, MetricDisk, MetricInodes:
+	case MetricCPU, MetricMemory, MetricSwap, MetricDisk, MetricInodes, MetricPSI:
 		return "%"
+	case MetricTemp:
+		return "°C"
+	case MetricPool:
+		// A state rather than a measurement: 0, 1 or 2 (PoolHealthValue).
+		return "state"
 	case MetricLoad:
 		return ""
 	case MetricNet:
@@ -219,8 +234,9 @@ func (c *CheckConfig) NormalizeMetricThresholds() {
 
 // ThresholdFor finds the entry that governs one metric key: the instance's own
 // entry when there is one, else its family's, else nothing (ok false). For a
-// network or disk-I/O direction ("net:eth0.rx") an entry for the whole
-// interface ("net:eth0") counts as the instance's own.
+// network or disk-I/O direction ("net:eth0.rx"), or a pressure average
+// ("psi:memory.avg10"), an entry for the whole interface ("net:eth0") or
+// resource ("psi:memory") counts as the instance's own.
 func (c CheckConfig) ThresholdFor(key string) (MetricThreshold, bool) {
 	list := c.EffectiveMetricThresholds()
 	find := func(metric string) (MetricThreshold, bool) {
@@ -235,7 +251,7 @@ func (c CheckConfig) ThresholdFor(key string) (MetricThreshold, bool) {
 		return t, true
 	}
 	family, instance := SplitMetricKey(key)
-	if i := strings.LastIndex(instance, "."); i > 0 && (family == MetricNet || family == MetricDiskIO) {
+	if i := strings.LastIndex(instance, "."); i > 0 && (family == MetricNet || family == MetricDiskIO || family == MetricPSI) {
 		if t, ok := find(MetricKey(family, instance[:i])); ok {
 			return t, true
 		}

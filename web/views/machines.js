@@ -370,6 +370,7 @@ export function hardwarePanel(key, { title = 'Hardware', metricStatus = null } =
       m ? ['System', [m.platform, m.arch, m.hostname].filter(Boolean).join(' · ') || '—'] : null,
       m?.bootTime ? ['Started', `${dateTime(m.bootTime)} (up ${duration(m.uptimeSeconds)})`] : null,
       m?.cpu?.model ? ['Processor', `${m.cpu.model} — ${num(m.cpu.cores)} cores`] : null,
+      m?.container ? ['Container', containerWording(m.container)] : null,
       host.agent?.lastVersion ? ['Agent version', agentVersionRow(host.agent.lastVersion, state.latestAgent, state.agentReleaseURL)] : null,
       host.agent?.lastAddr ? ['Reported from', host.agent.lastAddr] : null,
     ].filter(Boolean);
@@ -435,12 +436,62 @@ export function hardwarePanel(key, { title = 'Hardware', metricStatus = null } =
           m.filesystems.map((fs) => [
             fs.mount,
             h('span', { class: 'mono' }, fs.device || '—'),
-            fs.fsType || '—',
+            fs.datasets ? `${fs.fsType || 'zfs'} · ${plural(fs.datasets, 'dataset')}` : fs.fsType || '—',
             pct(fs.usedPct, 0),
             bytes(fs.freeBytes),
             bytes(fs.totalBytes),
             h('div', { class: 'meter meter-inline' + levelFor(`disk:${fs.mount}`, fs.usedPct) },
               h('div', { class: 'meter-track' }, h('div', { class: 'meter-fill', style: { width: `${fs.usedPct}%` } }))),
+          ])),
+      ));
+    }
+
+    if (m.pools?.length) {
+      // A pool's health is a state, not a quantity, so it is a word with the
+      // check's verdict behind its colour rather than a bar.
+      snapEl.append(h('div', null,
+        h('div', { class: 'section-title' }, 'ZFS pools'),
+        table(['Pool', 'Health', 'Allocated', 'Free', 'Size (raw)'],
+          m.pools.map((p) => {
+            const lvl = levelFor(`pool:${p.name}`, null) || (p.health === 'ONLINE' ? '' : p.health === 'DEGRADED' ? ' warn' : ' crit');
+            return [
+              p.name,
+              statusPill(lvl === ' crit' ? 'down' : lvl === ' warn' ? 'degraded' : 'up', { label: p.health || '—' }),
+              bytes(p.allocBytes),
+              bytes(p.freeBytes),
+              bytes(p.sizeBytes),
+            ];
+          })),
+      ));
+    }
+
+    if (m.temperatures?.length) {
+      snapEl.append(h('div', null,
+        h('div', { class: 'section-title' }, 'Temperatures'),
+        table(['Sensor', 'Now', 'High', 'Critical'],
+          m.temperatures.map((t) => {
+            const lvl = levelFor(`temp:${t.name}`, null) || tempLevel(t);
+            return [
+              t.name,
+              lvl ? statusPill(lvl === ' crit' ? 'down' : 'degraded', { label: celsius(t.celsius) }) : celsius(t.celsius),
+              t.highCelsius != null ? celsius(t.highCelsius) : '—',
+              t.critCelsius != null ? celsius(t.critCelsius) : '—',
+            ];
+          })),
+      ));
+    }
+
+    if (m.pressure?.length) {
+      snapEl.append(h('div', null,
+        h('div', { class: 'section-title' }, 'Pressure stall'),
+        h('p', { class: 'note' }, 'The share of time work was held up waiting for each resource. Near zero is normal; sustained figures mean the machine is short of it.'),
+        table(['Resource', 'Some, 10 s', 'Some, 60 s', 'Full, 10 s', 'Full, 60 s'],
+          m.pressure.map((p) => [
+            { cpu: 'Processor', memory: 'Memory', io: 'Disk I/O' }[p.resource] || p.resource,
+            pct(p.avg10, 1),
+            pct(p.avg60, 1),
+            p.fullAvg10 == null ? '—' : pct(p.fullAvg10, 1),
+            p.fullAvg60 == null ? '—' : pct(p.fullAvg60, 1),
           ])),
       ));
     }
@@ -573,6 +624,33 @@ export function hardwarePanel(key, { title = 'Hardware', metricStatus = null } =
     themeChanged() { for (const c of state.charts) c.scheduleDraw?.(); },
     destroy() { state.destroyed = true; unsub(); clearCharts(); },
   };
+}
+
+// containerWording says which limits the memory and processor figures were
+// measured against, since inside a container they are the container's, not
+// the machine's.
+function containerWording(c) {
+  const parts = [];
+  if (c.memoryLimitBytes) parts.push(`memory limited to ${bytes(c.memoryLimitBytes)}${c.hostMemoryBytes ? ` of ${bytes(c.hostMemoryBytes)}` : ''}`);
+  if (c.cpuLimitCores != null) parts.push(`processor limited to ${num(Math.round(c.cpuLimitCores * 100) / 100)} cores${c.hostCores ? ` of ${num(c.hostCores)}` : ''}`);
+  const kind = c.kind ? c.kind.charAt(0).toUpperCase() + c.kind.slice(1) : 'A container';
+  return `${kind} — ${parts.join(', ') || 'no limits'}. Memory and processor use are measured against these limits.`;
+}
+
+function celsius(v) {
+  return v == null ? '—' : `${Math.round(v * 10) / 10} °C`;
+}
+
+// tempLevel shades a reading by the limits the chip itself declares, when no
+// hardware check has a threshold for it.
+function tempLevel(t) {
+  if (t.critCelsius != null && t.celsius >= t.critCelsius) return ' crit';
+  if (t.highCelsius != null && t.celsius >= t.highCelsius) return ' warn';
+  return '';
+}
+
+function plural(n, word) {
+  return `${num(n)} ${word}${n === 1 ? '' : 's'}`;
 }
 
 function sourceWording(host) {

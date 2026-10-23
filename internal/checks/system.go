@@ -285,6 +285,26 @@ func hostMetricResults(cfg model.CheckConfig, m model.HostMetrics) []model.Metri
 		add(model.MetricKey(model.MetricDiskIO, d.Name+".write"), fmt.Sprintf("Disk %s write", d.Name), d.WriteBytesPerSec)
 		add(model.MetricKey(model.MetricDiskIO, d.Name+".busy"), fmt.Sprintf("Disk %s busy", d.Name), d.BusyPct)
 	}
+	// Each sensor is its own reading, so "the NVMe drive is hot" is a
+	// verdict of its own rather than a hottest-of-everything figure that hides
+	// which part it was.
+	for _, t := range m.Temperatures {
+		c := t.Celsius
+		add(model.MetricKey(model.MetricTemp, t.Name), fmt.Sprintf("Temperature %s", t.Name), &c)
+	}
+	// Pressure is the share of time work was stalled waiting for the
+	// resource: the 10-second figure catches a burst, the 60-second one a
+	// machine that is genuinely short. Both are the "some" line — at least one
+	// task waiting — which is the one that moves first.
+	for _, p := range m.Pressure {
+		a10, a60 := p.Avg10, p.Avg60
+		add(model.MetricKey(model.MetricPSI, p.Resource+".avg10"), fmt.Sprintf("Pressure on %s (10 s)", p.Resource), &a10)
+		add(model.MetricKey(model.MetricPSI, p.Resource+".avg60"), fmt.Sprintf("Pressure on %s (60 s)", p.Resource), &a60)
+	}
+	for _, p := range m.Pools {
+		v := model.PoolHealthValue(p.Health)
+		add(model.MetricKey(model.MetricPool, p.Name), fmt.Sprintf("Pool %s", p.Name), &v)
+	}
 	return out
 }
 
@@ -317,6 +337,18 @@ func metricString(v float64, unit string) string {
 		return pctString(v)
 	case "B/s":
 		return bytesPerSecond(v)
+	case "°C":
+		return fmt.Sprintf("%.0f °C", v)
+	case "state":
+		// A pool's health, which reads better as the word it stands for:
+		// "Pool tank is degraded, at or above the degraded warning threshold".
+		switch {
+		case v >= 2:
+			return "faulted"
+		case v >= 1:
+			return "degraded"
+		}
+		return "healthy"
 	}
 	return fmt.Sprintf("%.2f", v)
 }

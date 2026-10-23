@@ -205,7 +205,10 @@ the last word:
 - **On the machine**, `collect` in `agent.json` (or the control panel) is a
   *limit*: `{ "metrics": ["cpu", "memory", "disk", "net"], "interfaces": ["eth0"], "disks": [], "mounts": ["/", "/data"] }`.
   A list that is empty means "no limit". `metrics` are the kinds of reading
-  (`cpu`, `load`, `memory`, `swap`, `disk`, `inodes`, `net`, `diskio`).
+  (`cpu`, `load`, `memory`, `swap`, `disk`, `inodes`, `net`, `diskio`, and on
+  Linux `temp`, `psi` and `pool`). A limit written before the Linux kinds
+  existed does not name them, so a machine with one keeps not sending them
+  until they are added.
 - **In GWatch**, the **What it collects** section of the node's agent card
   chooses *within* that limit, from checkboxes for the interfaces, disks and
   filesystems the machine says it has. It can narrow what a machine reports and
@@ -478,6 +481,10 @@ shape works here too — `gwatch-agent print` shows the format.
 | Network throughput and errors | yes | yes | yes |
 | Disk read/write throughput | yes | yes (needs administrator) | yes (from `ioreg`) |
 | Disk busy (utilisation) | yes | yes (needs administrator) | yes (from `ioreg`) |
+| Temperatures, per sensor | yes | no | no |
+| Pressure stall (PSI) | yes (kernel 4.20+) | n/a | n/a |
+| ZFS pool health | yes (needs `zpool`) | n/a | n/a |
+| Container limits | yes (cgroup v2) | n/a | n/a |
 
 macOS has no way to read processor utilisation without a native extension, so
 the agent reports **load average per core** instead and says so in the
@@ -493,6 +500,62 @@ a fast SSD with many requests in flight can read high before it is the limit.
 Windows disk throughput needs the process to be able to open
 `\\.\PhysicalDriveN`, which the service account can and an ordinary user
 usually cannot. Everything else works either way.
+
+### Linux: temperatures, pressure, containers and ZFS
+
+**Temperatures** come from every hardware-monitoring chip the kernel knows
+(`/sys/class/hwmon/*/temp*_input`, named by the chip's `name` and the input's
+`label`) and from every thermal zone (`/sys/class/thermal/thermal_zone*/temp`)
+that hwmon does not already cover. Each sensor is its own reading, keyed
+`temp:<chip>/<label>` — `temp:coretemp/Package id 0`, `temp:nvme/Composite`,
+`temp:thermal/cpu-thermal` — so a threshold can be set on the family (every
+sensor) or on one. Two chips with the same name (two NVMe drives) are told
+apart by their device: `temp:nvme-nvme0/Composite`. The limits a chip declares
+(`temp*_max`, `temp*_crit`, a zone's critical trip point) are shown beside the
+reading but never alert by themselves: what alerts is the check's thresholds,
+and a new hardware check has none for temperature, because what is hot depends
+on the part and some chips report nonsense. Readings outside −40…150 °C are
+treated as a disconnected input and dropped. SATA drive temperatures appear
+when the `drivetemp` module is loaded; S.M.A.R.T. itself is not read (it needs
+root and `smartctl`, and polling it every reading can wake sleeping disks).
+
+**Pressure stall** (`/proc/pressure/{cpu,memory,io}`) is the share of recent
+time in which work was held up waiting for that resource. Each resource gives
+two readings, `psi:<resource>.avg10` and `psi:<resource>.avg60` (the "some"
+line: at least one task waiting); a threshold on `psi:memory` covers both.
+The "full" figures for memory and io are shown on the machine's page.
+
+**Inside a container** (Docker, Podman, LXC, Kubernetes — recognised by
+`/.dockerenv`, `/run/.containerenv`, `/run/systemd/container` or pid 1's
+cgroup), memory and processor use are measured against the container's own
+cgroup v2 limits, `memory.max` and `cpu.max`, rather than the host's totals: a
+container capped at 2 GiB is full at 2 GiB. Memory used is the cgroup's charge
+less its inactive file cache, as `docker stats` counts it; processor use is the
+share of the CPU quota used, so 100% means the container is being throttled.
+Each limit applies on its own, only when it is tighter than the machine, and
+the machine's page says which limits were applied. A process on the host is
+never measured this way, even under a systemd memory cap, and neither is the
+agent image reading a host through `/host`. cgroup v1 is not read. Pressure
+stall and temperatures inside a container are the host's.
+
+**Filesystems.** An overlay mounted at `/` — the root of a Docker container —
+is reported (its free space is the host filesystem the image layers live on);
+other overlays are container layers and are skipped. btrfs subvolumes of one
+filesystem are the same device and are reported once. ZFS datasets are folded
+into one entry per pool, named after the pool (`Device` is `tank`) and listed
+under the mount point of the pool's top-level dataset, or the dataset mounted
+closest to `/` when that one is not mounted: used is the sum of what the
+mounted datasets refer to, free is the pool's free space, and the machine page
+says how many datasets were folded in. Snapshots and unmounted datasets are not
+in that sum, and ZFS reports no inode figures. When ZFS is mounted and the
+`zpool` command is on the path, `zpool list` (given three seconds) supplies
+each pool's health as the reading `pool:<name>` — 0 healthy, 1 degraded, 2
+faulted or unavailable — and a new hardware check warns at 1 and is critical
+at 2. Its raw sizes, parity included, are shown beside the usable figures.
+An agent in a container with no `zpool` simply reports no pool health.
+
+Every one of these can be turned off for a machine like any other kind of
+reading (`temp`, `psi`, `pool` in `collect`, or the checkboxes on the node).
 
 Anything a platform cannot report is recorded as a warning on the reading and
 shown on the machine's page. It never fails the check on its own: knowing the
@@ -534,8 +597,9 @@ go, but from there on **each metric is its own thing**:
 
 - **Its own key.** `cpu`, `memory`, `swap` and `load` for the readings a
   machine has one of; `disk:/srv`, `inodes:/srv`, `net:eth0.rx`,
-  `net:eth0.tx`, `diskio:sda.read`, `diskio:sda.write`, `diskio:sda.busy` for
-  the ones it may have several of. The key is how the metric is named
+  `net:eth0.tx`, `diskio:sda.read`, `diskio:sda.write`, `diskio:sda.busy`,
+  and on Linux `temp:coretemp/Package id 0`, `psi:memory.avg10` and
+  `pool:tank`, for the ones it may have several of. The key is how the metric is named
   everywhere: in the last result, in charts, in triggers, in the API.
 - **Its own verdict.** Every run judges every metric against the threshold
   that governs it and records the verdict (`up`, `degraded` or `down`) with
@@ -545,7 +609,8 @@ go, but from there on **each metric is its own thing**:
   memory that is fine is not hidden behind the disk that is not.
 - **Its own thresholds.** The check carries a list of warning/critical pairs,
   one per metric family (Processor, Memory, Swap, Load per core, Disk space,
-  Inodes, Network throughput, Disk I/O), edited as boxed groups in the check
+  Inodes, Network throughput, Disk I/O, Temperature, Pressure stall, ZFS pool
+  health), edited as boxed groups in the check
   editor. Below them, *One disk, interface or device* adds an entry for a
   single instance — `disk:/srv`, `net:eth0` — which replaces the family's
   pair for that instance alone. A media disk that lives at 90% can have its

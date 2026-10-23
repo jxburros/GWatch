@@ -96,6 +96,9 @@ export const METRIC_FAMILIES = [
   { key: 'inodes', label: 'Inodes', unit: '%', instances: 'a mount point, e.g. /srv', note: 'A filesystem can run out of inodes with space to spare, and the failure looks identical to a full disk.' },
   { key: 'net', label: 'Network throughput', unit: 'B/s', step: 1, instances: 'an interface, e.g. eth0 (or eth0.rx for one direction)', note: 'Bytes per second, received or sent, per interface. Blank means throughput is charted but never alerted on.' },
   { key: 'diskio', label: 'Disk I/O', unit: 'B/s', step: 1, instances: 'a device, e.g. sda (or sda.read, sda.write; sda.busy is a percentage)', note: 'Bytes per second read or written, per device. Blank means it is charted but never alerted on.' },
+  { key: 'temp', label: 'Temperature', unit: '°C', instances: 'a sensor, e.g. coretemp/Package id 0 or nvme/Composite', note: 'Linux only: every hardware sensor and thermal zone, each its own reading. Blank means charted but never alerted on — what is hot depends on the part, so set it for the sensors you know.' },
+  { key: 'psi', label: 'Pressure stall', unit: '%', instances: 'a resource, e.g. memory (or memory.avg10, memory.avg60)', note: 'Linux only: the share of time work was stalled waiting for the processor, memory or disks, averaged over 10 and 60 seconds. Sustained memory or io pressure is a machine that is short of it.' },
+  { key: 'pool', label: 'ZFS pool health', unit: '', instances: 'a pool, e.g. tank', note: 'Linux with ZFS only: 0 is healthy, 1 is degraded (a disk has dropped out), 2 is faulted or unavailable.' },
 ];
 
 // legacyMetricThresholds converts the flat per-family fields a hardware check
