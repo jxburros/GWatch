@@ -43,11 +43,56 @@ disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
   day-sized chunks and, after the first, only catches up from where the last one got to.
 - **Alert e-mails** (#99): at most three are sent at once, and a failed one is retried
   once after 15 s before the alert is re-armed.
+- **The network map's clusters layout** no longer puts nodes on perfect rings: each
+  node's dependents branch off it in whatever direction has room, with longer lines to
+  bigger branches, and nothing overlaps.
 - **Documentation accuracy** (#165): API routes, the config export, Settings tabs,
   retention, privacy (what is encrypted, what GWatch contacts), ROADMAP and the brief.
 
 ### Added
 
+- **Linux: `gwatch install` creates a proper systemd service** (#125). The program goes
+  to `/usr/local/bin/gwatch`, runs as a `gwatch` system user with data in
+  `/var/lib/gwatch` and settings in `/etc/gwatch/gwatch.env`, under a hardened
+  `gwatch.service` with `CAP_NET_RAW` (and `CAP_NET_BIND_SERVICE` only for a port below
+  1024). Re-running it updates and reconfigures; an existing `GWatch.service` install is
+  migrated; `gwatch uninstall --purge` removes everything after a confirmation. Checks
+  and script actions no longer run as root — see `docs/INSTALL-LINUX.md` for granting
+  more. Updating from Settings › Updates is not available on these installs yet: re-run
+  the installer.
+- **Ping says how it works and why it fell back** (#131): the startup log, Settings ›
+  Monitor health and discovery name the ICMP method in use and the reason (for example
+  `ping_group_range`); the Linux docs cover all three ways to allow ping.
+- **Server `.deb` and `.rpm` packages** for amd64, arm64 and armhf (#126), with a
+  hardened unit, a `gwatch` user and an update path that steps aside for apt/dnf; a CI
+  job installs, upgrades and purges them, and another exercises `gwatch install` under
+  systemd end to end (#135).
+- **Linux readings** (#132): temperatures (hwmon and thermal zones), pressure stall
+  (PSI), memory and CPU against cgroup v2 limits inside a container, ZFS pools with
+  health, and `/` on overlay.
+- **Discovery reads the neighbour table and names makers** (#133): devices that ignore
+  ping are found through ARP, and results show the MAC address and its vendor (IEEE
+  registry, embedded); Windows reads `GetIpNetTable`.
+- **The agent keeps held readings through a restart** (#74), in a bounded spool beside
+  its configuration, and marks late readings so GWatch files them at the time they were
+  taken. Token rotation (#75) is now covered end to end by tests.
+- **More alert channels** (#122): Telegram, Discord, Gotify, Matrix, Twilio SMS,
+  PagerDuty and Opsgenie actions, and an "Also notify" list in Settings › Alerts that
+  goes out with the alert e-mails under the same suppression, with per-channel minimum
+  severity and groups. Secrets are sealed and masked.
+- **Opt-in PBKDF2 password hashing** (#49) from the standard library, for accounts and
+  backup encryption; Argon2id stays the default and accounts move over as they sign in.
+- **Matter devices** (#45): a `matter` check reads on/off, temperature, humidity,
+  contact, occupancy, illuminance and battery from a python-matter-server sidecar, with
+  a device picker and commissioning by pairing code. See `docs/MATTER.md`.
+- **The agent's control panel** (#64) shows the recent log, can update now, re-pair and
+  copy diagnostics, asks the OS for elevation when it needs to, and has Start menu and
+  desktop entries. The Windows setup program tests the connection before installing and
+  ends on a real result page (#63). An optional Windows notification-area icon (#53).
+- **Check groups across nodes** (#36), as a prototype: put checks from different nodes
+  in groups of their own and filter, chart and bulk-edit them as a set.
+- **Charts treat a node as one item** (#184): the picker lists checks under their node,
+  and a chart can be split one per node.
 - **Disk activity on macOS** (#185). The agent and the local hardware check read disk
   throughput, operations and busy % on macOS from the I/O Registry, as on Linux and
   Windows.
