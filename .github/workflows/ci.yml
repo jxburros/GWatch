@@ -419,7 +419,7 @@ jobs:
         deb="dist/packages/gwatch-agent_${AGENT_VERSION}-1_amd64.deb"
         dpkg-deb -I "$deb"
         dpkg-deb -c "$deb" | tee contents.txt
-        for want in ./usr/bin/gwatch-agent ./usr/lib/systemd/system/gwatch-agent.service ./etc/gwatch-agent/agent.env ./var/lib/gwatch-agent/; do
+        for want in ./usr/bin/gwatch-agent ./usr/lib/systemd/system/gwatch-agent.service ./etc/gwatch-agent/agent.env ./var/lib/gwatch-agent/ ./usr/share/applications/gwatch-agent.desktop ./usr/share/pixmaps/gwatch-agent.png; do
           grep -q " $want\$" contents.txt || { echo "::error::$deb does not contain $want"; exit 1; }
         done
         grep -q '^-rw------- .* ./etc/gwatch-agent/agent.env$' contents.txt || { echo "::error::agent.env must be 0600: it may hold a token"; exit 1; }
