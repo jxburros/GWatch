@@ -30,6 +30,7 @@ import (
 	"github.com/kardianos/service"
 
 	"github.com/jxburros/GWatch/internal/api"
+	"github.com/jxburros/GWatch/internal/checks"
 	"github.com/jxburros/GWatch/internal/dbconfig"
 	"github.com/jxburros/GWatch/internal/engine"
 	"github.com/jxburros/GWatch/internal/logging"
@@ -456,6 +457,9 @@ func runApp(ctx context.Context, cfg config, mode string, requestRestart func())
 	}
 	defer log.Close()
 	log.Printf("GWatch %s starting (%s mode), data dir %s", version, mode, cfg.dataDir)
+	// Which way ping works here, and why not the others — the line to look
+	// for when every ping check says "no permission" (docs/INSTALL-LINUX.md).
+	log.Printf("ping: %s", checks.PingStatusNow().Summary)
 
 	dbCfg, fromFile, err := dbconfig.Resolve(cfg.dataDir, cfg.db)
 	if err != nil {

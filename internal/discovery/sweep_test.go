@@ -9,7 +9,63 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jxburros/GWatch/internal/model"
 )
+
+// A machine that cannot ping at all fails the run at once, with the reason,
+// rather than reporting after a minute that nothing answered.
+func TestSweepFailsUpFrontWhenNothingCanPing(t *testing.T) {
+	lan := newFakeNetwork()
+	lan.device("10.0.0.2", "", time.Millisecond)
+	lan.install(t)
+	pingStatus = func() model.PingStatus {
+		return model.PingStatus{Auto: model.PingViaNone, Summary: "ping cannot work on this machine: unprivileged ICMP not permitted: gid 998 not in ping_group_range 1 0"}
+	}
+	var notified []Job
+	var mu sync.Mutex
+	reg := &Registry{}
+	job, err := reg.Start(Request{Ranges: []string{"10.0.0.1-3"}}, func(j Job) { mu.Lock(); notified = append(notified, j); mu.Unlock() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.State != StateFailed || !strings.Contains(job.Error, "ping_group_range") || job.FinishedAt == nil {
+		t.Fatalf("job = %+v, want failed with the reason", job)
+	}
+	if lan.attempts("10.0.0.2") != 0 {
+		t.Error("a run that cannot ping still pinged")
+	}
+	if reg.Running() {
+		t.Error("the registry thinks a run is in flight")
+	}
+	waitFor(t, "the failure to be broadcast", func() bool { mu.Lock(); defer mu.Unlock(); return len(notified) == 1 })
+	if latest, _ := reg.Latest(); latest.ID != job.ID || latest.State != StateFailed {
+		t.Errorf("latest = %+v", latest)
+	}
+}
+
+// A run that pings through the system command says so: it is slower, and
+// the reason is worth fixing.
+func TestSweepNotesSystemPingFallback(t *testing.T) {
+	lan := newFakeNetwork()
+	lan.device("10.0.0.2", "", time.Millisecond)
+	lan.install(t)
+	pingStatus = func() model.PingStatus {
+		return model.PingStatus{Auto: model.PingViaSystem, Summary: "the built-in ping cannot open an ICMP socket"}
+	}
+	reg := &Registry{}
+	job, err := reg.Start(Request{Ranges: []string{"10.0.0.1-3"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(job.PingNote, "system ping command") || !strings.Contains(job.PingNote, "cannot open an ICMP socket") {
+		t.Errorf("PingNote = %q", job.PingNote)
+	}
+	waitFor(t, "the sweep to finish", func() bool { j, _ := reg.Get(job.ID); return j.Done() })
+	if done, _ := reg.Get(job.ID); done.Responders != 1 || done.PingNote == "" {
+		t.Errorf("finished job = %+v", done)
+	}
+}
 
 // fakeNetwork stands in for a house full of devices: which addresses answer a
 // ping, what they are called, and which of their ports accept a connection.
@@ -58,8 +114,11 @@ func (f *fakeNetwork) device(ip, name string, rtt time.Duration, ports ...int) *
 // install puts the fake in place for the rest of the test.
 func (f *fakeNetwork) install(t *testing.T) {
 	t.Helper()
-	realPing, realLookup, realDial := pingHost, lookupAddr, dialPort
-	t.Cleanup(func() { pingHost, lookupAddr, dialPort = realPing, realLookup, realDial })
+	realPing, realLookup, realDial, realStatus := pingHost, lookupAddr, dialPort, pingStatus
+	t.Cleanup(func() { pingHost, lookupAddr, dialPort, pingStatus = realPing, realLookup, realDial, realStatus })
+	// An imaginary network can always be pinged, whatever this machine's
+	// own ICMP permissions are.
+	pingStatus = func() model.PingStatus { return model.PingStatus{Auto: model.PingViaUnprivileged} }
 
 	pingHost = func(ctx context.Context, host string, count int, timeout time.Duration) (int, int, []time.Duration, error) {
 		if f.block != nil {

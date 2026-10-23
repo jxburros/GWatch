@@ -125,7 +125,10 @@ second. Inside a container, as a non-root user, both need help. Pick one:
   check settings too.
 
 Without any of the three, ping checks fail with "no permission to open an ICMP
-socket" and say so in the check's status.
+socket" and say so in the check's status. Settings › Monitor health › Ping, and
+the `ping:` line in the container log at startup, say which of the three is in
+use and why the others are not (for example, the group the process runs as
+lying outside `ping_group_range`).
 
 ## Discovery and the container network
 

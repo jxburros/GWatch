@@ -185,6 +185,9 @@ func runPing(ctx context.Context, host string, count int, timeout time.Duration,
 	if errors.As(err, &dnsErr) {
 		return pr, err
 	}
+	// Remembered for Monitor Health, which otherwise could only say that the
+	// system command is in use, not what stopped the built-in one.
+	recordFallback(err)
 	pr2, err2 := systemPingFunc(ctx, host, count, timeout)
 	if err2 == nil {
 		return pr2, nil

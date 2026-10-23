@@ -146,7 +146,38 @@ sudo firewall-cmd --reload
 
 Use a source-subnet restriction when only your LAN should connect. Settings shows a command for detected ufw/firewalld installations. Use HTTPS through a reverse proxy for remote credentials.
 
-Unprivileged deployments can permit ICMP through `net.ipv4.ping_group_range`, use the distribution's `ping` command, or grant `CAP_NET_RAW` to a dedicated service. Root installations already have permission. See [Docker networking](DOCKER.md) for container capabilities.
+### Ping permissions
+
+GWatch's built-in ping tries three ways of sending an echo request, in this order, and uses the first that works:
+
+1. **An unprivileged ICMP socket.** Linux allows one only to processes in a group inside the `net.ipv4.ping_group_range` sysctl. Many distributions (and systemd since version 243) set it to `0 2147483647`, which covers everyone; others leave the kernel default `1 0`, which covers no one.
+2. **A raw ICMP socket**, which needs root or the `CAP_NET_RAW` capability.
+3. **The system `ping` command** (only with the ping method set to *auto* or *system*, in Settings > General > Ping). It works wherever `ping` itself does, but starts a process per check and is noticeably slower for discovery sweeps.
+
+The service `gwatch install` sets up already holds `CAP_NET_RAW` (`AmbientCapabilities=CAP_NET_RAW` in the unit), so on a systemd install ping works without anything else. If you run GWatch some other way as an ordinary user — from a terminal, under your own unit, or from a package that does not grant the capability — pick one of these:
+
+```sh
+# Option 1: allow unprivileged ICMP for every group (or narrow the range to one group's id).
+echo 'net.ipv4.ping_group_range = 0 2147483647' | sudo tee /etc/sysctl.d/60-gwatch-ping.conf
+sudo sysctl --system
+
+# Option 2: give the program file the capability. Repeat after every update, which replaces the file.
+sudo setcap cap_net_raw+ep /usr/local/bin/gwatch
+
+# Option 3: in your own systemd unit or a drop-in (sudo systemctl edit gwatch):
+#   [Service]
+#   AmbientCapabilities=CAP_NET_RAW
+```
+
+`setcap` does not work for a program started under `NoNewPrivileges=yes`, which ignores file capabilities; use the unit setting there instead.
+
+To see which way is in use and why the others are not, look at **Settings > Monitor health > Ping**, or at the line GWatch logs when it starts:
+
+```text
+ping: the built-in ping uses a raw ICMP socket (unprivileged ICMP not permitted: gid 998 not in ping_group_range 1 0 (switched off for every group))
+```
+
+Monitor health also shows the most recent time a ping check fell back to the system command, with the error that made it. Subnet discovery says so too: a sweep that is using the system command carries a note saying why, and on a machine where no way works at all the sweep stops straight away with the reason rather than reporting that nothing answered. See [Docker networking](DOCKER.md) for the same choices in a container.
 
 ## Updates and removal
 
