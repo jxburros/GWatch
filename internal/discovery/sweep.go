@@ -178,31 +178,52 @@ func pingOnce(ctx context.Context, a netip.Addr) (time.Duration, bool) {
 	return 0, false
 }
 
-// describe fills in the name and the open ports for each responder. The hosts
-// are handled one after another rather than in parallel: there are only ever a
-// handful of them, and a resolver asked for two hundred names at once is a
-// resolver that starts refusing.
+// describe fills in the name and the open ports for each responder. Hosts are
+// described a few at a time (describeWorkers): one after another, a /24 with
+// sixty devices spent over a minute here after the sweep itself had finished,
+// while two hundred lookups at once is a resolver that starts refusing. The
+// results keep the address order they were given in.
 //
 // A cancelled run still describes what it found, minus the lookups: those
 // devices answered, and a list of bare addresses is more use than no list.
 func describe(ctx context.Context, hits []hit, ports []int) []Responder {
-	out := make([]Responder, 0, len(hits))
-	for _, h := range hits {
-		ip := h.addr.String()
-		r := Responder{
-			IP:        ip,
-			RTTMS:     float64(h.rtt) / float64(time.Millisecond),
-			OpenPorts: []int{},
-		}
-		if ctx.Err() == nil {
-			r.Hostname = reverseName(ctx, ip)
-			r.OpenPorts = probePorts(ctx, ip, ports)
-		}
-		s := Suggest(r.OpenPorts)
-		r.Template, r.Note = s.Template, s.Note
-		out = append(out, r)
+	out := make([]Responder, len(hits))
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < min(describeWorkers, len(hits)); w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				out[i] = describeOne(ctx, hits[i], ports)
+			}
+		}()
 	}
+	for i := range hits {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
 	return out
+}
+
+// describeWorkers bounds how many hosts are described at once.
+const describeWorkers = 16
+
+func describeOne(ctx context.Context, h hit, ports []int) Responder {
+	ip := h.addr.String()
+	r := Responder{
+		IP:        ip,
+		RTTMS:     float64(h.rtt) / float64(time.Millisecond),
+		OpenPorts: []int{},
+	}
+	if ctx.Err() == nil {
+		r.Hostname = reverseName(ctx, ip)
+		r.OpenPorts = probePorts(ctx, ip, ports)
+	}
+	s := Suggest(r.OpenPorts)
+	r.Template, r.Note = s.Template, s.Note
+	return r
 }
 
 // reverseName returns the name behind an address, or "" — which is the

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -381,5 +382,43 @@ func TestStartRefusesBadInputBeforeAnythingRuns(t *testing.T) {
 	}
 	if _, err := reg.Latest(); err != ErrNotFound {
 		t.Errorf("nothing has run, so Latest() should say so: %v", err)
+	}
+}
+
+// Describing responders is done several at a time, and the list still comes
+// back in address order.
+func TestDescribeRunsInParallelAndKeepsOrder(t *testing.T) {
+	oldLookup, oldDial := lookupAddr, dialPort
+	t.Cleanup(func() { lookupAddr, dialPort = oldLookup, oldDial })
+	var mu sync.Mutex
+	inFlight, peak := 0, 0
+	lookupAddr = func(ctx context.Context, addr string) ([]string, error) {
+		mu.Lock()
+		inFlight++
+		peak = max(peak, inFlight)
+		mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+		return []string{"host-" + addr + "."}, nil
+	}
+	dialPort = func(ctx context.Context, addr string) error { return fmt.Errorf("refused") }
+
+	var hits []hit
+	for i := 1; i <= 40; i++ {
+		hits = append(hits, hit{addr: netip.AddrFrom4([4]byte{192, 168, 1, byte(i)})})
+	}
+	out := describe(context.Background(), hits, []int{80})
+	if len(out) != len(hits) {
+		t.Fatalf("got %d responders, want %d", len(out), len(hits))
+	}
+	for i, r := range out {
+		if r.IP != hits[i].addr.String() || r.Hostname != "host-"+r.IP {
+			t.Fatalf("responder %d = %+v, want %s in order", i, r, hits[i].addr)
+		}
+	}
+	if peak < 2 || peak > describeWorkers {
+		t.Errorf("peak concurrent lookups = %d, want between 2 and %d", peak, describeWorkers)
 	}
 }
