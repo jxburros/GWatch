@@ -948,14 +948,14 @@ func TestValidate(t *testing.T) {
 
 func TestTemplates(t *testing.T) {
 	tpls := Templates()
-	if len(tpls) != 10 {
+	if len(tpls) != 11 {
 		t.Fatalf("got %d templates", len(tpls))
 	}
 	// A template whose check reads a registered machine cannot name one until
 	// the person picks it in the editor, exactly as the others cannot know a
 	// host. Listing it here keeps that exception deliberate rather than
 	// letting any template quietly ship unvalidatable.
-	needsAChoice := map[string]string{"agent-machine": "which registered machine"}
+	needsAChoice := map[string]string{"agent-machine": "which registered machine", "matter-device": "choose the Matter node"}
 	seen := map[string]bool{}
 	for _, tpl := range tpls {
 		if tpl.ID == "" || tpl.Name == "" || tpl.Description == "" || len(tpl.Checks) == 0 {
@@ -967,7 +967,7 @@ func TestTemplates(t *testing.T) {
 		seen[tpl.ID] = true
 		for _, c := range tpl.Checks {
 			err := Validate(c, "192.168.1.10")
-			if want, ok := needsAChoice[tpl.ID]; ok {
+			if want, ok := needsAChoice[tpl.ID]; ok && (c.Type == model.CheckSystem || c.Type == model.CheckMatter) {
 				if err == nil || !strings.Contains(err.Error(), want) {
 					t.Errorf("template %s check %s: want an error asking for %q, got %v", tpl.ID, c.Name, want, err)
 				}

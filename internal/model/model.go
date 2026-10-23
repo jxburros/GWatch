@@ -28,10 +28,11 @@ const (
 	CheckCustom  CheckType = "custom"  // user-supplied command/script, output parsed for status/metrics
 	CheckSystem  CheckType = "system"  // hardware health of a machine: processor, memory, disk space, throughput
 	CheckSNMP    CheckType = "snmp"    // SNMP readings from a network device: interfaces, processor, uptime
+	CheckMatter  CheckType = "matter"  // Matter device telemetry read through a python-matter-server sidecar
 )
 
 // AllCheckTypes lists the supported check types in display order.
-var AllCheckTypes = []CheckType{CheckPing, CheckHTTP, CheckCert, CheckTCP, CheckDNS, CheckKeyword, CheckJSON, CheckCustom, CheckSystem, CheckSNMP}
+var AllCheckTypes = []CheckType{CheckPing, CheckHTTP, CheckCert, CheckTCP, CheckDNS, CheckKeyword, CheckJSON, CheckCustom, CheckSystem, CheckSNMP, CheckMatter}
 
 // Valid reports whether the type is one the engine can run.
 func (t CheckType) Valid() bool {
@@ -66,6 +67,8 @@ func (t CheckType) Label() string {
 		return "Hardware health"
 	case CheckSNMP:
 		return "SNMP"
+	case CheckMatter:
+		return "Matter"
 	}
 	return string(t)
 }
@@ -362,6 +365,20 @@ type CheckConfig struct {
 	SNMPPrivProto string    `json:"snmpPrivProto,omitempty"` // "" (noPriv) | DES | AES | AES192 | AES256 | AES192C | AES256C
 	SNMPPrivPass  string    `json:"snmpPrivPass,omitempty"`
 	SNMPOIDs      []SNMPOID `json:"snmpOids,omitempty"`
+
+	// Matter: readings taken from a Matter device through the Matter
+	// controller python-matter-server, which GWatch talks to over its
+	// WebSocket API (docs/MATTER.md). GWatch is not on the Matter fabric
+	// itself: the sidecar holds the fabric's credentials in its own store,
+	// and all GWatch keeps is the address to ask it at, so there is nothing
+	// here to seal. MatterServer may be left blank, in which case the node's
+	// host is asked on the sidecar's default port and path
+	// (ws://<host>:5580/ws). MatterNodeID is the node id the sidecar gave the
+	// device when it was commissioned; a bridge is one node whose bridged
+	// devices are endpoints, so each reading names its own endpoint.
+	MatterServer   string          `json:"matterServer,omitempty"`
+	MatterNodeID   uint64          `json:"matterNodeId,omitempty"`
+	MatterReadings []MatterReading `json:"matterReadings,omitempty"`
 }
 
 // DefaultJSONMetric is the metric name a recording json check uses when the
@@ -388,6 +405,12 @@ func (c Check) MetricUnits() map[string]string {
 		for _, o := range c.Config.SNMPOIDs {
 			if o.Name != "" {
 				units[o.Name] = o.Unit
+			}
+		}
+	case CheckMatter:
+		for _, r := range c.Config.MatterReadings {
+			if name := strings.TrimSpace(r.Name); name != "" {
+				units[name] = r.Unit
 			}
 		}
 	case CheckJSON:
@@ -468,6 +491,47 @@ type SNMPValue struct {
 	// to compare against.
 	Rate *float64 `json:"rate,omitempty"`
 	Unit string   `json:"unit,omitempty"`
+}
+
+// MatterReading is one value a Matter check reads from one endpoint of its
+// node, with the thresholds that decide the check's verdict — the Matter
+// counterpart of an SNMPOID.
+//
+// Kind names one of the standard readings GWatch knows how to interpret
+// (temperature, humidity, onoff, contact, occupancy, illuminance, battery;
+// see internal/matter.Standards for the cluster, attribute and conversion of
+// each), in which case Cluster and Attribute are implied and ignored. The kind
+// "attribute" reads any other attribute as it stands, multiplied by Scale,
+// from the Cluster and Attribute given here.
+//
+// A boolean reading is charted as 1 or 0: on, open and occupied are 1. A
+// threshold on one is how a state becomes an alert — "critical above 0" on a
+// door's contact is "tell me when it is open".
+type MatterReading struct {
+	Endpoint  uint32   `json:"endpoint"`
+	Kind      string   `json:"kind"`
+	Cluster   uint32   `json:"cluster,omitempty"`   // kind "attribute" only
+	Attribute uint32   `json:"attribute,omitempty"` // kind "attribute" only
+	Scale     float64  `json:"scale,omitempty"`     // kind "attribute" only; 0 and 1 mean "as read"
+	Name      string   `json:"name"`                // the metric name, unique within the check
+	Unit      string   `json:"unit,omitempty"`
+	WarnAbove *float64 `json:"warnAbove,omitempty"`
+	CritAbove *float64 `json:"critAbove,omitempty"`
+	WarnBelow *float64 `json:"warnBelow,omitempty"`
+	CritBelow *float64 `json:"critBelow,omitempty"`
+}
+
+// MatterValue is one reading as the last run read it.
+type MatterValue struct {
+	Name     string `json:"name"`
+	Endpoint uint32 `json:"endpoint"`
+	Path     string `json:"path"`           // the attribute path read, "endpoint/cluster/attribute"
+	Raw      string `json:"raw,omitempty"`  // how a person reads it: "21.5", "on", "open"
+	Unit     string `json:"unit,omitempty"` // as configured
+	// Value is the number the reading was charted and judged as. It is nil
+	// when the device has no value right now (the attribute is null) or the
+	// value is not a number, which Raw then explains.
+	Value *float64 `json:"value,omitempty"`
 }
 
 // SystemDefaults are the thresholds a new hardware check starts with. They are
@@ -597,6 +661,11 @@ type ResultDetails struct {
 
 	// SNMP: every OID the run asked for, in the order the check lists them.
 	SNMP []SNMPValue `json:"snmp,omitempty"`
+
+	// Matter: every reading the run asked for, in the order the check lists
+	// them, and which sidecar answered.
+	Matter       []MatterValue `json:"matter,omitempty"`
+	MatterServer string        `json:"matterServer,omitempty"`
 }
 
 // CertInfo describes the leaf certificate presented by a TLS server.

@@ -1,5 +1,5 @@
 // Package checks executes the individual monitor types (ping, http, cert,
-// tcp, dns, keyword, json, custom, system and snmp) and turns the outcome into
+// tcp, dns, keyword, json, custom, system, snmp and matter) and turns the outcome into
 // a model.Result.
 //
 // Run never returns an error: every failure, including a configuration
@@ -105,6 +105,11 @@ func runOnce(ctx context.Context, check model.Check, opts Options) (res model.Re
 	if check.Type == model.CheckSystem {
 		return runSystemCheck(ctx, check, opts)
 	}
+	// A Matter check asks the Matter server, whose address is its own
+	// setting; the node host only stands in for it when that is blank.
+	if check.Type == model.CheckMatter {
+		return runMatterCheck(ctx, check, opts)
+	}
 	target := check.Target(opts.NodeHost)
 	if target == "" {
 		return failResult("no target configured")
@@ -177,10 +182,11 @@ func Validate(check model.Check, nodeHost string) error {
 	}
 	cfg := check.Config
 	target := check.Target(nodeHost)
-	// A hardware check names a machine rather than an address, so it is the
-	// one type with nothing to resolve; validateSystemCheck checks what it
-	// does need instead.
-	if target == "" && check.Type != model.CheckSystem {
+	// A hardware check names a machine rather than an address, and a Matter
+	// check names its sidecar in a field of its own, so they are the types
+	// with no target to resolve; validateSystemCheck and validateMatterCheck
+	// check what they do need instead.
+	if target == "" && check.Type != model.CheckSystem && check.Type != model.CheckMatter {
 		return errors.New("a target (or a node host) is required")
 	}
 	if check.IntervalSeconds != 0 && check.IntervalSeconds < minIntervalSecs {
@@ -293,6 +299,10 @@ func Validate(check model.Check, nodeHost string) error {
 			return err
 		}
 		if err := validateSNMPCheck(cfg); err != nil {
+			return err
+		}
+	case model.CheckMatter:
+		if err := validateMatterCheck(cfg, nodeHost); err != nil {
 			return err
 		}
 	}
