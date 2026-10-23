@@ -1,3 +1,4 @@
+// @ts-check
 // Network map: every node drawn under the node it depends on.
 //
 // A node's "Depends on" is what dependency-aware alerting reads — while a
@@ -142,6 +143,7 @@ export function edgeStyle(look) {
 }
 
 /** A complete map configuration with its defaults filled in. */
+/** @param {any} [cfg] */
 export function normalizeMapConfig(cfg = {}) {
   const c = cfg && typeof cfg === 'object' ? cfg : {};
   const pick = (list, v, fb) => (list.some((o) => o.value === v) ? v : fb);
@@ -914,6 +916,9 @@ export function mapFilterOptions(groups) {
  * means "follow the map", and `defaults` ({ color, width, dash }) says what
  * the map has, so the empty thickness can show it. Without, thickness and
  * style always have a value.
+ *
+ * @typedef {{ color?: string, width?: number, dash?: string }} LineStyle
+ * @param {{ value?: LineStyle, inherit?: boolean, defaults?: LineStyle, disabled?: boolean, label?: string, onChange?: (value: LineStyle) => void }} [opts]
  */
 export function lineStyleControls({ value = {}, inherit = false, defaults = {}, disabled = false, label = 'Line', onChange } = {}) {
   let color = normalizeLineColor(value.color);
@@ -961,6 +966,8 @@ export function lineStyleControls({ value = {}, inherit = false, defaults = {}, 
  * `defaults` what the map draws a line as, and `onChange(style)` gets the
  * style as it should be kept — null when it sets nothing. The Reset button
  * clears the lot, so the link follows the map again.
+ *
+ * @param {{ parentName?: string, value?: LineStyle | null, defaults?: LineStyle, disabled?: boolean, onChange?: (style: LineStyle | null) => void }} [opts]
  */
 export function linkStyleEditor({ parentName = '', value = null, defaults = {}, disabled = false, onChange } = {}) {
   const controls = lineStyleControls({ value: value || {}, inherit: true, defaults, disabled, label: 'Link', onChange: (v) => onChange && onChange(normalizeLinkStyle(v)) });
@@ -976,6 +983,9 @@ export function linkStyleEditor({ parentName = '', value = null, defaults = {}, 
  * The map's options as a form — shared by the Network map page and the
  * dashboard widget editor. `.value` is the configuration the controls hold;
  * `onChange(cfg)` fires on every change.
+ *
+ * @param {any} cfg
+ * @param {{ groups?: any, onChange?: (cfg: any) => void }} [opts]
  */
 export function mapConfigEditor(cfg, { groups = null, onChange } = {}) {
   const c = normalizeMapConfig(cfg);

@@ -1,3 +1,4 @@
+// @ts-check
 // Small DOM toolkit: element builder, icons, status pills, toasts, modals,
 // dropdown menus, chip input, form fields, empty states and skeletons.
 
@@ -241,6 +242,7 @@ export function statusMeta(status) { return STATUS[status] || STATUS.unknown; }
 /** A status pill is a static label, not a live region: it is re-rendered with
  *  its row rather than updated in place, so it carries no role="status" —
  *  that would make a screen reader announce every pill on every redraw. */
+/** @param {string} status @param {{ label?: string, large?: boolean }} [opts] */
 export function statusPill(status, { label, large = false } = {}) {
   const m = statusMeta(status);
   return h('span', { class: `pill ${m.cls} ${large ? 'pill-lg' : ''}` }, icon(m.icon), label || m.label);
@@ -260,6 +262,7 @@ function spineChanged(key, status) {
  *  column, with the status word set beside it in mono. The spine is decorative
  *  — `statusWord` carries the status as text, so nothing is lost without it.
  *  Pass `key` (a stable row id) and the spine flashes when the status changes. */
+/** @param {string} status @param {{ size?: string, key?: string | number }} [opts] */
 export function statusSpine(status, { size = '', key } = {}) {
   const name = status in STATUS ? status : 'unknown';
   const flash = spineChanged(key, name) && !prefersReducedMotion();
@@ -272,12 +275,14 @@ function prefersReducedMotion() {
 
 /** The status word beside a spine, in the status colour. Static text, like
  *  the pill: no live-region role. */
+/** @param {string} status @param {{ label?: string }} [opts] */
 export function statusWord(status, { label } = {}) {
   const m = statusMeta(status);
   const key = status in STATUS ? status : 'unknown';
   return h('span', { class: `status-word text-${key}` }, label || m.label);
 }
 
+/** @param {string} status @param {{ text?: boolean }} [opts] */
 export function statusGlyph(status, { text = true } = {}) {
   const m = statusMeta(status);
   const el = h('span', { class: `status-glyph text-${status in STATUS ? status : 'unknown'}` }, icon(m.icon));
@@ -288,6 +293,7 @@ export function statusGlyph(status, { text = true } = {}) {
 
 /** A glowing status circle. The halo colour comes from the status class, so it
  *  stays right when the theme changes. `size` is 'sm' | '' | 'lg'. */
+/** @param {string} status @param {{ size?: string, label?: string }} [opts] */
 export function statusOrb(status, { size = '', label } = {}) {
   const m = statusMeta(status);
   const key = status in STATUS ? status : 'unknown';
@@ -297,6 +303,7 @@ export function statusOrb(status, { size = '', label } = {}) {
 }
 
 /** Compact "check chip": glyph + name + latency, for node rows. */
+/** @param {any} check @param {any} state @param {{ href?: string }} [opts] */
 export function checkChip(check, state, { href } = {}) {
   const status = state?.status || (check.enabled === false ? 'paused' : 'unknown');
   const m = statusMeta(status);
@@ -320,6 +327,10 @@ export function importanceBadge(importance) {
 
 /* ---------- Toasts ---------- */
 
+/**
+ * @param {string} message
+ * @param {{ kind?: 'info' | 'success' | 'error', timeout?: number, action?: { label: string, onClick: () => void } }} [opts]
+ */
 export function toast(message, { kind = 'info', timeout = 4500, action } = {}) {
   const root = document.getElementById('toasts');
   if (!root) return;
@@ -339,9 +350,10 @@ const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), selec
 
 /** The elements in `scope` a Tab press can land on. Judged by markup (hidden,
  *  disabled, inside a hidden ancestor) rather than by layout, so the answer is
- *  the same in a headless test as in a browser. */
+ *  the same in a headless test as in a browser.
+ *  @param {ParentNode} scope @returns {HTMLElement[]} */
 export function focusableIn(scope) {
-  return [...scope.querySelectorAll(FOCUSABLE)].filter((x) => !x.hidden && !x.disabled && !x.closest('[hidden]') && x.getAttribute('aria-hidden') !== 'true');
+  return [.../** @type {NodeListOf<HTMLElement & { disabled?: boolean }>} */ (scope.querySelectorAll(FOCUSABLE))].filter((x) => !x.hidden && !x.disabled && !x.closest('[hidden]') && x.getAttribute('aria-hidden') !== 'true');
 }
 
 // How many modals are open. The page behind them is made inert by the first
@@ -355,9 +367,14 @@ function setAppInert(on) {
 
 /** `describedBy` is the id of the element that explains the dialog (a
  *  confirm's message, say); it becomes the dialog's aria-describedby. */
+/**
+ * @param {{ title?: string, body?: any, footer?: any, wide?: boolean, onClose?: (result?: any) => void,
+ *   closeOnBackdrop?: boolean, ariaLabel?: string, describedBy?: string | null }} opts
+ * @returns {{ el: HTMLElement, body: HTMLElement, close: (result?: any) => void }}
+ */
 export function openModal({ title, body, footer, wide = false, onClose, closeOnBackdrop = true, ariaLabel, describedBy }) {
   const root = document.getElementById('modals');
-  const prevFocus = document.activeElement;
+  const prevFocus = /** @type {HTMLElement | null} */ (document.activeElement);
   // Named by its own heading, so what a screen reader announces is exactly
   // what is written at the top of the box. A caller with a different name in
   // mind passes ariaLabel, which then wins.
@@ -407,6 +424,10 @@ export function openModal({ title, body, footer, wide = false, onClose, closeOnB
   return { el: dialog, body: bodyEl, close };
 }
 
+/**
+ * @param {{ title?: string, message?: string, confirmLabel?: string, cancelLabel?: string, danger?: boolean, body?: any }} [opts]
+ * @returns {Promise<boolean>}
+ */
 export function confirmDialog({ title = 'Are you sure?', message, confirmLabel = 'Confirm', cancelLabel = 'Cancel', danger = false, body } = {}) {
   return new Promise((resolve) => {
     let result = false;
@@ -424,6 +445,10 @@ export function confirmDialog({ title = 'Are you sure?', message, confirmLabel =
   });
 }
 
+/**
+ * @param {{ title?: string, message?: string, label?: string, value?: string, placeholder?: string, type?: string, confirmLabel?: string, required?: boolean }} [opts]
+ * @returns {Promise<string | null>} null when cancelled
+ */
 export function promptDialog({ title, message, label = 'Name', value = '', placeholder = '', type = 'text', confirmLabel = 'Save', required = true } = {}) {
   return new Promise((resolve) => {
     let result = null;
@@ -538,6 +563,10 @@ export function menuButton(items, { label = 'More actions', small = false, cls =
 let idSeq = 0;
 export function uid(prefix = 'f') { return `${prefix}-${++idSeq}`; }
 
+/**
+ * @param {{ label?: any, input: any, help?: any, error?: any, id?: string, cls?: string }} opts
+ * @returns {HTMLElement & { setError: (msg?: string) => void }}
+ */
 export function field({ label, input, help, error, id, cls = '' }) {
   // The label and the descriptions point at the element that actually takes
   // the input, not at whatever wraps it: a composite control (chipInput, say)
@@ -581,9 +610,14 @@ export function numberInput(attrs = {}) { return h('input', { type: 'number', ..
 export function textarea(attrs = {}) { return h('textarea', attrs); }
 
 /** options: [{value, label, disabled}] or ['a','b'] */
+/**
+ * @param {{ options?: Array<string | number | { value: any, label?: string, disabled?: boolean }>, value?: any, [attr: string]: any }} [opts]
+ * @returns {HTMLSelectElement}
+ */
 export function selectInput({ options, value, ...attrs } = {}) {
   const sel = h('select', attrs);
   for (const o of options || []) {
+    /** @type {{ value: any, label?: any, disabled?: boolean }} */
     const opt = typeof o === 'object' ? o : { value: o, label: o };
     sel.append(h('option', { value: opt.value, disabled: !!opt.disabled }, opt.label ?? opt.value));
   }
@@ -594,6 +628,10 @@ export function selectInput({ options, value, ...attrs } = {}) {
   return sel;
 }
 
+/**
+ * @param {{ label?: any, checked?: boolean, onChange?: (checked: boolean) => void, id?: string, disabled?: boolean }} [opts]
+ * @returns {HTMLLabelElement & { input: HTMLInputElement }}
+ */
 export function checkbox({ label, checked = false, onChange, id, disabled } = {}) {
   const input = h('input', { type: 'checkbox', checked, id: id || uid('cb'), disabled: !!disabled });
   if (onChange) input.addEventListener('change', () => onChange(input.checked));
@@ -602,6 +640,10 @@ export function checkbox({ label, checked = false, onChange, id, disabled } = {}
   return el;
 }
 
+/**
+ * @param {{ label?: any, checked?: boolean, onChange?: (checked: boolean) => void, id?: string, disabled?: boolean, ariaLabel?: string }} [opts]
+ * @returns {HTMLLabelElement & { input: HTMLInputElement }}
+ */
 export function toggle({ label, checked = false, onChange, id, disabled, ariaLabel } = {}) {
   const input = h('input', { type: 'checkbox', role: 'switch', checked, id: id || uid('sw'), disabled: !!disabled, 'aria-label': ariaLabel || null });
   if (onChange) input.addEventListener('change', () => onChange(input.checked));
@@ -611,6 +653,10 @@ export function toggle({ label, checked = false, onChange, id, disabled, ariaLab
 }
 
 /** Chip / tag input. `.value` returns an array of strings. */
+/**
+ * @param {{ values?: string[] | null, placeholder?: string, suggestions?: string[] | null, onChange?: (values: string[]) => void, validate?: (value: string) => boolean, id?: string }} [opts]
+ * @returns {HTMLDivElement & { value: string[], input: HTMLInputElement }}
+ */
 export function chipInput({ values = [], placeholder = 'Add…', suggestions = [], onChange, validate, id } = {}) {
   // The API sends an empty list as null (a Go nil slice), so null is empty.
   let items = [...(values || [])];
@@ -665,6 +711,7 @@ export function chipInput({ values = [], placeholder = 'Add…', suggestions = [
 
 /* ---------- Misc ---------- */
 
+/** @param {{ icon?: string, title?: string, text?: any, actions?: any, compact?: boolean }} [opts] */
 export function emptyState({ icon: ic = 'info', title, text, actions, compact = false } = {}) {
   return h('div', { class: `empty ${compact ? 'empty-compact' : ''}` },
     h('span', { class: 'empty-icon' }, icon(ic)),
@@ -674,6 +721,7 @@ export function emptyState({ icon: ic = 'info', title, text, actions, compact = 
   );
 }
 
+/** @param {{ lines?: number, height?: number | string }} [opts] */
 export function skeleton({ lines = 3, height } = {}) {
   if (height) return h('div', { class: 'skeleton-block', style: { height: typeof height === 'number' ? `${height}px` : height }, 'aria-busy': 'true' });
   const el = h('div', { class: 'skeleton', 'aria-busy': 'true' });
@@ -681,6 +729,7 @@ export function skeleton({ lines = 3, height } = {}) {
   return el;
 }
 
+/** @param {string} kind @param {any} text @param {{ icon?: string, actions?: any }} [opts] */
 export function banner(kind, text, { icon: ic, actions } = {}) {
   const icons = { warn: 'alert', down: 'x', maint: 'wrench', info: 'info', up: 'check' };
   const el = h('div', { class: `banner banner-${kind}` }, icon(ic || icons[kind] || 'info'), h('div', { style: { flex: '1' } }, text));
@@ -703,6 +752,7 @@ export function relTimeEl(v, { prefix = '' } = {}) {
   return el;
 }
 
+/** @param {string[] | null | undefined} tags @param {{ group?: string }} [opts] */
 export function tagList(tags, { group } = {}) {
   const wrap = h('span', { class: 'n-tags' });
   if (group) wrap.append(h('span', { class: 'tag tag-group' }, group));
@@ -794,6 +844,12 @@ export function checkOptions(nodes, filterType) {
 }
 
 /** Multi-select list of checks with "Node › Check" labels. `.value` → array of ids. */
+/**
+ * @param {any[]} nodes
+ * @param {Array<number | string>} [selected]
+ * @param {{ filterType?: (check: any) => boolean, onChange?: (ids: number[]) => void }} [opts]
+ * @returns {HTMLDivElement & { value: number[] }}
+ */
 export function checkMultiSelect(nodes, selected = [], { filterType, onChange } = {}) {
   let sel = new Set((selected || []).map(Number));
   const wrap = h('div', { class: 'check-list', role: 'group', 'aria-label': 'Checks' });

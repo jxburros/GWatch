@@ -1,3 +1,4 @@
+// @ts-check
 // Shared "custom chart" configuration: the editor form and the renderer are
 // used by the Charts tab and by the dashboard's chart widgets, so a chart
 // configured on one can be pinned to the other unchanged.
@@ -107,8 +108,45 @@ export function normalizeSeries(list) {
   return out;
 }
 
-/** A complete config with defaults filled in. */
+/**
+ * One plotted line: a check and what of it is plotted. `named` marks a metric
+ * the check names itself (an SNMP OID, a hardware reading) rather than one of
+ * the built-in latency/loss metrics.
+ * @typedef {{ checkId: number, metric: string, named?: boolean }} SeriesSpec
+ */
+
+/**
+ * A chart's configuration as normalizeChartConfig leaves it. Configs are
+ * stored as JSON, so anything else a caller put on one is kept too.
+ * @typedef {{
+ *   metric: string,
+ *   colors: Record<string, string>,
+ *   series: SeriesSpec[],
+ *   checkIds: number[],
+ *   range: string,
+ *   style: string,
+ *   smooth: boolean,
+ *   points: boolean,
+ *   lineWidth: number,
+ *   shadeFailures: boolean,
+ *   legend: boolean,
+ *   grid: boolean,
+ *   yMin: number | null,
+ *   yMax: number | null,
+ *   threshold: number | null,
+ *   height: number,
+ *   splitBy: '' | 'node' | 'check',
+ *   split: boolean,
+ *   uptime: boolean,
+ *   timestack: any,
+ *   [extra: string]: any,
+ * }} ChartConfig
+ */
+
+/** A complete config with defaults filled in.
+ *  @param {any} [cfg] @returns {ChartConfig} */
 export function normalizeChartConfig(cfg = {}) {
+  /** @type {ChartConfig} */
   const c = { ...(cfg || {}) };
   // `metric` is now only what an automatic chart (no series picked) plots.
   c.metric = BUILTIN.has(c.metric) ? c.metric : 'avg';
@@ -131,9 +169,12 @@ export function normalizeChartConfig(cfg = {}) {
   c.shadeFailures = c.shadeFailures !== false;
   c.legend = c.legend !== false;
   c.grid = c.grid !== false;
-  c.yMin = c.yMin === '' || c.yMin == null || isNaN(Number(c.yMin)) ? null : Number(c.yMin);
-  c.yMax = c.yMax === '' || c.yMax == null || isNaN(Number(c.yMax)) ? null : Number(c.yMax);
-  c.threshold = c.threshold === '' || c.threshold == null || isNaN(Number(c.threshold)) ? null : Number(c.threshold);
+  // A form leaves an empty bound as '', which is no bound at all.
+  /** @param {any} v @returns {number | null} */
+  const optNum = (v) => (v === '' || v == null || isNaN(Number(v)) ? null : Number(v));
+  c.yMin = optNum(c.yMin);
+  c.yMax = optNum(c.yMax);
+  c.threshold = optNum(c.threshold);
   c.height = Math.min(800, Math.max(120, Number(c.height) || 260));
   // How the series are split into charts: all on one ('' — two units a chart
   // still apply), one chart per node (a node's ping, SNMP and hardware
@@ -239,6 +280,10 @@ export function describeChartConfig(cfg) {
  * check's readings come from its latest result, which /api/nodes does not
  * carry, so the first time one is opened its node is fetched (`loadNode`).
  * `.value` is the list of series.
+ *
+ * @param {any[]} nodes
+ * @param {any[]} [selected]
+ * @param {{ onChange?: (series: SeriesSpec[]) => void, loadNode?: (id: number) => Promise<any> }} [opts]
  */
 export function metricPicker(nodes, selected = [], { onChange, loadNode = (id) => api.get(`/api/nodes/${id}`) } = {}) {
   const sel = new Map(normalizeSeries(selected).map((s) => [seriesKey(s), s]));
@@ -347,6 +392,9 @@ export function metricPicker(nodes, selected = [], { onChange, loadNode = (id) =
 /**
  * Editor form for a chart config. Returns an element with `.value` (the config
  * read from the controls) and `onChange` callbacks fired live.
+ *
+ * @param {any} cfg
+ * @param {{ nodes?: any[], onChange?: (cfg: ChartConfig) => void, compact?: boolean, loadNode?: (id: number) => Promise<any> }} [opts]
  */
 export function chartConfigEditor(cfg, { nodes = [], onChange, compact = false, loadNode } = {}) {
   const c = normalizeChartConfig(cfg);
@@ -486,12 +534,17 @@ const asList = (x) => (Array.isArray(x) ? x : x ? [x] : []);
  * each named metric in its own. Resolves to [{ spec, hs }] in the config's
  * order, with `.missing` counting series that had nothing to fetch (a check
  * since deleted, a metric it no longer measures).
+ *
+ * @typedef {Array<{ spec: SeriesSpec, hs: any }> & { missing?: number }} SeriesList
+ * @typedef {Array<{ spec: SeriesSpec, hs: any, layer: number, shift: number }> & { spec?: SeriesSpec | null }} StackList
+ * @returns {Promise<SeriesList>}
  */
 export async function loadChartSeries(cfg, fetchFn = historyFetch) {
   const c = normalizeChartConfig(cfg);
   if (!c.series.length) {
     let list = asList(await fetchFn([], c.range));
     if (c.metric === 'loss') list = list.filter((hs) => hs.checkType === 'ping');
+    /** @type {SeriesList} */
     const out = list.map((hs) => ({ spec: { checkId: Number(hs.checkId), metric: c.metric }, hs }));
     out.missing = 0;
     return out;
@@ -504,6 +557,7 @@ export async function loadChartSeries(cfg, fetchFn = historyFetch) {
   ]);
   const byId = new Map(latency.map((hs) => [Number(hs.checkId), hs]));
   const byKey = new Map(named.map((s, i) => [seriesKey(s), namedLists[i][0]]));
+  /** @type {SeriesList} */
   const out = [];
   let missing = 0;
   for (const s of c.series) {
@@ -523,6 +577,7 @@ export async function loadChartSeries(cfg, fetchFn = historyFetch) {
  * points move forward to sit on the current window — with `.spec` the one
  * series stacked. `now` is rounded down to the minute, so the earlier layers
  * are asked for the same window on every redraw within it and stay cached.
+ * @returns {Promise<StackList>}
  */
 export async function loadTimestackSeries(cfg, fetchFn = historyFetch, now = Date.now()) {
   const c = normalizeChartConfig(cfg);
@@ -532,7 +587,7 @@ export async function loadTimestackSeries(cfg, fetchFn = historyFetch, now = Dat
   if (!spec) {
     // Nothing ticked: stack the first check GWatch would have picked.
     const auto = asList(await fetchFn([], ts.period));
-    if (!auto.length) { const none = []; none.spec = null; return none; }
+    if (!auto.length) { const none = /** @type {StackList} */ ([]); none.spec = null; return none; }
     spec = { checkId: Number(auto[0].checkId), metric: c.metric };
   }
   const named = !isBuiltinMetric(spec);
@@ -540,6 +595,7 @@ export async function loadTimestackSeries(cfg, fetchFn = historyFetch, now = Dat
   const lists = await Promise.all(Array.from({ length: ts.layers }, (_, i) => Promise.resolve()
     .then(() => fetchFn([spec.checkId], ts.period, named ? spec.metric : undefined, i === 0 ? undefined : end - i * period.ms))
     .then(asList).catch(() => [])));
+  /** @type {StackList} */
   const out = [];
   lists.forEach((list, i) => {
     const hs = list[0];
@@ -610,6 +666,10 @@ export function chartCsvItems(cfg, { nodes = [], series = null } = {}) {
  * third axis or rescaled into percentages nobody asked for, and a note above
  * the charts says so. yMin, yMax and the threshold line are in the unit of
  * the first series, so they apply to every chart whose left axis is in it.
+ *
+ * @param {HTMLElement} host
+ * @param {any} cfg
+ * @param {{ title?: string, fetch?: typeof historyFetch, fill?: boolean, onData?: (series: any[], entries: any[]) => void }} [opts]
  */
 export function renderConfiguredChart(host, cfg, { title = 'Chart', fetch: fetchFn, fill = false, onData } = {}) {
   const c = normalizeChartConfig(cfg);

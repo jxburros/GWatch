@@ -1,0 +1,34 @@
+// Type checking for the no-build web interface (#118). Nothing is compiled
+// or emitted: `npm run typecheck` runs `tsc --noEmit` over web/, which stays
+// plain JavaScript the browser loads as-is. Types are written as JSDoc
+// comments (@param, @returns, @typedef), never TypeScript syntax.
+//
+// Only the files whose first line is `// @ts-check` are checked; the rest are
+// read for the types they export but not reported on. To bring another file
+// under the checker:
+//   1. add `// @ts-check` as its first line,
+//   2. run `npm run typecheck` and fix what it reports — usually a JSDoc
+//      @param for a destructured options object (`{ a, b } = {}` is otherwise
+//      typed as exactly the defaults it lists), or a cast such as
+//      `/** @type {HTMLElement} */ (el)` where the DOM type is too wide,
+//   3. keep `npm test` and the Playwright suite green: a type fix must never
+//      change what the code does.
+// The checked files are listed in docs/RELEASING.md. The next step up is
+// "strictNullChecks": true, which reports about two dozen more places today.
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "target": "es2022",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["es2023", "dom", "dom.iterable"],
+    "types": [],
+    "strict": false,
+    "noImplicitAny": false,
+    "strictNullChecks": false,
+    "skipLibCheck": true
+  },
+  "include": ["web/**/*.js"]
+}

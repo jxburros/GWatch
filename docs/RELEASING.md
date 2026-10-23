@@ -15,6 +15,7 @@ make cover                        # race tests plus a per-function coverage repo
 make test-postgres / test-mysql   # the store, backup, API, engine and hostmon suites against a server
 make web-check                    # node --check over every web/*.js (needs node on PATH)
 make web-test                     # the jsdom suite in tests/web/
+make web-typecheck                # tsc over the web/ files marked // @ts-check (see tsconfig.json)
 make web-e2e                      # Playwright + axe over every route, in tests/e2e/
 make build / build-ncruces / build-cgo   # build with each of the three SQLite drivers
 make windows                      # cross-compile dist/gwatch.exe from Linux/macOS
@@ -44,7 +45,7 @@ request with the following jobs:
 
 | Job | Runner | What it does |
 |---|---|---|
-| `ci` ("Lint, build, test (Windows)") | `windows-latest` | gofmt, vet, `go mod tidy`/`verify`, build + full test suite, the mcp/ module, web-asset `node --check` plus the jsdom suite (`npm test`, `tests/web/`), PowerShell script parsing, compiles both Inno Setup installers, and dry-runs the release's Authenticode signing with a throwaway certificate ([below](#authenticode-signing)) |
+| `ci` ("Lint, build, test (Windows)") | `windows-latest` | gofmt, vet, `go mod tidy`/`verify`, build + full test suite, the mcp/ module, web-asset `node --check` plus the jsdom suite (`npm test`, `tests/web/`) and the web type check (`npm run typecheck`), PowerShell script parsing, compiles both Inno Setup installers, and dry-runs the release's Authenticode signing with a throwaway certificate ([below](#authenticode-signing)) |
 | `linux` ("Test (Linux)") | `ubuntu-latest` | gofmt, vet, staticcheck, build, full test and race suites (root and mcp/), the migration/store/backup/api/engine/hostmon suites against PostgreSQL 16 and MySQL 8 service containers ([`DATABASE.md`](DATABASE.md#for-developers)), `govulncheck` for both modules, and the browser accessibility suite (`npm run test:e2e` — Playwright drives Chromium through every route with an axe-core scan) |
 | `macos` ("Test (macOS)") | `macos-latest` | vet + test only — deliberately lean, but this is what actually compiles and exercises `internal/sysmetrics/collect_darwin.go` |
 | `docker` ("Container image") | `ubuntu-latest` | builds the `Dockerfile` for `linux/amd64` and `linux/arm/v7`, checks `gwatch version` inside it, then starts the container and waits for `/api/health` to answer 200 |
@@ -97,6 +98,7 @@ Pushing a tag such as `v0.1.0` additionally runs the `release` job (below) and t
 | `web/` | The browser interface (vanilla HTML/CSS/JS, no build step, embedded into the binary; open with `?mock=1` for an in-browser demo backend) |
 | `web/fonts/` | Barlow and Kode Mono, latin subsets, self-hosted so the UI still requests nothing from the internet ([SIL OFL 1.1](../web/fonts/OFL.txt)) |
 | `tests/web/` | The jsdom suite for `web/` (`make web-test`). It lives outside `web/` so `//go:embed` never ships it |
+| `tsconfig.json` | Type checking for `web/` (`make web-typecheck`): JSDoc types, no build. Checked today: `components.js`, `api.js`, `fmt.js`, `chart-config.js`, `netmap.js` — a file opts in with `// @ts-check` as its first line; the steps are in `tsconfig.json`, and `tests/web/typecheck-coverage.test.mjs` keeps the list from shrinking |
 | `tests/e2e/` | Playwright + axe over every route, in both themes (`make web-e2e`); `playwright.config.mjs` and `package.json` configure both suites |
 | `skill/` | The downloadable agent skill served by `GET /api/mcp/skill`, versioned by `skill/VERSION` |
 | `scripts/` | Windows build / install / uninstall PowerShell scripts |

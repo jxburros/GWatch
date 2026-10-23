@@ -1,3 +1,4 @@
+// @ts-check
 // Formatting helpers: relative times, durations, milliseconds, percentages,
 // bytes, rates and readings in whatever unit a metric is measured in.
 
@@ -5,11 +6,12 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const DAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+/** @param {any} v @returns {Date | null} */
 export function toDate(v) {
   if (v == null || v === '') return null;
-  if (v instanceof Date) return isNaN(v) ? null : v;
+  if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
   const d = new Date(v);
-  return isNaN(d) ? null : d;
+  return isNaN(d.getTime()) ? null : d;
 }
 
 function pad(n) { return String(n).padStart(2, '0'); }
@@ -150,7 +152,7 @@ export function toLocalInput(v) {
 export function fromLocalInput(s) {
   if (!s) return null;
   const d = new Date(s);
-  return isNaN(d) ? null : d.toISOString();
+  return isNaN(d.getTime()) ? null : d.toISOString();
 }
 
 /** Retention days → "30 days", "6 months", "2 years", "forever". */

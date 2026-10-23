@@ -1,3 +1,4 @@
+// @ts-check
 // Thin fetch wrapper for the localhost API plus the live-update stream.
 
 export class ApiError extends Error {

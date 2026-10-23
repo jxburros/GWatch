@@ -73,6 +73,10 @@ jobs:
         \ fi\n# The tests themselves live outside web/ (tests/web/), not because\n# they belong to a different feature\
         \ but so //go:embed web never\n# picks them up and ships them inside gwatch.exe \u2014 see tests/web/.\n\
         npm ci\nnpm test\n"
+    - name: Web type check
+      # tsc over the web/ files marked // @ts-check (JSDoc types; nothing is
+      # compiled). tsconfig.json says how to bring another file under it.
+      run: npm run typecheck
     - name: PowerShell scripts parse
       shell: pwsh
       run: |
