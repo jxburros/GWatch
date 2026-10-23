@@ -1654,6 +1654,12 @@ type UpdateStatus struct {
 	NextCheckAt  *time.Time  `json:"nextCheckAt"` // nil when automatic checks are off
 	AutoCheck    bool        `json:"autoCheck"`
 	PromptOnOpen bool        `json:"promptOnOpen"`
+	// PackagedBy is set when a package manager installed this copy (deb, rpm,
+	// docker, homebrew, winget): it owns the executable, CanApply is false,
+	// and PackageManager and PackageCommand say who updates it and how.
+	PackagedBy     string `json:"packagedBy,omitempty"`
+	PackageManager string `json:"packageManager,omitempty"`
+	PackageCommand string `json:"packageCommand,omitempty"`
 }
 
 // NetworkInfo tells the UI how the interface is reachable.

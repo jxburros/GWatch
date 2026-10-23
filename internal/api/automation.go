@@ -660,6 +660,16 @@ func (u *Updater) Status() model.UpdateStatus {
 	st := u.status
 	st.Executable = u.exe()
 	st.CanApply = st.Executable != "" && update.DirWritable(st.Executable)
+	if u.PackagedBy != "" {
+		latest := ""
+		if st.Last != nil {
+			latest = st.Last.LatestVersion
+		}
+		st.CanApply = false
+		st.PackagedBy = u.PackagedBy
+		st.PackageManager = packageManager(u.PackagedBy)
+		st.PackageCommand = packageUpdateCommand(u.PackagedBy, latest, packageArch)
+	}
 	st.AutoCheck = p.CheckAutomatically
 	st.PromptOnOpen = p.CheckAutomatically && p.PromptOnOpen
 	if !u.lastCheck.IsZero() {
@@ -880,11 +890,7 @@ func (u *Updater) target(ctx context.Context, repo, version string) (model.Updat
 // like any other.
 func (u *Updater) Apply(ctx context.Context, repo, version string) (model.UpdateInfo, error) {
 	if u.PackagedBy != "" {
-		command := map[string]string{"docker": "docker compose pull && docker compose up -d", "deb": "sudo apt install --only-upgrade gwatch", "rpm": "sudo dnf upgrade gwatch", "homebrew": "brew upgrade gwatch", "winget": "winget upgrade GWatch.GWatch"}[u.PackagedBy]
-		if command == "" {
-			command = "use the package manager that installed this executable"
-		}
-		return model.UpdateInfo{}, fmt.Errorf("installed by %s; to update, %s", u.PackagedBy, command)
+		return model.UpdateInfo{}, packagedRefusal(u.PackagedBy, u.latestKnown())
 	}
 	u.mu.Lock()
 	if u.status.Applying {

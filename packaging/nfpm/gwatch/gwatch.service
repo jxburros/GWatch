@@ -1,0 +1,90 @@
+# The GWatch server, as installed by the gwatch .deb or .rpm
+# (packaging/nfpm/gwatch.yaml). See docs/INSTALL-LINUX.md#from-a-deb-or-rpm-package.
+#
+# The package enables and starts this unit. It serves the web interface on
+# 127.0.0.1:7230 until told otherwise: set GWATCH_LISTEN in
+# /etc/gwatch/gwatch.env (or use Settings > Network) and restart.
+#
+# It runs as the unprivileged system user `gwatch`, which owns nothing on the
+# machine but /var/lib/gwatch (the StateDirectory below: the database, the
+# key, logs and backups). The only capability it keeps is CAP_NET_RAW, which
+# is what lets the built-in ping open a raw ICMP socket when the distribution
+# does not allow unprivileged ICMP (net.ipv4.ping_group_range). The binary
+# was built with -X main.packagedBy=deb (or rpm) and never replaces itself;
+# ProtectSystem=strict makes /usr read-only to it as well, which is a second,
+# independent reason it cannot.
+#
+# Command actions and custom-script checks run as `gwatch` inside this same
+# sandbox. If one needs to write somewhere other than /var/lib/gwatch, or the
+# service should listen on a port below 1024, add a drop-in rather than
+# editing this file (sudo systemctl edit gwatch), for example:
+#
+#   [Service]
+#   ReadWritePaths=/srv/gwatch-backups
+#   AmbientCapabilities=CAP_NET_RAW CAP_NET_BIND_SERVICE
+#   CapabilityBoundingSet=CAP_NET_RAW CAP_NET_BIND_SERVICE
+#
+# MemoryDenyWriteExecute is deliberately not set: it is inherited by custom
+# check scripts, and would break any that run on a JIT (node, java, pypy).
+[Unit]
+Description=GWatch network monitor
+Documentation=https://github.com/jxburros/GWatch/blob/main/docs/INSTALL-LINUX.md
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=gwatch
+Group=gwatch
+Environment=GWATCH_DATA_DIR=/var/lib/gwatch
+Environment=GWATCH_LISTEN=127.0.0.1:7230
+EnvironmentFile=-/etc/gwatch/gwatch.env
+ExecStart=/usr/bin/gwatch run
+# GWatch exits with status 3 to ask to be restarted (Settings > Network,
+# a restored backup), which Restart=always covers; 78 means "configuration
+# error, do not retry" and is not restarted.
+Restart=always
+RestartSec=5s
+RestartPreventExitStatus=78
+StateDirectory=gwatch
+StateDirectoryMode=0700
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogLevelPrefix=yes
+
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+NoNewPrivileges=yes
+ProtectSystem=strict
+# read-only rather than yes: the local host monitor measures the free space
+# on every mounted filesystem, /home included.
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectProc=invisible
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# Not ~@privileged: that set includes capset, and the system `ping` (the
+# fallback pinger, and what pingMethod=system uses) exits when it cannot drop
+# its capabilities.
+SystemCallFilter=~@resources
+SystemCallErrorNumber=EPERM
+# AF_NETLINK is how the interface list and addresses are read.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target
