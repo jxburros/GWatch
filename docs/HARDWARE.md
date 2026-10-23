@@ -244,7 +244,31 @@ it last spoke to GWatch, every setting above in a form, the collection limit as
 checkboxes for the interfaces and drives this machine actually has, the token
 (**Show**, to compare it with the node), a test reading, an update check, and
 start / stop / restart for the service. The file itself is there too, as an
-editor that refuses a file the agent could not run with.
+editor that refuses a file the agent could not run with. It also has:
+
+- **the last error** the agent hit, what it is collecting, the version, whether
+  it updates itself (or which package manager does), and where its settings
+  and token file is;
+- **the recent log** — the last 50 lines. A running agent copies its log to
+  `agent.log` beside its settings (owner-only, at most 1 MiB with one older
+  file, `agent.log.1`, kept); a service started by an older agent has only the
+  journal, which the panel reads instead on Linux. Anything shaped like a token
+  is removed, both as the log is written and as it is shown;
+- **Update now**, which installs the newest signed release by the same path
+  the automatic updater takes (download, verify, test-run, swap) and restarts
+  the service onto it. A packaged agent says which command updates it instead,
+  and downloads nothing;
+- **Pair this machine again** — a server address and a fresh pairing code,
+  exchanged for a new token exactly as `gwatch-agent pair` does, with the
+  service restarted onto it and a link to the machine in GWatch;
+- **Copy diagnostics** — version, platform, service state, the status file's
+  figures and last errors, the settings file with the token taken out, and the
+  end of the log, as text to paste wherever you are asking for help.
+
+Where to find it: `gwatch-agent ui`; **GWatch Agent control panel** in the
+Start menu after the Windows setup program; **GWatch Agent** in the
+application menu of a Linux desktop with the `.deb` or `.rpm` installed; and
+**Open control panel** on the [notification-area icon](#the-notification-area-icon-windows).
 
 It is not part of the service. The service runs as root or SYSTEM, and a page it
 hosted would let any user on the machine change what a root process does. The
@@ -252,8 +276,15 @@ panel is a short-lived process that runs as *you*, only on this machine's
 loopback address, and closes itself after half an hour of not being used: it can
 edit the configuration only if you could edit it yourself, and control the
 service only if the operating system lets you. Where the files belong to root
-(the Linux packages, the Windows service), run it as `sudo gwatch-agent ui` or
-from an Administrator terminal; otherwise it opens read-only and says so.
+(the Linux packages, the Windows service), it asks for an administrator's
+rights the desktop's own way — UAC on Windows, polkit's password dialog
+(`pkexec`) on a Linux desktop, the administrator dialog on macOS — and opens
+with them; over SSH, or wherever there is no such prompt, run it as `sudo
+gwatch-agent ui` or from an Administrator terminal. A service button refused
+for want of rights asks the same way, for that one command. The copy that asks
+never hands the elevated one the panel's address on a command line: it makes
+a private folder, the elevated copy leaves the page that leads to the panel
+there, and the browser is opened as you, never as root.
 
 What protects it: it listens on a loopback address and refuses any other host
 name in the request, so a web page cannot reach it by rebinding a DNS name; it is
@@ -267,6 +298,34 @@ the panel prints instead; anything that changes something needs a header a
 page on another origin cannot set and a matching `Origin`; the token is never in
 the page until you press **Show**. The service writes a small status file for it
 to read, which holds no token and no readings.
+
+### The notification-area icon (Windows)
+
+`gwatch-agent tray` puts the agent's mark by the clock. Its tooltip says whether
+the agent is reporting and when it last sent a reading, and the icon turns to a
+warning or an error sign when the service is stopped, has gone quiet or cannot
+reach GWatch; it looks again every 30 seconds. Click it, or choose **Open
+control panel** from its menu, for the panel; **Agent status** shows the detail;
+**Quit** removes it.
+
+It is optional and off by default. The setup program's last page has an
+unticked **Show the agent in the notification area** box, which runs
+`gwatch-agent tray start-at-login`: a value under your own
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` key, so it starts when you
+sign in (`gwatch-agent tray stop-at-login` removes it, and so does
+uninstalling). It runs as you, unelevated, holds no settings and listens on
+nothing; it reads the service's state from the service manager and the status
+file, which the service gives an access list that lets signed-in users read it
+(the configuration and the token beside it stay the administrators'). When you
+sign in, its console window may flash for a moment before it hides.
+
+**macOS and Linux remain deferred.** Every Go tray library for them needs cgo,
+which the agent's one pure-Go, `CGO_ENABLED=0` cross-compile cannot have; Linux
+desktops disagree about what a tray is (GNOME needs an extension for one at
+all); and each would need its own per-user login autostart. On those platforms
+`gwatch-agent tray` says so and points at `gwatch-agent ui`, which does
+everything the icon would. GWatch itself already notices an agent that stops
+reporting and alerts on it.
 
 ### Installing from a package manager
 
@@ -661,6 +720,17 @@ verifier — no database, no web interface, no GWatch credentials.
 **The machine never appears.** Run `gwatch-agent once --server … --token …` on
 it by hand. A rejected token says so plainly; a connection failure names what
 went wrong reaching the server.
+
+**Is that address even a GWatch?** `gwatch-agent probe --server URL
+[--insecure]` answers in one line, before any code is spent: whether the
+address is reachable, whether its certificate is acceptable, and whether what
+answers is a GWatch (its public `GET /api/health` carries `schedulerRunning`).
+It exits non-zero when it is not. The Windows setup program's **Test
+connection** button runs exactly this.
+
+**Asking for help.** **Copy diagnostics** in the control panel puts everything
+someone helping will ask for on the clipboard, with the token taken out; its
+**Recent log** card shows the end of `agent.log`.
 
 **"the server rejected this token".** The token was revoked, the machine was
 deleted, or it was mistyped. Register the machine again and use the new token.
