@@ -147,6 +147,7 @@ deliberately does and does not do on a machine.
 | [`docs/DATABASE.md`](docs/DATABASE.md) | Keeping the data on your own PostgreSQL or MySQL/MariaDB server instead of the SQLite file: setup, `database.json`, TLS, `gwatch migrate-db` |
 | [`docs/DOCKER.md`](docs/DOCKER.md) | Running GWatch in a container: the first account, the `/data` volume, ping and discovery inside Docker, upgrading by pulling |
 | [`docs/HARDWARE.md`](docs/HARDWARE.md) | Hardware health, the agent, its trust model, and what each platform can measure |
+| [`docs/COLLECTORS.md`](docs/COLLECTORS.md) | Remote collectors: checking a second site through a paired agent, what it is sent (credentials included) and what happens when it goes quiet |
 | [`docs/AGENT-DECISIONS.md`](docs/AGENT-DECISIONS.md) | Why the agent is built the way it is: self-update, what GWatch deliberately cannot do to a machine, and the options not taken |
 | [`docs/SNMP.md`](docs/SNMP.md) | SNMP checks: enabling SNMP on a router or switch, choosing OIDs, interface traffic in bits per second |
 | [`docs/MATTER.md`](docs/MATTER.md) | Matter devices: running python-matter-server beside GWatch, commissioning with a pairing code, the readings and what Thread needs |

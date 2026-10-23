@@ -109,7 +109,8 @@ to change:
   "buffer": "6h",
   "autoUpdate": true,
   "insecure": false,
-  "collect": {}
+  "collect": {},
+  "collector": false
 }
 ```
 
@@ -124,6 +125,7 @@ to change:
 | `autoUpdate` | Whether the agent installs new signed releases by itself. |
 | `insecure`, `certPin` | Accept a self-signed certificate, or pin the server's public key. These are about the server named above, and are dropped if the agent is pointed at a different one for a run. |
 | `collect` | The machine's own limit on what it will report (below). |
+| `collector` | Whether this machine may run network checks for GWatch as a [remote collector](COLLECTORS.md) — ping, TCP, HTTP, DNS and SNMP checks of the nodes pointed at it. `false` unless you change it; it takes effect only if GWatch has also turned collecting on for this agent. `GWATCH_AGENT_COLLECTOR` overrides it. |
 | `listen`, `repo`, `hostRoot` | Not written unless needed: serve mode's address, the repository updates are taken from, and the container host mount. Rarely needed. |
 
 Change a value, then restart the agent (`gwatch-agent restart`, or restart the
@@ -239,6 +241,8 @@ checkboxes are drawn from. GWatch's answer has no field for a URL, a command, a
 file or a version to install, so it cannot make the machine do anything it did
 not choose to; the full list is in [`API.md`](API.md#asking-for-settings) and the
 reasoning in [`AGENT-DECISIONS.md`](AGENT-DECISIONS.md#12-an-agent-asks-gwatch-for-a-small-fixed-set-of-things).
+The one addition is for a machine you have made a [remote collector](COLLECTORS.md)
+on both sides: its answer also lists the network checks to run.
 
 ### When GWatch is unreachable
 
@@ -489,6 +493,10 @@ The agent connects outwards and hangs up. Specifically:
   machine's readings, and every other route in GWatch refuses it.
 - **A reading is filed under the machine that sent it**, whatever the payload
   claims. A token cannot write another machine's history.
+- **A remote collector is opt-in on the machine.** Unless `agent.json` says
+  `"collector": true`, nothing GWatch says makes the agent run a check; with it,
+  the agent runs only built-in network checks (never a script), and is handed
+  the credentials those checks carry. See [`COLLECTORS.md`](COLLECTORS.md).
 - **Losing a token is small.** Someone holding it could send made-up readings
   for that one machine. Revoke it on the machine's node, or **Replace now** to
   give it a new one, and the old one stops working on the next request; past

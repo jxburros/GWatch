@@ -178,8 +178,8 @@ is sent `frame-ancestors *` and no `X-Frame-Options`. Everything else refuses to
 take a credential of their own in place of the sign-in:
 `GET /api/wallboards/{id}/view` (the token of a board whose sharing is switched on;
 every other caller is refused), `POST /api/agents/pair` (a one-use pairing code, with
-wrong codes counted against the same per-IP budget as wrong passwords), `/ingest/metrics`
-and `/ingest/checkin` (an agent token), and `/hook/…` (each endpoint's own token).
+wrong codes counted against the same per-IP budget as wrong passwords), `/ingest/metrics`,
+`/ingest/checkin` and `/ingest/results` (an agent token), and `/hook/…` (each endpoint's own token).
 
 Anything not listed in the policy table is admin-only with API keys denied, so a new
 route is closed until it is opened on purpose.
@@ -359,7 +359,7 @@ echoed as written, so an `Authorization` header on an HTTP check is stored in th
 ### Node and Check objects
 
 A `Node` is `{id, name, host, groups, group, tags, notes, importance, enabled,
-dependsOnNodeId, linkStyle, template, createdAt, updatedAt, checks}`. `host` is the default target
+dependsOnNodeId, linkStyle, collectorId, template, createdAt, updatedAt, checks}`. `host` is the default target
 its checks inherit when their own `config.target` is empty; `importance` is `low`,
 `normal`, `high` or `critical`; `dependsOnNodeId` is the parent used for
 dependency-aware alert suppression; `template` records which template the node was
@@ -379,6 +379,16 @@ and bulk edit. The style belongs to the link, so a node with no
 when the parent is deleted) and one pointed at a different parent keeps it.
 It is part of the node everywhere a node goes: the overview, the configuration
 export, backups and restores, and `POST /api/nodes/{id}/duplicate`.
+
+`collectorId` is where the node's network checks run from: `null` for this server, or
+the id of a paired agent acting as a remote collector
+([`COLLECTORS.md`](COLLECTORS.md)). Only its `ping`, `tcp`, `http`, `keyword`, `json`,
+`cert`, `dns` and `snmp` checks move; any other check of the node still runs here. A
+create or update naming an agent that does not exist, or has been revoked, is a `400`;
+`0` means this server. An agent whose collecting is not switched on is accepted, and the
+node's checks show as `unknown` with the reason until it is. While a check is collected,
+`POST /api/checks/{id}/run` answers `409` (this server is not where it runs) and
+`POST /api/nodes/{id}/run` skips it. Bulk edit does not change `collectorId`.
 
 A `Check` is `{id, nodeId, type, name, enabled, intervalSeconds, timeoutSeconds,
 retries, failureThreshold, config, alerts, sortOrder, createdAt, updatedAt}`.
@@ -841,7 +851,13 @@ routes — an administrator in the browser, never an API key:
   readable copy), and a rotation gets a readable one. It is a `POST`, it writes to the audit
   trail, and like the rest of the credential routes it is for an administrator in the
   browser, never an API key. `Agent` carries `tokenViewable`, `rotationPending`,
-  `rotationSince`, `collect`, `inventory` and `checkedInAt`; never a token.
+  `rotationSince`, `collect`, `inventory` and `checkedInAt`; never a token. It also
+  carries the remote-collector fields: `collector` (turned on in GWatch),
+  `collectorAllowed` (the machine said at its last check-in that its own `agent.json`
+  allows it), `collectorSeenAt` (when it last sent results or a heartbeat),
+  `collectorChecks` (how many checks it runs) and `collectorStatus` — `""` (off),
+  `waiting` (on here, not allowed on the machine), `idle` (no node checks from it),
+  `running`, or `unreachable` (it has checks and has gone quiet).
 - `POST /api/agents/{id}/rotate` body `{ "retireOld": bool }` → `{ "token": "gwa_…", "retiredOld": bool, "agent": Agent }`.
   Issues a replacement token. By default the old token keeps working until the new one is
   first used; an agent holding the old one is handed the new one when it next checks in
@@ -862,6 +878,11 @@ routes — an administrator in the browser, never an API key:
   machine reports, never widen it. `400` for an unknown metric family (`cpu`, `memory`,
   `swap`, `load`, `disk`, `inodes`, `net`, `diskio`, `temp`, `psi`, `pool`), or a service
   or program name that starts with `-` or contains a control character.
+- `PUT /api/agents/{id}/collector` body `{ "enabled": bool }` → `Agent`. GWatch's half of
+  the agreement that makes a machine a remote collector; the machine's half is
+  `"collector": true` in its own `agent.json`. Neither alone does anything: the checks are
+  handed out only when both are there. Written to the audit trail. `409` to turn it on for
+  a revoked agent. Administrator only, never an API key.
 - `GET /api/agents/latest` → `{ "version", "url", "checkedAt", "error"? }`, the newest
   non-pre-release `gwatch-agent` release in the update repository, which the interface
   uses to mark machines running an older agent. It reads the agent's own releases
@@ -955,21 +976,31 @@ per-IP failure budget as a wrong password.
 ### Asking for settings
 
 `POST /ingest/checkin` with `Authorization: Bearer gwa_…` and an optional body
-`{ "version": "0.7.0", "inventory": { "interfaces": [{ "name", "detail", "auto" }], "disks": […], "mounts": […], "services": […], "processes": […] } }`.
+`{ "version": "0.7.0", "collector": true, "inventory": { "interfaces": [{ "name", "detail", "auto" }], "disks": […], "mounts": […], "services": […], "processes": […] } }`.
+`collector` says the machine's own configuration allows it to act as a remote collector.
 Answers `200` with an `AgentSettings`:
 
 ```json
 { "checkInSeconds": 900,
   "collect": { "metrics": [], "interfaces": ["eth0"], "disks": [], "mounts": [] },
   "latestAgent": "0.7.1",
-  "token": "gwa_…" }
+  "token": "gwa_…",
+  "collector": { "checks": [ { "id": 41, "type": "snmp", "name": "Switch", "intervalSeconds": 60,
+                               "timeoutSeconds": 5, "retries": 1, "target": "10.2.0.2",
+                               "config": { "snmpCommunity": "…", "snmpOids": [ … ] } } ],
+                 "options": { "defaultCertWarn": 14, "latencyWarnMs": 0, "packetLossWarnPct": 0, "pingMethod": "" } } }
 ```
 
 That is the **whole** of what GWatch can tell an agent, and it is a closed set on purpose:
 how long to wait before asking again, the readings the administrator chose, the newest
-agent release as a hint, and — only while a rotation is waiting, and only to a caller that
-holds the token being replaced — the replacement token. There is no field for a URL to
-fetch, a command to run, a file to write or a version to install. The agent applies each
+agent release as a hint, the replacement token (only while a rotation is waiting, and only
+to a caller that holds the token being replaced), and the built-in network checks to run
+(only when an administrator has made the agent a collector **and** this check-in said the
+machine allows it), each with its target resolved and only the settings its type reads —
+including an SNMP community or HTTP headers, which is why they go only to the collector
+assigned to them. A collector is asked to check in every two minutes, so a check
+added to one of its nodes starts soon. There is no field for a command or a script, a URL to
+fetch code from, a file to write or a version to install. The agent applies each
 part on its own terms: the selection only ever narrows what its own file allows, the
 interval is clamped to between one minute and a day, a token is taken up only if the
 agent's file owns it, and `latestAgent` changes nothing (an agent still fetches and
@@ -981,7 +1012,36 @@ running at check-in time, listed then and never with a reading, for choosing whi
 watch. Like `/ingest/metrics` the
 route is reached with an agent token and nothing else, shares its failure budget, and is
 outside the authorization table. [`AGENT-DECISIONS.md`](AGENT-DECISIONS.md#12-an-agent-asks-gwatch-for-a-small-fixed-set-of-things)
-says why this does not turn GWatch into a control channel.
+says why this does not turn GWatch into a control channel, and
+[entry 16](AGENT-DECISIONS.md#16-an-agent-may-run-gwatchs-network-checks-from-where-it-is-if-both-sides-agree)
+why the collector's checks do not either.
+
+### Submitting check results (remote collectors)
+
+`POST /ingest/results` with `Authorization: Bearer gwa_…` and a body
+`{ "results": [ { "result": Result, "held": bool } ] }` — at most 500 results, an empty
+list being a heartbeat. Answers `202 { "accepted": n, "rejected": n }`.
+
+Each result has to be for a check this agent is currently assigned — an enabled check of a
+collectable type on an enabled node whose `collectorId` is this agent — or it is counted
+under `rejected` and dropped; a collector cannot write into any other check. A live result
+goes through exactly the processing a result taken here does (state, incidents, alerts,
+notification rules, maintenance, silences); its time is kept unless it is more than a
+minute ahead of GWatch's clock or five minutes behind, when the arrival time is used. A
+result marked `held` (kept through an outage, by the collector's own clock) is added to the
+check's history at its own time and judges nothing, like a held hardware reading, and is
+refused (rejected) if it has no time, is ahead of GWatch's clock or is more than 48 hours
+old. `403` when collecting is turned off for the agent in GWatch, or the agent has not said
+its own configuration allows it; the agent drops what it holds rather than retrying. Like
+the other `/ingest/` routes it takes an agent token and nothing else, shares their failure
+budget and is outside the authorization table.
+
+A collector that sends nothing — results or heartbeat — for three of its shortest check
+interval (never less than three minutes) is called unreachable: its checks become
+`unknown`, with `suppressReason: "collector"` and the reason in `lastMessage`, and one
+`collector_unreachable` event and one alert are raised for the collector rather than one
+per check. When it sends again a `collector_back` event is recorded; a check that was
+down before is down again, without a second down alert.
 
 Rates in a `HostMetrics` (`usagePct`, anything `…PerSec`) are derived by the reporting
 machine from two of its own consecutive readings, never by GWatch subtracting across the
@@ -992,7 +1052,7 @@ arrival time. See [`HARDWARE.md`](HARDWARE.md).
 
 ## Events / incidents
 
-- `GET /api/events?limit=100&before=ID&nodeId=&checkId=&type=&q=&since=&until=` → `[Event]` newest first. A `type` filter also includes its counterpart (down+recovered, warning+warning_cleared, cert_warning+cert_warning_cleared, silenced+unsilenced, maintenance_began+maintenance_ended, alert_sent+alert_failed, rule_fired+rule_cleared) unless `exact=1`. `q` is a case-insensitive search over title, detail, node and check name; `since`/`until` accept RFC 3339, `2006-01-02T15:04` or `2006-01-02`.
+- `GET /api/events?limit=100&before=ID&nodeId=&checkId=&type=&q=&since=&until=` → `[Event]` newest first. A `type` filter also includes its counterpart (down+recovered, warning+warning_cleared, cert_warning+cert_warning_cleared, silenced+unsilenced, maintenance_began+maintenance_ended, alert_sent+alert_failed, rule_fired+rule_cleared, collector_unreachable+collector_back) unless `exact=1`. `q` is a case-insensitive search over title, detail, node and check name; `since`/`until` accept RFC 3339, `2006-01-02T15:04` or `2006-01-02`.
 - `POST /api/events/note` body `{ "nodeId": null|id, "text": "rebooted router" }` → Event (timeline annotation).
 
 Every `Event` carries an optional `actor` naming who caused it — `"local"`, `"password"`,
@@ -1038,6 +1098,7 @@ every other event.
 | `auth` | a sign-in, sign-out, failed sign-in, or an account or API-key change |
 | `discovery` | a subnet was swept, or nodes were added from a sweep |
 | `rule_fired` / `rule_cleared` | a notification rule's conditions came together, or came apart again |
+| `collector_unreachable` / `collector_back` | a remote collector stopped sending results (its checks are unknown until it is back), or started again. One pair per collector, filed under the collector machine's node when it has one |
 
 ## Maintenance windows
 

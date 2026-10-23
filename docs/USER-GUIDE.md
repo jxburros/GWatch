@@ -1421,6 +1421,7 @@ A short list of things that exist but are easy to never find.
 | [`DOCKER.md`](DOCKER.md) | Running in a container |
 | [`DATABASE.md`](DATABASE.md) | PostgreSQL or MySQL instead of SQLite |
 | [`HARDWARE.md`](HARDWARE.md) | Hardware health and the agent in full |
+| [`COLLECTORS.md`](COLLECTORS.md) | Checking a second site from a paired agent (Check from) |
 | [`SNMP.md`](SNMP.md) | Enabling SNMP on a device, choosing OIDs |
 | [`RECIPES.md`](RECIPES.md) | Ready-made trigger and endpoint recipes |
 | [`REMOTE-ACCESS.md`](REMOTE-ACCESS.md) | Reaching GWatch from outside, safely |
