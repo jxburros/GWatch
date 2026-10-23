@@ -3,7 +3,7 @@
 // layout (x, y, width, height per widget) is saved with the dashboard.
 
 import { api } from '../api.js';
-import { preserveFocus, h, icon, clear, replace, statusPill, statusSpine, statusWord, statusGlyph, checkChip, statusOrb, toast, confirmDialog, promptDialog, openModal, menuButton, field, textInput, numberInput, selectInput, checkbox, emptyState, skeleton, eventRow, rangeChips, statusMeta, uid } from '../components.js';
+import { refreshRegion, h, icon, clear, replace, statusPill, statusSpine, statusWord, statusGlyph, checkChip, statusOrb, toast, confirmDialog, promptDialog, openModal, menuButton, field, textInput, numberInput, selectInput, checkbox, emptyState, skeleton, eventRow, rangeChips, statusMeta, uid } from '../components.js';
 import { relTime, bytes, plural, dateShort, duration, pct, nodeGroups, inGroup, NODE_SORTS, sortNodes } from '../fmt.js';
 import { chartConfigEditor, renderConfiguredChart, normalizeChartConfig, cachedHistoryFetch, expireHistory, chartCsvItems, TIMESTACK_PERIODS } from '../chart-config.js';
 // charts.js is already in the graph by way of chart-config.js, so naming these
@@ -293,11 +293,10 @@ export async function mount(root, ctx) {
       const view = state.chartViews.get(w.id);
       if (view) { view.refresh(); continue; }
       if (w.type === 'uptime_chart') { fillUptime(state.uptimeLists.get(w.id), w); continue; }
-      const restore = preserveFocus(card._body);
-      clear(card._body);
       replace(card._actions, card._actionKids);
-      try { renderWidgetBody(w, widgetConfig(w), card._body, card._actions); } catch (e) { console.error(e); card._body.append(h('div', { class: 'note' }, 'Could not render this widget.')); }
-      restore();
+      refreshRegion(card._body, (body) => {
+        try { renderWidgetBody(w, widgetConfig(w), body, card._actions); } catch (e) { console.error(e); body.append(h('div', { class: 'note' }, 'Could not render this widget.')); }
+      });
     }
   }
 

@@ -858,3 +858,167 @@ export function preserveFocus(root) {
   };
 }
 export function scrollBehavior() { return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'; }
+
+/* ---------- Refreshing a region without losing the user's place ---------- */
+// Two ways to refresh part of a view (#118). Prefer renderKeyed whenever the
+// contents are a list of things with ids: it keeps the very same elements, so
+// nothing about them — focus, hover, an open menu, a half-typed value — is
+// lost. refreshRegion is for contents with no natural keys: it rebuilds, and
+// puts the focus and the scroll position back afterwards.
+
+/** The key a keyed child was rendered under (see renderKeyed). */
+const KEY = Symbol('gwatchKey');
+
+/**
+ * Bring `container`'s children in line with `items`, one element per item,
+ * matched by key. An element whose key is still present is kept — the same
+ * DOM node, so its focus ring, hover, scroll and any open menu survive — and
+ * handed to `update` to bring its contents up to date; a new key is built
+ * with `render`; a key that has gone is removed. Elements are only moved when
+ * the order really changed, and the focused element is focused again if a
+ * move took the focus away (a browser blurs a node it moves).
+ *
+ * Every child of `container` should come from here: children without a key
+ * are removed. A null/false `item` is skipped.
+ *
+ * @template T
+ * @param {Element} container
+ * @param {ReadonlyArray<T | null | undefined | false>} items
+ * @param {{
+ *   key: (item: T, index: number) => string,
+ *   render: (item: T, index: number) => Element,
+ *   update?: (el: Element, item: T, index: number) => Element | void,
+ * }} opts `update` may return a different element to swap in; without
+ *   `update` an existing element is kept exactly as it is.
+ * @returns {Element} the container
+ */
+export function renderKeyed(container, items, { key, render, update }) {
+  const active = /** @type {HTMLElement | null} */ (document.activeElement);
+  const hadFocus = !!active && active !== document.body && container.contains(active);
+  /** @type {Map<string, Element>} */
+  const old = new Map();
+  for (const el of [...container.children]) {
+    const k = /** @type {any} */ (el)[KEY];
+    if (k == null || old.has(k)) el.remove(); else old.set(k, el);
+  }
+  /** @type {Element[]} */
+  const next = [];
+  const seen = new Set();
+  items.forEach((item, i) => {
+    if (item == null || item === false) return;
+    const it = /** @type {T} */ (item);
+    const k = String(key(it, i));
+    if (seen.has(k)) return; // a duplicate key would steal its twin's element
+    seen.add(k);
+    let el = old.get(k);
+    if (el) {
+      const swapped = update ? update(el, it, i) : undefined;
+      if (swapped && swapped !== el) { el.replaceWith(swapped); el = swapped; }
+      old.delete(k);
+    } else {
+      el = render(it, i);
+    }
+    /** @type {any} */ (el)[KEY] = k;
+    next.push(el);
+  });
+  for (const el of old.values()) el.remove();
+  let cursor = container.firstElementChild;
+  for (const el of next) {
+    if (el === cursor) { cursor = cursor.nextElementSibling; continue; }
+    container.insertBefore(el, cursor);
+  }
+  if (hadFocus && active && active.isConnected && document.activeElement !== active) active.focus({ preventScroll: true });
+  return container;
+}
+
+/**
+ * Rebuild a region wholesale — for content with no natural keys, or that is
+ * cheap to write again — while keeping the user's place in it: the focused
+ * control (matched by data-focus-key, href, aria-label or id; see
+ * preserveFocus) and the region's own scroll position.
+ *
+ * @param {Element} region
+ * @param {(region: Element) => void} build writes the new contents; the
+ *   region is already empty when it is called.
+ * @returns {Element} the region
+ */
+export function refreshRegion(region, build) {
+  const restore = preserveFocus(region);
+  const top = region.scrollTop, left = region.scrollLeft;
+  clear(region);
+  try { build(region); } finally {
+    if (top || left) { region.scrollTop = top; region.scrollLeft = left; }
+    restore();
+  }
+  return region;
+}
+
+/**
+ * @typedef {{ value: string, label: string }} ChipItem
+ * @typedef {{
+ *   label: string,
+ *   items: ChipItem[],
+ *   current: string,
+ *   onPick: (value: string) => void,
+ *   allLabel?: string,
+ * }} ChipRowOptions
+ * @typedef {{ kind: 'label' } | { kind: 'chip', value: string, text: string }} ChipPart
+ */
+
+/**
+ * A filter chip row: "Label  [All] [a] [b]…", one of them pressed. Pass the
+ * row this returned last time as `row` and it is brought up to date in place
+ * (the same buttons, so a refresh never takes the focus off a chip); pass
+ * null to build one. With no items there is no row and null comes back.
+ * Picking the pressed chip again goes back to All.
+ *
+ * @param {Element | null} row
+ * @param {ChipRowOptions} opts
+ * @returns {HTMLElement | null}
+ */
+export function chipRow(row, { label, items, current, onPick, allLabel = 'All' }) {
+  if (!items.length) return null;
+  const el = /** @type {HTMLElement} */ (row || h('div', { class: 'chip-row', role: 'group' }));
+  el.setAttribute('aria-label', label);
+  /** @type {ChipPart[]} */
+  const parts = [{ kind: 'label' }, { kind: 'chip', value: '', text: allLabel }, ...items.map((it) => /** @type {ChipPart} */ ({ kind: 'chip', value: it.value, text: it.label }))];
+  /** @param {Element} b @param {ChipPart} p */
+  const sync = (b, p) => {
+    if (p.kind === 'label') { if (b.textContent !== label) b.textContent = label; return; }
+    const on = p.value ? current === p.value : !current;
+    b.className = `chip ${on ? 'active' : ''}`;
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    b.setAttribute('data-focus-key', `${label}:${p.value || 'all'}`);
+    if (b.textContent !== p.text) b.textContent = p.text;
+    /** @type {any} */ (b)._pick = () => onPick(p.value && current === p.value ? '' : p.value);
+  };
+  renderKeyed(el, parts, {
+    key: (p) => (p.kind === 'label' ? '\u0000label' : `chip:${p.value}`),
+    render: (p) => {
+      /** @type {HTMLElement} */
+      const b = p.kind === 'label'
+        ? h('span', { class: 'chip-label' })
+        : h('button', { type: 'button', onclick: () => /** @type {any} */ (b)._pick() });
+      sync(b, p);
+      return b;
+    },
+    update: (b, p) => { sync(b, p); },
+  });
+  return el;
+}
+
+/**
+ * Several chip rows in one container (a view's filter bar), each kept between
+ * refreshes by its label. A row with no items is left out.
+ *
+ * @param {Element} container
+ * @param {ChipRowOptions[]} rows
+ * @returns {Element} the container
+ */
+export function chipRows(container, rows) {
+  return renderKeyed(container, rows.filter((r) => r.items.length), {
+    key: (r) => r.label,
+    render: (r) => /** @type {HTMLElement} */ (chipRow(null, r)),
+    update: (el, r) => { chipRow(el, r); },
+  });
+}

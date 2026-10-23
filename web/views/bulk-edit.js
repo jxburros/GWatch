@@ -10,7 +10,7 @@
 // the same rows that go into the body, not from a second description of them.
 
 import { api } from '../api.js';
-import { h, icon, clear, replace, field, textInput, numberInput, selectInput, chipInput, toast, confirmDialog, emptyState, skeleton, checkTypeLabel, busy, statusWord, uid } from '../components.js';
+import { h, icon, clear, replace, field, textInput, numberInput, selectInput, chipInput, toast, confirmDialog, emptyState, skeleton, checkTypeLabel, chipRows, renderKeyed, busy, statusWord, uid } from '../components.js';
 import { interval as fmtInterval, nodeGroups, inGroup } from '../fmt.js';
 import { BULK_FIELDS, bulkField, bulkValue, setPath, ON_OFF_OPTIONS, TRI } from './node-fields.js';
 
@@ -77,26 +77,19 @@ export async function mount(root, ctx) {
     }).sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  function chipRow(label, items, current, onPick) {
-    if (!items.length) return null;
-    const row = h('div', { class: 'chip-row', role: 'group', 'aria-label': label }, h('span', { class: 'chip-label' }, label));
-    row.append(h('button', { type: 'button', class: `chip ${!current ? 'active' : ''}`, 'aria-pressed': !current ? 'true' : 'false', onclick: () => onPick('') }, 'All'));
-    for (const it of items) row.append(h('button', { type: 'button', class: `chip ${current === it.value ? 'active' : ''}`, 'aria-pressed': current === it.value ? 'true' : 'false', onclick: () => onPick(current === it.value ? '' : it.value) }, it.label));
-    return row;
-  }
-
+  // Kept between refreshes, so the focus stays on the chip just pressed (#118).
   function renderFilters() {
-    clear(filters);
     const counts = {};
     for (const n of state.nodes) counts[n.status || 'unknown'] = (counts[n.status || 'unknown'] || 0) + 1;
-    filters.append(
-      chipRow('Group', state.groups.groups.map((g) => ({ value: g.name, label: `${g.name} (${g.count})` })), state.group, (v) => { state.group = v; renderFilters(); renderPick(); }),
-      chipRow('Status', STATUS_ORDER.filter((s) => counts[s]).map((s) => ({ value: s, label: `${s[0].toUpperCase()}${s.slice(1)} (${counts[s]})` })), state.status, (v) => { state.status = v; renderFilters(); renderPick(); }),
-      chipRow('Tag', state.groups.tags.map((t) => ({ value: t.name, label: t.name })), state.tag, (v) => { state.tag = v; renderFilters(); renderPick(); }),
+    const pick = (key) => (v) => { state[key] = v; renderFilters(); renderPick(); };
+    chipRows(filters, [
+      { label: 'Group', items: state.groups.groups.map((g) => ({ value: g.name, label: `${g.name} (${g.count})` })), current: state.group, onPick: pick('group') },
+      { label: 'Status', items: STATUS_ORDER.filter((s) => counts[s]).map((s) => ({ value: s, label: `${s[0].toUpperCase()}${s.slice(1)} (${counts[s]})` })), current: state.status, onPick: pick('status') },
+      { label: 'Tag', items: state.groups.tags.map((t) => ({ value: t.name, label: t.name })), current: state.tag, onPick: pick('tag') },
       // Picking a check group (#36) shows the nodes that have one and ticks
       // exactly the checks in it, so "every HTTPS certificate" is one click.
-      chipRow('Check group', (state.groups.checkGroups || []).map((g) => ({ value: g.name, label: `${g.name} (${g.count})` })), state.checkGroup, (v) => { state.checkGroup = v; renderFilters(); renderPick(); if (v) selectCheckGroup(v); }),
-    );
+      { label: 'Check group', items: (state.groups.checkGroups || []).map((g) => ({ value: g.name, label: `${g.name} (${g.count})` })), current: state.checkGroup, onPick: (v) => { pick('checkGroup')(v); if (v) selectCheckGroup(v); } },
+    ]);
   }
 
   const inCheckGroup = (c, g) => (c.config?.groups || []).some((x) => x.trim().toLowerCase() === g.trim().toLowerCase());
@@ -223,7 +216,7 @@ export async function mount(root, ctx) {
   /* ---------- Right: the change builder ---------- */
 
   const rowsEl = h('div', { class: 'stack-sm' });
-  const typesEl = h('div', { class: 'chip-row', role: 'group', 'aria-label': 'Limit to check types' }, h('span', { class: 'chip-label' }, 'Only'));
+  const typesEl = h('div', { class: 'chip-row', role: 'group', 'aria-label': 'Limit to check types' });
   const summaryEl = h('p', { class: 'bulk-summary', role: 'status' });
   const errorEl = h('div', { class: 'bulk-error', role: 'alert', hidden: true });
   const applyBtn = h('button', { class: 'btn btn-primary', type: 'button', onclick: apply }, icon('save'), 'Apply changes');
@@ -329,14 +322,26 @@ export async function mount(root, ctx) {
         : null);
   }
 
+  // The type chips are keyed by type, so toggling one keeps the focus on it.
   function renderTypes() {
-    [...typesEl.querySelectorAll('.chip')].forEach((c) => c.remove());
     const present = [...new Set(state.nodes.flatMap((n) => checksOf(n).map((c) => c.type)))].sort();
-    typesEl.append(h('button', { type: 'button', class: `chip ${state.types.size ? '' : 'active'}`, 'aria-pressed': state.types.size ? 'false' : 'true', onclick: () => { state.types.clear(); renderTypes(); renderSummary(); } }, 'Every type'));
-    for (const t of present) {
-      const on = state.types.has(t);
-      typesEl.append(h('button', { type: 'button', class: `chip ${on ? 'active' : ''}`, 'aria-pressed': on ? 'true' : 'false', onclick: () => { if (on) state.types.delete(t); else state.types.add(t); renderTypes(); renderSummary(); } }, checkTypeLabel(t)));
-    }
+    const sync = (b, t) => {
+      const on = t ? state.types.has(t) : !state.types.size;
+      b.className = `chip ${on ? 'active' : ''}`;
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      return b;
+    };
+    const toggleType = (t) => {
+      if (!t) state.types.clear(); else if (state.types.has(t)) state.types.delete(t); else state.types.add(t);
+      renderTypes(); renderSummary();
+    };
+    const LABEL = '\u0000label';
+    renderKeyed(typesEl, [LABEL, '', ...present], {
+      key: (t) => `type:${t}`,
+      render: (t) => (t === LABEL ? h('span', { class: 'chip-label' }, 'Only')
+        : sync(h('button', { type: 'button', onclick: () => toggleType(t) }, t ? checkTypeLabel(t) : 'Every type'), t)),
+      update: (b, t) => { if (t !== LABEL) sync(b, t); },
+    });
   }
 
   function renderBuild() {
