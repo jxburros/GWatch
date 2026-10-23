@@ -96,8 +96,8 @@ export async function mount(root, ctx) {
 
   const saveBar = (label = 'Save changes') => { const b = h('button', { class: 'btn btn-primary', type: 'button', onclick: () => saveSettings(b) }, icon('save'), label); return h('div', { class: 'form-actions' }, b); };
   const unit = (input, u) => h('div', { class: 'input-with-unit' }, input, h('span', { class: 'unit' }, u));
-  const numField = (obj, key, label, { unitLabel, help, min = 0, step } = {}) => {
-    const input = numberInput({ value: obj[key] ?? '', min, step, oninput: () => { obj[key] = Number(input.value) || 0; } });
+  const numField = (obj, key, label, { unitLabel, help, min = 0, max, step } = {}) => {
+    const input = numberInput({ value: obj[key] ?? '', min, step, ...(max != null ? { max } : {}), oninput: () => { obj[key] = Number(input.value) || 0; } });
     return field({ label, input: unitLabel ? unit(input, unitLabel) : input, help });
   };
 
@@ -429,6 +429,9 @@ export async function mount(root, ctx) {
     const recipients = chipInput({ values: a.recipients || [], placeholder: 'Add an email address and press Enter', validate: (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), onChange: (v) => { a.recipients = v; } });
     const notifyRecovery = checkbox({ label: 'Send a recovery email when a check becomes healthy again', checked: !!a.notifyRecovery, onChange: (v) => { a.notifyRecovery = v; } });
     const notifyWarnings = checkbox({ label: 'Also email for warnings (high latency, packet loss, expiring certificates, content changes)', checked: !!a.notifyWarnings, onChange: (v) => { a.notifyWarnings = v; } });
+    /* Grouping and the digest (#99) only change how many e-mails carry the
+     * alerts and when they leave, never whether an alert is due. */
+    const digest = selectInput({ options: [{ value: 'off', label: 'Off — email each warning' }, { value: 'hourly', label: 'Hourly digest' }, { value: 'daily', label: 'Daily digest (08:00)' }], value: a.warningDigest || 'off', onchange: () => { a.warningDigest = digest.value; } });
     const smtp = a.smtp;
     const host = textInput({ value: smtp.host || '', placeholder: 'smtp.example.com', oninput: () => { smtp.host = host.value; } });
     const port = numberInput({ value: smtp.port || 587, min: 1, max: 65535, oninput: () => { smtp.port = Number(port.value); } });
@@ -454,6 +457,9 @@ export async function mount(root, ctx) {
             numField(a, 'cooldownMinutes', 'Cooldown', { unitLabel: 'min', help: 'Minimum time between repeated alerts for the same check.' }),
             numField(a, 'certWarnDays', 'Certificate warning', { unitLabel: 'days', min: 1, help: 'Warn when a certificate expires within this many days.' })),
           h('div', { class: 'stack-sm' }, notifyRecovery, notifyWarnings),
+          h('div', { class: 'form-grid' },
+            numField(a, 'groupWindowSeconds', 'Group alerts for the same node within', { unitLabel: 'seconds', max: 300, help: 'When several checks on one node go down (or recover) within this time, send one email listing them all instead of one each. Delays the first alert by up to this long. 0 = off, at most 300.' }),
+            field({ label: 'Send warnings as a digest', input: digest, help: 'Collect warning emails into one summary instead of sending each. Down and recovery emails are always sent straight away; notification channels still get each warning.' })),
         )),
       alsoNotifyCard(a),
       h('section', { class: 'card' }, h('h2', null, 'Outgoing email (SMTP)'), h('p', { class: 'lead' }, 'Use an app password where your provider offers one. The password is stored locally and never shown again.'),

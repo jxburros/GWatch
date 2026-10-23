@@ -23,6 +23,11 @@ func (e *Engine) reportLoop() {
 			if err := e.runReports(e.ctx, now); err != nil {
 				e.RecordError("scheduled reports", err)
 			}
+			// The warning digest (alertbatch.go) is due on the hour, or
+			// once a day, so the reports' minute tick serves it too.
+			if err := e.runDigest(e.ctx, now); err != nil {
+				e.RecordError("warning digest", err)
+			}
 		}
 	}
 }

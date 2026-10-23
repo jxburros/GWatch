@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +30,14 @@ type mailTask struct {
 	// channels (PagerDuty, Opsgenie): recovery e-mails are switched off, but
 	// the page those channels opened would otherwise never be resolved.
 	channelsOnly bool
+	// skipEmail marks a warning whose e-mail went into the warning digest
+	// (see alertbatch.go): the channels still get it, the e-mail does not.
+	skipEmail bool
+	// group, when set, makes this task stand for a grouped alert about
+	// several checks on one node (see alertbatch.go): it carries the
+	// summary for the channels, and every member's timeline gets the
+	// channel's outcome.
+	group []mailTask
 }
 
 type downDecision struct {
@@ -336,9 +345,7 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 	if prev != snapshot.Status {
 		e.broadcast(Update{Kind: "state", CheckID: c.ID, NodeID: n.ID})
 	}
-	for _, m := range mails {
-		e.sendMail(m)
-	}
+	e.dispatchAlerts(c, prev, snapshot, mails)
 	e.fireTriggers(triggerContext{check: c, node: n, result: stored, state: snapshot, prev: prev, events: events})
 	// A status change may bring a notification rule's conditions together
 	// or apart; only the rules that look at this check need another look.
@@ -643,9 +650,9 @@ func (e *Engine) sendMail(m mailTask) {
 	s := e.settings
 	e.mu.Unlock()
 	channels := alertChannelsFor(s.Alerts.Channels, m)
-	email := !m.channelsOnly && len(m.to) > 0
+	email := !m.channelsOnly && !m.skipEmail && len(m.to) > 0
 	if !email && len(channels) == 0 {
-		if m.channelsOnly {
+		if m.channelsOnly || m.skipEmail {
 			return
 		}
 		e.failedMail(m)
@@ -665,7 +672,7 @@ func (e *Engine) sendMail(m mailTask) {
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
-		defer func() { e.mu.Lock(); delete(e.mailDone, m.check.ID); close(done); e.mu.Unlock() }()
+		defer e.releaseMailDone(done, m)
 		label := alertLabel(m.kind)
 		delivered := false
 		if email {
@@ -746,6 +753,23 @@ func alertVars(m mailTask, instance, channel string) actions.Vars {
 	vars["message"] = m.message
 	vars["alert.kind"] = m.kind
 	vars["alert.channel"] = channel
+	// {{alert.count}} and {{alert.checks}} say how many checks, and which,
+	// the alert is about: one for an ordinary alert, several for a grouped
+	// one (Settings › Alerts › group alerts per node), whose {{check.*}}
+	// placeholders are left empty because no single check is the subject.
+	vars["alert.count"] = "1"
+	vars["alert.checks"] = m.check.Name
+	if len(m.group) > 0 {
+		names := make([]string, 0, len(m.group))
+		for _, t := range m.group {
+			names = append(names, t.check.Name)
+		}
+		vars["alert.count"] = strconv.Itoa(len(m.group))
+		vars["alert.checks"] = strings.Join(names, ", ")
+		for _, k := range []string{"check.id", "check.name", "check.type", "check.target", "target"} {
+			vars[k] = ""
+		}
+	}
 	switch m.kind {
 	case "down":
 		vars["status"] = string(model.StatusDown)
@@ -789,16 +813,25 @@ func (e *Engine) deliverChannel(ch model.AlertChannel, m mailTask, instance, lab
 		case <-work.Done():
 		}
 	}
-	ev := model.Event{NodeID: ptrInt64(m.node.ID), CheckID: ptrInt64(m.check.ID), NodeName: m.node.Name, CheckName: m.check.Name}
-	if !res.OK {
-		e.log.Errorf("send %s to channel %q (%s) for %s/%s: %s", m.kind, name, ch.Action.Type, m.node.Name, m.check.Name, res.Error)
-		ev.Type, ev.Title, ev.Detail = model.EventAlertFailed, fmt.Sprintf("%s to %s failed", label, name), firstLine(res.Error)
-		e.recordEvent(ev)
-		return false
+	// A grouped alert is one message, but each of its checks has its own
+	// timeline, so each gets the outcome.
+	about := m.group
+	if len(about) == 0 {
+		about = []mailTask{m}
 	}
-	ev.Type, ev.Title, ev.Detail = model.EventAlertSent, fmt.Sprintf("%s sent to %s", label, name), fmt.Sprintf("%s — %s", ch.Action.Type, firstLine(res.Output))
-	e.recordEvent(ev)
-	return true
+	if !res.OK {
+		e.log.Errorf("send %s to channel %q (%s) for %s/%s: %s", m.kind, name, ch.Action.Type, m.node.Name, vars["alert.checks"], res.Error)
+	}
+	for _, t := range about {
+		ev := model.Event{NodeID: ptrInt64(t.node.ID), CheckID: ptrInt64(t.check.ID), NodeName: t.node.Name, CheckName: t.check.Name}
+		if !res.OK {
+			ev.Type, ev.Title, ev.Detail = model.EventAlertFailed, fmt.Sprintf("%s to %s failed", label, name), firstLine(res.Error)
+		} else {
+			ev.Type, ev.Title, ev.Detail = model.EventAlertSent, fmt.Sprintf("%s sent to %s", label, name), fmt.Sprintf("%s — %s", ch.Action.Type, firstLine(res.Output))
+		}
+		e.recordEvent(ev)
+	}
+	return res.OK
 }
 
 // TestAlertChannel sends a sample alert through one "also notify" channel,

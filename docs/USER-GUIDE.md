@@ -767,11 +767,54 @@ blank actor column means "nobody did this, it just happened".
 - **Also email for warnings** — latency, packet loss, expiring certificates,
   content changes.
 - **Certificate warning** — how many days before expiry counts as a warning.
+- **Group alerts for the same node within** — see *Fewer emails* below. 0 (off)
+  by default.
+- **Send warnings as a digest** — *off*, *hourly* or *daily*; see below.
 - **SMTP** — host, port, security (*STARTTLS* on 587, *TLS/SSL* on 465, or
   *none*), from address, user name and password.
 
 **Send a test message** is not optional in spirit. An alerting setup you have
 never watched deliver is a guess.
+
+Alert emails are sent at most three at a time, and one that fails is tried
+once more fifteen seconds later. If it still fails, the alert is not counted as
+sent: the next failing run tries again.
+
+### Fewer emails: grouping and the warning digest
+
+One web server stopping takes its HTTP, JSON and TCP checks down together,
+which is three down emails and, later, three recovery emails. **Group alerts
+for the same node within N seconds** turns that into one of each. The first
+alert about a node opens a window of N seconds; alerts of the same kind (down,
+recovered or warning) about that node's other checks that arrive before it
+closes join it, and when it closes one email goes out — *"Web server: 3 checks
+down"* — listing every check with its own message and details. Each chat or
+push channel gets one message for the group too.
+
+- The price is time: the first down email waits up to N seconds. 30 seconds is
+  a good value when several checks share an interval; the most is 300. It is
+  off by default so that nothing changes for an existing install until you ask.
+- If only one alert arrives in the window, it is sent as an ordinary email.
+- A check that recovers while its down alert is still waiting is not reported
+  at all — neither the outage nor the recovery — and its cooldown is not used
+  up. The timeline still shows the outage and says the alert was dropped.
+- Cooldowns, silences, maintenance and dependencies work per check exactly as
+  before; grouping only changes how many emails carry the alerts. If a grouped
+  email cannot be delivered, every check in it is re-armed.
+- Checks with their own recipient list are grouped separately, since one email
+  cannot go to both lists.
+- PagerDuty and Opsgenie still get one event per check (at the moment the
+  group is sent), because each check has its own incident there and must be
+  resolved on its own.
+- Stopping the service sends whatever is waiting at once.
+
+**Send warnings as a digest** collects warning emails (never down or recovery
+ones) and sends them as one summary: *hourly* on the hour, or *daily* at 08:00.
+The collected warnings are kept in the database, so a restart does not lose
+them; if the digest cannot be sent it is tried again after 15 minutes. Chat and
+push channels still get each warning as it happens — set a channel to *outages
+only* if you want it quieter. Switching the digest off sends whatever it has
+collected on the next minute.
 
 ### Also notify: chat, push, SMS and paging
 

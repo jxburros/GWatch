@@ -1253,6 +1253,10 @@ func (s *Store) LoadSettings(ctx context.Context) (model.Settings, error) {
 	if st.Alerts.Channels == nil {
 		st.Alerts.Channels = []model.AlertChannel{}
 	}
+	st.Alerts.GroupWindowSeconds = min(max(st.Alerts.GroupWindowSeconds, 0), model.MaxAlertGroupWindowSeconds)
+	if st.Alerts.WarningDigest == "" || !model.ValidWarningDigest(st.Alerts.WarningDigest) {
+		st.Alerts.WarningDigest = model.WarningDigestOff
+	}
 	if st.Alerts.SMTP.Security == "" {
 		st.Alerts.SMTP.Security = "starttls"
 	}

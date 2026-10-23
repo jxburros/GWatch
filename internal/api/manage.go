@@ -389,6 +389,17 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	if a.CertWarnDays < 1 {
 		a.CertWarnDays = def.Alerts.CertWarnDays
 	}
+	if a.GroupWindowSeconds < 0 || a.GroupWindowSeconds > model.MaxAlertGroupWindowSeconds {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("the alert grouping window must be between 0 (off) and %d seconds", model.MaxAlertGroupWindowSeconds))
+		return
+	}
+	if !model.ValidWarningDigest(a.WarningDigest) {
+		writeError(w, http.StatusBadRequest, "the warning digest must be off, hourly or daily")
+		return
+	}
+	if a.WarningDigest == "" {
+		a.WarningDigest = model.WarningDigestOff
+	}
 	recips := make([]string, 0, len(a.Recipients))
 	for _, rcp := range a.Recipients {
 		rcp = strings.TrimSpace(rcp)

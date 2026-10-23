@@ -69,14 +69,18 @@ type Engine struct {
 	log   *logging.Logger
 	opts  Options
 
-	reloadMu     sync.Mutex
-	mu           sync.Mutex
-	settings     model.Settings
-	nodes        map[int64]model.Node
-	checks       map[int64]model.Check
-	states       map[int64]*model.CheckState
-	mailDone     map[int64]chan struct{}
-	mailSem      chan struct{} // see mailSlots
+	reloadMu sync.Mutex
+	mu       sync.Mutex
+	settings model.Settings
+	nodes    map[int64]model.Node
+	checks   map[int64]model.Check
+	states   map[int64]*model.CheckState
+	mailDone map[int64]chan struct{}
+	mailSem  chan struct{} // see mailSlots
+	// alertGroups are the per-node alert groups whose window is open, and
+	// digestMu serialises the warning digest; see alertbatch.go.
+	alertGroups  map[groupKey]*alertGroup
+	digestMu     sync.Mutex
 	inflight     map[int64]*checkFlight
 	recordResult func(context.Context, model.Result, model.CheckState) (model.Result, error)
 	running      map[int64]bool
@@ -214,6 +218,10 @@ func (e *Engine) Stop() {
 	e.mu.Unlock()
 	e.recordEvent(model.Event{Type: model.EventServiceStopped, Title: "Monitoring service stopping"})
 	e.cancel()
+	// Alerts waiting in a grouping window go out now rather than when their
+	// window closes, which may be minutes away; their e-mails then get the
+	// same grace period as any other in-flight delivery.
+	e.flushAlertGroups()
 	// Stopping has an upper bound. A script action may run for ten minutes
 	// and a hung custom check for ever, and the service manager (the Windows
 	// SCM, systemd) kills a service that takes much longer than 20–90 s to

@@ -939,6 +939,40 @@ type AlertSettings struct {
 	// maintenance windows, silences, dependencies, acknowledgements and the
 	// cooldown — without any rules of their own. See AlertChannel.
 	Channels []AlertChannel `json:"channels"`
+	// GroupWindowSeconds (issue #99) gathers the alerts about one node into
+	// a single e-mail. The first down, recovery or warning about a node opens
+	// a window this long; the alerts of the same kind about that node's other
+	// checks that arrive inside it join it, and when it closes one e-mail
+	// ("Web server: 3 checks down") and one message per channel go out
+	// instead of one per check. 0, the default and what every install did
+	// before, sends each alert at once. At most MaxAlertGroupWindowSeconds.
+	GroupWindowSeconds int `json:"groupWindowSeconds"`
+	// WarningDigest collects warning e-mails (never down or recovery ones)
+	// into one summary sent hourly or daily instead of one e-mail each. One
+	// of the WarningDigest* constants; "" reads as off.
+	WarningDigest string `json:"warningDigest"`
+}
+
+// MaxAlertGroupWindowSeconds bounds AlertSettings.GroupWindowSeconds. A
+// longer window would hold a down alert back for longer than most people
+// would accept before learning that something is broken.
+const MaxAlertGroupWindowSeconds = 300
+
+// Warning digest intervals, see AlertSettings.WarningDigest.
+const (
+	WarningDigestOff    = "off"
+	WarningDigestHourly = "hourly"
+	WarningDigestDaily  = "daily"
+)
+
+// ValidWarningDigest reports whether v is one of the digest intervals, or
+// empty, which means off.
+func ValidWarningDigest(v string) bool {
+	switch v {
+	case "", WarningDigestOff, WarningDigestHourly, WarningDigestDaily:
+		return true
+	}
+	return false
 }
 
 // Alert channel severities. A channel set to "warning" receives everything
@@ -1282,6 +1316,7 @@ func DefaultSettings() Settings {
 			NotifyWarnings:   true,
 			CertWarnDays:     14,
 			SMTP:             SMTPSettings{Port: 587, Security: "starttls"},
+			WarningDigest:    WarningDigestOff,
 		},
 		Retention: RetentionSettings{
 			RawDays:     30,

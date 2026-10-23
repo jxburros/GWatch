@@ -214,3 +214,25 @@ test('settings Alerts lists, adds, tests and saves alert channels', async (t) =>
   assert.equal(pager.action.type, 'pagerduty');
   assert.equal(pager.action.routingKey, '********', 'the key comes back masked');
 });
+
+// #99: Settings › Alerts has the per-node grouping window and the warning
+// digest, and saves both with the settings.
+test('settings Alerts edits the grouping window and the warning digest', async (t) => {
+  const { root } = await mountView(settingsView, { params: { tab: 'alerts' } }, t);
+  const panel = root.querySelector('.settings-panel');
+  const byLabel = (re) => { const l = [...panel.querySelectorAll('label')].find((el) => re.test(el.textContent)); return l && document.getElementById(l.htmlFor); };
+  const window_ = byLabel(/Group alerts for the same node/);
+  const digest = byLabel(/Send warnings as a digest/);
+  assert.ok(window_ && digest, 'both controls are labelled');
+  assert.equal(window_.value, '30');
+  assert.equal(window_.max, '300');
+  assert.deepEqual([...digest.options].map((o) => o.value), ['off', 'hourly', 'daily']);
+  window_.value = '60'; window_.dispatchEvent(new window.Event('input'));
+  digest.value = 'daily'; digest.dispatchEvent(new window.Event('change'));
+  document.querySelectorAll('.toast').forEach((el) => el.remove());
+  [...panel.querySelectorAll('button')].find((b) => b.textContent.includes('Save changes')).click();
+  await waitFor(() => [...document.querySelectorAll('.toast')].some((el) => /Settings saved/.test(el.textContent)));
+  const saved = await api.get('/api/settings');
+  assert.equal(saved.alerts.groupWindowSeconds, 60);
+  assert.equal(saved.alerts.warningDigest, 'daily');
+});
