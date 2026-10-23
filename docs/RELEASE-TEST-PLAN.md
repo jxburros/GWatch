@@ -1,445 +1,465 @@
-# Release test plan — the release after 0.7.2
+# Release test plan — Windows
 
-This is everything to check by hand before releasing the work on
-`claude/friendly-volta-u5cmy2`. CI covers a lot (see the end), but CI has never
-touched a real Windows service, a Mac, a real systemd machine you care about, a
-real Matter device, a second site, or a database that real people have been
-filling for months. Those are what this list is for.
+Everything to check by hand on Windows before releasing the work on the
+`claude/friendly-volta-u5cmy2` branch. It starts with how to build and install
+that branch from the ZIP GitHub offers, so you can test it before any release
+exists.
 
-Tick the boxes as you go. Each section says how risky it is:
+CI already builds and unit-tests all of this on Windows on every push (see the
+end), but CI has never installed a real Windows service, clicked through a setup
+program, pulled the power on a PC, or run for days with real devices. That is
+what this list is for.
 
-- 🔴 **Blocker** — a failure here can lose data, lock someone out or leave a
-  machine unmonitored. Do not release until it passes.
-- 🟠 **Should** — a failure is bad but contained to one feature. Fix it or ship
-  the feature switched off and say so in the release notes.
-- 🧪 **Experimental** — new, and never run against the real thing. Test it, and if
-  it misbehaves, call it "preview" in the release notes rather than holding the
-  whole release.
+Each section says how risky it is:
 
----
-
-## 0. How to run this release safely
-
-- [ ] **Release a release candidate first.** Tag `v0.8.0-rc.1` (and
-      `agent-v0.8.0-rc.1`). A tag with a prerelease suffix publishes a GitHub
-      *prerelease*, does not move Docker's `latest`, and the updater on stable
-      installs skips it (docs/RELEASING.md, "Release candidates"). Install the
-      RC on your test machines and work through this list against it — that
-      way you are testing the real signed, packaged artefacts, not a local build.
-- [ ] **Bump the versions.** `VERSION` and `cmd/gwatch-agent/VERSION` are both
-      still `0.7.2`. Both programs changed a lot, so this is `0.8.0` for both
-      (the server and the agent version separately; see "The two release trains
-      must never cross" in docs/RELEASING.md). Move the CHANGELOG's
-      **Unreleased** section under the new version heading and date it.
-- [ ] **Merge to `main` through a pull request** and let the whole CI run go
-      green on it (Linux, Windows, macOS, Postgres, MySQL, the e2e suite, the
-      packaging jobs, the `linux-service` job, the Authenticode dry run). Several
-      of those jobs are new and have **never run on GitHub yet** — expect to fix
-      one or two.
-- [ ] **Take a backup of every real install before upgrading it** (Settings ›
-      Backups › Create backup, with history), and copy the archive somewhere off
-      the machine. Note the password.
-- [ ] **Write down how to roll back** before you need it (section 16).
-
-### Machines you need
-
-| Machine | Used for |
-| --- | --- |
-| A copy of your current real install (0.7.2), or a machine restored from its backup | Upgrade testing — the most important part |
-| Windows 10/11 (a real one, not just CI) | Server installer, agent installer, service, tray, code signing check |
-| A Mac (Apple Silicon is fine) | Server and agent as launchd services, disk activity |
-| A Linux machine with systemd (Ubuntu/Debian VM is ideal) | `gwatch install`, `.deb` package, agent package, hardened service |
-| A second Linux box or VM (or a Pi) | Agent, remote collector, Linux readings |
-| Docker | Container image, discovery-in-container note, cgroup limits |
-| *Optional:* Fedora/RHEL VM | `.rpm` packages |
-| *Optional:* Alpine VM | OpenRC fallback |
-| *Optional:* a PostgreSQL or MySQL server | Upgrade and restore on a server database, if anyone uses one |
+- 🔴 **Blocker** — a failure can lose data, lock someone out or leave a machine
+  unmonitored. Don't release until it passes.
+- 🟠 **Should** — bad, but contained to one feature. Fix it, or ship with the
+  feature off and say so in the release notes.
+- 🧪 **Experimental** — new and never run against the real thing. If it
+  misbehaves, call it "preview" in the release notes rather than holding the
+  release.
 
 ---
 
-## 1. 🔴 Upgrading an existing 0.7.2 install
+## Part 1 — Build and install the branch from GitHub's ZIP
 
-Real users already have data. This is the single most important section.
+### What you need
 
-- [ ] **Your own data survives the upgrade.** On a copy of a real install
-      (or restore your real backup onto a fresh 0.7.2 first), install the new
-      version over it. Then check:
+- [ ] **Windows 10 or 11, 64-bit**, with an account that can run things as
+      Administrator. A spare PC or a virtual machine (Hyper-V, VirtualBox) is best,
+      because some tests pull the power or uninstall things. A VM also gives you
+      snapshots to go back to.
+- [ ] **A second Windows PC or VM** for the agent and remote-collector tests (the
+      agent can share the server's PC, but a separate machine is more realistic).
+- [ ] **Go 1.26 or newer** (the build needs it — `go.mod` says `go 1.26.0`):
+      ```powershell
+      winget install GoLang.Go
+      ```
+      Close and reopen PowerShell, then check: `go version` must say `go1.26` or later.
+- [ ] **Inno Setup 6** (builds the two setup programs):
+      ```powershell
+      winget install JRSoftware.InnoSetup
+      ```
+- Nothing else: no Git, no Node.js, no C compiler. The web interface is built into
+  `gwatch.exe`.
+
+### Download the branch
+
+1. Open <https://github.com/jxburros/GWatch/tree/claude/friendly-volta-u5cmy2>
+   (you need to be signed in to GitHub if the repository is private).
+2. Click **Code ▸ Download ZIP**. (Direct link:
+   `https://github.com/jxburros/GWatch/archive/refs/heads/claude/friendly-volta-u5cmy2.zip`)
+3. Extract it somewhere short and **not** synced by OneDrive, for example
+   `C:\src\`. You get a folder called `GWatch-claude-friendly-volta-u5cmy2`.
+   Rename it to `C:\src\GWatch` to keep paths short.
+4. Files extracted from a download are marked "from the internet". Clear that so
+   Windows doesn't block the build scripts. In PowerShell:
+   ```powershell
+   Get-ChildItem -Recurse C:\src\GWatch | Unblock-File
+   ```
+
+### Build the setup programs
+
+In a normal (not Administrator) PowerShell window:
+
+```powershell
+cd C:\src\GWatch
+powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1 -Version 0.8.0-test -AgentVersion 0.8.0-test
+```
+
+- `-Version 0.8.0-test` stamps the build so you can tell it apart from the
+  released 0.7.2 everywhere (Settings › About, `gwatch version`, the agent card).
+  Without it the build calls itself `0.7.2`, the same as the release, which makes
+  upgrade testing confusing.
+- It takes a few minutes the first time (Go downloads its dependencies).
+- When it finishes, `C:\src\GWatch\dist\` holds:
+  - `gwatch-setup-0.8.0-test.exe` — the server's setup program
+  - `gwatch-agent-setup-0.8.0-test.exe` — the agent's setup program
+  - `gwatch.exe` and `gwatch-agent.exe` — the bare programs
+- [ ] The build finished without errors and both setup programs exist.
+
+*Optional:* run the automated tests on your machine too (≈5–10 minutes):
+```powershell
+go test ./...
+```
+
+### About testing a ZIP build
+
+- These builds are **not signed** (neither Authenticode nor the update signature
+  of a real release), so Windows SmartScreen may not behave the way it will for
+  the real download, and **Settings › Updates will say you are up to date** — there
+  is no published release newer than `0.8.0-test`. Self-update is tested later, in
+  Part 3, against a release candidate.
+- Everything else behaves exactly as the release will.
+
+### Install the server from the ZIP build
+
+- [ ] Run `dist\gwatch-setup-0.8.0-test.exe`. Choose the port (7230) and tick
+      **Allow other devices on my network to open GWatch** if you want to test from a
+      phone or another PC (it adds a Windows Firewall rule for your local subnet).
+- [ ] At the end it opens <http://127.0.0.1:7230>. On a fresh install, a browser on
+      the same PC is the administrator; create your first account under
+      **Settings › Users & access** if you want to sign in from other devices.
+- [ ] **Settings › About** shows `0.8.0-test`.
+
+*Alternative without Inno Setup:* build only the program and install it as a
+service with the scripts, from an **Administrator** PowerShell:
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -Version 0.8.0-test
+powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -Exe .\dist\gwatch.exe -Listen 0.0.0.0:7230
+```
+(`scripts\uninstall.ps1` removes it; add `-RemoveData` to delete the database too.)
+
+### Install the agent from the ZIP build
+
+- [ ] In GWatch: **Nodes › Add node › A machine with the GWatch agent** — note the
+      server address and the pairing code it shows.
+- [ ] On the second PC, copy over and run `gwatch-agent-setup-0.8.0-test.exe`.
+      On the Connect page enter the server address **with `http://`** (for example
+      `http://192.168.1.20:7230` — the agent assumes `https://` if you leave it
+      off), the pairing code and a name.
+
+Both programs keep their data in `C:\ProgramData\GWatch` (the server's
+`gwatch.db`, `logs\`, `backups\`; the agent's `agent.json`, `agent.log` and so on),
+so they can share a PC.
+
+---
+
+## Part 2 — What to test
+
+### 1. 🔴 Upgrading an existing 0.7.2 install
+
+People already have months of data. This is the most important section.
+
+- [ ] Start from the real **0.7.2**: download `gwatch-setup-0.7.2.exe` and
+      `gwatch-agent-setup-0.7.2.exe` from the
+      [Releases page](https://github.com/jxburros/GWatch/releases) (or use a copy
+      of your own real install). Set it up the way a user would: a dozen nodes,
+      a few weeks of history if you can (or restore a backup of your real install
+      onto it), a dashboard, a rule, a maintenance window, an alert e-mail, an API
+      key, a paired agent.
+- [ ] **Make a backup first** (Settings › Backups › Create backup, with history)
+      and copy it off the PC. Note the password.
+- [ ] Run **`gwatch-setup-0.8.0-test.exe` over it** (don't uninstall first). Then:
   - [ ] every node, check, group, tag, dashboard, wallboard, rule, trigger,
         endpoint and maintenance window is still there;
   - [ ] history charts still show the old data at 24h, 7d, 30d and 1y;
-  - [ ] the event timeline and incidents are intact;
-  - [ ] you can sign in with your existing account (password hashes are still
-        Argon2id and must keep working);
-  - [ ] API keys still work (try one with `curl`);
-  - [ ] alert e-mail settings still send (Settings › Alerts › send a test).
-- [ ] **The database schema upgrades cleanly.** This release adds columns
-      (`nodes.collector_id`; `agents.collector`, `collector_allowed`,
-      `collector_seen_at`) and new settings. Watch the log on first start for
-      errors. If anyone runs GWatch on **PostgreSQL or MySQL**, repeat the
-      upgrade on that backend (`make test-postgres` / `make test-mysql` only
-      covers fresh test databases).
-- [ ] **The first start after upgrading is not slow.** The rollup backfill now
-      runs in chunks and remembers how far it got (#107). With months of
-      history, results should keep arriving during the first minutes after
-      start, and a second restart should not repeat the backfill.
-- [ ] **0.7.2 agents keep reporting to the new server** before they update
-      themselves. Leave one old agent running, upgrade only the server, and
-      confirm its machine stays healthy.
-- [ ] **New agents work with the upgraded server** (pair a fresh one).
-- [ ] **Self-update from 0.7.2 works on each platform you support.** From a
-      0.7.2 install, Settings › Updates should offer the RC (only with
-      "include pre-releases" switched on) or, once released, the stable
-      version; apply it and confirm the service comes back on the new version
-      by itself. The update signatures now bind the release (`release-sig`), so
-      this is the real proof that old installs can take the new release.
-- [ ] **Agents self-update from 0.7.2** (`gwatch-agent update`, or wait for the
-      automatic update) and come back reporting.
+  - [ ] the incident timeline is intact;
+  - [ ] you can still sign in with your existing account;
+  - [ ] your API key still works:
+        `curl.exe -H "Authorization: Bearer <key>" http://127.0.0.1:7230/api/nodes`;
+  - [ ] Settings › Alerts › send a test e-mail still arrives;
+  - [ ] `C:\ProgramData\GWatch\logs\` shows no errors from the first start.
+- [ ] **The first start is not slow.** With months of history, results should
+      keep arriving during the first minutes (the startup catch-up now runs in
+      small pieces), and a second restart should not repeat it.
+- [ ] **The old 0.7.2 agent keeps reporting** to the upgraded server. Then
+      upgrade the agent by running `gwatch-agent-setup-0.8.0-test.exe` over it —
+      it keeps its pairing and keeps reporting.
+- [ ] **A 0.7.2 backup restores** on the new version (Settings › Backups).
 
-## 2. 🔴 Fresh installs, per platform
+### 2. 🔴 The server as a Windows service (🧪 new service code)
 
-### Windows (server)
-- [ ] Run `gwatch-setup-*.exe` on a clean machine. Install, open the URL, create
-      the first account, add a node.
-- [ ] SmartScreen will warn "unknown publisher" unless code signing is set up
-      (#120, section 13). Expected for now — note it in the release notes.
-- [ ] Run the setup program again over the top (upgrade path) and confirm
-      nothing is lost.
-- [ ] Uninstall from Settings › Apps and confirm the service is gone.
+The code that registers and runs GWatch as a Windows service was replaced in this
+release and has **never run on a real Windows machine**. From an **Administrator**
+PowerShell in `C:\Program Files\GWatch`:
 
-### Linux with systemd — `gwatch install` (🧪 new in #125)
-The service now runs as a dedicated `gwatch` user under a hardened unit.
-None of this has run on a real machine yet.
-- [ ] `sudo ./gwatch-linux-amd64 install --listen 0.0.0.0:7230` on a clean VM.
-  - [ ] `/usr/local/bin/gwatch` exists, `systemctl status gwatch` is active,
-        `ps -o user= -C gwatch` says `gwatch`.
-  - [ ] Data is in `/var/lib/gwatch` (owned by `gwatch`, mode 700); settings in
-        `/etc/gwatch/gwatch.env` (mode 600).
-  - [ ] The web UI is reachable from another machine on the LAN.
-- [ ] Create the first account (docs/INSTALL-LINUX.md shows the `curl` to
-      `127.0.0.1:7230/api/users`).
-- [ ] **Ping works without root**: add a ping check to your router; it goes up.
-      Settings › Monitor health › Ping says which method it uses (#131).
-- [ ] **Re-running install is safe**: run the same `install` again — it updates
-      and restarts, keeps your data and settings.
-- [ ] **Reconfigure**: `install --listen 0.0.0.0:8080` changes the port.
-      Try a port below 1024 (e.g. 80) and confirm it can bind.
-- [ ] **Migration from an old install**: on a machine where 0.7.2 was installed
-      with `sudo gwatch install` (unit `GWatch.service`, data under
-      `/root/.local/share/gwatch`), run the new `install`. The old unit is
-      removed, the data moves to `/var/lib/gwatch`, and everything is still
-      there afterwards. **Take a backup first** — this moves your database.
-- [ ] **Custom checks and script actions now run as `gwatch`, not root.**
-      If you (or users) have custom checks or script actions that need root,
-      Docker, or files in a home directory, they will now fail. Test one, and
-      check the docs' drop-in instructions (`systemctl edit gwatch`) work.
-- [ ] **Updating**: Settings › Updates cannot install updates on these installs
-      any more (the service can't write `/usr/local/bin`). Confirm the page
-      says to re-run the installer, and that re-running `install.sh` with the
-      new binary updates it.
-- [ ] `sudo gwatch uninstall` keeps data; `sudo gwatch uninstall --purge`
-      asks for confirmation and then removes the unit, program, data,
-      `/etc/gwatch` and the `gwatch` user.
-- [ ] Reboot the VM: the service starts by itself.
+- [ ] `sc.exe qc GWatch` shows `AUTO_START`, `WIN32_OWN_PROCESS`, the display
+      name and `"C:\Program Files\GWatch\gwatch.exe" run …`.
+- [ ] `sc.exe qfailure GWatch` shows `RESTART -- Delay = 5000 milliseconds`.
+- [ ] `.\gwatch.exe status` says `running` — and also from a **non-Administrator**
+      prompt.
+- [ ] `.\gwatch.exe stop` → `status` says `stopped`; `.\gwatch.exe start` brings it
+      back; `.\gwatch.exe restart` gives it a new process ID (Task Manager ›
+      Details).
+- [ ] Stopping an already stopped service, or starting a running one, succeeds
+      quietly.
+- [ ] **Crash recovery**: `taskkill /F /IM gwatch.exe` — it is running again
+      within about 10 seconds.
+- [ ] **Reboot**: after restarting the PC, GWatch is running before anyone signs in
+      (open it from another device, or check right after signing in).
+- [ ] **Stopping is quick**: start a long script action (a trigger running
+      `powershell -Command Start-Sleep 300`), then `.\gwatch.exe stop` — it stops
+      within about 20 seconds.
+- [ ] **Install twice is refused**: `.\gwatch.exe install` while installed says it
+      already exists and leaves the service alone.
+- [ ] **Uninstall** from Windows Settings › Apps › GWatch: the service is gone
+      (`sc.exe query GWatch` says it doesn't exist), the firewall rule is gone, and
+      `C:\ProgramData\GWatch` (your data) is kept.
+- [ ] **Reinstall** over the kept data: everything is back.
+- [ ] **Foreground run**: stop the service, run `.\gwatch.exe run` in a terminal,
+      open the UI, then Ctrl+C — it stops cleanly. Start the service again.
 
-### Linux `.deb` / `.rpm` packages (🧪 new in #126)
-- [ ] `sudo apt install ./gwatch_*_amd64.deb` on Ubuntu/Debian: it prints the URL
-      and how to create the first account; the service is running as `gwatch`.
-- [ ] Settings › Updates says updates come from the package manager and does
-      not offer to install one.
-- [ ] Install a newer `.deb` over it: data and edits to `/etc/gwatch/gwatch.env`
-      survive.
-- [ ] `sudo apt remove gwatch` keeps `/var/lib/gwatch`; `sudo apt purge gwatch`
-      removes it and the user.
-- [ ] *Optional:* the same with the `.rpm` on Fedora, and the armhf `.deb` on a
-      32-bit Pi OS.
-- [ ] `gwatch install` refuses to run on a packaged build (it would create a
-      second service).
+### 3. 🔴 The agent on Windows
 
-### macOS (server)
-- [ ] `sudo gwatch install`, then work through docs/RELEASING.md
-      "Service hosting: manual checks" steps 1–10 (section 4 below).
+#### The setup program (🧪 new)
+- [ ] **Test connection** on the Connect page: try a correct address, a wrong one,
+      `https://` against a server that only does `http://`, and a wrong port. Each
+      gives a clear one-line answer before anything is installed.
+- [ ] Click **Next** without testing — it tests for you; on a failure it asks
+      "Install anyway?".
+- [ ] The **last page** says "Paired as *name*, service running" and the "Open this
+      machine in GWatch" box opens the right node. With a wrong or used pairing
+      code it shows the real error instead.
+- [ ] **Look at the pages at 100%, 125% and 150% display scaling** (Settings ›
+      Display) — the new button and labels have never been seen on a real screen.
+- [ ] **Silent install** on a third run:
+      `gwatch-agent-setup-0.8.0-test.exe /VERYSILENT /SERVER=http://<server>:7230 /CODE=<code> /NAME=Test-PC`
+- [ ] `"C:\Program Files\GWatch Agent\gwatch-agent.exe" probe --server http://<server>:7230`
+      prints one line and exits 0; with a wrong address it exits non-zero.
 
-### Docker
-- [ ] `docker compose up` with the documented compose file; create the first
-      account with the `docker exec` command from docs/DOCKER.md.
-- [ ] Hardware readings inside the container: memory and CPU are now measured
-      against the container's limits (#132). Set `mem_limit` and confirm the
-      percentage is of the limit, not the host.
-- [ ] The root filesystem `/` is now reported (overlay).
-- [ ] Discovery in bridge networking shows the note explaining why MAC
-      addresses are missing.
+#### The agent service (🧪 new service code)
+From an Administrator prompt in `C:\Program Files\GWatch Agent`, repeat the
+service checks from section 2 for `GWatchAgent`: `sc.exe qc GWatchAgent`,
+`sc.exe qfailure GWatchAgent`, `.\gwatch-agent.exe status|stop|start|restart`,
+`taskkill /F /IM gwatch-agent.exe` (back within ~10 s), and a reboot.
+- [ ] All of the above pass for the agent.
 
-## 3. 🔴 The agent (gwatch-agent 0.8.0)
+#### Power cuts (🔴 the bug a user reported)
+Do this in a VM (Hyper-V "Turn off", VirtualBox "Power off") or on a spare PC by
+holding the power button.
+- [ ] Cut the power on the agent's PC **five times**, at random moments. After
+      each boot, the machine is reporting again in GWatch without you touching it.
+- [ ] **Damaged settings file**: from an Administrator PowerShell
+      ```powershell
+      & "C:\Program Files\GWatch Agent\gwatch-agent.exe" stop
+      Clear-Content C:\ProgramData\GWatch\agent.json
+      & "C:\Program Files\GWatch Agent\gwatch-agent.exe" start
+      ```
+      It keeps reporting (it falls back to `agent.json.bak`) and `agent.log` has a
+      warning saying so.
+- [ ] Cut the power on the **server's** PC too: it comes back by itself and its
+      database is fine (open a few charts).
 
-### Install and pair
-- [ ] **Windows installer** (🧪 #63): the Connect page's **Test connection**
-      button — try a correct address, a wrong one, `http` instead of `https`,
-      and a self-signed certificate with and without the box ticked. The final
-      page should say "Paired as *name*, service running" with a link that
-      opens the machine in GWatch; with a wrong code it should show the actual
-      error. **Check the layout at 125% and 150% display scaling** — the new
-      button's position has never been seen on a real screen.
-- [ ] Silent install still works:
-      `gwatch-agent-setup-*.exe /VERYSILENT /SERVER=… /CODE=… /NAME=…`.
-- [ ] **Linux packages**: `sudo apt install ./gwatch-agent_*.deb` then
-      `sudo gwatch-agent pair --server … --code …`.
-- [ ] **macOS**: Homebrew or the install script, then pair.
-- [ ] `gwatch-agent probe --server https://your-gwatch:7230` prints one clear
-      line and the right exit code for a good and a bad address.
+#### When the server is down
+- [ ] Stop the server for 15 minutes while the agent runs, then start it again.
+      The agent machine's charts fill in the gap at the right times.
+- [ ] Same again, but **restart the agent's PC** during the outage — the held
+      readings still arrive (they are kept in
+      `C:\ProgramData\GWatch\agent-queue.jsonl`, which disappears once delivered).
 
-### Power cut and reboot (🔴 #170, the issue a user actually hit)
-- [ ] **Pull the power** (or hard-reset the VM) on a machine running the agent,
-      a few times, ideally while it is running a check-in. It must come back
-      reporting by itself every time.
-- [ ] Simulate the damaged-file case: stop the agent, empty `agent.json`
-      (`: > agent.json`), start it. It should run from `agent.json.bak` and log
-      a warning; the machine stays healthy in GWatch.
-- [ ] **Serve mode** (`gwatch-agent serve`) on a machine whose address comes
-      from DHCP: reboot it; it must start serving once the network is up.
+#### Token rotation
+- [ ] On the node's agent card: **Rotate token…**. Within 15 minutes the agent picks
+      up the new token and keeps reporting; the old token stops working. Try
+      **Replace now** as well.
 
-### Readings held through an outage (#74)
-- [ ] Stop the GWatch server for 15 minutes while an agent runs; start it again.
-      The gap in that machine's charts fills in, at the right times.
-- [ ] Same, but **restart the agent's machine during the outage** — held
-      readings survive (`agent-queue.jsonl`).
-- [ ] The spool file stays small and disappears once delivered.
+#### The agent control panel (🧪 new)
+Open **Start ▸ GWatch Agent control panel** as a normal (non-admin) user.
+- [ ] It opens in the browser.
+- [ ] **Recent log** shows lines, and **no token** appears anywhere in it.
+- [ ] **Copy diagnostics** — paste into Notepad and search for the token: not there.
+- [ ] **Start / Stop / Restart** pops up a **UAC prompt**; after you approve, it
+      works. Cancelling UAC gives a clear message.
+- [ ] **Re-pair** with a fresh code from GWatch — it works and links to the node.
+- [ ] **Update now** says it is up to date (expected for a ZIP build; re-test with
+      the release candidate in Part 3).
+- [ ] Change a setting on the **Settings** card and press **Save** — it actually
+      saves now (this button was broken).
 
-### Token rotation (#75)
-- [ ] On a node's agent card: **Rotate token…**. Within one check-in
-      (≤ 15 min) the agent picks it up, keeps reporting, and the old token stops
-      working. Try **Replace now** too.
+#### Tray icon (🧪 new, optional feature)
+- [ ] Reinstall the agent with **"Show the agent in the notification area"** ticked
+      on the last page. The icon appears; sign out and in — it's still there.
+- [ ] The tooltip shows the status; stop the agent service → the icon changes to a
+      warning or error.
+- [ ] Right-click: **Open control panel**, **Agent status**, **Quit** all work.
+- [ ] Restart Windows Explorer (Task Manager › Windows Explorer › Restart) — the
+      icon comes back.
+- [ ] Watch for a black console window flashing at sign-in (a known possibility).
+- [ ] Uninstall the agent — the icon disappears and doesn't come back at the next
+      sign-in.
 
-### Agent control panel (🧪 #64)
-Run `gwatch-agent ui` on each OS (and from the Start menu / application menu).
-- [ ] It opens in the browser without a terminal.
-- [ ] **Recent log** shows lines; no token appears anywhere in it.
-- [ ] **Copy diagnostics** — paste it somewhere and check there is no token.
-- [ ] **Update now** on an older agent: it updates and restarts. On a packaged
-      (apt/Homebrew) agent it should refuse and show the package command.
-- [ ] **Re-pair** with a new code.
-- [ ] **Start/Stop/Restart** as a normal user: the OS should ask for an
-      administrator password (UAC on Windows, a polkit prompt on Linux, the
-      admin dialog on macOS). Cancelling the prompt should give a clear message.
-- [ ] The Settings card's **Save** button now actually saves (it was broken).
+#### Readings from a Windows machine
+- [ ] **Network rate on gigabit**: copy a large file over the network and compare the
+      agent's network reading with Task Manager › Performance › Ethernet. They
+      should roughly agree even above 600 Mbit/s (this used to read wrong).
+- [ ] **Disk activity and busy %** move while you copy a large file.
+- [ ] **Services to watch** (🧪 new): on the node's agent card › What it collects,
+      start typing `Spooler` — Windows' own services are suggested. Watch it, then
+      `Stop-Service Spooler` (Administrator) → the check goes critical;
+      `Start-Service Spooler` → back up.
+- [ ] **Programs to watch**: watch `notepad`, open and close Notepad — the count
+      goes 1 → 0 and the check goes critical at 0.
+- [ ] The same two lists work for the **server's own PC** (its hardware panel).
 
-### Windows tray icon (🧪 #53)
-- [ ] Tick "Show the agent in the notification area" in the installer. Sign out
-      and back in: the icon appears, the tooltip shows the status, and it turns
-      to a warning/error icon when you stop the service.
-- [ ] Menu: Open control panel, Agent status, Quit.
-- [ ] Restart Explorer (Task Manager) — the icon comes back.
-- [ ] Uninstall the agent — the icon goes and doesn't come back at next sign-in.
-- [ ] Watch for a console window flashing at sign-in (known possible issue).
+### 4. 🔴 Backups and restore
 
-### Hardware readings
-- [ ] **macOS disk activity** (🧪 #185): a Mac now reports disk read/write and
-      busy %. Copy a big file and watch it move.
-- [ ] **Windows network rates** above ~600 Mbit/s are right (64-bit counters,
-      #161) — copy a large file over gigabit and compare with Task Manager.
-- [ ] **Linux** (🧪 #132): temperatures appear (and look sane), PSI readings,
-      ZFS pools as one entry each with health (if you have ZFS).
-- [ ] **A dead network share** mounted on a Linux machine (unplug the NAS)
-      does not freeze the readings (#161).
+- [ ] **Preview**: Settings › Backups › restore an archive. Before anything happens
+      you see what it will do (accounts to add, commands, endpoints without tokens,
+      access changes). **Cancel** — nothing changed.
+- [ ] **Safety backup**: restore an older backup for real. A new archive appears in
+      the list and the timeline says "Pre-restore backup created". Restore *that*
+      one — you're back exactly where you started.
+- [ ] **Deleted accounts stay deleted**: delete a user, restore a backup from before
+      — the user is not back unless you tick "Re-create accounts…".
+- [ ] **New PC**: on a clean VM, install the ZIP build and restore your backup —
+      everything comes back, accounts included.
+- [ ] **Close the browser** in the middle of restoring a large backup — it finishes
+      anyway (check the timeline afterwards).
+- [ ] **Monitoring resumes** after a restore: checks run, a broken check still
+      alerts.
+- [ ] **PBKDF2** (🧪): Settings › Users & access › Password hashing → PBKDF2. Sign
+      out and in again (still works). Make a backup and restore it — fine.
+      ⚠️ A PBKDF2 backup **cannot be restored by 0.7.2** (release-notes item). Switch
+      back to Argon2id and sign in again.
 
-### Services and programs (🧪 #62)
-- [ ] On each OS, open the agent card › What it collects › Services to watch;
-      the machine's list appears as suggestions. Watch `ssh`/`sshd` (Linux),
-      `Spooler` (Windows), something from `launchctl list` (macOS).
-- [ ] Stop the service: the check goes critical; start it: back up.
-- [ ] Watch a program by name (`firefox`, `chrome.exe`): count goes 0 → n.
-- [ ] The same for GWatch's own computer (its hardware panel).
+### 5. 🟠 Alerts
 
-## 4. 🔴 Service hosting on Windows and macOS (🧪 #46)
+Use a node you can break on purpose (a TCP check on a port you can open and
+close, or the second PC).
+- [ ] E-mail alerts arrive for down, recovery and warning.
+- [ ] **Grouping**: Settings › Alerts › group alerts within 30 seconds. Break
+      something with several checks → **one** e-mail listing them; recovery → one
+      e-mail. Break it and fix it within 30 s → **no** e-mail.
+- [ ] **Warning digest** hourly: warnings come as one summary on the hour.
+- [ ] **Each alert channel you'll advertise** (🧪 new ones): Settings › Alerts ›
+      Also notify › add one › **Test** — Telegram, Discord, Gotify, Matrix, Twilio
+      SMS, PagerDuty, Opsgenie, Teams (Workflows), plus the existing Slack, ntfy,
+      Pushover. ⚠️ Testing PagerDuty/Opsgenie opens a real `gwatch-test` incident
+      you must resolve by hand.
+- [ ] **PagerDuty/Opsgenie close the incident** when the check recovers.
+- [ ] **Maintenance silences channels too**: put the node in maintenance, break it,
+      nothing is sent anywhere.
+- [ ] **Accents and dashes**: name a node `Café — rack`; e-mail and ntfy show it
+      exactly.
 
-kardianos/service was replaced with our own code. It has **never run** on the
-Windows Service Control Manager or launchd. Do the 10 steps in
-docs/RELEASING.md › "Service hosting: manual checks" on Windows (admin prompt)
-and on a Mac (`sudo`), once for `gwatch` and once for `gwatch-agent`:
+### 6. 🧪 Remote collectors
 
-- [ ] 1 Fresh install · 2 Status (also as a non-admin) · 3 Stop/start/restart
-- [ ] 4 Crash recovery (kill the process; back within ~10 s)
-- [ ] 5 Reboot (runs without anyone signing in)
-- [ ] 6 Self-update · 7 Install twice is refused · 8 Upgrade over a 0.7.2 install
-- [ ] 9 Uninstall (data kept) · 10 Foreground `run` with Ctrl+C
-- [ ] *Optional:* Alpine (OpenRC): `install` writes `/etc/init.d/GWatch` and it
-      reads `/etc/gwatch/gwatch.env`.
+Brand new and the biggest change. Use the second PC as the collector.
+- [ ] On the second PC, edit `C:\ProgramData\GWatch\agent.json` (Notepad as
+      Administrator), add `"collector": true`, and restart the agent
+      (`gwatch-agent.exe restart`). In GWatch, open that machine's agent card and
+      turn on **Use this machine as a remote collector**. Check that with only one of the two switches
+      on, nothing happens.
+- [ ] Create a node for a device only the second PC needs to reach (or any device —
+      it still proves the path), set **Check from** to that agent, and add ping,
+      TCP and HTTP checks. They go up, with results coming from the agent.
+- [ ] An SNMP check (your router) and an HTTP check with a custom header work from
+      the collector.
+- [ ] Break the device: the alert fires as usual.
+- [ ] **Turn the collector PC off**: after a few minutes its checks go "unknown" and
+      you get **one** "collector unreachable" alert, not one per check. Turn it
+      on: a "collector back" event, and the gap fills in.
+- [ ] A custom (script) check on that node still runs on the server, not the
+      collector.
 
-## 5. 🔴 Backups and restore (#148, #49)
+### 7. 🧪 Matter
 
-- [ ] **Preview**: Settings › Backups › restore a file. Before anything happens
-      you see a summary (accounts that would be added, commands, endpoints
-      without tokens, access changes). Cancel — nothing changed.
-- [ ] **Safety backup**: restore an older backup. A new archive appears in the
-      backup list and the timeline says "Pre-restore backup created"; restoring
-      *that* archive puts you back exactly where you were.
-- [ ] **Deleted accounts stay deleted**: delete a user, restore a backup taken
-      before — the user is not back unless you tick "Re-create accounts…".
-- [ ] **A restore onto a fresh install** (moving to a new computer) brings
-      everything back, accounts included.
-- [ ] **Monitoring pauses and resumes**: during a long restore (with history)
-      checks don't run; afterwards they resume and alerts still work.
-- [ ] **Close the browser mid-restore** of a big archive — it finishes anyway.
-- [ ] **A 0.7.2 backup restores on the new version**, and a new backup made
-      with the default (Argon2id) still restores on 0.7.2 (format unchanged).
-- [ ] **PBKDF2** (🧪 #49): switch Settings › Users & access › Password hashing to
-      PBKDF2. Sign out and in (account is rehashed; you stay signed in
-      elsewhere). Make a backup — it must restore on the *new* version.
-      ⚠️ A PBKDF2 backup **cannot** be restored by 0.7.2 or older; say so in the
-      release notes. Switch back to Argon2id and sign in again.
-- [ ] `gwatch migrate-db` refuses while GWatch is running (only if anyone uses
-      PostgreSQL/MySQL).
+Matter needs the python-matter-server sidecar, which needs proper LAN multicast
+and IPv6 — that generally **does not work under Docker Desktop on Windows**. Run
+the sidecar on a Linux box, a Raspberry Pi or alongside Home Assistant
+(docs/MATTER.md), and point GWatch on Windows at it. If you have no such setup,
+skip this section and label Matter "preview" in the release notes.
+- [ ] Add a Matter check, enter the sidecar's address, **Load devices**, pick a
+      reading. The value matches the device's own app.
+- [ ] Unplug the device → the check goes down. Stop the sidecar → down with a clear
+      message.
 
-## 6. 🟠 Alerts (#99, #122, #178)
+### 8. 🟠 Discovery
 
-Use a test node you can break on purpose (a VM, or a TCP check on a port you
-open and close).
-- [ ] **E-mail alerts** still go out for down, recovery and warning.
-- [ ] **Grouping** (Settings › Alerts › group within 30 s): stop a machine with
-      several checks — **one** e-mail lists them; recovery is one e-mail too.
-      Bring it back up within the window — no e-mail at all.
-- [ ] **Warning digest** hourly: warnings arrive as one summary on the hour.
-- [ ] **Each alert channel you plan to advertise** (🧪 #122), via Settings ›
-      Alerts › Also notify › Test: Telegram, Discord, Gotify, Matrix, Twilio SMS,
-      PagerDuty, Opsgenie, Teams (Workflows), Slack, ntfy, Pushover.
-      ⚠️ Testing PagerDuty/Opsgenie opens a real `gwatch-test` incident — resolve
-      it by hand.
-- [ ] **PagerDuty/Opsgenie resolve on recovery** — break a check, see the
-      incident open, fix it, see it resolve.
-- [ ] **Maintenance and silence suppress channels too** — put the node in
-      maintenance, break it, nothing is sent anywhere.
-- [ ] **Accents and dashes** in a node name (e.g. "Café — rack") arrive intact
-      in e-mail and ntfy (#178).
+- [ ] Nodes › Discover on your home network. It finishes noticeably faster than in
+      0.7.2.
+- [ ] Phones and smart-home devices that ignore ping now appear, with a **MAC
+      address and maker**; a phone's randomised address says "private".
+- [ ] Add a device from the results; the suggested template makes sense.
+- [ ] Settings › Monitor health › **Ping** says which ping method Windows is using.
 
-## 7. 🧪 Remote collectors (#123)
+### 9. 🟠 The web interface
 
-Brand new and the biggest change. Needs two networks (a second VM on another
-subnet or a friend's/office network over a VPN).
-- [ ] On the remote agent's machine set `"collector": true` in `agent.json` and
-      restart it; in GWatch turn collecting on on its agent card. Both are needed —
-      confirm that with only one, nothing is sent.
-- [ ] Create a node on the remote network, set **Check from** to that agent, add
-      ping, TCP and HTTP checks. They go up with results arriving from the agent.
-- [ ] An SNMP check with a community string, and an HTTP check with a header,
-      work from the collector.
-- [ ] Break a remote device: the alert fires as normal.
-- [ ] **Stop the collector's agent**: after a few minutes its checks go
-      "unknown" and you get **one** "collector unreachable" alert, not one per
-      check. Start it: a "collector back" event, held results fill the gap.
-- [ ] Try to give a collector a custom/script check — it must stay on the server.
-- [ ] A restore while a collector is sending: results wait and arrive afterwards.
+- [ ] **Every Settings tab opens** (Settings was split into separate files): click
+      through all 16, change and save something on each, reload the page.
+- [ ] **Network map › Layout: Clusters** with your real network: readable, nodes
+      branch off their parents, nothing overlaps, no line runs through another box.
+      Try each node size, and the dashboard's network-map widget.
+- [ ] **Charts**: the picker lists checks under their node; **Charts: One chart per
+      node** puts a node's checks together.
+- [ ] **Check groups** (prototype): give two checks on different nodes the same
+      check group; filter the Nodes list and bulk edit by it.
+- [ ] **Filters stay put**: filter Nodes and Incidents › Events, reload, press Back
+      — the filter is still there; **Export CSV** matches what's on screen.
+- [ ] **CSV opens correctly in Excel**, with accented names intact (double-click the
+      file).
+- [ ] **Leave a dashboard and a wallboard open for an hour**: no flicker, focus
+      stays where you clicked, and Edge/Chrome's Task Manager doesn't show the tab
+      growing without limit.
+- [ ] A **read-only (viewer) account** sees no secrets anywhere (alert-channel
+      tokens, check passwords) and can't open admin pages.
+- [ ] **Edge and Chrome** both work; also try your phone if you enabled LAN access.
 
-## 8. 🧪 Matter (#45)
+### 10. 🟠 Engine behaviour
 
-Only tested against a fake server built from the sidecar's source code.
-- [ ] Run python-matter-server with the Docker Compose snippet in
-      docs/MATTER.md; commission one real device (multi-admin from your
-      existing hub, or a pairing code).
-- [ ] Add a Matter check, **Load devices**, pick a reading (e.g. a plug's on/off,
-      a sensor's temperature). Values match the device's own app.
-- [ ] Unplug the device: the check goes down. Stop the sidecar: down with a
-      clear message.
-- [ ] If anything is off, ship Matter labelled "preview".
+- [ ] **Laptop sleep**: on a laptop running GWatch, sleep it for an hour; on waking,
+      a "Monitoring paused" event appears.
+- [ ] **Deleting a node a rule uses**: the rule is updated (or switched off if it
+      had nothing left) and the change shows in the event timeline.
+- [ ] **Soak test**: leave it running for **several days** with real nodes, the
+      agent and a collector. Check Settings › Monitor health for internal errors,
+      and that `C:\ProgramData\GWatch` isn't growing unexpectedly.
 
-## 9. 🟠 Discovery (#110, #131, #133)
+### 11. 🟠 Security spot-checks
 
-- [ ] Sweep your home /24. It finishes noticeably faster than before.
-- [ ] Phones/IoT devices that ignore ping now show up (from the ARP table) with a
-      MAC address and maker; randomised phone MACs say "private".
-- [ ] Add a device from the results; the suggested template is sensible.
-- [ ] On Windows, the MAC/vendor column is filled too.
+- [ ] A **read-only API key** is refused (403) by the new admin endpoints, e.g.
+      `curl.exe -X POST -H "Authorization: Bearer <key>" http://127.0.0.1:7230/api/settings/test-channel`.
+- [ ] The agent control panel's address doesn't work in another browser profile or
+      an InPrivate window (it needs its cookie).
+- [ ] **Audit › Configuration › Download JSON** contains no passwords or tokens —
+      search the file.
+- [ ] The firewall rule added by the server's setup allows only your local subnet
+      (`wf.msc` › Inbound Rules › GWatch › Scope).
 
-## 10. 🟠 Web interface
+---
 
-- [ ] **Every Settings tab opens** (the Settings page was split into 16 files
-      that load on demand, #118): click through all of them, change and save
-      something on each, reload.
-- [ ] **Network map › Clusters** with your real network: readable, nothing
-      overlapping, no line through another box. Try Large size and the
-      dashboard widget version.
-- [ ] **Charts**: the picker groups checks under their node; "One chart per node"
-      works (#184).
-- [ ] **Check groups** (prototype, #36): add a group to two checks on different
-      nodes; filter the Nodes list and bulk edit by it.
-- [ ] **Filters in the address** (#113): filter Nodes and Incidents › Events,
-      reload, use Back — the filter stays; Export CSV matches what is shown.
-- [ ] **CSV export opens correctly in Excel** with accented names (#178).
-- [ ] **Dashboards and wallboards** with live updates for 10+ minutes: no
-      flicker, focus stays where you clicked, the browser's network tab isn't
-      re-downloading 30-day history every second (#114).
-- [ ] A **viewer** (read-only) account sees no secrets anywhere (alert channel
-      tokens, check credentials) and can't reach admin pages.
-- [ ] Phone-sized screen: the main pages are usable.
+## Part 3 — The release itself
 
-## 11. 🟠 Engine behaviour
+Once Parts 1–2 pass:
 
-- [ ] **Stopping is quick** (#105): `stop`/`restart` the service while a long
-      script action runs; it stops within ~20 s.
-- [ ] **Laptop sleep** (#161): put a Mac/Linux laptop running GWatch to sleep
-      for an hour; a "Monitoring paused" event appears on wake.
-- [ ] **Deleting a node used by a rule** (#161): the rule is updated (or switched
-      off if empty) and the change shows in the event timeline.
-- [ ] **Leave it running for a few days** on the RC with real nodes before the
-      final release, and watch Settings › Monitor health for internal errors.
+- [ ] **Set the versions**: `VERSION` and `cmd/gwatch-agent/VERSION` to `0.8.0`
+      (both programs changed); move the CHANGELOG's **Unreleased** section under
+      `0.8.0` with the date.
+- [ ] **Merge to `main` through a pull request** and let CI go green. Several CI
+      jobs are new and have never run on GitHub — expect to fix one or two.
+- [ ] **Publish a release candidate first**: tag `v0.8.0-rc.1` and
+      `agent-v0.8.0-rc.1`. That publishes a GitHub *prerelease*; installs on the
+      stable channel don't pick it up.
+- [ ] **Test self-update against the RC** (this can't be tested with a ZIP build):
+  - [ ] on a 0.7.2 server, switch on Settings › Updates › **Show pre-releases**,
+        apply the update — the service comes back on the new version by itself;
+  - [ ] a 0.7.2 agent updates with `gwatch-agent.exe update` (or the control
+        panel's **Update now**) and keeps reporting;
+  - [ ] `gwatch.exe update --rollback` (Administrator) brings the previous version
+        back.
+- [ ] **Download the RC's setup programs from GitHub** on a clean VM and install
+      them: this is the first time you'll see what users see, including the
+      **SmartScreen "unknown publisher" warning** (expected until code signing is
+      set up — docs/RELEASING.md › Authenticode signing).
+- [ ] All files are on the RC's release page: both setup programs, the `.exe`
+      programs, `.sha256` and `.sig` files.
+- [ ] Then tag `v0.8.0` and `agent-v0.8.0` for the real release.
 
-## 12. 🟠 Security spot-checks
+### Things to put in the release notes
 
-- [ ] A **read-only API key** cannot reach the new admin endpoints: Matter
-      commission/nodes, alert-channel test, collector switch, backup inspect.
-      (`curl -H "Authorization: Bearer <key>" -X POST …` → 403.)
-- [ ] The agent panel (`gwatch-agent ui`) refuses requests without its cookie
-      (open its URL in a private window — nothing loads).
-- [ ] Config export (Audit › Configuration › Download JSON, i.e.
-      `/api/export/config.json`) contains no passwords or tokens — search the file.
-- [ ] `/ingest/results` refuses a token from an agent that isn't a collector.
+- [ ] **Windows installers are unsigned** — SmartScreen will warn until code
+      signing is set up.
+- [ ] **PBKDF2 backups** can't be restored by 0.7.2 or older.
+- [ ] **Experimental**: remote collectors, Matter, the tray icon, check groups.
+- [ ] Testing a **PagerDuty/Opsgenie** channel opens a real incident.
 
-## 13. 🟠 Release mechanics
+### If something goes wrong after release
 
-- [ ] All expected files are on the release: server binaries (incl. linux/arm),
-      agent binaries, both Windows setup programs, `.sha256` and `.sig` for each,
-      the six server packages and the agent packages, the MCP companion.
-- [ ] `make verify-release` (or `gwatch-sign verify`) passes on the downloads.
-- [ ] Docker image `ghcr.io/jxburros/gwatch:<version>` pulls and runs; `latest`
-      only moves on the stable tag.
-- [ ] winget manifest (if you publish it) points at the right installer.
-- [ ] **Code signing (#120)** is *not* set up yet, so the release summary shows
-      "Windows binaries are not Authenticode-signed". That is expected. When you
-      do set it up (docs/RELEASING.md › Authenticode signing), right-click the
-      setup program › Properties › Digital Signatures should show JX Holdings.
+- A user's install broke on upgrade: they install the previous version's setup
+  program from the Releases page and restore the backup made before upgrading
+  (or the automatic "Pre-restore" / scheduled one in `C:\ProgramData\GWatch\backups`).
+- Server binary only: `gwatch.exe update --rollback` from an Administrator prompt.
+- Publish a fixed patch release rather than deleting a bad one — installs that
+  already updated need something newer to move to.
 
-## 14. Release notes — things to tell users
+---
 
-- [ ] **Linux `gwatch install`** now runs GWatch as a `gwatch` user, not root;
-      custom checks/scripts that needed root need a drop-in; updates are by
-      re-running the installer.
-- [ ] **PBKDF2 backups** can't be restored by older versions.
-- [ ] **Experimental**: remote collectors, Matter, the Windows tray, check
-      groups (prototype).
-- [ ] **Windows installers are unsigned** (SmartScreen warning) until signing is
-      set up.
-- [ ] **New alert channels** — PagerDuty/Opsgenie "test" opens a real incident.
+## What CI already covers on Windows
 
-## 15. What CI already covers (so you don't have to)
-
-Every push runs: Go tests on Linux/Windows/macOS (plus PostgreSQL and MySQL),
-`go vet` and the race detector, the 351 web unit tests, the type check, the 183
-browser (Playwright) tests against the mock API, the mock-vs-API contract test,
-the server and agent package builds with install/upgrade/purge on a systemd
-runner, the full `gwatch install` lifecycle on systemd, the Inno Setup
-installer compile, the Authenticode dry run with a throwaway certificate, and
-the check that signing happens before hashing. If any of those are red on the
-release PR, fix them first — but green CI does **not** replace sections 1–8.
-
-## 16. If something goes wrong after release
-
-- **A user's install broke on upgrade**: they restore the backup they took
-  (or the automatic pre-restore/scheduled one) on the previous version.
-  Previous binaries stay on the GitHub releases page.
-- **Rolling back the server binary**: `gwatch update --rollback` restores the
-  previous executable kept by the updater (for installs that self-update;
-  a Linux `gwatch install` or package install rolls back by installing the
-  previous version's binary or package).
-- **A bad release**: publish a fixed patch release quickly rather than deleting
-  one — clients that already updated need something newer to move to.
-- **Linux `gwatch install` data move**: if the migration from `/root/...` went
-  wrong, the original directory is only moved, never deleted — look in
-  `/var/lib/gwatch` and restore from the backup taken in section 0.
+Every push builds and tests on a Windows runner: all Go tests (including the
+Windows service registration settings and the tray's Win32 structures), both
+Inno Setup installers compiled, the PowerShell scripts parsed and linted, an
+Authenticode signing dry run with a throwaway certificate, and the 351 web unit
+tests and 183 browser tests (on Linux, against the same web interface). Green CI
+means the code is consistent — it does **not** replace the hands-on tests above.
