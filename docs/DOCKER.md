@@ -136,6 +136,12 @@ containers, not your router, printers and NAS. Ordinary checks are not affected:
 a check against `192.168.1.1` reaches it fine through Docker's NAT, and that is
 what most people want.
 
+The neighbour (ARP) table discovery reads for MAC addresses and makers has the
+same limit: in a bridge-networked container it holds Docker's bridge and
+nothing from your LAN, so every MAC column is empty and devices that ignore
+pings are not found. A run in a container whose table shows no LAN device says
+so above its results.
+
 If you want discovery to see the real LAN there are two ways, both with a
 cost:
 

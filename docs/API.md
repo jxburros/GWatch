@@ -489,14 +489,31 @@ answered **409**; the registry is in memory, so a restart forgets the last run.
       "rttMs": 1.4,
       "openPorts": [22, 80],
       "template": "home-server",
-      "note": "SSH and a web interface — looks like a server or NAS."
+      "note": "SSH and a web interface — looks like a server or NAS.",
+      "mac": "00:11:32:aa:bb:cc",
+      "vendor": "Synology",
+      "noPing": false
     }
   ],
+  "notes": [],
   "error": "",
   "startedAt": "...",
   "finishedAt": "..."
 }
 ```
+
+After the pings, the server reads its own IPv4 neighbour (ARP) table — `/proc/net/arp` on
+Linux, `GetIpNetTable` on Windows; not yet on macOS. Every address in the swept ranges with
+a resolved entry is a responder, so a device that answered ARP but not the ping is found
+too, with `noPing: true` and `rttMs` 0 (its note warns that a ping check would read it as
+down). `mac` is the address in that table, lower-case and colon-separated, and `vendor` the
+maker of the network card from the IEEE registry embedded in GWatch, or
+`"Private (randomised) address"` for a locally administered MAC such as a phone's; both are
+absent for a device behind a router, which never has an entry of its own. The vendor also
+sharpens the suggested template's note — and a web-only device whose maker makes printers,
+cameras or smart-home kit is not suggested as a router. `notes` explain the results: today,
+that GWatch runs in a container whose neighbour table shows no LAN devices (bridge
+networking). IPv6 neighbours (NDP) are not read.
 
 Progress is also pushed over `/api/stream` (see Server-sent events), and each run leaves
 one entry of type `discovery` in the timeline — "Discovery scanned 254 addresses in

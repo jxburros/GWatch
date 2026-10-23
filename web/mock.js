@@ -1069,9 +1069,11 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   // drives it can simply wait.
   const DISCOVERY_MS = 2000;
   const DISCOVERY_FOUND = [
-    { ip: '192.168.1.1', hostname: 'gateway.lan', rttMs: 1.8, openPorts: [80, 443], template: 'router', note: 'Only a web interface answered — looks like a router, switch or access point.' },
-    { ip: '192.168.1.23', hostname: 'pi.lan', rttMs: 0.9, openPorts: [22, 80], template: 'home-server', note: 'SSH and a web interface — looks like a server or NAS.' },
-    { ip: '192.168.1.64', hostname: '', rttMs: 5.4, openPorts: [9100], template: 'tcp-service', note: 'Port 9100 is open — this looks like a network printer.' },
+    { ip: '192.168.1.1', hostname: 'gateway.lan', rttMs: 1.8, openPorts: [80, 443], template: 'router', note: 'Only a web interface answered, and the maker is Ubiquiti — a router, switch or access point.', mac: '24:a4:3c:01:02:03', vendor: 'Ubiquiti' },
+    { ip: '192.168.1.23', hostname: 'pi.lan', rttMs: 0.9, openPorts: [22, 80], template: 'home-server', note: 'SSH and a web interface — looks like a server or NAS — a Raspberry Pi.', mac: 'dc:a6:32:01:02:03', vendor: 'Raspberry Pi Trading' },
+    { ip: '192.168.1.64', hostname: '', rttMs: 5.4, openPorts: [9100], template: 'tcp-service', note: 'Port 9100 is open — this looks like a network printer.', mac: '3c:2a:f4:00:00:01', vendor: 'Brother Industries' },
+    // Found through the neighbour table only: it answered ARP, not the ping.
+    { ip: '192.168.1.80', hostname: 'desktop.lan', rttMs: 0, openPorts: [3389], template: 'ping', note: 'Remote desktop is open — this looks like a Windows machine. Install the agent on it for hardware health. It did not answer a ping (it was found in this machine\'s neighbour table), so a ping check would show it as down; watch one of its ports instead.', mac: 'a8:5e:45:00:00:01', vendor: 'ASUSTek COMPUTER', noPing: true },
   ];
   let discoveryJob = null;
   // The last add, so a test can prove the request was made.

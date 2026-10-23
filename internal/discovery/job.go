@@ -43,8 +43,36 @@ type Job struct {
 	Responders int         `json:"responders"`
 	Results    []Responder `json:"results"`
 	Error      string      `json:"error,omitempty"`
-	StartedAt  time.Time   `json:"startedAt"`
-	FinishedAt *time.Time  `json:"finishedAt,omitempty"`
+	// Notes are things worth knowing about how far to trust the results,
+	// shown above them — today, that GWatch is in a container whose network
+	// hides the LAN's hardware addresses.
+	Notes      []string   `json:"notes,omitempty"`
+	StartedAt  time.Time  `json:"startedAt"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+}
+
+// runNotes works out a finished run's Notes from its results. It is a
+// variable so a test can pretend to be in a container, or not.
+var runNotes = containerNotes
+
+// containerNotes explains an empty MAC column inside a container. With
+// Docker's default bridge network the container's neighbour table holds the
+// bridge and nothing else, so no device on the LAN gets a MAC address or a
+// maker, and a device that ignores pings cannot be found through it; the
+// sweep itself also only reaches the LAN through the host's NAT. Host or
+// macvlan networking fixes all of that (docs/DOCKER.md). A container whose
+// results do carry MAC addresses is already on the LAN and needs no note.
+func containerNotes(results []Responder) []string {
+	kind := containerKind()
+	if kind == "" {
+		return nil
+	}
+	for _, r := range results {
+		if r.MAC != "" {
+			return nil
+		}
+	}
+	return []string{fmt.Sprintf("GWatch is running in a container (%s). With bridge networking it cannot see the network's neighbour table, so MAC addresses and makers are missing and devices that ignore pings are not found. Use host or macvlan networking to see the LAN directly.", kind)}
 }
 
 // Done reports whether the run has stopped, however it stopped.
@@ -179,6 +207,7 @@ func (r *Registry) finish(id string, results []Responder, ctxErr error) Job {
 	}
 	r.job.Results = results
 	r.job.Responders = len(results)
+	r.job.Notes = runNotes(results)
 	if ctxErr == nil {
 		// A run that was not interrupted got through everything it was given,
 		// whatever the last progress tick happened to record.
@@ -264,6 +293,9 @@ func (r *Registry) Running() bool {
 func (j Job) clone() Job {
 	out := j
 	out.Ranges = copyOf(j.Ranges)
+	if j.Notes != nil {
+		out.Notes = copyOf(j.Notes)
+	}
 	out.Ports = copyOf(j.Ports)
 	out.Results = make([]Responder, len(j.Results))
 	for i, r := range j.Results {

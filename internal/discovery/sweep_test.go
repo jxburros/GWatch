@@ -34,6 +34,9 @@ type fakeNetwork struct {
 	// time it pulls the plug.
 	block  chan struct{}
 	holdIf func(ip string) bool
+
+	// arp is the neighbour table the sweep reads once the pings are done.
+	arp []neighbour
 }
 
 func newFakeNetwork() *fakeNetwork {
@@ -58,8 +61,14 @@ func (f *fakeNetwork) device(ip, name string, rtt time.Duration, ports ...int) *
 // install puts the fake in place for the rest of the test.
 func (f *fakeNetwork) install(t *testing.T) {
 	t.Helper()
-	realPing, realLookup, realDial := pingHost, lookupAddr, dialPort
-	t.Cleanup(func() { pingHost, lookupAddr, dialPort = realPing, realLookup, realDial })
+	realPing, realLookup, realDial, realNeigh, realNotes := pingHost, lookupAddr, dialPort, readNeighbours, runNotes
+	t.Cleanup(func() {
+		pingHost, lookupAddr, dialPort, readNeighbours, runNotes = realPing, realLookup, realDial, realNeigh, realNotes
+	})
+	// The machine running the tests has a neighbour table of its own, and may
+	// well be a container; neither is any business of an imaginary house.
+	readNeighbours = func() []neighbour { return f.arp }
+	runNotes = func([]Responder) []string { return nil }
 
 	pingHost = func(ctx context.Context, host string, count int, timeout time.Duration) (int, int, []time.Duration, error) {
 		if f.block != nil {

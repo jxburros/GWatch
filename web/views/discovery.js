@@ -285,7 +285,7 @@ export async function openDiscovery(ctx, onDone) {
       return;
     }
     updateProgress();
-    replace(body, errorEl, summaryLine(), resultsTable(), groupField);
+    replace(body, errorEl, summaryLine(), ...notesBanners(), resultsTable(), groupField);
     foot.append(closeBtn, againBtn, addBtn);
     addBtn.disabled = state.adding || !state.selected.size;
   }
@@ -318,6 +318,12 @@ export async function openDiscovery(ctx, onDone) {
     progressDetail.textContent = `${plural(job.responders || 0, 'device', 'devices')} so far`;
   }
 
+  // Notes the server attached to the run — for now, that GWatch is in a
+  // container whose bridge network hides the LAN's hardware addresses.
+  function notesBanners() {
+    return (state.job.notes || []).map((n) => banner('info', n));
+  }
+
   function resultsTable() {
     rows = [];
     const found = state.job.results || [];
@@ -325,7 +331,7 @@ export async function openDiscovery(ctx, onDone) {
       return h('div', { class: 'card' }, emptyState({
         icon: 'radar',
         title: 'Nothing answered',
-        text: 'No address in that range replied to a ping. Some devices ignore pings by design — a firewalled PC, for one — so you may still want to add them by hand.',
+        text: 'No address in that range replied to a ping or showed up in this machine’s neighbour table. A device on another network behind a router may still ignore pings — a firewalled PC, for one — so you may still want to add it by hand.',
         compact: true,
       }));
     }
@@ -370,7 +376,14 @@ export async function openDiscovery(ctx, onDone) {
         h('td', null, nameInput),
         // The name fields take what space there is, so the round trip is
         // pinned to one line rather than being allowed to wrap mid-figure.
-        h('td', { class: 'num', style: { whiteSpace: 'nowrap' } }, ms(f.rttMs)),
+        h('td', { class: 'num', style: { whiteSpace: 'nowrap' } }, f.noPing
+          ? h('span', { class: 'muted', title: 'Did not answer a ping; found in this machine’s neighbour (ARP) table.' }, 'no ping')
+          : ms(f.rttMs)),
+        // The hardware address, with the maker of its network card under it:
+        // "Brother Industries" turns an unnamed address into the printer.
+        h('td', null,
+          f.mac ? h('span', { class: 'mono' }, f.mac) : h('span', { class: 'dim' }, '—'),
+          f.vendor ? h('div', { class: 'tiny muted' }, f.vendor) : null),
         h('td', { class: 'mono' }, (f.openPorts || []).join(' ') || h('span', { class: 'dim' }, '—')),
         h('td', null, templateSel, f.note ? h('div', { class: 'tiny muted' }, f.note) : null),
       ));
@@ -382,6 +395,7 @@ export async function openDiscovery(ctx, onDone) {
         h('th', null, 'Address'),
         h('th', null, 'Name'),
         h('th', { class: 'num' }, 'Reply'),
+        h('th', null, 'MAC address · maker'),
         h('th', null, 'Open ports'),
         h('th', null, 'Start from'),
       )),
