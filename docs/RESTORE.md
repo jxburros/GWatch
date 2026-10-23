@@ -58,8 +58,15 @@ new machine's remote-access password is set and you are not calling from
 `127.0.0.1`. A successful response looks like:
 
 ```json
-{ "ok": true, "nodes": 12, "checks": 31, "results": 481203, "rollups": 9120, "events": 214, "history": true }
+{ "ok": true, "nodes": 12, "checks": 31, "results": 481203, "rollups": 9120, "events": 214, "history": true,
+  "skippedUsers": [], "skippedAgents": [], "safetyBackup": "gwatch-backup-20261023-101500-full.gwbackup" }
 ```
+
+Before it changes anything, a restore takes a full backup (history included) of what
+is there now, encrypted with the same password, and names it in `safetyBackup` and in
+the event timeline. If the restore was a mistake, or fails part-way, restore that file
+to go back. If that backup cannot be written (a full disk, say), nothing is restored.
+A restore carries on to the end even if the browser that asked for it is closed.
 
 ## What a restore brings over
 
@@ -73,8 +80,15 @@ new machine's remote-access password is set and you are not calling from
   from supported backup format 2 archives. These are *merged*:
   an account, key or agent already on the new machine is left exactly as it is, so a
   restore never overwrites the password of the administrator doing the restoring, and
-  never resurrects a key that was deliberately revoked here. An archive from an older
-  version has none of these and leaves them untouched.
+  never resurrects a key that was deliberately revoked here. An account or agent in the
+  archive that is **not** on this machine — one deleted since the backup was made — is
+  left out and listed (`skippedUsers`, `skippedAgents`) unless you tick **Re-create
+  accounts and agents that have been deleted since this backup** (`restoreAccounts:
+  true`), so an older backup cannot bring back a removed administrator's password or a
+  purged machine's token. On a machine with no accounts at all, as when moving to a new
+  computer, they are re-created without asking. An agent that is still here keeps its
+  link to its node. An archive from an older version has none of these and leaves them
+  untouched.
 - Optionally, the **history**, which includes what each hardware check recorded: a machine's readings are its check's results, kept like any other check's. (An archive from before that carries a separate list of hardware readings; it is not read, because every reading in it was also a result of a hardware check.)
 - **Settings**: general, alerts (including SMTP configuration), retention
   policy, network access, appearance, and the automatic-backup schedule.

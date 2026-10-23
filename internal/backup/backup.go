@@ -84,6 +84,24 @@ type Summary struct {
 	Agents     int      `json:"agents"`
 	History    bool     `json:"history"`
 	Manifest   Manifest `json:"manifest"`
+	// SkippedUsers and SkippedAgents are the accounts and machines in the
+	// archive that are not on this server and were not re-created (see
+	// RestoreOptions.RecreateAccounts).
+	SkippedUsers  []string `json:"skippedUsers,omitempty"`
+	SkippedAgents []string `json:"skippedAgents,omitempty"`
+}
+
+// RestoreOptions says what a restore brings back beyond the configuration.
+type RestoreOptions struct {
+	// IncludeHistory restores results, rollups and events when the archive
+	// has them.
+	IncludeHistory bool
+	// RecreateAccounts re-creates the user accounts and agents in the
+	// archive that are not on this server. Without it they are left out and
+	// listed in the summary: users can only be deleted, not revoked, so an
+	// older backup would otherwise bring a deleted administrator back with
+	// their old password, and a purged agent's token would work again.
+	RecreateAccounts bool
 }
 
 var safeName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -430,9 +448,15 @@ func hasFile(zr *zip.Reader, name string) bool {
 }
 
 // Restore replaces the configuration (and optionally the history) with the
-// contents of the archive. Node and check ids are preserved so history rows
-// keep pointing at the right checks.
+// contents of the archive, re-creating every account in it. Node and check ids
+// are preserved so history rows keep pointing at the right checks.
 func Restore(ctx context.Context, st *store.Store, path, password string, includeHistory bool) (Summary, error) {
+	return RestoreWith(ctx, st, path, password, RestoreOptions{IncludeHistory: includeHistory, RecreateAccounts: true})
+}
+
+// RestoreWith is Restore with the choices spelled out.
+func RestoreWith(ctx context.Context, st *store.Store, path, password string, opts RestoreOptions) (Summary, error) {
+	includeHistory := opts.IncludeHistory
 	zr, cleanup, err := Open(path, password)
 	if err != nil {
 		return Summary{}, err
@@ -457,7 +481,7 @@ func Restore(ctx context.Context, st *store.Store, path, password string, includ
 		}
 	}
 
-	if err := restoreConfig(ctx, st, cfg, &sum, includeHistory); err != nil {
+	if err := restoreConfig(ctx, st, cfg, &sum, includeHistory, opts.RecreateAccounts); err != nil {
 		return sum, err
 	}
 	if includeHistory {
@@ -524,7 +548,7 @@ const batchSize = 2000
 // Wallboards are present in the archive as a whole or not at all, so they
 // are replaced when the archive has them and untouched otherwise (a
 // format-1 archive).
-func restoreConfig(ctx context.Context, st *store.Store, cfg Config, sum *Summary, includeHistory bool) error {
+func restoreConfig(ctx context.Context, st *store.Store, cfg Config, sum *Summary, includeHistory, recreateAccounts bool) error {
 	if err := st.RestoreNodes(ctx, cfg.Nodes, includeHistory); err != nil {
 		return err
 	}
@@ -597,6 +621,16 @@ func restoreConfig(ctx context.Context, st *store.Store, cfg Config, sum *Summar
 	// Agents before users and keys only by convention; none depends on
 	// another. An agent's node_id points at a node restored above.
 	for _, a := range cfg.Agents {
+		if !recreateAccounts {
+			known, err := st.AgentTokenKnown(ctx, a.TokenHash)
+			if err != nil {
+				return fmt.Errorf("restore agent %q: %w", a.Name, err)
+			}
+			if !known {
+				sum.SkippedAgents = append(sum.SkippedAgents, a.Name)
+				continue
+			}
+		}
 		added, err := st.ImportAgent(ctx, a)
 		if err != nil {
 			return fmt.Errorf("restore agent %q: %w", a.Name, err)
@@ -606,6 +640,14 @@ func restoreConfig(ctx context.Context, st *store.Store, cfg Config, sum *Summar
 		}
 	}
 	for _, u := range cfg.Users {
+		if !recreateAccounts {
+			if _, _, err := st.GetUserByName(ctx, u.Username); errors.Is(err, store.ErrNotFound) {
+				sum.SkippedUsers = append(sum.SkippedUsers, u.Username)
+				continue
+			} else if err != nil {
+				return fmt.Errorf("restore user %q: %w", u.Username, err)
+			}
+		}
 		added, err := st.ImportUser(ctx, u)
 		if err != nil {
 			return fmt.Errorf("restore user %q: %w", u.Username, err)
@@ -643,7 +685,7 @@ func Copy(ctx context.Context, src, dst *store.Store, progress func(stage string
 	if err != nil {
 		return sum, fmt.Errorf("read configuration: %w", err)
 	}
-	if err := restoreConfig(ctx, dst, cfg, &sum, true); err != nil {
+	if err := restoreConfig(ctx, dst, cfg, &sum, true, true); err != nil {
 		return sum, fmt.Errorf("write configuration: %w", err)
 	}
 	report("configuration", sum.Nodes)

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -621,7 +622,12 @@ func (s *Server) handleDeleteBackup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-func (s *Server) restore(w http.ResponseWriter, r *http.Request, path, password string, includeHistory bool) {
+// restoreTimeout bounds a restore, which carries on if the browser that asked
+// for it goes away: stopping a restore half-way is how a database ends up
+// emptied, so the request's own cancellation is not passed on.
+const restoreTimeout = 2 * time.Hour
+
+func (s *Server) restore(w http.ResponseWriter, r *http.Request, path, password string, includeHistory, recreateAccounts bool) {
 	if strings.TrimSpace(password) == "" {
 		writeError(w, http.StatusBadRequest, "password is required")
 		return
@@ -635,37 +641,87 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request, path, password 
 		s.fail(w, err)
 		return
 	}
-	sum, err := backup.Restore(r.Context(), s.Store, path, password, includeHistory)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), restoreTimeout)
+	defer cancel()
+
+	// A safety net first: everything as it is now, history included, under
+	// the same password, so a restore that was a mistake (or that fails
+	// part-way) can itself be undone from Settings › Backups.
+	safety := ""
+	if s.BackupDir != "" {
+		info, err := s.Engine.RunBackup(ctx, s.BackupDir, password, true, 0, "Pre-restore backup")
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not take a backup of the current data before restoring, so nothing was changed: "+err.Error())
+			return
+		}
+		safety = info.FileName
+	}
+
+	// Accounts missing from this server are only re-created when asked, or
+	// when there are none at all (a restore onto a fresh installation).
+	if !recreateAccounts {
+		if n, err := s.Store.CountUsers(ctx); err == nil && n == 0 {
+			recreateAccounts = true
+		}
+	}
+	sum, err := backup.RestoreWith(ctx, s.Store, path, password, backup.RestoreOptions{IncludeHistory: includeHistory, RecreateAccounts: recreateAccounts})
 	if errors.Is(err, backup.ErrArchiveTooLarge) {
 		// Refused before anything was written.
 		writeError(w, http.StatusRequestEntityTooLarge, err.Error())
 		return
 	}
 	if err != nil {
-		s.recordEvent(r.Context(), model.Event{Type: model.EventRestore, Title: "Restore failed", Detail: err.Error()})
+		detail := err.Error()
+		if safety != "" {
+			detail += fmt.Sprintf(" The data as it was before is in %s; restore that to go back.", safety)
+		}
+		s.recordEvent(ctx, model.Event{Type: model.EventRestore, Title: "Restore failed", Detail: detail})
+		if safety != "" {
+			writeError(w, http.StatusInternalServerError, "restore failed: "+detail)
+			return
+		}
 		s.fail(w, err)
 		return
 	}
-	if err := s.Engine.ReloadConfig(r.Context()); err != nil {
+	if err := s.Engine.ReloadConfig(ctx); err != nil {
 		s.fail(w, err)
 		return
 	}
 	status := s.Engine.BackupStatus()
 	now := time.Now()
 	status.LastRestoreAt = &now
-	s.Engine.SetBackupStatus(r.Context(), status)
-	s.recordEvent(r.Context(), model.Event{Type: model.EventRestore, Title: "Backup restored", Detail: fmt.Sprintf("%d node(s), %d check(s)%s restored from %s.", sum.Nodes, sum.Checks, map[bool]string{true: fmt.Sprintf(", %d results, %d events", sum.Results, sum.Events), false: ""}[sum.History], filepath.Base(path))})
-	if err := s.Engine.RunRetention(r.Context(), true); err != nil {
+	s.Engine.SetBackupStatus(ctx, status)
+	detail := fmt.Sprintf("%d node(s), %d check(s)%s restored from %s.", sum.Nodes, sum.Checks, map[bool]string{true: fmt.Sprintf(", %d results, %d events", sum.Results, sum.Events), false: ""}[sum.History], filepath.Base(path))
+	if len(sum.SkippedUsers) > 0 {
+		detail += fmt.Sprintf(" Not re-created, as they are no longer on this server: %d account(s) (%s).", len(sum.SkippedUsers), strings.Join(sum.SkippedUsers, ", "))
+	}
+	if len(sum.SkippedAgents) > 0 {
+		detail += fmt.Sprintf(" Not re-created: %d agent(s) (%s).", len(sum.SkippedAgents), strings.Join(sum.SkippedAgents, ", "))
+	}
+	if safety != "" {
+		detail += " The data as it was before is in " + safety + "."
+	}
+	s.recordEvent(ctx, model.Event{Type: model.EventRestore, Title: "Backup restored", Detail: detail})
+	if err := s.Engine.RunRetention(ctx, true); err != nil {
 		s.Log.Errorf("retention after restore: %v", err)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "nodes": sum.Nodes, "checks": sum.Checks, "results": sum.Results, "rollups": sum.Rollups, "events": sum.Events, "history": sum.History})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "nodes": sum.Nodes, "checks": sum.Checks, "results": sum.Results, "rollups": sum.Rollups, "events": sum.Events, "history": sum.History,
+		"skippedUsers": nonNil(sum.SkippedUsers), "skippedAgents": nonNil(sum.SkippedAgents), "safetyBackup": safety})
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 func (s *Server) handleRestoreExisting(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		FileName       string `json:"fileName"`
-		Password       string `json:"password"`
-		IncludeHistory bool   `json:"includeHistory"`
+		FileName        string `json:"fileName"`
+		Password        string `json:"password"`
+		IncludeHistory  bool   `json:"includeHistory"`
+		RestoreAccounts bool   `json:"restoreAccounts"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeDecodeError(w, err)
@@ -680,7 +736,7 @@ func (s *Server) handleRestoreExisting(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "backup not found")
 		return
 	}
-	s.restore(w, r, p, body.Password, body.IncludeHistory)
+	s.restore(w, r, p, body.Password, body.IncludeHistory, body.RestoreAccounts)
 }
 
 // restoreUploadLimit caps a restore upload: the largest archive a restore
@@ -721,7 +777,8 @@ func (s *Server) handleRestoreUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	tmp.Close()
 	includeHistory := strings.EqualFold(r.FormValue("includeHistory"), "true")
-	s.restore(w, r, tmp.Name(), r.FormValue("password"), includeHistory)
+	recreateAccounts := strings.EqualFold(r.FormValue("restoreAccounts"), "true")
+	s.restore(w, r, tmp.Name(), r.FormValue("password"), includeHistory, recreateAccounts)
 }
 
 // ---- export ----

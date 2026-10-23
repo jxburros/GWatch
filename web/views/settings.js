@@ -822,28 +822,40 @@ export async function mount(root, ctx) {
     const file = h('input', { type: 'file', accept: '.gwbackup,.zip,.bin,*/*' });
     const rpw = h('input', { type: 'password', autocomplete: 'off', placeholder: 'Backup password' });
     const rHist = checkbox({ label: 'Also restore history and events', checked: true });
+    const rAccounts = accountsCheckbox();
     const restoreResult = h('div', { role: 'status' });
     const restoreBtn = h('button', { class: 'btn btn-danger', type: 'button', onclick: async () => {
       if (!file.files?.[0]) { toast('Choose a backup file first', { kind: 'error' }); return; }
       if (!rpw.value) { toast('Enter the backup password', { kind: 'error' }); rpw.focus(); return; }
       const ok = await confirmDialog({ title: 'Restore from file?', message: 'This replaces the current configuration (nodes, checks, dashboards, maintenance windows, automation and settings) with the contents of the backup. History is replaced if selected and present in the backup. Otherwise, history for matching checks and the event timeline are kept. Checks absent from the backup and their history are removed.', confirmLabel: 'Restore', danger: true });
       if (!ok) return;
-      const fd = new FormData(); fd.append('file', file.files[0]); fd.append('password', rpw.value); fd.append('includeHistory', rHist.input.checked ? 'true' : 'false');
+      const fd = new FormData(); fd.append('file', file.files[0]); fd.append('password', rpw.value); fd.append('includeHistory', rHist.input.checked ? 'true' : 'false'); fd.append('restoreAccounts', rAccounts.input.checked ? 'true' : 'false');
       const done = busy(restoreBtn, 'Restoring…');
-      try { const r = await api.upload('/api/backups/restore', fd); replace(restoreResult, banner('up', `Restored ${plural(r.nodes ?? 0, 'node')}, ${plural(r.checks ?? 0, 'check')} and ${num(r.results ?? 0)} results.`)); toast('Restore complete', { kind: 'success' }); load(); }
+      try { const r = await api.upload('/api/backups/restore', fd); replace(restoreResult, banner('up', `Restored ${plural(r.nodes ?? 0, 'node')}, ${plural(r.checks ?? 0, 'check')} and ${num(r.results ?? 0)} results.${restoreNotes(r)}`)); toast('Restore complete', { kind: 'success' }); load(); }
       catch (e) { replace(restoreResult, banner('down', `Restore failed: ${e.message}`)); }
       done();
     } }, icon('upload'), 'Restore from file');
     const restoreCard = h('section', { class: 'card' }, h('h2', null, 'Restore from a file'), h('p', { class: 'lead' }, 'Moving to a new computer? Install GWatch, then restore the archive you downloaded from the old one.'),
-      h('div', { class: 'form-grid' }, field({ label: 'Backup file', input: file }), field({ label: 'Password', input: rpw }), h('div', { class: 'span-2' }, rHist)),
+      h('div', { class: 'form-grid' }, field({ label: 'Backup file', input: file }), field({ label: 'Password', input: rpw }), h('div', { class: 'span-2' }, rHist), h('div', { class: 'span-2' }, rAccounts)),
       h('div', { class: 'form-actions', style: { marginTop: '12px' } }, restoreBtn), restoreResult);
+    // A restore takes a backup of what it replaces first, and leaves out the
+    // accounts and agents deleted since the backup was made unless asked.
+    function accountsCheckbox() { return checkbox({ label: 'Re-create accounts and agents that have been deleted since this backup', checked: false }); }
+    function restoreNotes(r) {
+      const notes = [];
+      if (r.skippedUsers?.length) notes.push(`Not re-created: ${plural(r.skippedUsers.length, 'account')} (${r.skippedUsers.join(', ')}).`);
+      if (r.skippedAgents?.length) notes.push(`Not re-created: ${plural(r.skippedAgents.length, 'agent')} (${r.skippedAgents.join(', ')}).`);
+      if (r.safetyBackup) notes.push(`What was here before is kept as ${r.safetyBackup}.`);
+      return notes.length ? ` ${notes.join(' ')}` : '';
+    }
     async function restoreExisting(b) {
       const pwIn = h('input', { type: 'password', autocomplete: 'off', placeholder: 'Backup password' });
       const hist = checkbox({ label: 'Also restore history and events', checked: b.includeHistory, disabled: !b.includeHistory });
-      const ok = await confirmDialog({ title: `Restore ${b.fileName}?`, confirmLabel: 'Restore', danger: true, body: h('div', { class: 'stack-sm' }, banner('warn', 'This replaces the current configuration. Nodes, checks, dashboards, maintenance windows, automation and settings will be overwritten. History is replaced if selected and present in the backup. Otherwise, history for matching checks and the event timeline are kept. Checks absent from the backup and their history are removed.'), field({ label: 'Password', input: pwIn }), hist) });
+      const accounts = accountsCheckbox();
+      const ok = await confirmDialog({ title: `Restore ${b.fileName}?`, confirmLabel: 'Restore', danger: true, body: h('div', { class: 'stack-sm' }, banner('warn', 'This replaces the current configuration. Nodes, checks, dashboards, maintenance windows, automation and settings will be overwritten. History is replaced if selected and present in the backup. Otherwise, history for matching checks and the event timeline are kept. Checks absent from the backup and their history are removed.'), field({ label: 'Password', input: pwIn }), hist, accounts) });
       if (!ok) return;
       if (!pwIn.value) { toast('The backup password is required', { kind: 'error' }); return; }
-      try { const r = await api.post('/api/backups/restore-existing', { fileName: b.fileName, password: pwIn.value, includeHistory: hist.input.checked }); toast(`Restored ${plural(r.nodes ?? 0, 'node')} and ${plural(r.checks ?? 0, 'check')}`, { kind: 'success' }); load(); }
+      try { const r = await api.post('/api/backups/restore-existing', { fileName: b.fileName, password: pwIn.value, includeHistory: hist.input.checked, restoreAccounts: accounts.input.checked }); toast(`Restored ${plural(r.nodes ?? 0, 'node')} and ${plural(r.checks ?? 0, 'check')}.${restoreNotes(r)}`, { kind: 'success', timeout: 10000 }); load(); }
       catch (e) { toast(`Restore failed: ${e.message}`, { kind: 'error' }); }
     }
     const autoEnabled = toggle({ label: 'Create backups automatically', checked: !!bk.enabled, onChange: (v) => { bk.enabled = v; } });

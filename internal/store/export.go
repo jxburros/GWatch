@@ -154,15 +154,33 @@ func (s *Store) ExportAgents(ctx context.Context) ([]AgentRecord, error) {
 	return out, rows.Err()
 }
 
+// AgentTokenKnown says whether an agent with this token digest is registered.
+func (s *Store) AgentTokenKnown(ctx context.Context, tokenHash string) (bool, error) {
+	var n int
+	if err := s.queryRow(ctx, "SELECT COUNT(*) FROM agents WHERE token_hash = ?", tokenHash).Scan(&n); err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // ImportAgent adds a machine exported by ExportAgents, keeping its id: the
 // readings it sent are keyed "agent:<id>", so a new id would orphan them. An
-// agent with the same token digest is left alone and false is returned.
+// agent with the same token digest is left alone, apart from its node link,
+// and false is returned.
 func (s *Store) ImportAgent(ctx context.Context, r AgentRecord) (bool, error) {
 	var n int
 	if err := s.queryRow(ctx, "SELECT COUNT(*) FROM agents WHERE token_hash = ?", r.TokenHash).Scan(&n); err != nil {
 		return false, err
 	}
 	if n > 0 {
+		// The machine is still here, but restoring the nodes cleared its link
+		// to one (agents.node_id is ON DELETE SET NULL), so put that back.
+		if r.NodeID != nil {
+			if _, err := s.exec(ctx, "UPDATE agents SET node_id = ? WHERE token_hash = ? AND node_id IS NULL AND EXISTS (SELECT 1 FROM nodes WHERE id = ?)",
+				*r.NodeID, r.TokenHash, *r.NodeID); err != nil {
+				return false, err
+			}
+		}
 		return false, nil
 	}
 	if r.CreatedAt.IsZero() {

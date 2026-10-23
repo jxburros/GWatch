@@ -356,7 +356,16 @@ func TestSettingsDashboardsMaintenanceBackups(t *testing.T) {
 	}
 	var health model.Health
 	call(t, ts, "GET", "/api/health", nil, &health)
-	if health.Backup.LastRestoreAt == nil || health.Backup.LastBackupFile != info.FileName || !health.SMTPConfigured {
+	// A restore first takes a backup of what it replaces (#148), so that is
+	// now the latest backup.
+	var restored struct {
+		SafetyBackup string `json:"safetyBackup"`
+	}
+	_ = json.Unmarshal(rb, &restored)
+	if restored.SafetyBackup == "" || restored.SafetyBackup == info.FileName {
+		t.Fatalf("no pre-restore backup was named: %s", rb)
+	}
+	if health.Backup.LastRestoreAt == nil || health.Backup.LastBackupFile != restored.SafetyBackup || !health.SMTPConfigured {
 		t.Fatalf("health: %+v", health.Backup)
 	}
 	if code := call(t, ts, "DELETE", "/api/backups/"+info.FileName, nil, nil); code != 200 {
