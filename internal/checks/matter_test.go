@@ -161,7 +161,10 @@ func TestMatterCheckServerDown(t *testing.T) {
 	check.TimeoutSeconds = 1
 	start := time.Now()
 	res = Run(context.Background(), check, Options{})
-	if res.Status != model.StatusDown || !strings.Contains(res.Message, "did not answer within") || time.Since(start) > 4*time.Second {
+	// Which deadline fires first — the wait for the greeting or the run's own
+	// timeout — depends on how busy the machine is; either way it is down,
+	// and quickly.
+	if res.Status != model.StatusDown || !(strings.Contains(res.Message, "did not answer within") || strings.Contains(res.Message, "timed out after")) || time.Since(start) > 4*time.Second {
 		t.Fatalf("silent server: %s %q after %s", res.Status, res.Message, time.Since(start))
 	}
 }
