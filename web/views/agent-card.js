@@ -7,6 +7,8 @@
 //     machine's agent.json, and replaceable by a rotation that the agent picks
 //     up by itself, or by a "replace now" for a token that may have leaked;
 //   * what it collects, chosen from what the machine says it has;
+//   * whether it is a remote collector — running other nodes' network checks
+//     from where it is (#123) — and how that is going;
 //   * revoke and delete.
 //
 // GWatch never connects to the machine. Everything here is stored in GWatch and
@@ -14,7 +16,7 @@
 
 import { api } from '../api.js';
 import {
-  h, icon, replace, statusPill, relTimeEl, openModal, confirmDialog, toast, agentLogo,
+  h, icon, replace, statusPill, relTimeEl, openModal, confirmDialog, toast, agentLogo, toggle,
 } from '../components.js';
 import { agentIsBehind } from '../fmt.js';
 import { collectionPicker, describeSelection } from './agent-collect.js';
@@ -45,7 +47,7 @@ export function agentCard(agent, { latest = null, releaseURL = '', onChange = ()
       h('div', { class: 'btn-group' }, h('button', { class: 'btn btn-danger', type: 'button', onclick: () => purge(agent, onChange) }, icon('trash'), 'Delete agent')));
     return el;
   }
-  body.append(tokenSection(agent, onChange), collectSection(agent, onChange), dangerSection(agent, onChange));
+  body.append(tokenSection(agent, onChange), collectSection(agent, onChange), collectorSection(agent, onChange), dangerSection(agent, onChange));
   return el;
 }
 
@@ -186,6 +188,51 @@ function collectSection(agent, onChange) {
 }
 
 function summaryOf(agent) { return describeSelection(agent.collect || {}); }
+
+/* ---------- remote collector ---------- */
+
+/**
+ * What the collector status means, in words. `collectorStatus` comes from the
+ * server: '' (off), waiting, idle, running or unreachable.
+ */
+export function collectorWords(agent) {
+  const n = agent.collectorChecks || 0;
+  const checks = `${n} check${n === 1 ? '' : 's'}`;
+  switch (agent.collectorStatus) {
+    case 'waiting': return { pill: 'unknown', label: 'waiting for the machine', text: `Turned on here, but the machine has not allowed it: its agent.json needs "collector": true (then restart the agent). Until then it is given no checks${n ? `, and the ${checks} assigned to it are unknown` : ''}.` };
+    case 'idle': return { pill: 'paused', label: 'no checks yet', text: 'Ready. Choose this machine under "Check from" on a node to have it run that node’s network checks.' };
+    case 'running': return { pill: 'up', label: `running ${checks}`, text: `Runs ${checks} for GWatch from where it is.` };
+    case 'unreachable': return { pill: 'down', label: 'unreachable', text: `Has stopped sending results. Its ${checks} are unknown until it does; one alert was raised for the collector rather than one per check.` };
+    default: return { pill: 'paused', label: 'off', text: '' };
+  }
+}
+
+function collectorSection(agent, onChange) {
+  const words = collectorWords(agent);
+  const sw = toggle({
+    label: 'Use this machine as a remote collector',
+    checked: !!agent.collector,
+    onChange: async (on) => {
+      sw.input.disabled = true;
+      try {
+        await api.put(`/api/agents/${agent.id}/collector`, { enabled: on });
+        toast(on ? `${agent.name} can now run checks for GWatch, once its own agent.json allows it.` : `${agent.name} stops running checks at its next check-in.`, { kind: 'success' });
+        onChange();
+      } catch (e) { toast(e.message, { kind: 'error' }); sw.input.checked = !on; sw.input.disabled = false; }
+    },
+  });
+  return h('div', { class: 'stack-sm', 'data-section': 'collector' },
+    h('div', { class: 'section-title' }, 'Remote collector'),
+    h('p', { class: 'note' }, 'A collector runs the ping, TCP, HTTP, DNS and SNMP checks of the nodes you point at it — useful for a second site this server cannot reach. It needs two switches: this one, and ',
+      h('code', null, '"collector": true'), ' in the machine’s own ', h('code', null, 'agent.json'), '. GWatch never connects to it; it picks up its checks when it asks for settings, and the checks’ SNMP communities and HTTP headers are sent to it then.'),
+    sw,
+    agent.collector
+      ? h('div', { class: 'row', 'data-collector-status': agent.collectorStatus || 'off', style: { gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+          statusPill(words.pill, { label: words.label }),
+          agent.collectorSeenAt ? h('span', { class: 'dim small' }, 'last results ', relTimeEl(agent.collectorSeenAt)) : null,
+          h('span', { class: 'note' }, words.text))
+      : (agent.collectorAllowed ? h('p', { class: 'note' }, 'The machine allows collecting in its own settings; turn it on here to use it.') : null));
+}
 
 /* ---------- revoke and delete ---------- */
 

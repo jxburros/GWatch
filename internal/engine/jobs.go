@@ -585,7 +585,7 @@ func (e *Engine) Overview(ctx context.Context) (Overview, error) {
 	if err != nil {
 		return Overview{}, err
 	}
-	incidents, err := e.store.ListEvents(ctx, store.EventFilter{Limit: 20, Types: []model.EventType{model.EventDown, model.EventRecovered, model.EventWarning, model.EventWarningCleared, model.EventCertWarning, model.EventContentChanged, model.EventAffectedByParent, model.EventMaintenanceBegan, model.EventMaintenanceEnded, model.EventMonitorGap}})
+	incidents, err := e.store.ListEvents(ctx, store.EventFilter{Limit: 20, Types: []model.EventType{model.EventDown, model.EventRecovered, model.EventWarning, model.EventWarningCleared, model.EventCertWarning, model.EventContentChanged, model.EventAffectedByParent, model.EventMaintenanceBegan, model.EventMaintenanceEnded, model.EventMonitorGap, model.EventCollectorDown, model.EventCollectorUp}})
 	if err != nil {
 		return Overview{}, err
 	}

@@ -42,7 +42,7 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     // group is the deprecated alias for the first group, exactly as the
     // server sends it.
     const groups = (o.groups || (o.group ? [o.group] : [])).slice(0, 16);
-    return { id, name: o.name, host: o.host, groups, group: groups[0] || '', tags: o.tags || [], notes: o.notes || '', importance: o.importance || 'normal', enabled: o.enabled !== false, dependsOnNodeId: o.dependsOnNodeId ?? null, linkStyle: styleOut(o.linkStyle), template: o.template || '', createdAt: ago(40 * DAY), updatedAt: ago(2 * DAY), checks: [] };
+    return { id, name: o.name, host: o.host, groups, group: groups[0] || '', tags: o.tags || [], notes: o.notes || '', importance: o.importance || 'normal', enabled: o.enabled !== false, dependsOnNodeId: o.dependsOnNodeId ?? null, collectorId: o.collectorId ?? null, linkStyle: styleOut(o.linkStyle), template: o.template || '', createdAt: ago(40 * DAY), updatedAt: ago(2 * DAY), checks: [] };
   }
 
   const nodes = [];
@@ -882,7 +882,7 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   on('PUT', /^\/api\/nodes\/(\d+)$/, (m, body) => {
     const n = findNode(m[1]); if (!n) throw err(404, 'node not found');
     const groups = (body.groups && body.groups.length ? body.groups : (body.group ? [body.group] : [])).slice(0, 16);
-    Object.assign(n, { name: body.name, host: body.host, groups, group: groups[0] || '', tags: body.tags || [], notes: body.notes || '', importance: body.importance || 'normal', enabled: body.enabled !== false, dependsOnNodeId: body.dependsOnNodeId ?? null, linkStyle: cleanLinkStyle(body.linkStyle, body.dependsOnNodeId), updatedAt: iso(Date.now()) });
+    Object.assign(n, { name: body.name, host: body.host, groups, group: groups[0] || '', tags: body.tags || [], notes: body.notes || '', importance: body.importance || 'normal', enabled: body.enabled !== false, dependsOnNodeId: body.dependsOnNodeId ?? null, collectorId: body.collectorId ?? null, linkStyle: cleanLinkStyle(body.linkStyle, body.dependsOnNodeId), updatedAt: iso(Date.now()) });
     const keep = new Set();
     const next = (body.checks || []).map((c, i) => {
       const existing = c.id ? n.checks.find((x) => x.id === c.id) : null;
@@ -1367,9 +1367,19 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   var nasAgent; // eslint-disable-line no-var
   function nasWatchDefault() { return { services: ['docker', 'smbd'], processes: ['Plex Media Server'] }; }
   const agents = [
-    { id: 1, name: 'Living room NAS', nodeId: null, prefix: 'gwa_k3m9vq2x', enabled: true, createdBy: 'local', createdAt: ago(21 * DAY), revokedAt: null, lastSeenAt: ago(40e3), lastAddr: '192.168.1.24:52104', lastVersion: '0.5.0', hostname: 'nas.lan', os: 'linux', arch: 'arm64', tokenViewable: true, collect: nasWatchDefault(), inventory: mockInventory(), checkedInAt: ago(4 * MIN) },
+    { id: 1, name: 'Living room NAS', nodeId: null, prefix: 'gwa_k3m9vq2x', enabled: true, createdBy: 'local', createdAt: ago(21 * DAY), revokedAt: null, lastSeenAt: ago(40e3), lastAddr: '192.168.1.24:52104', lastVersion: '0.5.0', hostname: 'nas.lan', os: 'linux', arch: 'arm64', tokenViewable: true, collect: nasWatchDefault(), inventory: mockInventory(), checkedInAt: ago(4 * MIN), collector: false, collectorAllowed: true, collectorChecks: 0, collectorStatus: '' },
   ];
   nasAgent = agents[0];
+  // What the server works out about a collector (internal/engine/collectors.go),
+  // done the simple way: how many network checks point at it, and from the two
+  // switches whether it is off, waiting, idle or running.
+  const COLLECTABLE = ['ping', 'tcp', 'http', 'keyword', 'json', 'cert', 'dns', 'snmp'];
+  function withCollector(a) {
+    const n = nodes.filter((x) => x.enabled !== false && String(x.collectorId) === String(a.id))
+      .reduce((sum, x) => sum + x.checks.filter((c) => c.enabled !== false && COLLECTABLE.includes(c.type)).length, 0);
+    const status = !a.collector ? '' : (!a.collectorAllowed || a.revokedAt || !a.enabled) ? 'waiting' : n ? 'running' : 'idle';
+    return { ...clone(a), collectorChecks: n, collectorStatus: status, collectorSeenAt: status === 'running' ? ago(20e3) : null };
+  }
   // The tokens themselves, kept apart from the agent objects the way the server
   // keeps them apart from the list: only the reveal route hands one out.
   const agentTokens = { 1: { current: 'gwa_k3m9vq2xabcdefghij234567abcdefghij234567', pending: '' } };
@@ -1514,7 +1524,7 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     }
     return { key, range: u.searchParams.get('range') || '24h', from: iso(NOW - span), to: iso(NOW), samples };
   });
-  on('GET', /^\/api\/agents$/, () => clone(agents));
+  on('GET', /^\/api\/agents$/, () => agents.map(withCollector));
   // Newer than the 0.5.0 the demo machine reports, so the "an older agent is
   // running" marks are visible in mock mode.
   on('GET', /^\/api\/agents\/latest$/, () => ({ version: '0.6.0', url: 'https://github.com/jxburros/GWatch/releases', checkedAt: iso(NOW - 3600e3) }));
@@ -1543,6 +1553,13 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     const a = agentById(m[1]); a.rotationPending = false; delete a.rotationSince;
     if (agentTokens[a.id]) agentTokens[a.id].pending = '';
     return null;
+  });
+  on('PUT', /^\/api\/agents\/(\d+)\/collector$/, (m, body) => {
+    const a = agentById(m[1]);
+    if (body?.enabled && a.revokedAt) throw err(409, 'this machine has been revoked; it cannot collect');
+    a.collector = !!body?.enabled;
+    addEvent('auth', { title: `Remote collecting turned ${a.collector ? 'on' : 'off'} for ${a.name}` });
+    return withCollector(a);
   });
   on('PUT', /^\/api\/agents\/(\d+)\/collect$/, (m, body) => {
     const a = agentById(m[1]);

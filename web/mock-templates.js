@@ -20,6 +20,7 @@ export default [
       "dependsOnNodeId": null,
       "linkStyle": null,
       "template": "website",
+      "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
       "updatedAt": "0001-01-01T00:00:00Z",
       "checks": null
@@ -100,6 +101,7 @@ export default [
       "dependsOnNodeId": null,
       "linkStyle": null,
       "template": "home-server",
+      "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
       "updatedAt": "0001-01-01T00:00:00Z",
       "checks": null
@@ -179,6 +181,7 @@ export default [
       "dependsOnNodeId": null,
       "linkStyle": null,
       "template": "router",
+      "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
       "updatedAt": "0001-01-01T00:00:00Z",
       "checks": null
@@ -258,6 +261,7 @@ export default [
       "dependsOnNodeId": null,
       "linkStyle": null,
       "template": "snmp-device",
+      "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
       "updatedAt": "0001-01-01T00:00:00Z",
       "checks": null
@@ -336,6 +340,7 @@ export default [
       "dependsOnNodeId": null,
       "linkStyle": null,
       "template": "matter-device",
+      "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
       "updatedAt": "0001-01-01T00:00:00Z",
       "checks": null
@@ -395,6 +400,7 @@ export default [
       "dependsOnNodeId": null,
       "linkStyle": null,
       "template": "ping",
+      "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
       "updatedAt": "0001-01-01T00:00:00Z",
       "checks": null
@@ -439,6 +445,7 @@ export default [
       "dependsOnNodeId": null,
       "linkStyle": null,
       "template": "api",
+      "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
       "updatedAt": "0001-01-01T00:00:00Z",
       "checks": null
@@ -503,6 +510,7 @@ export default [
       "dependsOnNodeId": null,
       "linkStyle": null,
       "template": "tcp-service",
+      "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
       "updatedAt": "0001-01-01T00:00:00Z",
       "checks": null
@@ -547,6 +555,7 @@ export default [
       "dependsOnNodeId": null,
       "linkStyle": null,
       "template": "this-computer",
+      "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
       "updatedAt": "0001-01-01T00:00:00Z",
       "checks": null
@@ -635,6 +644,7 @@ export default [
       "dependsOnNodeId": null,
       "linkStyle": null,
       "template": "agent-machine",
+      "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
       "updatedAt": "0001-01-01T00:00:00Z",
       "checks": null
@@ -723,6 +733,7 @@ export default [
       "dependsOnNodeId": null,
       "linkStyle": null,
       "template": "dns",
+      "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
       "updatedAt": "0001-01-01T00:00:00Z",
       "checks": null

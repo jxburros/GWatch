@@ -739,6 +739,8 @@ export const EVENT_META = {
   service_started: { label: 'Service started', icon: 'power', cls: 'ev-info' },
   service_stopped: { label: 'Service stopped', icon: 'power', cls: 'ev-neutral' },
   monitor_gap: { label: 'Monitoring gap', icon: 'moon', cls: 'ev-warn' },
+  collector_unreachable: { label: 'Collector unreachable', icon: 'radar', cls: 'ev-down' },
+  collector_back: { label: 'Collector back', icon: 'radar', cls: 'ev-up' },
   internal_error: { label: 'Internal error', icon: 'alert', cls: 'ev-down' },
   backup: { label: 'Backup', icon: 'save', cls: 'ev-info' },
   restore: { label: 'Restore', icon: 'upload', cls: 'ev-info' },

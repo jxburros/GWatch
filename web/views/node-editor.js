@@ -361,12 +361,13 @@ function adoptMetricThresholds(checks) {
 
 export async function mount(root, ctx) {
   const isNew = !ctx.params.id;
-  const state = { draft: null, nodes: [], groups: { groups: [], tags: [] }, settings: null, errors: {}, destroyed: false, saving: false };
+  const state = { draft: null, nodes: [], agents: [], groups: { groups: [], tags: [] }, settings: null, errors: {}, destroyed: false, saving: false };
   root.append(skeleton({ lines: 6 }));
 
-  // Load supporting data
-  const [nodes, groups, settings] = await Promise.all([api.get('/api/nodes').catch(() => []), api.get('/api/groups').catch(() => ({ groups: [], tags: [] })), api.get('/api/settings').catch(() => null)]);
-  state.nodes = nodes || []; state.groups = groups || { groups: [], tags: [] }; state.settings = settings;
+  // Load supporting data. The agents are for "Check from"; the list is an
+  // administrator's, and anyone else simply sees "This server".
+  const [nodes, groups, settings, agents] = await Promise.all([api.get('/api/nodes').catch(() => []), api.get('/api/groups').catch(() => ({ groups: [], tags: [] })), api.get('/api/settings').catch(() => null), api.get('/api/agents').catch(() => [])]);
+  state.nodes = nodes || []; state.groups = groups || { groups: [], tags: [] }; state.settings = settings; state.agents = agents || [];
 
   if (isNew) {
     const tplId = ctx.query.get('template');
@@ -374,7 +375,7 @@ export async function mount(root, ctx) {
     if (tplId) { try { const list = await api.get('/api/templates'); tpl = (list || []).find((t) => t.id === tplId) || null; } catch { tpl = null; } }
     state.draft = tpl
       ? { ...tpl.node, id: undefined, template: tpl.id, tags: [...(tpl.node.tags || [])], enabled: true, importance: tpl.node.importance || 'normal', checks: (tpl.checks || []).map((c) => ({ ...c, _key: uid('c'), id: undefined, config: { ...(c.config || {}) }, alerts: c.alerts ? { ...c.alerts } : null })) }
-      : { name: '', host: '', groups: [], tags: [], notes: '', importance: 'normal', enabled: true, dependsOnNodeId: null, template: '', checks: [] };
+      : { name: '', host: '', groups: [], tags: [], notes: '', importance: 'normal', enabled: true, dependsOnNodeId: null, collectorId: null, template: '', checks: [] };
     if (tpl && (!state.draft.name || state.draft.name === tpl.name)) state.draft.name = '';
   } else {
     let node;
@@ -416,6 +417,26 @@ export async function mount(root, ctx) {
   }
   syncLinkStyle();
 
+  // Where the node's network checks run from: this server, or a paired agent
+  // acting as a remote collector (#123). Script, hardware and Matter checks
+  // run here whatever this says. An agent whose collecting is not switched on
+  // is still offered (so the node can be set up first) and says so.
+  const collectorOptions = [{ value: '', label: 'This server' }, ...state.agents
+    .filter((a) => !a.revokedAt || String(a.id) === String(d.collectorId))
+    .map((a) => ({ value: a.id, label: `${a.name} (remote collector${a.collector ? (a.collectorAllowed ? '' : ' — not yet allowed on the machine') : ' — collecting is off'})` }))];
+  if (d.collectorId && !collectorOptions.some((o) => String(o.value) === String(d.collectorId))) collectorOptions.push({ value: d.collectorId, label: `Agent ${d.collectorId}` });
+  const collectorNote = h('div', { class: 'note small', 'data-collector-note': '' });
+  const collectorSel = selectInput({ options: collectorOptions, value: d.collectorId ?? '', onchange: () => { d.collectorId = collectorSel.value ? Number(collectorSel.value) : null; syncCollector(); } });
+  function syncCollector() {
+    const a = state.agents.find((x) => String(x.id) === String(d.collectorId));
+    collectorNote.textContent = !d.collectorId ? ''
+      : !a ? 'This agent is not in the list GWatch can see.'
+        : !a.collector ? `Collecting is off for ${a.name}: turn it on in its agent card, or these checks stay unknown.`
+          : !a.collectorAllowed ? `${a.name} has not allowed collecting in its own agent.json ("collector": true) yet; until it does, these checks stay unknown.`
+            : `Ping, TCP, HTTP, DNS and SNMP checks run from ${a.name}; other checks still run here. "Test this check" tests from this server.`;
+  }
+  syncCollector();
+
   const nameField = field({ label: 'Name', input: nameInput });
   const hostField = field({ label: 'Host / target', input: hostInput, help: 'Hostname, IP address or URL. Individual checks can override it.' });
   const nodeCard = h('section', { class: 'card', 'aria-label': 'Node' },
@@ -427,6 +448,7 @@ export async function mount(root, ctx) {
       field({ label: 'Importance', input: importanceSel, help: 'Critical and high nodes are listed first on the wallboard.' }),
       field({ label: 'Depends on', input: dependsSel, help: 'Alerts for this node are suppressed while the parent is down, and its failures are shown as "affected by" the parent.' }),
       linkStyleField,
+      field({ label: 'Check from', input: h('div', { class: 'stack-sm' }, collectorSel, collectorNote), help: 'Where this node’s network checks run: this server, or a paired agent at another site acting as a remote collector.' }),
       field({ label: 'Notes', input: notesInput, cls: 'span-2' }),
       h('div', { class: 'span-2' }, enabledToggle),
     ));
