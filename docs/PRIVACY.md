@@ -153,9 +153,11 @@ Only what you configure, and only to destinations you chose.
    (the agent-release lookup stops too).
    Nothing is installed without you choosing to install it, whether or not
    automatic checks are on.
-5. **Automation you set up.** Triggers, notification rules and custom
-   endpoints send exactly what you told them to send, to the webhook URL,
-   Slack or Teams workspace, ntfy server or Pushover account you configured, or
+5. **Automation and alert channels you set up.** Triggers, notification
+   rules, custom endpoints and the "also notify" alert channels send exactly
+   what you told them to send, to the webhook URL, chat workspace (Slack,
+   Teams, Discord, Telegram, Matrix), push service (ntfy, Gotify, Pushover),
+   SMS provider (Twilio) or paging service (PagerDuty, Opsgenie) you configured, or
    run the command you wrote on the local machine. If you point a trigger at a
    third-party notification service, that service sees whatever the message
    contains, and their privacy policy applies to it — not ours.

@@ -733,7 +733,7 @@ blank actor column means "nobody did this, it just happened".
 
 **Settings › Alerts** holds the global email configuration.
 
-- **Send email alerts** — the master switch.
+- **Send alerts** — the master switch, for email and the channels below alike.
 - **Recipients** — where they go.
 - **Failures before down** — consecutive failed runs before a check alerts.
 - **Cooldown** — the minimum gap between two alerts about the same check, so a
@@ -747,6 +747,36 @@ blank actor column means "nobody did this, it just happened".
 
 **Send a test message** is not optional in spirit. An alerting setup you have
 never watched deliver is a guess.
+
+### Also notify: chat, push, SMS and paging
+
+The **Also notify** card sends the same alerts somewhere other than email:
+Slack, Microsoft Teams (Workflows), Discord, Telegram, Matrix, ntfy, Gotify,
+Pushover, SMS through Twilio, PagerDuty or Opsgenie. Each channel has:
+
+- **Send** — *everything* (outages, recoveries and warnings, as the email gets
+  them) or *outages only* (down and recovered).
+- **Only for these groups** — leave empty for every node, or name groups to
+  route, say, the servers to an SMS and everything else to a chat channel.
+- **Where it goes** — the service and its credentials, with a **Test this
+  action** button that sends a sample alert.
+
+A channel gets an alert at exactly the moment the email would go out. That
+means everything below that narrows an email narrows the channel too —
+silences, maintenance, dependencies, the cooldown — without setting anything up
+twice. Alerts can go to channels only: with no recipients, enabling alerts
+needs at least one channel switched on.
+
+PagerDuty incidents and Opsgenie alerts are opened on an outage and resolved
+when the check recovers, even if recovery emails are switched off; each check
+has its own incident, and warnings their own, so a cleared warning never closes
+an outage. Keys, tokens and webhook URLs are stored encrypted and shown as
+`********` afterwards; editing a channel without retyping them keeps them.
+
+Each delivery is in the timeline as **alert sent** ("Down alert sent to On-call
+SMS") or **alert failed** with the provider's reason. A down alert counts as
+delivered if the email or any channel got through; if nothing did, the next
+failing run tries again.
 
 ### The four ways an alert gets narrowed
 
@@ -824,15 +854,23 @@ and **Cooldown** stops it running constantly.
 
 ### Actions
 
-Eight kinds:
+Fifteen kinds. The notification ones are also what **Settings › Alerts ›
+Also notify** uses (see [section 10](#10-email-alerts)):
 
 | Action | Fields |
 |---|---|
 | **HTTP request** | URL, method (*auto* sends POST when there is a body), headers, body, expected status, timeout, ignore TLS errors |
 | **Slack** | Webhook URL |
-| **Microsoft Teams** | Webhook URL |
+| **Microsoft Teams** | Workflows webhook URL (in Teams: *Workflows › Post to a channel when a webhook request is received*; the old Office 365 connector URLs no longer work), title, message |
+| **Discord** | Channel webhook URL, title, message. `@everyone` in a message never pings |
+| **Telegram** | Bot token from @BotFather, chat ID (a number, or `@channelname`), title, message |
+| **Matrix** | Homeserver URL, access token of a bot account, room ID (`!…:server`), title, message |
 | **ntfy** | Server, topic, title, message, tags, priority (*min* to *urgent*) |
+| **Gotify** | Server, application token, title, message, priority (0–10) |
 | **Pushover** | Application token, user key, title, message, priority (*lowest (-2)* to *emergency (2)*) |
+| **SMS (Twilio)** | Account SID, auth token, from (a Twilio number or a messaging service), to (one or more numbers in `+15551234567` form), message |
+| **PagerDuty** | Events API v2 integration key, event (*automatic*: open on a failure, resolve on a recovery), severity, deduplication key, summary |
+| **Opsgenie** | API key, region (US or EU), event (*automatic*: create, then close on a recovery), priority, alias, tags, message |
 | **Git command** | Repository directory, git command and arguments |
 | **Custom code** | Interpreter (*sh*, *bash*, *PowerShell*, *cmd.exe*, *Python*, *Node.js*, or *Custom command…* where `{{file}}` is the script's path), the code, and a working directory |
 | **Run a node now** | Which node's checks to run |

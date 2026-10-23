@@ -5,7 +5,7 @@
 import { api, qs } from '../api.js';
 import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, openModal, emptyState, skeleton, banner, eventRow, busy, applyTheme, applyAccent, ACCENT_PRESETS, hexToRgb, applyDensity, currentDensity } from '../components.js';
 import { relTime, dateTime, bytes, num, duration, retentionSpan, toLocalInput, fromLocalInput, weekdayShort, timeShort, plural, isBeta } from '../fmt.js';
-import { openEndpointEditor, endpointRow, triggerRow, openTriggerEditor } from './automation.js';
+import { openEndpointEditor, endpointRow, triggerRow, openTriggerEditor, openAlertChannelEditor, actionBadge, actionSummary, ALERT_SEVERITIES } from './automation.js';
 import { rulesPanel } from './rules.js';
 import { tipsEnabled, setTipsEnabled, resetTips, seenCount, resetOnboarding, TIPS } from '../tips.js';
 
@@ -424,7 +424,8 @@ export async function mount(root, ctx) {
   async function tabAlerts() {
     const s = state.settings || await loadSettings();
     const a = s.alerts; a.smtp = a.smtp || { port: 587, security: 'starttls' };
-    const enabled = toggle({ label: 'Send email alerts', checked: !!a.enabled, onChange: (v) => { a.enabled = v; } });
+    const enabled = toggle({ label: 'Send alerts', checked: !!a.enabled, onChange: (v) => { a.enabled = v; } });
+    a.channels = a.channels || [];
     const recipients = chipInput({ values: a.recipients || [], placeholder: 'Add an email address and press Enter', validate: (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), onChange: (v) => { a.recipients = v; } });
     const notifyRecovery = checkbox({ label: 'Send a recovery email when a check becomes healthy again', checked: !!a.notifyRecovery, onChange: (v) => { a.notifyRecovery = v; } });
     const notifyWarnings = checkbox({ label: 'Also email for warnings (high latency, packet loss, expiring certificates, content changes)', checked: !!a.notifyWarnings, onChange: (v) => { a.notifyWarnings = v; } });
@@ -454,6 +455,7 @@ export async function mount(root, ctx) {
             numField(a, 'certWarnDays', 'Certificate warning', { unitLabel: 'days', min: 1, help: 'Warn when a certificate expires within this many days.' })),
           h('div', { class: 'stack-sm' }, notifyRecovery, notifyWarnings),
         )),
+      alsoNotifyCard(a),
       h('section', { class: 'card' }, h('h2', null, 'Outgoing email (SMTP)'), h('p', { class: 'lead' }, 'Use an app password where your provider offers one. The password is stored locally and never shown again.'),
         h('div', { class: 'form-grid' },
           field({ label: 'SMTP host', input: host }), field({ label: 'Port', input: port }),
@@ -469,6 +471,46 @@ export async function mount(root, ctx) {
           h('p', { class: 'note' }, h('b', null, 'Dependencies: '), 'when a node "depends on" another (say Plex depends on Gateway) and the parent is down, failures on the child are recorded as "affected by Gateway" and no separate email is sent for it.'),
           h('p', { class: 'note' }, h('b', null, 'Cooldown: '), 'after an alert is sent for a check, further alerts for that same check are held back for the cooldown period. A recovery email is still sent as soon as it comes back.'),
           h('p', { class: 'note' }, h('b', null, 'Maintenance and silences: '), 'checks keep running and history is kept, but alerts are suppressed and shown as such in the incident timeline.'))));
+  }
+
+  /* "Also notify": notification channels sent to at exactly the moments an
+   * alert e-mail is, so maintenance, silences, dependencies, acknowledgements
+   * and the cooldown hold them back just the same. Edits change the settings
+   * document in memory; the card's Save button saves it with everything else.
+   */
+  function alsoNotifyCard(a) {
+    const list = h('div', { class: 'alert-channels' });
+    let groups = [];
+    api.get('/api/groups').then((g) => { groups = (g?.groups || []).map((x) => x.name); }).catch(() => {});
+    const render = () => {
+      clear(list);
+      if (!a.channels.length) {
+        list.append(h('p', { class: 'note' }, 'No channels yet. Alerts go by email only.'));
+        return;
+      }
+      a.channels.forEach((ch, i) => {
+        const sev = ALERT_SEVERITIES.find((s) => s.value === (ch.minSeverity || 'warning'));
+        const scope = ch.groups?.length ? `groups: ${ch.groups.join(', ')}` : 'all nodes';
+        list.append(h('div', { class: 'trigger-row' },
+          toggle({ ariaLabel: `${ch.name || 'Channel'} enabled`, checked: !!ch.enabled, onChange: (v) => { ch.enabled = v; } }),
+          h('div', { style: { minWidth: 0 } },
+            h('div', { class: 't-name' }, ch.name || ch.action?.type, actionBadge(ch.action)),
+            h('div', { class: 't-sub' }, `${sev ? sev.label.split(':')[0] : ''} · ${scope} · ${actionSummary(ch.action)}`)),
+          h('div', { class: 'btn-group' },
+            h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => { const next = await openAlertChannelEditor(ch, { groups }); if (next) { a.channels[i] = next; render(); } } }, icon('edit'), 'Edit'),
+            h('button', { class: 'btn btn-sm btn-danger icon-btn', type: 'button', 'aria-label': `Remove ${ch.name || 'channel'}`, onclick: async () => {
+              if (await confirmDialog({ title: `Remove "${ch.name || 'this channel'}"?`, message: 'It stops receiving alerts once you save.', confirmLabel: 'Remove', danger: true })) { a.channels.splice(i, 1); render(); }
+            } }, icon('trash')))));
+      });
+    };
+    render();
+    const add = h('button', { class: 'btn', type: 'button', onclick: async () => { const ch = await openAlertChannelEditor(null, { groups }); if (ch) { a.channels.push(ch); render(); } } }, icon('plus'), 'Add channel');
+    return h('section', { class: 'card' }, h('h2', null, 'Also notify'),
+      h('p', { class: 'lead' }, 'Send the same alerts to Slack, Teams, Discord, Telegram, Matrix, ntfy, Gotify, Pushover, SMS (Twilio), PagerDuty or Opsgenie. A channel gets an alert exactly when the email would go out, so maintenance windows, silences, dependencies and the cooldown apply to it too. Set a channel to "outages only", or to some groups, to route only critical alerts there.'),
+      h('p', { class: 'note' }, 'PagerDuty and Opsgenie incidents are resolved when the check recovers, even if recovery emails are off. Keys and webhook URLs are stored encrypted and never shown again; edit a channel without retyping them to keep the saved ones.'),
+      list,
+      h('div', { class: 'btn-group', style: { marginTop: '8px' } }, add),
+      h('hr', { class: 'divider' }), saveBar());
   }
 
   /* ---------- Automation: endpoints + all triggers ---------- */

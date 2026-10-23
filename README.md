@@ -67,8 +67,11 @@ The agent is unchanged and stays at **gwatch-agent 0.5.0**. Full detail in
   history — rolled up and pruned automatically, so the database grows by roughly one daily
   summary per check per day once the finer data ages out (daily summaries are kept forever
   unless you set a limit).
-- **Automation**: triggers and custom inbound endpoints run webhooks, Slack/Teams/ntfy/
-  Pushover notifications, git commands or scripts when something changes.
+- **Alert channels**: besides email, alerts can also go to Slack, Teams, Discord,
+  Telegram, Matrix, ntfy, Gotify, Pushover, SMS (Twilio), PagerDuty or Opsgenie, per
+  severity and node group, with the same silences, maintenance and dependency rules.
+- **Automation**: triggers and custom inbound endpoints run webhooks, the same
+  notification channels, git commands or scripts when something changes.
 - **Wallboards** for a spare monitor or tablet, with an optional no-sign-in projected view.
   The interface is responsive, so a narrow window or a tablet can read it, but it is built
   for a desk: GWatch is not a phone app and is not designed to run on phone hardware.

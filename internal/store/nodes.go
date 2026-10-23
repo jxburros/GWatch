@@ -1072,6 +1072,21 @@ func (s *Store) sealSettings(st *model.Settings) error {
 		return fmt.Errorf("seal backup password: %w", err)
 	}
 	st.Backups.Password = bp
+	// The alert channels' credentials (webhook URLs, bot tokens, routing
+	// keys) are sealed field by field through the same Action.SecretFields
+	// list triggers and rules use. The slice is copied first: st is a copy
+	// of the caller's settings, but its Channels still share their backing
+	// array with the engine's live settings, which must stay in cleartext.
+	if len(st.Alerts.Channels) > 0 {
+		chs := make([]model.AlertChannel, len(st.Alerts.Channels))
+		copy(chs, st.Alerts.Channels)
+		for i := range chs {
+			if err := chs[i].Action.TransformSecrets(s.sealSecret); err != nil {
+				return fmt.Errorf("seal alert channel %q: %w", chs[i].Name, err)
+			}
+		}
+		st.Alerts.Channels = chs
+	}
 	return nil
 }
 
@@ -1095,6 +1110,13 @@ func (s *Store) openSettings(st *model.Settings) {
 	open(&st.Alerts.SMTP.Password, "smtp password")
 	open(&st.General.AccessPassword, "access password")
 	open(&st.Backups.Password, "backup password")
+	for i := range st.Alerts.Channels {
+		name := st.Alerts.Channels[i].Name
+		_ = st.Alerts.Channels[i].Action.TransformSecrets(func(v string) (string, error) {
+			open(&v, "alert channel "+name)
+			return v, nil
+		})
+	}
 	s.setSecretsErr(firstErr)
 }
 
@@ -1112,7 +1134,17 @@ func (s *Store) migrateSecrets(ctx context.Context) error {
 		return nil
 	}
 	plaintext := func(v string) bool { return v != "" && !secrets.IsSealed(v) }
-	if !plaintext(st.Alerts.SMTP.Password) && !plaintext(st.General.AccessPassword) && !plaintext(st.Backups.Password) {
+	channelPlaintext := false
+	for i := range st.Alerts.Channels {
+		a := st.Alerts.Channels[i].Action
+		_ = a.TransformSecrets(func(v string) (string, error) {
+			if plaintext(v) {
+				channelPlaintext = true
+			}
+			return v, nil
+		})
+	}
+	if !plaintext(st.Alerts.SMTP.Password) && !plaintext(st.General.AccessPassword) && !plaintext(st.Backups.Password) && !channelPlaintext {
 		return nil
 	}
 	if err := s.sealSettings(&st); err != nil {
@@ -1217,6 +1249,9 @@ func (s *Store) LoadSettings(ctx context.Context) (model.Settings, error) {
 	}
 	if st.Alerts.Recipients == nil {
 		st.Alerts.Recipients = []string{}
+	}
+	if st.Alerts.Channels == nil {
+		st.Alerts.Channels = []model.AlertChannel{}
 	}
 	if st.Alerts.SMTP.Security == "" {
 		st.Alerts.SMTP.Security = "starttls"

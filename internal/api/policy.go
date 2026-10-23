@@ -179,6 +179,9 @@ var policies = []routePolicy{
 	{"GET", "/api/settings", levelAdmin, keyDeny},
 	{"PUT", "/api/settings", levelAdmin, keyDeny},
 	{"POST", "/api/settings/test-email", levelAdmin, keyDeny},
+	// Testing an alert channel sends a real message with the stored
+	// credentials, so it is held to the same standing as reading them.
+	{"POST", "/api/settings/test-channel", levelAdmin, keyDeny},
 	// Which database GWatch keeps its data in (database.json). Reading it
 	// names a server; writing it moves the data. An integration key has no
 	// business with either.
