@@ -280,12 +280,12 @@ export async function openDiscovery(ctx, onDone) {
     }
     if (job.state === 'running') {
       updateProgress();
-      replace(body, errorEl, summaryLine(), progressEl);
+      replace(body, errorEl, summaryLine(), pingNote(), progressEl);
       foot.append(cancelBtn);
       return;
     }
     updateProgress();
-    replace(body, errorEl, summaryLine(), resultsTable(), groupField);
+    replace(body, errorEl, summaryLine(), pingNote(), resultsTable(), groupField);
     foot.append(closeBtn, againBtn, addBtn);
     addBtn.disabled = state.adding || !state.selected.size;
   }
@@ -294,6 +294,15 @@ export async function openDiscovery(ctx, onDone) {
   // announces the run's outcome once — when it changes — instead of on every
   // one of the dozens of renders a sweep produces.
   const summaryEl = h('p', { role: 'status' });
+
+  // pingNote explains a run that is not using the built-in ping (#131): it is
+  // pinging through the system command, which is slower, and the server says
+  // why. A run that cannot ping at all has already failed with the reason as
+  // its error, so this is only ever the milder case.
+  function pingNote() {
+    const note = state.job?.pingNote;
+    return note ? h('p', { class: 'note' }, icon('info'), ' ', note) : null;
+  }
 
   function summaryLine() {
     const job = state.job;

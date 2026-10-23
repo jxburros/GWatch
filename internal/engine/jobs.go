@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jxburros/GWatch/internal/checks"
 	"github.com/jxburros/GWatch/internal/model"
 	"github.com/jxburros/GWatch/internal/store"
 )
@@ -389,8 +390,15 @@ func (e *Engine) Health(ctx context.Context) model.Health {
 	if errs == nil {
 		errs = []model.Event{}
 	}
+	// The probe may open two sockets, so it runs before the engine lock is
+	// taken; it is cached for a minute in any case.
+	ping := checks.PingStatusNow()
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	ping.Configured = e.settings.General.PingMethod
+	if ping.Configured == "" {
+		ping.Configured = model.PingMethodAuto
+	}
 	now := time.Now()
 	h := model.Health{
 		Version:          e.opts.Version,
@@ -418,6 +426,7 @@ func (e *Engine) Health(ctx context.Context) model.Health {
 		LastAlertError:   e.lastAlertErr,
 		ListenAddress:    e.opts.ListenAddr,
 		Platform:         runtime.GOOS + "/" + runtime.GOARCH,
+		Ping:             ping,
 	}
 	for id, c := range e.checks {
 		h.ChecksTotal++

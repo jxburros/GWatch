@@ -23,7 +23,7 @@ const (
 	progressEvery = 250 * time.Millisecond // how often progress is reported
 )
 
-// These three are the package's only contact with the network, and they are
+// These four are the package's only contact with the network, and they are
 // variables so the tests can sweep an imaginary house full of devices without
 // sending a packet. Production never reassigns them.
 var (
@@ -32,6 +32,10 @@ var (
 	// answers the check the sweep suggests, which is the only promise the
 	// results list is really making.
 	pingHost = checks.PingHost
+
+	// pingStatus says whether, and how, pingHost can work on this machine;
+	// a run that cannot ping at all fails up front with the reason.
+	pingStatus = checks.PingStatusNow
 
 	// lookupAddr asks for the name behind an address.
 	lookupAddr = func(ctx context.Context, addr string) ([]string, error) {

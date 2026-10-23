@@ -1321,6 +1321,36 @@ type Health struct {
 	LastAlertError       string          `json:"lastAlertError,omitempty"`
 	ListenAddress        string          `json:"listenAddress"`
 	Platform             string          `json:"platform"`
+	Ping                 PingStatus      `json:"ping"`
+}
+
+// Ways the built-in ping can reach the network, as PingStatus.Auto reports
+// what the "auto" ping method will actually use on this machine.
+const (
+	PingViaUnprivileged = "unprivileged" // an unprivileged ICMP datagram socket
+	PingViaRaw          = "raw"          // a raw ICMP socket (root or CAP_NET_RAW)
+	PingViaSystem       = "system"       // the operating system's ping command
+	PingViaNone         = "none"         // nothing works: every ping check fails
+)
+
+// PingStatus is what Monitor Health says about ping: which way of sending
+// one this machine allows, and why the ones before it in the order the
+// built-in ping tries them (unprivileged socket, raw socket, system command)
+// were not available. It exists because "ping failed: no permission" was a
+// dead end — the reason is usually one sysctl or one capability away, and
+// this names it.
+type PingStatus struct {
+	Configured         string     `json:"configured"` // GeneralSettings.PingMethod
+	Auto               string     `json:"auto"`       // a PingVia* value
+	Unprivileged       bool       `json:"unprivileged"`
+	UnprivilegedReason string     `json:"unprivilegedReason,omitempty"`
+	Raw                bool       `json:"raw"`
+	RawReason          string     `json:"rawReason,omitempty"`
+	SystemPing         string     `json:"systemPing,omitempty"` // path of the ping command, if there is one
+	Summary            string     `json:"summary"`              // one sentence, as logged at startup
+	LastFallback       string     `json:"lastFallback,omitempty"`
+	LastFallbackAt     *time.Time `json:"lastFallbackAt,omitempty"`
+	CheckedAt          time.Time  `json:"checkedAt"`
 }
 
 // GapInfo records a detected period where the scheduler did not run

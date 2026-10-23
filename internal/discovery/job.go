@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jxburros/GWatch/internal/model"
 )
 
 // The states a run passes through. A run is only ever in one of them, and
@@ -43,8 +45,13 @@ type Job struct {
 	Responders int         `json:"responders"`
 	Results    []Responder `json:"results"`
 	Error      string      `json:"error,omitempty"`
-	StartedAt  time.Time   `json:"startedAt"`
-	FinishedAt *time.Time  `json:"finishedAt,omitempty"`
+	// PingNote says why this run is not using the built-in ping, when it is
+	// not: a sweep through the system ping command is far slower, and one
+	// that finds nothing because nothing can be pinged should say so rather
+	// than suggest an empty network.
+	PingNote   string     `json:"pingNote,omitempty"`
+	StartedAt  time.Time  `json:"startedAt"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
 }
 
 // Done reports whether the run has stopped, however it stopped.
@@ -83,6 +90,11 @@ type Registry struct {
 	// routes above it — over an imaginary network. The monitoring engine takes
 	// its check runner the same way; see engine.Options.Run.
 	Sweep SweepFunc
+
+	// PingStatus says how this machine can ping (checks.PingStatusNow). Nil
+	// means ask the checks package — except when Sweep has been replaced, as
+	// a test's imaginary network needs no permission to be pinged.
+	PingStatus func() model.PingStatus
 
 	mu      sync.Mutex
 	job     Job
@@ -127,8 +139,30 @@ func (r *Registry) Start(req Request, notify func(Job)) (Job, error) {
 		Results:   []Responder{},
 		StartedAt: time.Now(),
 	}
+	scan, status := r.Sweep, r.PingStatus
+	if status == nil && scan == nil {
+		status = pingStatus
+	}
+	if status != nil {
+		switch ps := status(); ps.Auto {
+		case model.PingViaNone:
+			// Every address would fail the same way; a run that reports
+			// "nothing answered" after a minute would be a lie about the
+			// network. Fail now, with the reason.
+			now := time.Now()
+			job.State, job.Error, job.FinishedAt = StateFailed, "this machine cannot send a ping — "+ps.Summary, &now
+			r.job = job
+			r.mu.Unlock()
+			cancel()
+			if notify != nil {
+				go notify(job.clone())
+			}
+			return job.clone(), nil
+		case model.PingViaSystem:
+			job.PingNote = "Pinging with the system ping command, which is slower, because " + ps.Summary + "."
+		}
+	}
 	r.job, r.cancel, r.running = job, cancel, true
-	scan := r.Sweep
 	r.mu.Unlock()
 	if scan == nil {
 		scan = sweep

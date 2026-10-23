@@ -669,6 +669,28 @@ export async function mount(root, ctx) {
       h('section', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', null, 'Current storage'), runBtn), statusBox, h('hr', { class: 'divider' }), pathsBox));
   }
 
+  // pingCard says which way ping works on the monitoring machine and, when it
+  // is not the first choice, why (#131): the unprivileged socket the kernel
+  // refused, the raw socket that needs CAP_NET_RAW, the last time a check fell
+  // back to the system ping command. The reason is the useful part, so it is
+  // the card's sub-line rather than a tooltip.
+  function pingCard(p) {
+    const via = {
+      unprivileged: ['Built-in', true],
+      raw: ['Built-in (raw socket)', true],
+      system: ['System ping command', false],
+      none: ['Not available', false],
+    }[p.auto] || ['Unknown', false];
+    const value = h('span', { class: `status-glyph ${via[1] ? 'text-up' : (p.auto === 'none' ? 'text-down' : 'text-degraded')}` }, icon(via[1] ? 'check' : 'x'), via[0]);
+    const reasons = p.auto === 'unprivileged' ? [] : [p.unprivilegedReason, p.auto === 'raw' ? '' : p.rawReason].filter(Boolean);
+    const sub = h('span', null,
+      `Method setting: ${p.configured || 'auto'}`,
+      reasons.length ? h('span', null, h('br'), reasons.join('; ')) : null,
+      p.lastFallback ? h('span', null, h('br'), `Last fell back to the ping command ${relTime(p.lastFallbackAt)}: ${p.lastFallback}`) : null,
+      p.auto === 'unprivileged' || p.auto === 'raw' ? null : h('span', null, h('br'), h('a', { href: 'https://github.com/jxburros/GWatch/blob/main/docs/INSTALL-LINUX.md#network-and-ping', target: '_blank', rel: 'noopener' }, 'How to allow ping')));
+    return hcard(value, 'Ping', sub);
+  }
+
   function hcard(value, label, sub) { return h('div', { class: 'health-card' }, h('div', { class: 'hv' }, value), h('div', { class: 'hl' }, label), sub ? h('div', { class: 'hs' }, sub) : null); }
 
   // dataPathsBlock shows where GWatch's files actually live, in a read-only
@@ -1131,7 +1153,8 @@ export async function mount(root, ctx) {
             hcard(hl.lastCheckAt ? relTime(hl.lastCheckAt) : 'never', 'Last check completed', hl.lastSuccessAt ? `last success ${relTime(hl.lastSuccessAt)}` : ''),
             hcard(hl.nextCheckAt ? relTime(hl.nextCheckAt) : '—', 'Next scheduled check', hl.nextCheckAt ? dateTime(hl.nextCheckAt) : ''),
             hcard(gap ? duration(gap.seconds) : 'None detected', 'Last sleep / offline gap', gap ? `${dateTime(gap.from, { seconds: false })} → ${timeShort(gap.to)}` : 'The monitoring computer has not been asleep or offline recently.'),
-            hcard(h('span', { class: 'mono', style: { fontSize: '14px' } }, hl.listenAddress || '—'), 'Listening on', `${hl.platform || ''} · v${hl.version || '?'}`))),
+            hcard(h('span', { class: 'mono', style: { fontSize: '14px' } }, hl.listenAddress || '—'), 'Listening on', `${hl.platform || ''} · v${hl.version || '?'}`),
+            hl.ping ? pingCard(hl.ping) : null)),
         h('section', { class: 'card' }, h('h2', null, 'Storage and retention'),
           h('div', { class: 'health-cards', style: { marginTop: '10px' } },
             hcard(bytes(hl.databaseBytes), 'Database size', h('span', { class: 'mono' }, hl.databasePath || '')),

@@ -44,6 +44,17 @@ test('settings General has a Ping card with the method choice', async (t) => {
   assert.match(panel.textContent, /falls back to the system ping command/);
 });
 
+// #131: Monitor health says which way ping works and why not the first choice.
+test('settings Monitor health shows the ping method and the reason it is not the first choice', async (t) => {
+  const { root } = await mountView(settingsView, { params: { tab: 'health' } }, t);
+  await waitFor(() => /Built-in \(raw socket\)/.test(root.textContent));
+  const card = [...root.querySelectorAll('.health-card')].find((c) => c.querySelector('.hl')?.textContent === 'Ping');
+  assert.ok(card, 'a Ping health card');
+  assert.match(card.textContent, /Method setting: auto/);
+  assert.match(card.textContent, /windows has no unprivileged ICMP socket/);
+  assert.doesNotMatch(card.textContent, /How to allow ping/, 'no help link when the built-in ping works');
+});
+
 // #56: the AI & MCP tab carries the set-up guide (a read-only key first), the
 // skill download, and — because web/mock.js's fixture has an older download
 // behind it — the quiet "updated since" note inside the skill card only.
