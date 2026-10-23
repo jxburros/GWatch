@@ -454,7 +454,7 @@ export function promptDialog({ title, message, label = 'Name', value = '', place
     let result = null;
     const input = h('input', { type, value, placeholder, id: 'prompt-input', autocomplete: type === 'password' ? 'current-password' : 'off' });
     const form = h('form', { onsubmit: (e) => { e.preventDefault(); if (required && !input.value.trim()) { input.focus(); return; } result = input.value; m.close(); } },
-      message ? h('p', { style: { marginBottom: '14px' } }, message) : null,
+      message ? h('p', { class: 'u-mb-14' }, message) : null,
       field({ label, input }),
     );
     const m = openModal({
@@ -732,7 +732,7 @@ export function skeleton({ lines = 3, height } = {}) {
 /** @param {string} kind @param {any} text @param {{ icon?: string, actions?: any }} [opts] */
 export function banner(kind, text, { icon: ic, actions } = {}) {
   const icons = { warn: 'alert', down: 'x', maint: 'wrench', info: 'info', up: 'check' };
-  const el = h('div', { class: `banner banner-${kind}` }, icon(ic || icons[kind] || 'info'), h('div', { style: { flex: '1' } }, text));
+  const el = h('div', { class: `banner banner-${kind}` }, icon(ic || icons[kind] || 'info'), h('div', { class: 'u-flex-1' }, text));
   if (actions) el.append(h('div', { class: 'btn-group' }, actions));
   return el;
 }
@@ -816,7 +816,7 @@ export function eventRow(ev, { showNode = true, now = Date.now() } = {}) {
   const m = eventMeta(ev.type);
   const link = ev.nodeId ? `#/nodes/${ev.nodeId}` : null;
   const title = h('div', { class: 'ev-title' });
-  if (showNode && ev.nodeName) title.append(link ? h('a', { href: link, style: { color: 'inherit' } }, ev.nodeName) : ev.nodeName, ev.checkName ? ` › ${ev.checkName}` : '', ' — ');
+  if (showNode && ev.nodeName) title.append(link ? h('a', { class: 'u-color-inherit', href: link }, ev.nodeName) : ev.nodeName, ev.checkName ? ` › ${ev.checkName}` : '', ' — ');
   title.append(ev.title || m.label);
   // An event about one of a check's metrics says which one, so a disk filling
   // up and the memory on the same check read as the two incidents they are.
@@ -858,7 +858,7 @@ export function checkMultiSelect(nodes, selected = [], { filterType, onChange } 
   for (const g of groups) {
     for (const c of g.checks) {
       const cb = checkbox({ label: `${g.node.name} › ${c.name}`, checked: sel.has(Number(c.id)), onChange: (v) => { if (v) sel.add(Number(c.id)); else sel.delete(Number(c.id)); onChange && onChange([...sel]); } });
-      cb.append(h('span', { class: 'tag', style: { marginLeft: 'auto' } }, c.type));
+      cb.append(h('span', { class: 'tag u-ml-auto' }, c.type));
       wrap.append(cb);
     }
   }

@@ -15,7 +15,7 @@ export async function mount(root, ctx) {
   const state = { node: null, events: [], triggers: [], nodes: [], range: '24h', charts: [], expanded: new Set(), results: new Map(), destroyed: false, history: null, hardware: new Map(), latChart: null, lossChart: null, uptimeEl: null, historyShape: '', metricCharts: new Map() };
 
   const headEl = h('div');
-  const bannersEl = h('div', { class: 'stack-sm', style: { marginBottom: '14px' } });
+  const bannersEl = h('div', { class: 'stack-sm u-mb-14' });
   const checksEl = h('div', { class: 'stack-joined' });
   // A machine is a node, so its readings belong on the node rather than on a
   // page of their own. One panel per hardware check.
@@ -192,7 +192,7 @@ export async function mount(root, ctx) {
     card.append(stats);
     if (expanded) {
       card.append(resultInspector(last, c));
-      const recent = h('div', { style: { marginTop: '16px' } }, h('div', { class: 'section-title' }, 'Recent results'), skeleton({ lines: 3 }));
+      const recent = h('div', { class: 'u-mt-16' }, h('div', { class: 'section-title' }, 'Recent results'), skeleton({ lines: 3 }));
       card.append(recent);
       loadResults(c).then((rows) => { if (!state.destroyed) replace(recent, h('div', { class: 'section-title' }, 'Recent results'), resultsTable(rows, c)); }).catch((e) => replace(recent, h('div', { class: 'note' }, e.message)));
     }
@@ -485,7 +485,7 @@ export async function mount(root, ctx) {
       const csv = g.metrics.length === 1
         ? h('a', { class: 'btn btn-sm', href: `/api/export/history.csv${qs({ checkId: c.id, range: state.range, metric: g.metrics[0].name })}`, download: `${slug(g.metrics[0].name)}-${state.range}.csv` }, icon('download'), 'CSV')
         : (() => { const btn = h('button', { class: 'btn btn-sm', type: 'button', onclick: () => showMenu(btn, g.metrics.map((m) => ({ label: `CSV — ${m.label || m.name}`, icon: 'download', href: `/api/export/history.csv${qs({ checkId: c.id, range: state.range, metric: m.name })}`, download: `${slug(m.name)}-${state.range}.csv` }))) }, icon('download'), 'CSV'); return btn; })();
-      section.append(h('div', { 'data-group': g.id }, h('div', { class: 'row-between', style: { marginBottom: '4px' } },
+      section.append(h('div', { 'data-group': g.id }, h('div', { class: 'row-between u-mb-4' },
         h('div', { class: 'small muted' }, g.title, g.unit ? ` (${g.unit})` : ''),
         csv), host));
       drew = true;
@@ -531,7 +531,7 @@ export async function mount(root, ctx) {
   function chartSection(title, host, onExportPng, ids) {
     const csvBtn = h('button', { class: 'btn btn-sm', type: 'button', onclick: () => showMenu(csvBtn, ids.map((cid) => { const c = state.node.checks.find((x) => x.id === cid); return { label: `CSV — ${c ? c.name : cid}`, icon: 'download', href: `/api/export/history.csv${qs({ checkId: cid, range: state.range })}`, download: `history-${cid}-${state.range}.csv` }; })) }, icon('download'), 'Export CSV');
     return h('div', null,
-      h('div', { class: 'row-between', style: { marginBottom: '8px' } }, h('div', { class: 'section-title', style: { marginBottom: 0 } }, title), h('div', { class: 'btn-group' }, h('button', { class: 'btn btn-sm', type: 'button', onclick: onExportPng }, icon('image'), 'Export PNG'), csvBtn)),
+      h('div', { class: 'row-between u-mb-8' }, h('div', { class: 'section-title u-mb-0' }, title), h('div', { class: 'btn-group' }, h('button', { class: 'btn btn-sm', type: 'button', onclick: onExportPng }, icon('image'), 'Export PNG'), csvBtn)),
       host);
   }
   function clearCharts() {

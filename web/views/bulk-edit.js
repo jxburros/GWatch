@@ -281,7 +281,7 @@ export async function mount(root, ctx) {
             if (sel.value === 'custom') { customIn.hidden = false; customIn.focus(); }
             else { customIn.hidden = true; row.value = Number(sel.value); renderSummary(); }
           } });
-          input = h('div', { class: 'stack-sm', style: { gap: '6px' } }, sel, customIn);
+          input = h('div', { class: 'stack-sm u-gap-6' }, sel, customIn);
         } else {
           input = selectInput({ options: opts, value: row.value, onchange: () => { row.value = input.value; renderSummary(); } });
         }

@@ -116,7 +116,7 @@ export async function mount(root, ctx) {
           h('p', { class: 'lead' }, s.lead),
           s.body(),
           s.extra ? s.extra() : null,
-          s.actions ? h('div', { class: 'btn-group', style: { marginTop: '4px' } }, s.actions()) : null)),
+          s.actions ? h('div', { class: 'btn-group u-mt-4' }, s.actions()) : null)),
       h('div', { class: 'ob-foot' },
         h('button', { class: 'btn btn-ghost', type: 'button', onclick: () => leave() }, last ? 'Close' : 'Skip the tour'),
         h('div', { class: 'btn-group' },

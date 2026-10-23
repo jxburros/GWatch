@@ -237,7 +237,7 @@ export async function mount(root, ctx) {
     const statusSig = `${status}|${n.inMaintenance ? 1 : 0}`;
     if (sig.status !== statusSig) {
       sig.status = statusSig;
-      replace(p.statusCell, statusWord(status), n.inMaintenance && status !== 'maintenance' ? h('div', { class: 'tiny text-maintenance', style: { marginTop: '4px' } }, 'in maintenance') : null);
+      replace(p.statusCell, statusWord(status), n.inMaintenance && status !== 'maintenance' ? h('div', { class: 'tiny text-maintenance u-mt-4' }, 'in maintenance') : null);
     }
 
     const href = `#/nodes/${n.id}`;

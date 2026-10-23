@@ -48,7 +48,7 @@ export async function mount(root, ctx) {
     const applyBtn = h('button', { class: 'btn btn-primary', type: 'button', onclick: () => reload() }, icon('filter'), 'Apply');
     const exportBtn = h('a', { class: 'btn', download: 'gwatch-events.csv', href: '#' }, icon('download'), 'Export CSV');
     const listEl = h('div');
-    const foot = h('div', { class: 'row-between', style: { marginTop: '10px' } });
+    const foot = h('div', { class: 'row-between u-mt-10' });
     const countEl = h('span', { class: 'note' });
     const params = () => ({ q: q.value.trim(), type: type.value, nodeId: node.value, since: fromLocalInput(since.value), until: fromLocalInput(until.value) });
     const syncExport = () => { exportBtn.href = `/api/export/events.csv${qs({ ...params(), limit: 5000 })}`; };
@@ -81,7 +81,7 @@ export async function mount(root, ctx) {
         const m = eventMeta(ev.type);
         tb.append(h('tr', null,
           h('td', { class: 'mono nowrap', title: dateTime(ev.ts) }, dateTime(ev.ts, { seconds: true }), h('div', { class: 'dim tiny' }, relTime(ev.ts))),
-          h('td', null, h('div', { class: 'row', style: { gap: '6px', flexWrap: 'nowrap' } }, eventIcon(ev.type), h('span', { class: 'ev-type' }, m.label))),
+          h('td', null, h('div', { class: 'row u-gap-6 u-nowrap-flex' }, eventIcon(ev.type), h('span', { class: 'ev-type' }, m.label))),
           h('td', null, ev.nodeName ? h('a', { href: ev.nodeId ? `#/nodes/${ev.nodeId}` : null }, ev.nodeName, ev.checkName ? ` › ${ev.checkName}` : '') : h('span', { class: 'dim' }, '—')),
           h('td', null, h('div', { class: 'strong' }, ev.title || m.label), ev.detail ? h('div', { class: 'ev-detail' }, ev.detail) : null),
           // Empty for anything the monitoring engine did on its own.
@@ -147,7 +147,7 @@ export async function mount(root, ctx) {
     state.refresh = load;
     return h('section', { class: 'card' },
       h('div', { class: 'log-toolbar' }, h('div', { class: 'search' }, search), level, limit, follow, refreshBtn, dl),
-      box, h('div', { style: { marginTop: '8px' } }, fileEl));
+      box, h('div', { class: 'u-mt-8' }, fileEl));
   }
 
   /* ---------- Exports ---------- */

@@ -194,7 +194,7 @@ export async function mount(root, ctx) {
         field({ label: 'Theme', input: theme, help: themeNote }),
         field({ label: 'Type size', input: scale, help: 'For a screen further away than the one you laid it out on.' }),
         field({ label: 'Footer strip', input: chrome, help: 'The service-health line along the bottom.' })),
-      h('div', { class: 'card-actions admin-only', style: { marginTop: '12px' } },
+      h('div', { class: 'card-actions admin-only u-mt-12' },
         h('button', { class: 'btn btn-primary', type: 'button', onclick: () => {
           const latest = state.boards.find((b) => b.id === board.id);
           if (!latest) return;

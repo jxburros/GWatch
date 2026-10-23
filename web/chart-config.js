@@ -471,7 +471,7 @@ export function chartConfigEditor(cfg, { nodes = [], onChange, compact = false, 
       field({ label: 'Y axis maximum', input: yMax }),
       field({ label: 'Threshold line', input: threshold, help: 'Draws a dashed warning line at this value on the left axis.' }),
     ),
-    h('div', { class: 'stack-sm', style: { gap: '6px' } }, smooth, points, shade, legend, grid, field({ label: 'Charts', input: split }), uptime),
+    h('div', { class: 'stack-sm u-gap-6' }, smooth, points, shade, legend, grid, field({ label: 'Charts', input: split }), uptime),
   );
   Object.defineProperty(wrap, 'value', { get: () => normalizeChartConfig({
     series: picker.value, metric: autoMetric.value, range: range.value, style: style.value, lineWidth: width.value, height: height.value,
@@ -749,7 +749,7 @@ export function renderConfiguredChart(host, cfg, { title = 'Chart', fetch: fetch
       let chart = reuse ? charts[gi] : null;
       if (!chart) {
         const hostEl = h('div', { class: 'chart-host', style: fill ? { flex: '1', minHeight: '0', display: 'flex', flexDirection: 'column' } : { marginBottom: plan.length > 1 ? '12px' : '0' } });
-        if (group.check && (gi === 0 || plan[gi - 1].heading !== group.heading)) hostEl.append(h('div', { class: 'section-title', style: { marginBottom: '4px' } }, group.heading));
+        if (group.check && (gi === 0 || plan[gi - 1].heading !== group.heading)) hostEl.append(h('div', { class: 'section-title u-mb-4' }, group.heading));
         body.append(hostEl);
         // A legend whenever a line needs naming: more than one on the chart, or
         // one of several charts that the units split apart. A chart of its own
@@ -761,7 +761,7 @@ export function renderConfiguredChart(host, cfg, { title = 'Chart', fetch: fetch
       chart.setData({ series: group.series.map(({ entry, ...s }) => s), from, to, bucketSeconds: bucket });
     });
     if (c.uptime) {
-      const up = h('div', { style: { marginTop: '8px' } });
+      const up = h('div', { class: 'u-mt-8' });
       const seen = new Set();
       for (const { hs } of entries) {
         if (seen.has(Number(hs.checkId))) continue;

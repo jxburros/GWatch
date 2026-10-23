@@ -242,7 +242,7 @@ export function resultInspector(result, check, { compact = false } = {}) {
     for (let i = 0; i < lost; i++) chips.append(h('span', { class: 'lost' }, 'lost'));
     right.push(h('div', null, h('div', { class: 'section-title' }, 'Packets'),
       kv([['Sent / received', `${d.packetsSent ?? 0} / ${d.packetsReceived ?? 0}`, { mono: true }]]),
-      d.rtts?.length || lost ? h('div', { style: { marginTop: '10px' } }, chips) : null));
+      d.rtts?.length || lost ? h('div', { class: 'u-mt-10' }, chips) : null));
   }
 
   // DNS

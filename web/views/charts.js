@@ -70,7 +70,7 @@ export async function mount(root, ctx) {
     if (!state.saved.length) list.append(h('div', { class: 'note', style: { padding: '8px' } }, 'No saved charts yet. Configure one below and press Save.'));
     for (const c of state.saved) {
       list.append(h('button', { type: 'button', class: `saved-item ${c.id === state.currentId ? 'active' : ''}`, onclick: () => ctx.navigate(`/charts/${c.id}`) },
-        icon('chart'), h('span', { style: { minWidth: 0, flex: 1 } }, h('div', { class: 'truncate' }, c.name), h('div', { class: 'sub truncate' }, describeChartConfig(parseCfg(c.config))))));
+        icon('chart'), h('span', { class: 'u-min-w-0 u-flex-1' }, h('div', { class: 'truncate' }, c.name), h('div', { class: 'sub truncate' }, describeChartConfig(parseCfg(c.config))))));
     }
     side.append(h('section', { class: 'card saved-card' }, h('div', { class: 'card-title' }, 'Saved charts'), list));
     state.editor = chartConfigEditor(state.cfg, { nodes: state.nodes, onChange: onEdit });

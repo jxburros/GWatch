@@ -98,7 +98,7 @@ function tourCard(ctx) {
     h('div', { class: 'stack-sm' },
       tipsToggle,
       seen,
-      h('div', { class: 'btn-group', style: { marginTop: '6px' } },
+      h('div', { class: 'btn-group u-mt-6' },
         h('button', { class: 'btn', type: 'button', onclick: () => { resetOnboarding(); ctx.navigate('/onboarding'); } }, icon('play'), 'Restart onboarding'),
         h('button', { class: 'btn', type: 'button', onclick: () => { resetTips(); refreshSeen(); toast('Tips reset — you will see them again', { kind: 'success' }); } }, icon('refresh'), 'Reset tips'),
       ),

@@ -2101,3 +2101,30 @@ body.wallboard-mode .wall { height: calc(100dvh - var(--mock-banner-height, 0px)
 .release-main .muted a { text-decoration: underline; text-underline-offset: 0.15em; }
 
 .wall-group .g-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- Utilities (#118) ----------
+   The small layout nudges views used to write as inline style objects
+   (style: { marginTop: '12px' }). Each is !important so it wins exactly as
+   the inline style did, whatever the element's other classes say, and sizes
+   stay in px because the inline values were. Prefer a component class for
+   anything bigger than a nudge. */
+.u-mt-4 { margin-top: 4px !important; }
+.u-mt-6 { margin-top: 6px !important; }
+.u-mt-8 { margin-top: 8px !important; }
+.u-mt-10 { margin-top: 10px !important; }
+.u-mt-12 { margin-top: 12px !important; }
+.u-mt-14 { margin-top: 14px !important; }
+.u-mt-16 { margin-top: 16px !important; }
+.u-mb-0 { margin-bottom: 0 !important; }
+.u-mb-4 { margin-bottom: 4px !important; }
+.u-mb-8 { margin-bottom: 8px !important; }
+.u-mb-14 { margin-bottom: 14px !important; }
+.u-ml-auto { margin-left: auto !important; }
+.u-pt-6 { padding-top: 6px !important; }
+.u-pt-8 { padding-top: 8px !important; }
+.u-gap-6 { gap: 6px !important; }
+.u-nowrap-flex { flex-wrap: nowrap !important; }
+.u-flex-1 { flex: 1 !important; }
+.u-min-w-0 { min-width: 0 !important; }
+.u-fs-13 { font-size: 13px !important; }
+.u-color-inherit { color: inherit !important; }

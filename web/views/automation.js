@@ -90,7 +90,7 @@ export function actionSummary(a, nodes = []) {
 function placeholderHelp(extra = []) {
   const list = h('div', { class: 'placeholder-list' });
   for (const p of [...PLACEHOLDERS, ...extra]) list.append(h('code', { title: 'Click to copy', onclick: () => { navigator.clipboard?.writeText(`{{${p}}}`); toast(`Copied {{${p}}}`, { kind: 'info', timeout: 1500 }); } }, `{{${p}}}`));
-  return h('details', { class: 'collapsible' }, h('summary', null, icon('chevronRight'), 'Placeholders you can use'), h('div', { class: 'stack-sm', style: { paddingTop: '6px' } }, h('p', { class: 'note' }, 'Placeholders are replaced when the action runs. Scripts also receive them as environment variables (GWATCH_NODE_NAME, GWATCH_STATUS …) and the request body on stdin for endpoints.'),
+  return h('details', { class: 'collapsible' }, h('summary', null, icon('chevronRight'), 'Placeholders you can use'), h('div', { class: 'stack-sm u-pt-6' }, h('p', { class: 'note' }, 'Placeholders are replaced when the action runs. Scripts also receive them as environment variables (GWATCH_NODE_NAME, GWATCH_STATUS …) and the request body on stdin for endpoints.'),
     h('p', { class: 'note' }, 'Inside script code a placeholder does not become raw text: it becomes a safe reference to its value — ', h('code', null, '"${GWATCH_MESSAGE}"'), ' in sh/bash, ', h('code', null, '${env:GWATCH_MESSAGE}'), ' in PowerShell, a string literal in Python and Node. Values can contain anything the sender chose, so they are never allowed to be read as code. The GWATCH_* environment variables are always available and are the clearest thing to use.'),
     list));
 }
@@ -422,7 +422,7 @@ export function openTriggerEditor(existing, { node, nodes = [] }) {
     // "disk:/srv", an SNMP check's OID name — against a number of its own.
     const metricKey = textInput({ value: t.metric || '', placeholder: 'e.g. cpu, disk:/srv, net:eth0.rx', 'aria-label': 'Metric key' });
     const metricOver = numberInput({ value: t.metricOver || '', step: 'any', placeholder: 'value', 'aria-label': 'Metric threshold' });
-    const metricField = field({ label: 'Metric above', input: h('div', { class: 'row', style: { gap: '6px' } }, metricKey, metricOver), help: 'The key as it appears in the check’s last result (Inspect last result › Metrics).' });
+    const metricField = field({ label: 'Metric above', input: h('div', { class: 'row u-gap-6' }, metricKey, metricOver), help: 'The key as it appears in the check’s last result (Inspect last result › Metrics).' });
     const syncLatency = () => {
       latencyField.hidden = !conds.querySelector('input[value="latency_over"]:checked');
       metricField.hidden = !conds.querySelector('input[value="metric_over"]:checked');
@@ -468,7 +468,7 @@ export function triggerRow(t, { node, nodes = [], onChange } = {}) {
   const last = t.lastRunAt ? h('span', { class: t.lastStatus === 'failed' ? 'text-down' : 'text-up' }, `${t.lastStatus === 'failed' ? 'failed' : 'ran'} `, relTimeEl(t.lastRunAt), ` (${t.runCount} run${t.runCount === 1 ? '' : 's'})`) : h('span', { class: 'dim' }, 'never run');
   return h('div', { class: 'trigger-row' },
     h('div', { class: 'admin-only' }, toggle({ ariaLabel: `${t.name} enabled`, checked: t.enabled !== false, onChange: async (v) => { try { await api.put(`/api/triggers/${t.id}`, { ...t, enabled: v }); onChange && onChange(); } catch (e) { toast(e.message, { kind: 'error' }); onChange && onChange(); } } })),
-    h('div', { style: { minWidth: 0 } },
+    h('div', { class: 'u-min-w-0' },
       h('div', { class: 't-name' }, t.name, actionBadge(t.action), t.enabled === false ? h('span', { class: 'tag' }, 'disabled') : null),
       h('div', { class: 't-sub' }, `on: ${condLabels.join(', ')}${checkName ? ` · only ${checkName}` : ''}${t.cooldownMinutes ? ` · cooldown ${t.cooldownMinutes} min` : ''} · ${actionSummary(t.action, nodes)}`),
       h('div', { class: 't-sub' }, last),
@@ -554,7 +554,7 @@ export function endpointRow(e, { nodes = [], onChange } = {}) {
   } }, icon('play'), 'Run');
   const last = e.lastCalledAt ? h('span', { class: e.lastStatus === 'failed' ? 'text-down' : 'text-up' }, `${e.lastStatus === 'failed' ? 'failed' : 'ok'} · called `, relTimeEl(e.lastCalledAt), ` (${e.callCount} call${e.callCount === 1 ? '' : 's'})`) : h('span', { class: 'dim' }, 'never called');
   return h('div', { class: 'endpoint-row' },
-    h('div', { style: { minWidth: 0 } },
+    h('div', { class: 'u-min-w-0' },
       h('div', { class: 't-name', style: { fontWeight: 650, display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } }, e.name, actionBadge(e.action), h('span', { class: 'tag' }, e.method || 'ANY'), e.token ? h('span', { class: 'tag', title: 'Token required' }, icon('lock'), ' token') : h('span', { class: 'tag', style: { color: 'var(--down)', borderColor: 'var(--down)' }, title: 'Anyone who can reach this port can call this URL' }, icon('alert'), ' no token'), e.enabled === false ? h('span', { class: 'tag' }, 'disabled') : null),
       h('div', { class: 'e-url' }, url, ' ', h('button', { class: 'btn btn-ghost btn-sm icon-btn', type: 'button', title: 'Copy URL', 'aria-label': 'Copy URL', onclick: () => { navigator.clipboard?.writeText(e.token ? `${url}?token=${e.token}` : url); toast('URL copied', { kind: 'info', timeout: 1500 }); } }, icon('copy'))),
       h('div', { class: 't-sub' }, `${actionSummary(e.action, nodes)}${e.description ? ' · ' + e.description : ''}`),

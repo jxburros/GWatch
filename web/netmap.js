@@ -1015,7 +1015,7 @@ export function mapConfigEditor(cfg, { groups = null, onChange } = {}) {
       h('legend', null, 'Line style'),
       lines.el,
       h('div', { class: 'row-between' }, h('span', { class: 'help' }, 'A link can have its own colour, thickness and style: choose a node on the map.'), resetLines)),
-    h('div', { class: 'stack-sm', style: { gap: '6px' } }, onlyLinked, colorEdges, showLegend));
+    h('div', { class: 'stack-sm u-gap-6' }, onlyLinked, colorEdges, showLegend));
   Object.defineProperty(wrap, 'value', { get: () => normalizeMapConfig({
     orientation: orientation.value, labels: labels.value, size: size.value, edges: edges.value, group: group.value, tag: tag.value,
     onlyLinked: onlyLinked.input.checked, colorEdges: colorEdges.input.checked, showLegend: showLegend.input.checked,
