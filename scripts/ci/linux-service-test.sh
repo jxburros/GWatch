@@ -143,7 +143,7 @@ check_gone() {
 	if systemctl cat "$unit" >/dev/null 2>&1; then fail "$unit outlived the uninstall"; fi
 	if systemctl is-active --quiet "$unit"; then fail "$unit is still running"; fi
 	for path in /etc/systemd/system/gwatch.service /usr/lib/systemd/system/gwatch.service /lib/systemd/system/gwatch.service \
-		/etc/systemd/system/multi-user.target.wants/gwatch.service "$datadir" /etc/gwatch /usr/local/libexec/gwatch "$@"; do
+		/etc/systemd/system/multi-user.target.wants/gwatch.service "$datadir" /etc/gwatch /usr/local/libexec/gwatch /usr/local/bin/gwatch "$@"; do
 		if sudo test -e "$path"; then fail "$path is still there"; fi
 	done
 	if getent passwd gwatch >/dev/null; then fail "the gwatch user is still there"; fi
