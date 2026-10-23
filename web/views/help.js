@@ -144,6 +144,7 @@ function docsCard() {
       link(`${DOCS_URL}/DATABASE.md`, 'Database', 'SQLite, or your own PostgreSQL or MySQL/MariaDB server, and moving between them'),
       link(`${DOCS_URL}/DOCKER.md`, 'Running in Docker', 'The container image, its volume and its limits'),
       link(`${DOCS_URL}/SNMP.md`, 'SNMP checks', 'Enabling SNMP, choosing OIDs, traffic in bits per second'),
+      link(`${DOCS_URL}/MATTER.md`, 'Matter devices', 'python-matter-server, commissioning, the readings and their thresholds'),
       link(`${DOCS_URL}/REMOTE-ACCESS.md`, 'Remote access', 'Reaching GWatch from outside, safely'),
       link(`${DOCS_URL}/RESTORE.md`, 'Restore on a new machine', 'Backup, install, restore'),
       link(`${DOCS_URL}/RECIPES.md`, 'Trigger & endpoint recipes', 'Home Assistant, Discord, ntfy, Docker, git'),

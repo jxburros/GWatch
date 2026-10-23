@@ -166,6 +166,11 @@ var policies = []routePolicy{
 	// administrator in front of the machine rather than to any integration,
 	// however wide its key.
 	{"POST", "/api/snmp/walk", levelAdmin, keyDeny},
+	// Listing a Matter server's devices is the same kind of probe as an SNMP
+	// walk. Commissioning goes further — it adds a device to a controller's
+	// fabric — so it is the administrator's decision twice over.
+	{"POST", "/api/matter/nodes", levelAdmin, keyDeny},
+	{"POST", "/api/matter/commission", levelAdmin, keyDeny},
 	{"GET", "/api/network", levelAdmin, keyDeny},
 	// Discovery pings a few thousand addresses and then creates monitors from
 	// what answered. Both halves are an administrator's decision, and reading
