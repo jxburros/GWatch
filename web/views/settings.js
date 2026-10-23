@@ -1153,7 +1153,7 @@ export async function mount(root, ctx) {
       const [users, keys] = await Promise.all([api.get('/api/users'), api.get('/api/apikeys')]);
       const s = state.settings || await loadSettings();
       const admins = users.filter((u) => u.role === 'admin').length;
-      replace(wrap, usersCard(users, admins, render), localLoginCard(s, admins), apiKeysCard(keys, render), scopesCard());
+      replace(wrap, usersCard(users, admins, render), localLoginCard(s, admins), passwordHashingCard(s), apiKeysCard(keys, render), scopesCard());
     };
     await render();
     state.panelRefresh = render;
@@ -1261,6 +1261,33 @@ export async function mount(root, ctx) {
       admins === 0
         ? h('p', { class: 'note' }, 'Create an administrator account first — otherwise this would lock you out of your own monitor.')
         : h('p', { class: 'note' }, 'Keep a password manager entry for at least one administrator. If every password is lost, the way back in is to restore a backup taken before this was turned on.'));
+  }
+
+  // How account passwords and backup keys are derived (#49). Argon2id is the
+  // default and the recommendation; PBKDF2 is there for owners who would
+  // rather GWatch depended on the Go standard library alone. Changing it never
+  // locks anybody out: existing hashes keep verifying, and each account moves
+  // to the selected algorithm the next time it signs in.
+  function passwordHashingCard(s) {
+    const g = s.general;
+    const sel = selectInput({
+      options: [
+        { value: 'argon2id', label: 'Argon2id (recommended)' },
+        { value: 'pbkdf2-sha256', label: 'PBKDF2 (standard library only)' },
+      ],
+      value: g.passwordHashing || 'argon2id',
+      disabled: !isAdmin,
+      onchange: async () => {
+        g.passwordHashing = sel.value;
+        const saved = await saveSettings();
+        g.passwordHashing = saved?.general?.passwordHashing || 'argon2id';
+        sel.value = g.passwordHashing;
+      },
+    });
+    return h('section', { class: 'card' }, h('h2', null, 'Password hashing'),
+      h('p', { class: 'lead' }, 'How account passwords are stored and how backup files are encrypted. Argon2id needs a lot of memory for every guess, which makes stolen hashes and backups expensive to attack with graphics cards. PBKDF2-SHA256 (600,000 rounds) comes from the Go standard library alone, but at the same cost to this computer it is cheaper to attack that way.'),
+      field({ label: 'Password hashing', input: sel, help: 'Existing passwords keep working either way. Each account switches to the chosen method the next time it signs in, and new backups use it from now on; older backups still restore.' }),
+      h('p', { class: 'note' }, 'PBKDF2 is acceptable for a monitor that stays on your own network, but Argon2id remains the recommendation. Backups made with PBKDF2 cannot be restored by GWatch releases that predate this option.'));
   }
 
   function apiKeysCard(keys, reload) {

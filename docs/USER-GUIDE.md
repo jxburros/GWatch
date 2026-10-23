@@ -1100,6 +1100,26 @@ GWatch will not let you remove or demote the last administrator. Passwords are
 stored as argon2id hashes; session tokens and API keys only as sha256 digests.
 None can be read back out of the database.
 
+### Password hashing
+
+**Settings › Users & access › Password hashing** chooses how passwords are
+hashed and how backup files are encrypted:
+
+- **Argon2id (recommended)** — the default. Every guess needs a large block of
+  memory, which is what makes a stolen hash or backup expensive to attack with
+  graphics cards.
+- **PBKDF2 (standard library only)** — PBKDF2-HMAC-SHA256 with 600,000
+  iterations, for owners who would rather GWatch depended on the Go standard
+  library alone. At the same cost to your computer it is cheaper to attack on a
+  GPU than Argon2id. That is an acceptable trade for a monitor that stays on
+  your own network, but it is a trade.
+
+Switching never locks anybody out: passwords hashed either way keep working,
+and each account is quietly re-hashed with the chosen method the next time it
+signs in. New backups use the chosen method from then on; older backups still
+restore. A backup made with PBKDF2 cannot be restored by a GWatch release older
+than this option.
+
 ### API keys
 
 For things that are not browsers, scoped **read-only** or **read-write**.
@@ -1149,6 +1169,9 @@ signs it out everywhere.
 
 A backup is a single password-encrypted archive (Argon2id + AES-256-GCM) of
 your configuration, optionally including the whole history and event timeline.
+If you chose PBKDF2 under [Password hashing](#password-hashing), new backups
+derive their key with PBKDF2 instead; the archive records which one it used, so
+restore needs nothing but the password.
 
 - **Manual backups** always work, whatever the settings below say, and are
   never pruned automatically.

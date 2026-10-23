@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jxburros/GWatch/internal/auth"
 	"github.com/jxburros/GWatch/internal/backup"
 	"github.com/jxburros/GWatch/internal/engine"
 	"github.com/jxburros/GWatch/internal/mailer"
@@ -313,6 +314,16 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// The hashing algorithm (#49). Empty is how every settings document saved
+	// before the option existed looks, so it means the Argon2id default;
+	// anything else that is not a known name is refused rather than quietly
+	// replaced, because it decides how passwords and backups are protected.
+	alg, ok := auth.ParseAlgorithm(g.PasswordHashing)
+	if !ok {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf(`password hashing must be %q or %q`, auth.Argon2id, auth.PBKDF2))
+		return
+	}
+	g.PasswordHashing = string(alg)
 	if g.DefaultIntervalSecs < 10 || g.DefaultIntervalSecs > 86400 {
 		writeError(w, http.StatusBadRequest, "default interval must be between 10 seconds and 1 day")
 		return
@@ -486,6 +497,11 @@ func describeSettingsChange(before, after model.Settings) string {
 	}
 	if before.General.RequireLoginLocally != after.General.RequireLoginLocally {
 		parts = append(parts, "sign-in on this computer "+map[bool]string{true: "required", false: "no longer required"}[after.General.RequireLoginLocally])
+	}
+	// How passwords and backups are protected is a security decision, so it
+	// gets a line of its own in the audit trail.
+	if before.General.PasswordHashing != after.General.PasswordHashing {
+		parts = append(parts, "password hashing set to "+after.General.PasswordHashing)
 	}
 	if before.General.Theme != after.General.Theme || before.General.AccentColor != after.General.AccentColor {
 		parts = append(parts, "appearance changed")
