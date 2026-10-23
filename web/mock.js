@@ -483,19 +483,19 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   const events = [];
   function ev(msAgo, type, o = {}) {
     const n = o.node; const c = o.check;
-    events.push({ id: 0, ts: ago(msAgo), type, nodeId: n ? n.id : null, checkId: c ? c.id : null, nodeName: n ? n.name : undefined, checkName: c ? c.name : undefined, title: o.title || '', detail: o.detail || '', meta: o.meta ? JSON.stringify(o.meta) : undefined });
+    events.push({ id: 0, ts: ago(msAgo), type, nodeId: n ? n.id : null, checkId: c ? c.id : null, nodeName: n ? n.name : undefined, checkName: c ? c.name : undefined, title: o.title || '', detail: o.detail || '', actor: o.actor, meta: o.meta ? JSON.stringify(o.meta) : undefined });
   }
   ev(3 * DAY + 2 * HOUR, 'service_started', { title: 'GWatch service started', detail: 'Version 0.5.0 · windows/amd64 · listening on 127.0.0.1:7230' });
   ev(3 * DAY + 2 * HOUR + 40 * MIN, 'service_stopped', { title: 'GWatch service stopped', detail: 'Stopped for upgrade to 0.5.0' });
   ev(3 * DAY + 2 * HOUR + 41 * MIN, 'backup', { title: 'Backup created', detail: 'gwatch-2026-09-15-0713.gwbackup · 12.4 MB · configuration + history' });
   ev(2 * DAY + 6 * HOUR, 'monitor_gap', { title: 'Monitoring gap of 45 minutes', detail: 'The computer was asleep or offline from 01:10 to 01:55. No checks ran during this time.' });
-  ev(2 * DAY + 3 * HOUR, 'config_changed', { node: ha, title: 'Node updated', detail: 'Added JSON check "API alive"; interval of "Frontend" changed from 60 s to 120 s' });
+  ev(2 * DAY + 3 * HOUR, 'config_changed', { node: ha, actor: 'local', title: 'Node updated', detail: 'Added JSON check "API alive"; interval of "Frontend" changed from 60 s to 120 s' });
   ev(2 * DAY + 1 * HOUR, 'internal_error', { title: 'Failed to send email', detail: 'smtp.example.com: 535 authentication failed — check the SMTP password' });
   ev(2 * DAY + 1 * HOUR, 'alert_failed', { node: site, check: site.checks[0], title: 'Alert email could not be sent', detail: 'SMTP authentication failed (retrying next cycle)' });
-  ev(2 * DAY, 'config_changed', { title: 'Alert settings changed', detail: 'SMTP password updated; test email sent successfully' });
+  ev(2 * DAY, 'config_changed', { actor: 'local', title: 'Alert settings changed', detail: 'SMTP password updated; test email sent successfully' });
   ev(1 * DAY + 20 * HOUR, 'warning', { node: ha, check: ha.checks[1], title: 'High response time', detail: 'Frontend answered in 1,240 ms (warning threshold 800 ms)' });
   ev(1 * DAY + 19 * HOUR + 40 * MIN, 'warning_cleared', { node: ha, check: ha.checks[1], title: 'Response time back to normal', detail: '190 ms' });
-  ev(1 * DAY + 9 * HOUR, 'note', { node: nas, title: 'Note: replaced failing drive in bay 3', detail: 'RAID rebuild expected to take ~6 hours' });
+  ev(1 * DAY + 9 * HOUR, 'note', { node: nas, actor: 'local', title: 'Note: replaced failing drive in bay 3', detail: 'RAID rebuild expected to take ~6 hours' });
   ev(1 * DAY + 2 * HOUR, 'retention', { title: 'Retention run finished', detail: 'Rolled up 41,280 raw results into 5-minute buckets · deleted 12,904 rows older than 30 days · 2.1 s' });
   ev(1 * DAY + 1 * HOUR, 'down', { node: weather, check: weather.checks[0], title: 'Health endpoint is down', detail: 'HTTP 503 Service Unavailable (expected 200)' });
   ev(1 * DAY + 1 * HOUR - 2 * MIN, 'alert_sent', { node: weather, check: weather.checks[0], title: 'Alert email sent', detail: 'To jeff@example.com, sam@example.com' });
@@ -568,7 +568,7 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     { id: 'nodes-maintenance', name: 'In maintenance', enabled: true, colour: 'yellow', condition: { kind: 'nodesInStatus', status: 'maintenance', minCount: 1 } },
   ];
   let settings = {
-    general: { instanceName: 'Home monitor', defaultIntervalSeconds: 60, defaultTimeoutSeconds: 10, maxConcurrentChecks: 8, minIntervalSeconds: 10, wallboardRefreshSeconds: 15, latencyWarnMs: 0, packetLossWarnPct: 0, pingMethod: 'auto', theme: localStorage.getItem('gw.theme') || 'dark', accentColor: '#43c9c0', remoteAccess: false, accessPassword: '', requireLoginLocally: false, passwordHashing: 'argon2id', updateRepo: 'jxburros/GWatch' },
+    general: { instanceName: 'Home monitor', defaultIntervalSeconds: 60, defaultTimeoutSeconds: 10, maxConcurrentChecks: 8, minIntervalSeconds: 10, wallboardRefreshSeconds: 15, latencyWarnMs: 0, packetLossWarnPct: 0, pingMethod: 'auto', theme: localStorage.getItem('gw.theme') || 'dark', accentColor: '#43c9c0', remoteAccess: false, accessPassword: '', requireLoginLocally: false, behindHTTPSProxy: false, passwordHashing: 'argon2id', updateRepo: 'jxburros/GWatch' },
     alerts: { enabled: true, recipients: ['jeff@example.com', 'sam@example.com'], failureThreshold: 2, cooldownMinutes: 60, notifyRecovery: true, notifyWarnings: true, certWarnDays: 14, groupWindowSeconds: 30, warningDigest: 'off', smtp: { host: 'smtp.example.com', port: 587, username: 'gwatch@example.com', password: '********', from: 'GWatch <gwatch@example.com>', security: 'starttls' },
       // Settings › Alerts › Also notify. Secrets come back masked, as the
       // real server sends them.
@@ -576,7 +576,9 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
         { id: 'ch-1a2b3c', name: 'Family Telegram', enabled: true, minSeverity: 'warning', groups: [], action: { type: 'telegram', token: '********', chatId: '-1001234567890', title: '', message: '', timeoutSeconds: 30 } },
         { id: 'ch-4d5e6f', name: 'On-call SMS', enabled: true, minSeverity: 'down', groups: ['Servers'], action: { type: 'twilio', accountSid: 'ACXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX', token: '********', from: '+15550001111', to: '+15550002222', message: '', timeoutSeconds: 30 } },
       ] },
-    retention: { rawDays: 30, fiveMinDays: 180, hourlyDays: 730, dailyDays: 0, eventDays: 730 },
+    retention: { rawDays: 30, fiveMinDays: 180, hourlyDays: 730, dailyDays: 0, eventDays: 730, hostDays: 90 },
+    backups: { enabled: false, intervalHours: 24, keep: 7, includeHistory: true, password: '' },
+    updates: { checkAutomatically: true, checkIntervalHours: 24, includePrerelease: false, promptOnOpen: true },
     indicators: clone(DEFAULT_INDICATORS),
   };
   let retention = { lastRunAt: ago(1 * DAY + 2 * HOUR), lastDurationMs: 2140, lastError: '', rawRows: 412_880, rollupRows5m: 96_412, rollupRows1h: 18_207, rollupRows1d: 1_128, eventRows: 1_940, oldestRaw: ago(30 * DAY), deletedLastRun: 12_904, plan: ['Raw results older than 30 days are rolled up into 5-minute buckets and deleted.', '5-minute buckets older than 180 days are rolled up into hourly buckets and deleted.', 'Hourly buckets older than 730 days are rolled up into daily buckets and deleted.', 'Daily buckets are kept forever.', 'Events older than 730 days are deleted.'] };
@@ -594,7 +596,7 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     return {
       version: '0.5.0', serviceMode: 'service', serviceRunning: true, startedAt: ago(3 * DAY + 2 * HOUR), uptimeSeconds: Math.floor((Date.now() - (NOW - 3 * DAY - 2 * HOUR)) / 1000), now: iso(Date.now()), schedulerRunning: true,
       lastCheckAt: runs[runs.length - 1] || null, lastSuccessAt: runs[runs.length - 1] || null, nextCheckAt: nexts[0] || null,
-      checksTotal: all.length, checksEnabled: all.filter((c) => c.enabled && findNode(c.nodeId).enabled).length, checksRunning: 0,
+      checksTotal: all.length, checksEnabled: all.filter((c) => c.enabled && findNode(c.nodeId).enabled).length, checksRunning: 0, overdueChecks: 0, oldestOverdueSeconds: 0,
       lastGap: { from: ago(2 * DAY + 6 * HOUR + 45 * MIN), to: ago(2 * DAY + 6 * HOUR), seconds: 2700 },
       databasePath: 'C:\\ProgramData\\GWatch\\gwatch.db', databaseBytes: 48_300_000, databaseDriver: 'modernc.org/sqlite', dataDir: 'C:\\ProgramData\\GWatch', keyPath: 'C:\\ProgramData\\GWatch\\gwatch.key', backupDir: 'C:\\ProgramData\\GWatch\\backups', retention, backup: backupStatus,
       recentErrors: events.filter((e) => e.type === 'internal_error').slice(0, 5), alertsEnabled: settings.alerts.enabled, smtpConfigured: !!settings.alerts.smtp.host, lastAlertAt: ago(21 * MIN + 30e3), lastAlertError: '', listenAddress: '127.0.0.1:7230', platform: 'windows/amd64',
@@ -811,7 +813,7 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   let signedIn = null;
   const me = () => ({ kind: signedIn ? 'session' : 'local', name: signedIn?.username || 'this computer', role: signedIn?.role || 'admin', isAdmin: !signedIn || signedIn.role === 'admin', canWrite: !signedIn || signedIn.role === 'admin', signedIn: !!signedIn, theme: settings.general.theme, accentColor: settings.general.accentColor, indicators: clone(settings.indicators || []) });
   on('GET', /^\/api\/me$/, me);
-  on('GET', /^\/api\/auth\/setup$/, () => ({ usersConfigured: users.length > 0, loginRequired: false, accessPasswordSet: false, apiVersion: 1 }));
+  on('GET', /^\/api\/auth\/setup$/, () => ({ usersConfigured: users.length > 0, loginRequired: false, accessPasswordSet: false, localLoginForced: !!settings.general.requireLoginLocally, apiVersion: 1 }));
   on('GET', /^\/api\/users$/, () => clone(users));
   on('POST', /^\/api\/users$/, (m, body) => { if (!body.username || body.password?.length < 8) throw err(400, 'User name and password of at least 8 characters required'); const u = { id: Date.now(), username: body.username, role: users.length ? body.role : 'admin', createdAt: iso(Date.now()) }; users.push(u); passwords.set(u.id, body.password); return clone(u); });
   on('PUT', /^\/api\/users\/(\d+)$/, (m, body) => { const u = users.find((x) => x.id === Number(m[1])); if (!u) throw err(404, 'User not found'); if (body.role) u.role = body.role; if (body.password) passwords.set(u.id, body.password); return clone(u); });
@@ -1295,7 +1297,7 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
 
   on('GET', /^\/api\/charts$/, () => clone(savedCharts));
   on('PUT', /^\/api\/charts$/, (m, body) => { savedCharts = (body || []).map((c, i) => ({ ...c, id: c.id || `chart-${Date.now()}${i}`, name: c.name || `Chart ${i + 1}`, updatedAt: iso(Date.now()) })); return clone(savedCharts); });
-  on('GET', /^\/api\/automation\/meta$/, () => ({ conditions: ['down', 'recovered', 'degraded', 'warning_cleared', 'cert_warning', 'content_changed', 'affected_by_parent', 'status_change', 'any_failure', 'any_success', 'latency_over'], interpreters: ['sh', 'bash', 'powershell', 'cmd', 'python', 'node', 'custom'], defaultInterpreter: 'powershell', placeholders: [] }));
+  on('GET', /^\/api\/automation\/meta$/, () => ({ conditions: ['down', 'recovered', 'degraded', 'warning_cleared', 'cert_warning', 'content_changed', 'affected_by_parent', 'status_change', 'any_failure', 'any_success', 'latency_over'], interpreters: ['sh', 'bash', 'powershell', 'cmd', 'python', 'node', 'custom'], defaultInterpreter: 'powershell', placeholders: [], minTokenLength: 8, tokenlessEndpoints: endpoints.filter((e) => !String(e.token || '').trim()).map(({ id, name, slug }) => ({ id, name, slug })) }));
   on('GET', /^\/api\/triggers$/, (m, body, u) => { const nid = u.searchParams.get('nodeId'); return clone(nid ? triggers.filter((t) => t.nodeId === Number(nid)) : triggers); });
   on('POST', /^\/api\/triggers$/, (m, body) => { const t = { ...body, id: triggers.length ? Math.max(...triggers.map((x) => x.id)) + 1 : 1, lastRunAt: null, lastStatus: '', lastOutput: '', runCount: 0, createdAt: iso(Date.now()), updatedAt: iso(Date.now()) }; triggers.push(t); addEvent('config_changed', { title: `Trigger saved: ${t.name}` }); return clone(t); });
   on('PUT', /^\/api\/triggers\/(\d+)$/, (m, body) => { const t = triggers.find((x) => x.id === Number(m[1])); if (!t) throw err(404, 'not found'); Object.assign(t, body, { id: t.id, updatedAt: iso(Date.now()) }); return clone(t); });
@@ -1327,7 +1329,7 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   on('POST', /^\/api\/rules\/(\d+)\/test$/, (m) => { const r = rules.find((x) => x.id === Number(m[1])); if (!r) throw err(404, 'not found'); return r.actions.map((a) => ({ ok: true, output: `${a.type}: sent (mock)`, startedAt: iso(Date.now()), durationMs: 42 })); });
   on('POST', /^\/api\/triggers\/(\d+)\/run$/, (m) => { const t = triggers.find((x) => x.id === Number(m[1])); if (!t) throw err(404, 'not found'); t.lastRunAt = iso(Date.now()); t.lastStatus = 'ok'; t.runCount++; t.lastOutput = 'mock run'; addEvent('trigger_fired', { nodeId: t.nodeId, nodeName: findNode(t.nodeId)?.name, title: `Trigger ran: ${t.name}`, detail: `${t.action.type} action on manual — mock run` }); return { ok: true, output: 'mock run', startedAt: t.lastRunAt, durationMs: 42 }; });
   on('POST', /^\/api\/actions\/test$/, (m, body) => ({ ok: true, output: `mock: would run a ${body?.action?.type} action`, startedAt: iso(Date.now()), durationMs: 12, statusCode: body?.action?.type === 'http' ? 200 : 0 }));
-  on('GET', /^\/api\/endpoints$/, () => clone(endpoints));
+  on('GET', /^\/api\/endpoints$/, () => clone(endpoints).map((e) => ({ allowNoToken: false, ...e, hasToken: !!e.token })));
   on('POST', /^\/api\/endpoints$/, (m, body) => { const e = { ...body, id: endpoints.length ? Math.max(...endpoints.map((x) => x.id)) + 1 : 1, slug: (body.slug || body.name || 'hook').toLowerCase().replace(/[^a-z0-9_-]+/g, '-'), lastCalledAt: null, lastStatus: '', lastOutput: '', callCount: 0, createdAt: iso(Date.now()), updatedAt: iso(Date.now()) }; if (endpoints.some((x) => x.slug === e.slug)) throw err(400, `an endpoint with the slug "${e.slug}" already exists`); endpoints.push(e); return clone(e); });
   on('PUT', /^\/api\/endpoints\/(\d+)$/, (m, body) => { const e = endpoints.find((x) => x.id === Number(m[1])); if (!e) throw err(404, 'not found'); Object.assign(e, body, { id: e.id, updatedAt: iso(Date.now()) }); return clone(e); });
   on('DELETE', /^\/api\/endpoints\/(\d+)$/, (m) => { const i = endpoints.findIndex((x) => x.id === Number(m[1])); if (i < 0) throw err(404, 'not found'); endpoints.splice(i, 1); return { ok: true }; });

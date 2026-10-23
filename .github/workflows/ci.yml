@@ -77,6 +77,14 @@ jobs:
       # tsc over the web/ files marked // @ts-check (JSDoc types; nothing is
       # compiled). tsconfig.json says how to bring another file under it.
       run: npm run typecheck
+    - name: The mock API matches the real one
+      # internal/api/mock_contract_test.go records the shape of the real
+      # handlers' answers in tests/contract/api-shapes.json (and fails if they
+      # moved without it); tests/web/mock-contract.test.mjs holds web/mock.js
+      # to that file. Both also run in the suites above; this step names them.
+      run: |
+        go test -count=1 -run TestMockContractShapes ./internal/api
+        node --test tests/web/mock-contract.test.mjs
     - name: PowerShell scripts parse
       shell: pwsh
       run: |

@@ -98,6 +98,7 @@ Pushing a tag such as `v0.1.0` additionally runs the `release` job (below) and t
 | `web/` | The browser interface (vanilla HTML/CSS/JS, no build step, embedded into the binary; open with `?mock=1` for an in-browser demo backend) |
 | `web/fonts/` | Barlow and Kode Mono, latin subsets, self-hosted so the UI still requests nothing from the internet ([SIL OFL 1.1](../web/fonts/OFL.txt)) |
 | `tests/web/` | The jsdom suite for `web/` (`make web-test`). It lives outside `web/` so `//go:embed` never ships it |
+| `tests/contract/` | `api-shapes.json`: the keys and JSON types of the real handlers' answers to a set of GETs, written by `internal/api/mock_contract_test.go` (`GWATCH_UPDATE_CONTRACT=1 go test ./internal/api -run TestMockContractShapes` after a handler changes) and held against `web/mock.js` by `tests/web/mock-contract.test.mjs`, so the demo backend cannot drift from the API unnoticed |
 | `tsconfig.json` | Type checking for `web/` (`make web-typecheck`): JSDoc types, no build. Checked today: `components.js`, `api.js`, `fmt.js`, `chart-config.js`, `netmap.js` — a file opts in with `// @ts-check` as its first line; the steps are in `tsconfig.json`, and `tests/web/typecheck-coverage.test.mjs` keeps the list from shrinking |
 | `tests/e2e/` | Playwright + axe over every route, in both themes (`make web-e2e`); `playwright.config.mjs` and `package.json` configure both suites |
 | `skill/` | The downloadable agent skill served by `GET /api/mcp/skill`, versioned by `skill/VERSION` |
