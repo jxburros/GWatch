@@ -629,9 +629,7 @@ func (e *Engine) sendMail(m mailTask) {
 	go func() {
 		defer e.wg.Done()
 		defer func() { e.mu.Lock(); delete(e.mailDone, m.check.ID); close(done); e.mu.Unlock() }()
-		ctx, cancel := context.WithTimeout(e.workContext(), 45*time.Second)
-		defer cancel()
-		err := e.opts.Send(ctx, s.Alerts.SMTP, msg)
+		err := e.deliverMail(s.Alerts.SMTP, msg)
 		e.mu.Lock()
 		e.lastAlertAt = ptrTime(time.Now())
 		if err != nil {
@@ -654,6 +652,49 @@ func (e *Engine) sendMail(m mailTask) {
 		e.recordEvent(model.Event{Type: model.EventAlertSent, NodeID: ptrInt64(m.node.ID), CheckID: ptrInt64(m.check.ID), NodeName: m.node.Name, CheckName: m.check.Name,
 			Title: label + " emailed", Detail: "Sent to " + strings.Join(m.to, ", ")})
 	}()
+}
+
+// mailSlots bounds how many alert e-mails are sent at once. A router going
+// down with a hundred checks behind it used to open a hundred SMTP
+// connections together, which is how Gmail and Microsoft 365 rate limits are
+// tripped and alerts lost.
+const mailSlots = 3
+
+// mailRetryAfter is how long a failed alert e-mail waits before its one
+// retry: long enough for a greylisting server or a brief outage to pass, short
+// enough that the check's next result (which waits for this e-mail) is not
+// held up for long. A message that still fails re-arms the alert, so the next
+// failing result sends it again.
+var mailRetryAfter = 15 * time.Second
+
+// deliverMail sends one alert e-mail through the shared slots, trying once
+// more after mailRetryAfter if the first attempt fails.
+func (e *Engine) deliverMail(smtp model.SMTPSettings, msg mailer.Message) error {
+	work := e.workContext()
+	attempt := func() error {
+		select {
+		case e.mailSem <- struct{}{}:
+		case <-work.Done():
+			return work.Err()
+		}
+		defer func() { <-e.mailSem }()
+		ctx, cancel := context.WithTimeout(work, 45*time.Second)
+		defer cancel()
+		return e.opts.Send(ctx, smtp, msg)
+	}
+	err := attempt()
+	if err == nil || mailRetryAfter <= 0 {
+		return err
+	}
+	select {
+	case <-time.After(mailRetryAfter):
+	case <-work.Done():
+		return err
+	}
+	if err2 := attempt(); err2 != nil {
+		return fmt.Errorf("%w (tried twice)", err2)
+	}
+	return nil
 }
 
 // SendTestEmail sends a test message using the current SMTP settings.

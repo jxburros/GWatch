@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -74,6 +75,10 @@ func setup(t *testing.T) (*Engine, *store.Store, *fakeNet, *mailbox) {
 // on the same database, as after a restart.
 func setupOn(t *testing.T, st *store.Store) (*Engine, *store.Store, *fakeNet, *mailbox) {
 	t.Helper()
+	// Tests that fail delivery on purpose should not wait out the retry.
+	old := mailRetryAfter
+	mailRetryAfter = 0
+	t.Cleanup(func() { mailRetryAfter = old })
 	log, _ := logging.New("", nil)
 	settings := model.DefaultSettings()
 	settings.Alerts.Enabled = true
@@ -449,5 +454,45 @@ func TestStopIsBounded(t *testing.T) {
 	case <-cancelled:
 	default:
 		t.Fatal("in-flight work was not cancelled after the grace period")
+	}
+}
+
+// #99: a failed alert e-mail is tried once more, and no more than mailSlots
+// are ever being sent at once.
+func TestAlertMailRetriesAndIsBounded(t *testing.T) {
+	e, _, _, _ := setup(t)
+	mailRetryAfter = 10 * time.Millisecond
+	var mu sync.Mutex
+	calls, inFlight, peak := 0, 0, 0
+	e.opts.Send = func(context.Context, model.SMTPSettings, mailer.Message) error {
+		mu.Lock()
+		calls++
+		first := calls == 1
+		inFlight++
+		peak = max(peak, inFlight)
+		mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+		if first {
+			return errors.New("451 greylisted")
+		}
+		return nil
+	}
+	if err := e.deliverMail(model.SMTPSettings{}, mailer.Message{}); err != nil {
+		t.Fatalf("the retry did not go through: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 12; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = e.deliverMail(model.SMTPSettings{}, mailer.Message{}) }()
+	}
+	wg.Wait()
+	if peak > mailSlots {
+		t.Fatalf("%d e-mails were sent at once, want at most %d", peak, mailSlots)
 	}
 }

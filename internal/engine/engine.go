@@ -76,6 +76,7 @@ type Engine struct {
 	checks       map[int64]model.Check
 	states       map[int64]*model.CheckState
 	mailDone     map[int64]chan struct{}
+	mailSem      chan struct{} // see mailSlots
 	inflight     map[int64]*checkFlight
 	recordResult func(context.Context, model.Result, model.CheckState) (model.Result, error)
 	running      map[int64]bool
@@ -142,6 +143,7 @@ func New(st *store.Store, log *logging.Logger, opts Options) *Engine {
 		states:       map[int64]*model.CheckState{},
 		running:      map[int64]bool{},
 		mailDone:     map[int64]chan struct{}{},
+		mailSem:      make(chan struct{}, mailSlots),
 		inflight:     map[int64]*checkFlight{},
 		recordResult: st.RecordResult,
 		activeMW:     map[int64]bool{},
