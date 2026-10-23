@@ -629,7 +629,7 @@ func (e *Engine) sendMail(m mailTask) {
 	go func() {
 		defer e.wg.Done()
 		defer func() { e.mu.Lock(); delete(e.mailDone, m.check.ID); close(done); e.mu.Unlock() }()
-		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		ctx, cancel := context.WithTimeout(e.workContext(), 45*time.Second)
 		defer cancel()
 		err := e.opts.Send(ctx, s.Alerts.SMTP, msg)
 		e.mu.Lock()

@@ -7,6 +7,8 @@ import (
 	"github.com/jxburros/GWatch/internal/model"
 	"github.com/jxburros/GWatch/internal/store"
 	"github.com/jxburros/GWatch/internal/store/storetest"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -87,5 +89,23 @@ func TestMigrateDBReplaceAndSaveRules(t *testing.T) {
 	}
 	if !bytes.Equal(before, after) {
 		t.Fatal("unmodified file configuration was unnecessarily rewritten")
+	}
+}
+
+// #105: migrate-db refuses to copy while a GWatch answers on the address it
+// would use, and is not fooled by something else listening there.
+func TestGWatchRunningProbe(t *testing.T) {
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"serviceRunning":true,"schedulerRunning":true,"now":"2026-10-23T00:00:00Z"}`))
+	}))
+	defer gw.Close()
+	if where, running := gwatchRunning(context.Background(), config{listen: strings.TrimPrefix(gw.URL, "http://")}); !running || !strings.Contains(where, "answers") {
+		t.Fatalf("a GWatch answering on the address was not noticed: %q %v", where, running)
+	}
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("hello")) }))
+	defer other.Close()
+	if _, running := gwatchRunning(context.Background(), config{listen: strings.TrimPrefix(other.URL, "http://")}); running {
+		t.Fatal("something that is not GWatch was taken for it")
 	}
 }

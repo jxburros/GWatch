@@ -98,7 +98,12 @@ type Engine struct {
 	sem      chan struct{}
 	ctx      context.Context
 	cancel   context.CancelFunc
-	wg       sync.WaitGroup
+	// work is what alert e-mails, trigger actions and rule actions run
+	// under. It outlives ctx, so an alert being sent as the service stops
+	// still goes out, but Stop cancels it once the grace period is over.
+	work       context.Context
+	cancelWork context.CancelFunc
+	wg         sync.WaitGroup
 	started  bool
 	stopping bool
 
@@ -173,6 +178,7 @@ func (e *Engine) Start(parent context.Context) error {
 	e.startedAt = time.Now()
 	e.lastTick = e.startedAt
 	e.ctx, e.cancel = context.WithCancel(parent)
+	e.work, e.cancelWork = context.WithCancel(context.WithoutCancel(parent))
 	e.mu.Unlock()
 
 	if err := e.ReloadConfig(e.ctx); err != nil {
@@ -206,8 +212,47 @@ func (e *Engine) Stop() {
 	e.mu.Unlock()
 	e.recordEvent(model.Event{Type: model.EventServiceStopped, Title: "Monitoring service stopping"})
 	e.cancel()
-	e.wg.Wait()
+	// Stopping has an upper bound. A script action may run for ten minutes
+	// and a hung custom check for ever, and the service manager (the Windows
+	// SCM, systemd) kills a service that takes much longer than 20–90 s to
+	// stop — possibly in the middle of a database write. In-flight actions
+	// get a grace period to finish, are then cancelled, and are then left.
+	done := make(chan struct{})
+	go func() { e.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(stopGrace):
+		e.log.Printf("engine stop: work still running after %s; cancelling it", stopGrace)
+		e.cancelWork()
+		select {
+		case <-done:
+		case <-time.After(stopAfterCancel):
+			e.log.Printf("engine stop: giving up waiting for in-flight work after a further %s", stopAfterCancel)
+			return
+		}
+	}
+	e.cancelWork()
 	e.log.Printf("engine stopped")
+}
+
+// stopGrace is how long Stop lets in-flight work finish before cancelling it,
+// and stopAfterCancel how long it then waits for the cancellation to land.
+// Together they stay inside the stop timeouts of the Windows SCM and systemd.
+var (
+	stopGrace       = 15 * time.Second
+	stopAfterCancel = 5 * time.Second
+)
+
+// workContext is the context actions and alert e-mails run under: e.work once
+// the engine has started, and a plain background context for an engine used
+// without Start (as tests do).
+func (e *Engine) workContext() context.Context {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.work == nil {
+		return context.Background()
+	}
+	return e.work
 }
 
 // Running reports whether the scheduler is active.

@@ -415,3 +415,39 @@ func TestMaintenanceMatchesAnyOfANodesGroups(t *testing.T) {
 		t.Fatalf("the node tally itself should not be inflated: %d", ov.Summary.Total)
 	}
 }
+
+// #105: Stop has an upper bound. Work that outlives the grace period is
+// cancelled, and work that ignores even that is left behind rather than
+// holding the service past its service manager's stop timeout.
+func TestStopIsBounded(t *testing.T) {
+	oldGrace, oldAfter := stopGrace, stopAfterCancel
+	t.Cleanup(func() { stopGrace, stopAfterCancel = oldGrace, oldAfter })
+	stopGrace, stopAfterCancel = 50*time.Millisecond, 50*time.Millisecond
+
+	e, _, _, _ := setup(t)
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	cancelled := make(chan struct{})
+	e.wg.Add(1)
+	go func() { // an action that only stops when it is cancelled
+		defer e.wg.Done()
+		<-e.workContext().Done()
+		close(cancelled)
+	}()
+	stuck := make(chan struct{})
+	e.wg.Add(1)
+	go func() { defer e.wg.Done(); <-stuck }() // and one that never stops
+	t.Cleanup(func() { close(stuck) })
+
+	start := time.Now()
+	e.Stop()
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("Stop took %s", took)
+	}
+	select {
+	case <-cancelled:
+	default:
+		t.Fatal("in-flight work was not cancelled after the grace period")
+	}
+}

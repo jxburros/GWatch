@@ -249,7 +249,7 @@ func (e *Engine) evaluateRules(ctx context.Context, changedCheck *int64) {
 		e.wg.Add(1)
 		go func(o ruleOutcome, vars actions.Vars) {
 			defer e.wg.Done()
-			e.runRule(context.Background(), o, vars, now)
+			e.runRule(e.workContext(), o, vars, now)
 		}(o, vars)
 	}
 	if len(out) > 0 {

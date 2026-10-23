@@ -302,7 +302,7 @@ func (e *Engine) fireTriggers(tc triggerContext) {
 		e.wg.Add(1)
 		go func(t model.Trigger, vars actions.Vars, cond string) {
 			defer e.wg.Done()
-			e.executeTrigger(context.Background(), t, tc.node, tc.check, vars, cond)
+			e.executeTrigger(e.workContext(), t, tc.node, tc.check, vars, cond)
 		}(d.t, vars, d.cond)
 	}
 }
