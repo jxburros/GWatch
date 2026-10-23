@@ -11,6 +11,15 @@ disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ## Unreleased
 
+### Changed
+
+- **GWatch and the agent host their services with their own code** (#46) instead of
+  kardianos/service: the Windows Service Control Manager, launchd and systemd (with
+  OpenRC and SysV fallbacks), which now also read the env file on non-systemd Linux.
+- **Web UI maintenance** (#118): shared helpers keep focus through live refreshes, the
+  shared modules are type-checked with `tsc`, a contract test keeps the mock API in step
+  with the real one, and the Settings, node editor and mock files are split into modules.
+
 ### Fixed
 
 - **The agent comes back after a power cut** (#170). A power cut while `agent.json` was
@@ -89,6 +98,22 @@ disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
   copy diagnostics, asks the OS for elevation when it needs to, and has Start menu and
   desktop entries. The Windows setup program tests the connection before installing and
   ends on a real result page (#63). An optional Windows notification-area icon (#53).
+- **Remote collectors** (#123): a paired agent can run the network checks (ping, TCP,
+  DNS, SNMP, HTTP) of nodes at another site and send the results back, when an admin
+  turns it on in GWatch and the machine allows it in its own `agent.json`. A collector
+  that goes quiet raises one alert, not one per check. See `docs/COLLECTORS.md`.
+- **Watch services and programs** (#62): `service:<name>` and `process:<name>` readings
+  on Linux, Windows and macOS, critical when stopped by default, picked from the
+  machine's own list.
+- **Grouped alerts and a warning digest** (#99): optionally, a node's alerts within a
+  short window go out as one e-mail ("Web — 3 checks down"), and warnings can be sent as
+  an hourly or daily digest.
+- **Restores are atomic, validated and previewed** (#148): the configuration is restored
+  in one transaction with monitoring paused, the archive goes through the API's own
+  validation, and Settings › Backups shows what a restore will add and change first.
+- **Authenticode signing for the Windows programs and setup programs** (#120), switched
+  on once an Azure Artifact Signing account is configured; releases stay unsigned, with
+  a warning, until then.
 - **Check groups across nodes** (#36), as a prototype: put checks from different nodes
   in groups of their own and filter, chart and bulk-edit them as a set.
 - **Charts treat a node as one item** (#184): the picker lists checks under their node,
