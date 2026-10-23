@@ -63,6 +63,7 @@ import (
 
 	"github.com/jxburros/GWatch/internal/model"
 	"github.com/jxburros/GWatch/internal/svc"
+	"github.com/jxburros/GWatch/internal/sysmetrics"
 	"github.com/jxburros/GWatch/web"
 )
 
@@ -307,11 +308,13 @@ func newUIServer(cfg config, addr, secret, code string) *uiServer {
 		c2 := c
 		ctx, cancel := context.WithTimeout(ctx, 2*requestTimeout)
 		defer cancel()
-		metrics, err := collect(ctx, c2, newCollector(c2))
+		rt, collector := newRuntime(c2), newCollector(c2)
+		rt.watch(collector)
+		metrics, err := collect(ctx, c2, collector)
 		if err != nil {
 			return fmt.Errorf("cannot read this computer's hardware: %w", err)
 		}
-		return send(ctx, newClient(c2), c2, newRuntime(c2).shape(metrics))
+		return send(ctx, newClient(c2), c2, rt.shape(metrics))
 	}
 	s.checkUpdate = checkUpdate
 	s.installUpdate = installUpdateFromPanel
@@ -337,6 +340,7 @@ func (s *uiServer) handler() http.Handler {
 	mux.HandleFunc("POST /api/token", s.handleToken)
 	mux.HandleFunc("POST /api/service/{action}", s.handleService)
 	mux.HandleFunc("POST /api/test", s.handleTest)
+	mux.HandleFunc("GET /api/watchable", s.handleWatchable)
 	mux.HandleFunc("POST /api/update-check", s.handleUpdateCheck)
 	// ui_actions.go
 	mux.HandleFunc("GET /api/log", s.handleLog)
@@ -522,6 +526,30 @@ func (s *uiServer) buildState() map[string]any {
 
 func (s *uiServer) handleState(w http.ResponseWriter, r *http.Request) {
 	writeUIJSON(w, http.StatusOK, s.buildState())
+}
+
+// listWatchable is sysmetrics' service and program listing; tests replace it.
+var listWatchable = func(ctx context.Context) (services, processes []model.InventoryItem, problems []string) {
+	services, err := sysmetrics.ListServices(ctx)
+	if err != nil {
+		problems = append(problems, "services: "+err.Error())
+	}
+	processes, err = sysmetrics.ListProcesses(ctx)
+	if err != nil {
+		problems = append(problems, "programs: "+err.Error())
+	}
+	return services, processes, problems
+}
+
+// handleWatchable lists every service on this machine and every program
+// running on it now, so whoever is choosing what to watch can tick names
+// rather than guess at them. It is only made when the panel asks: the list
+// is the whole machine, and nothing else needs it.
+func (s *uiServer) handleWatchable(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	services, processes, problems := listWatchable(ctx)
+	writeUIJSON(w, http.StatusOK, map[string]any{"services": services, "processes": processes, "problems": problems})
 }
 
 // configWritable asks the operating system rather than guessing from modes: can

@@ -54,12 +54,49 @@ type CollectSelection struct {
 	// Mounts are the filesystems reported, by mount point. Empty means the
 	// automatic set.
 	Mounts []string `json:"mounts,omitempty"`
+
+	// Services and Processes are the services and programs to watch, by
+	// name. Unlike the lists above, empty here means none rather than
+	// automatic: there is no sensible "every service" to fall back on, and
+	// looking for nothing is what keeps a machine nobody asked about from
+	// running systemctl or walking the process table on every reading. A
+	// service is a systemd unit ("nginx", or "nginx.service"), a Windows
+	// service's name or display name, or a launchd label; a process is an
+	// executable name ("plex", "Plex Media Server.exe"). The ceiling rule is
+	// the same as everywhere else: names in the agent's own file are both
+	// what it watches when GWatch has not chosen and the most GWatch can
+	// choose from.
+	Services  []string `json:"services,omitempty"`
+	Processes []string `json:"processes,omitempty"`
+}
+
+// Watching reports whether the selection names any service or process to
+// watch, which is the only time a collector looks for them.
+func (c CollectSelection) Watching() bool {
+	return len(watchNames(c.Services)) > 0 || len(watchNames(c.Processes)) > 0
+}
+
+// WatchedServices and WatchedProcesses are the names to look for, without
+// the empty entry that stands for "both sides chose and nothing is in
+// common" (see combineNames).
+func (c CollectSelection) WatchedServices() []string  { return watchNames(c.Services) }
+func (c CollectSelection) WatchedProcesses() []string { return watchNames(c.Processes) }
+
+func watchNames(in []string) []string {
+	var out []string
+	for _, s := range in {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // IsZero reports whether the selection chooses nothing, which is "automatic"
 // everywhere.
 func (c CollectSelection) IsZero() bool {
-	return len(c.Metrics) == 0 && len(c.Interfaces) == 0 && len(c.Disks) == 0 && len(c.Mounts) == 0
+	return len(c.Metrics) == 0 && len(c.Interfaces) == 0 && len(c.Disks) == 0 && len(c.Mounts) == 0 &&
+		len(c.Services) == 0 && len(c.Processes) == 0
 }
 
 // Normalize trims, de-duplicates and sorts every list, so two selections that
@@ -70,6 +107,8 @@ func (c CollectSelection) Normalize() CollectSelection {
 		Interfaces: normalizeNames(c.Interfaces),
 		Disks:      normalizeNames(c.Disks),
 		Mounts:     normalizeNames(c.Mounts),
+		Services:   normalizeNames(c.Services),
+		Processes:  normalizeNames(c.Processes),
 	}
 }
 
@@ -103,13 +142,24 @@ func (c CollectSelection) Validate() error {
 			return fmt.Errorf("%q is not a metric family; use %s", m, strings.Join(MetricFamilies, ", "))
 		}
 	}
-	for label, list := range map[string][]string{"metrics": c.Metrics, "interfaces": c.Interfaces, "disks": c.Disks, "mounts": c.Mounts} {
+	for label, list := range map[string][]string{"metrics": c.Metrics, "interfaces": c.Interfaces, "disks": c.Disks, "mounts": c.Mounts, "services": c.Services, "processes": c.Processes} {
 		if len(list) > MaxCollectNames {
 			return fmt.Errorf("too many %s (at most %d)", label, MaxCollectNames)
 		}
 		for _, s := range list {
 			if len(s) > MaxCollectNameLen {
 				return fmt.Errorf("a name in %s is too long", label)
+			}
+		}
+	}
+	// A service or program name is handed to systemctl, launchctl or the
+	// Service Control Manager as one argument. Nothing is run through a
+	// shell, but a name starting with a dash would read as an option, and a
+	// control character is never part of a real name.
+	for kind, list := range map[string][]string{"service": c.Services, "program": c.Processes} {
+		for _, s := range list {
+			if strings.HasPrefix(s, "-") || strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+				return fmt.Errorf("%q is not a %s name", s, kind)
 			}
 		}
 	}
@@ -136,6 +186,8 @@ func (c CollectSelection) Effective(selection CollectSelection) CollectSelection
 		Interfaces: combineNames(c.Interfaces, selection.Interfaces),
 		Disks:      combineNames(c.Disks, selection.Disks),
 		Mounts:     combineNames(c.Mounts, selection.Mounts),
+		Services:   combineNames(c.Services, selection.Services),
+		Processes:  combineNames(c.Processes, selection.Processes),
 	}
 }
 
@@ -186,13 +238,28 @@ type Inventory struct {
 	Interfaces []InventoryItem `json:"interfaces,omitempty"`
 	Disks      []InventoryItem `json:"disks,omitempty"`
 	Mounts     []InventoryItem `json:"mounts,omitempty"`
+
+	// Services and Processes are what could be watched: every service the
+	// system knows, with its description and whether it is running now, and
+	// every program running at the moment the list was made. They are made
+	// when asked for — at an agent's check-in, or when someone opens the
+	// list for this computer — never with a reading, and Auto is always
+	// false: nothing is watched until someone picks it.
+	Services  []InventoryItem `json:"services,omitempty"`
+	Processes []InventoryItem `json:"processes,omitempty"`
 }
+
+// MaxInventoryWatchNames bounds the service and process lists of an
+// inventory. A Windows machine has three or four hundred services, more than
+// the other lists ever hold, and the whole check-in still has to fit
+// comfortably in what GWatch accepts.
+const MaxInventoryWatchNames = 1024
 
 // Normalize bounds an inventory received from the network.
 func (i Inventory) Normalize() Inventory {
-	clip := func(in []InventoryItem) []InventoryItem {
-		if len(in) > MaxCollectNames {
-			in = in[:MaxCollectNames]
+	clipTo := func(in []InventoryItem, limit int) []InventoryItem {
+		if len(in) > limit {
+			in = in[:limit]
 		}
 		out := make([]InventoryItem, 0, len(in))
 		for _, it := range in {
@@ -210,7 +277,12 @@ func (i Inventory) Normalize() Inventory {
 		}
 		return out
 	}
-	return Inventory{Interfaces: clip(i.Interfaces), Disks: clip(i.Disks), Mounts: clip(i.Mounts)}
+	clip := func(in []InventoryItem) []InventoryItem { return clipTo(in, MaxCollectNames) }
+	return Inventory{
+		Interfaces: clip(i.Interfaces), Disks: clip(i.Disks), Mounts: clip(i.Mounts),
+		Services:  clipTo(i.Services, MaxInventoryWatchNames),
+		Processes: clipTo(i.Processes, MaxInventoryWatchNames),
+	}
 }
 
 // AgentCheckIn is what an agent says when it asks GWatch for its settings.

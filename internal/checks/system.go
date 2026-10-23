@@ -305,6 +305,18 @@ func hostMetricResults(cfg model.CheckConfig, m model.HostMetrics) []model.Metri
 		v := model.PoolHealthValue(p.Health)
 		add(model.MetricKey(model.MetricPool, p.Name), fmt.Sprintf("Pool %s", p.Name), &v)
 	}
+	// Watched services and programs: one reading each, keyed by the name
+	// someone asked for. A stopped service and a program with no copy
+	// running are readings of 0, which the default thresholds make
+	// critical; a machine watching nothing has none of these at all.
+	for _, s := range m.Services {
+		v := model.ServiceValue(s)
+		add(model.MetricKey(model.MetricService, s.Name), fmt.Sprintf("Service %s", s.Name), &v)
+	}
+	for _, p := range m.Processes {
+		v := float64(p.Count)
+		add(model.MetricKey(model.MetricProcess, p.Name), fmt.Sprintf("Copies of %s running", p.Name), &v)
+	}
 	return out
 }
 
@@ -349,6 +361,15 @@ func metricString(v float64, unit string) string {
 			return "degraded"
 		}
 		return "healthy"
+	case "running":
+		// A service: "Service nginx is stopped, at or below the stopped
+		// critical threshold".
+		if v >= 1 {
+			return "running"
+		}
+		return "stopped"
+	case "count":
+		return fmt.Sprintf("%.0f", v)
 	}
 	return fmt.Sprintf("%.2f", v)
 }

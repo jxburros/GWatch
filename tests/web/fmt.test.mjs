@@ -184,6 +184,20 @@ test('unitValue writes any reading in its own unit', () => {
   assert.equal(fmt.unitValue(undefined, 'B/s'), '—');
 });
 
+// #62: a watched service is running or stopped, a watched program a count of
+// copies; neither is ever written with its unit's name.
+test('services and programs read as words and counts', () => {
+  assert.equal(fmt.metricUnit('service:nginx'), 'running');
+  assert.equal(fmt.metricUnit('process:plex'), 'count');
+  assert.equal(fmt.metricLabel('service:nginx'), 'Service nginx');
+  assert.equal(fmt.metricValue(1, 'running'), 'running');
+  assert.equal(fmt.metricValue(0, 'running'), 'stopped');
+  assert.equal(fmt.unitValue(3, 'count'), '3');
+  assert.equal(fmt.unitValue(0, 'running'), 'stopped');
+  assert.equal(fmt.unitAxis(1, 'running'), '1');
+  assert.equal(fmt.unitAxis(4, 'count'), '4');
+});
+
 test('unitAxis writes every tick on an axis in one scaled unit', () => {
   // Ticks 0 … 2 MB/s in steps of 0.5 MB/s: one unit, one decimal, all the way up.
   const yt = { max: 2e6, step: 5e5 };

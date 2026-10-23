@@ -52,3 +52,43 @@ func TestEvaluateHostLinuxHardwareReadings(t *testing.T) {
 		t.Error("a faulted pool should take the check down")
 	}
 }
+
+// Watched services and programs (#62): a stopped service and a program with
+// no copy running are each critical under the default thresholds, by name,
+// and the reason says which and in words.
+func TestEvaluateHostWatchedServicesAndProcesses(t *testing.T) {
+	now := time.Now()
+	m := healthyReading(now)
+	m.Services = []model.HostService{{Name: "nginx", Running: true, State: "active (running)"}, {Name: "smbd", State: "failed"}}
+	m.Processes = []model.HostProcess{{Name: "plex", Count: 2}, {Name: "backup", Count: 0}}
+
+	res := evaluateHost(systemCheck(model.SystemDefaults()), m, now)
+	if res.Success {
+		t.Fatal("a stopped service should take the check down")
+	}
+	if got := metricByKey(t, res, "service:nginx"); got.Status != model.StatusUp || got.Value != 1 || got.Unit != "running" {
+		t.Errorf("running service: %+v", got)
+	}
+	smbd := metricByKey(t, res, "service:smbd")
+	if smbd.Status != model.StatusDown || !strings.Contains(smbd.Reason, "Service smbd is stopped, at or below the stopped critical threshold") {
+		t.Errorf("stopped service: %+v", smbd)
+	}
+	if got := metricByKey(t, res, "process:plex"); got.Status != model.StatusUp || got.Value != 2 {
+		t.Errorf("running program: %+v", got)
+	}
+	backup := metricByKey(t, res, "process:backup")
+	if backup.Status != model.StatusDown || !strings.Contains(backup.Reason, "Copies of backup running is 0") {
+		t.Errorf("missing program: %+v", backup)
+	}
+
+	// An instance entry with no level stops one service from alerting.
+	cfg := model.SystemDefaults()
+	cfg.MetricThresholds = append(cfg.MetricThresholds, model.MetricThreshold{Metric: "service:smbd", Below: true},
+		model.MetricThreshold{Metric: "process:backup", Below: true})
+	if err := model.ValidateMetricThresholds(cfg.MetricThresholds); err != nil {
+		t.Fatal(err)
+	}
+	if res := evaluateHost(systemCheck(cfg), m, now); !res.Success {
+		t.Errorf("both were switched off: %s", res.Error)
+	}
+}

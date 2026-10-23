@@ -12,7 +12,7 @@ import {
   openModal, confirmDialog, field, textInput, selectInput, toast, agentLogo,
 } from '../components.js';
 import { LineChart, SERIES_COLORS } from '../charts.js';
-import { collectionPicker } from './agent-collect.js';
+import { collectionPicker, watchPicker } from './agent-collect.js';
 import { bytes, pct, duration, dateTime, num, agentIsBehind, rate as fmtRate } from '../fmt.js';
 
 // Shading for a usage bar. These are display thresholds only — what actually
@@ -331,15 +331,18 @@ function agentVersionRow(running, latest, releaseURL) {
     }, icon('download'), `${latest} available`));
 }
 
-export function hardwarePanel(key, { title = 'Hardware', metricStatus = null } = {}) {
+export function hardwarePanel(key, { title = 'Hardware', metricStatus = null, isAdmin = false } = {}) {
   const state = { host: null, range: '24h', charts: [], destroyed: false, latestAgent: null, agentReleaseURL: null };
 
   const headEl = h('div', null, skeleton({ lines: 3 }));
   const snapEl = h('div', { class: 'stack' });
+  // Built once rather than with every reading, so a live update never throws
+  // away a name someone is typing.
+  const watchEl = h('div');
   const chartsEl = h('div');
   const el = h('section', { class: 'card', 'aria-label': `${title}: ${key}` },
     h('div', { class: 'card-head' }, h('h2', { class: 'card-title' }, icon('cpu'), title), h('span', { class: 'mono dim small' }, key)),
-    h('div', { class: 'stack' }, headEl, snapEl, chartsEl));
+    h('div', { class: 'stack' }, headEl, snapEl, watchEl, chartsEl));
 
   async function load() {
     try {
@@ -355,9 +358,42 @@ export function hardwarePanel(key, { title = 'Hardware', metricStatus = null } =
         renderHead();
       });
       renderSnapshot();
+      if (!state.watchBuilt && state.host.source === 'local' && isAdmin) { state.watchBuilt = true; renderLocalWatch(); }
     } catch (e) {
       replace(headEl, emptyState({ icon: 'alert', title: 'Could not load this machine', text: e.message, compact: true }));
     }
+  }
+
+  // The computer GWatch runs on has no agent to tell what to watch, so its
+  // services and programs are chosen here (an agent's are chosen on its card,
+  // with the rest of what it collects). The list to pick from is the whole
+  // machine, so it is only made when asked for.
+  function renderLocalWatch() {
+    const picker = watchPicker({
+      value: state.host.watch || {},
+      note: 'Name the services and programs on this computer that should be running. Each becomes a reading of the hardware check, and stopping is critical by default. Nothing is watched until you name something.',
+    });
+    const listBtn = h('button', { class: 'btn', type: 'button', onclick: async () => {
+      listBtn.disabled = true;
+      try {
+        const inv = await api.get('/api/hosts/local/watchable');
+        picker.setInventory(inv);
+        if (inv.problems?.length) toast(inv.problems.join('; '), { kind: 'info' });
+      } catch (e) { toast(e.message, { kind: 'error' }); }
+      listBtn.disabled = false;
+    } }, icon('search'), 'List what this computer has');
+    const save = h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
+      save.disabled = true;
+      try {
+        state.host.watch = await api.put('/api/hosts/local/watch', picker.value());
+        toast('Saved. The next reading of this computer reports them.', { kind: 'success' });
+      } catch (e) { toast(e.message, { kind: 'error' }); }
+      save.disabled = false;
+    } }, icon('save'), 'Save what to watch');
+    replace(watchEl, h('div', { class: 'stack-sm', 'data-section': 'watch' },
+      h('div', { class: 'section-title' }, 'Services and programs to watch'),
+      picker.el,
+      h('div', { class: 'btn-group' }, listBtn, save)));
   }
 
   function renderHead() {
@@ -493,6 +529,35 @@ export function hardwarePanel(key, { title = 'Hardware', metricStatus = null } =
             p.fullAvg10 == null ? '—' : pct(p.fullAvg10, 1),
             p.fullAvg60 == null ? '—' : pct(p.fullAvg60, 1),
           ])),
+      ));
+    }
+
+    if (m.services?.length) {
+      // Each watched service is a state, shown as a word with the check's
+      // verdict behind its colour, and the system's own description of it.
+      snapEl.append(h('div', null,
+        h('div', { class: 'section-title' }, 'Watched services'),
+        table(['Service', 'State', 'Description'],
+          m.services.map((s) => {
+            const lvl = levelFor(`service:${s.name}`, null) || (s.running ? '' : ' crit');
+            return [
+              s.name,
+              statusPill(lvl === ' crit' ? 'down' : lvl === ' warn' ? 'degraded' : 'up', { label: s.state || (s.running ? 'running' : 'stopped') }),
+              s.description ? h('span', null, s.description) : h('span', { class: 'muted' }, '—'),
+            ];
+          })),
+      ));
+    }
+
+    if (m.processes?.length) {
+      snapEl.append(h('div', null,
+        h('div', { class: 'section-title' }, 'Watched programs'),
+        table(['Program', 'Running'],
+          m.processes.map((p) => {
+            const lvl = levelFor(`process:${p.name}`, null) || (p.count > 0 ? '' : ' crit');
+            const label = p.count > 0 ? `${num(p.count)} running` : 'not running';
+            return [p.name, statusPill(lvl === ' crit' ? 'down' : lvl === ' warn' ? 'degraded' : 'up', { label })];
+          })),
       ));
     }
 

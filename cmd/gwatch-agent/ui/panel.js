@@ -149,7 +149,10 @@ function describeCollecting(c) {
   if (!c) return 'everything';
   const kinds = (c.metrics && c.metrics.length) ? c.metrics.join(', ') : 'every kind of reading';
   const only = ['interfaces', 'disks', 'mounts'].filter((k) => c[k] && c[k].length).map((k) => `${c[k].length} ${k}`);
-  return only.length ? `${kinds}; only ${only.join(', ')}` : kinds;
+  const named = (l) => (l || []).filter(Boolean).length;
+  const watch = [named(c.services) ? `${named(c.services)} services` : '', named(c.processes) ? `${named(c.processes)} programs` : ''].filter(Boolean);
+  const out = only.length ? `${kinds}; only ${only.join(', ')}` : kinds;
+  return watch.length ? `${out}; watching ${watch.join(' and ')}` : out;
 }
 
 async function updateNow(ev) {
@@ -334,11 +337,14 @@ function buildCollect() {
     };
   });
 
+  const watch = buildWatch(coll);
+
   const problems = h('div');
   const save = h('button', { type: 'button', class: 'primary', disabled: readOnly(), onclick: async () => {
     const ticked = famBoxes.filter((b) => b.input.checked).map((b) => b.fam.key);
     const collect = { metrics: ticked.length === famBoxes.length ? [] : ticked };
     for (const c of cats) collect[c.key] = c.value();
+    Object.assign(collect, watch.value());
     save.disabled = true;
     try {
       state = await api('PUT', '/api/settings', { collect });
@@ -355,7 +361,62 @@ function buildCollect() {
   return card('What this machine reports',
     h('p', { class: 'lead' }, 'These are the limits of what leaves this machine. An administrator in GWatch can narrow them further for this machine, never widen them.'),
     h('fieldset', null, h('legend', null, 'Kinds of reading'), h('div', { class: 'cols' }, famBoxes.map((b) => b.el))),
-    cats.map((c) => c.el), problems, h('div', { class: 'row' }, save), h('p', { class: 'note' }, gwText));
+    cats.map((c) => c.el), watch.el, problems, h('div', { class: 'row' }, save), h('p', { class: 'note' }, gwText));
+}
+
+/* Services and programs to watch (#62). Each is a list of names, one per line;
+   nothing is watched until a name is given. The machine's own list is long
+   (hundreds of services on Windows), so it is fetched only when asked and
+   offered as boxes to tick under a filter, ticking adding the name to the list. */
+const WATCH_KINDS = [
+  { key: 'services', title: 'Services to watch', hint: 'One per line. A systemd unit on Linux (nginx), a service or display name on Windows (Spooler), a launchd label on macOS. GWatch reports each as running or stopped, and a stopped one is critical by default.' },
+  { key: 'processes', title: 'Programs to watch', hint: 'One per line, by executable name (plex, postgres). GWatch reports how many copies are running, and none is critical by default.' },
+];
+
+function buildWatch(coll) {
+  const kinds = WATCH_KINDS.map((k) => {
+    const text = h('textarea', { id: `watch-${k.key}`, rows: 4, class: 'watch', 'aria-label': k.title, placeholder: k.key === 'services' ? 'nginx\ndocker' : 'plex' });
+    text.value = (coll[k.key] || []).filter(Boolean).join('\n');
+    const names = () => text.value.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+    const filter = h('input', { type: 'text', placeholder: 'Filter', 'aria-label': `Filter ${k.title.toLowerCase()}`, hidden: true });
+    const list = h('div', { class: 'cols watch-list' });
+    let items = [];
+    const draw = () => {
+      const chosen = new Set(names());
+      const q = filter.value.trim().toLowerCase();
+      list.replaceChildren(...items.filter((i) => !q || i.name.toLowerCase().includes(q) || (i.detail || '').toLowerCase().includes(q)).slice(0, 200).map((i, idx) => {
+        const input = h('input', { type: 'checkbox', id: `watch-${k.key}-${idx}`, checked: chosen.has(i.name) });
+        input.addEventListener('change', () => {
+          const now = names().filter((n) => n !== i.name);
+          if (input.checked) now.push(i.name);
+          text.value = now.join('\n');
+        });
+        return h('label', { class: 'check', for: input.id }, input, h('span', { class: 't' }, h('span', null, i.name), i.detail ? h('span', { class: 'd' }, i.detail) : null));
+      }));
+    };
+    filter.addEventListener('input', draw);
+    text.addEventListener('change', draw);
+    return {
+      key: k.key,
+      el: h('fieldset', { 'data-watch': k.key }, h('legend', null, k.title), text, h('p', { class: 'note' }, k.hint), filter, list),
+      offer(found) { items = found || []; filter.hidden = items.length === 0; draw(); },
+      value: () => [...new Set(names())],
+    };
+  });
+  const listNote = h('p', { class: 'note' });
+  const listBtn = h('button', { type: 'button', onclick: async () => {
+    listBtn.disabled = true;
+    try {
+      const out = await api('GET', '/api/watchable');
+      for (const k of kinds) k.offer(out[k.key]);
+      listNote.textContent = `${(out.services || []).length} services and ${(out.processes || []).length} running programs on this machine.${(out.problems || []).length ? ' ' + out.problems.join('; ') : ''}`;
+    } catch (e) { banner('bad', e.message); }
+    listBtn.disabled = false;
+  } }, 'List what this machine has');
+  return {
+    el: h('div', null, kinds.map((k) => k.el), h('div', { class: 'row' }, listBtn), listNote),
+    value: () => Object.fromEntries(kinds.map((k) => [k.key, k.value()])),
+  };
 }
 
 /* ---------- token ---------- */

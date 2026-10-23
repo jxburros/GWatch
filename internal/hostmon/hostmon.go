@@ -75,6 +75,7 @@ type Monitor struct {
 	mu      sync.RWMutex
 	latest  map[string]model.HostMetrics
 	lastErr string
+	watch   model.CollectSelection // the services and programs this computer watches (watch.go)
 }
 
 // New returns a Monitor reading this computer and storing into st.
@@ -93,6 +94,7 @@ func (m *Monitor) Run(ctx context.Context) {
 	if interval <= 0 {
 		interval = DefaultSampleInterval
 	}
+	m.loadLocalWatch(ctx)
 	m.sampleLocal(ctx)
 
 	t := time.NewTicker(interval)

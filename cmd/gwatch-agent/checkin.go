@@ -117,6 +117,50 @@ func (rt *agentRuntime) shape(m model.HostMetrics) model.HostMetrics {
 	return sysmetrics.Apply(visible, rt.effective(), true)
 }
 
+// watch points the collector at the services and programs to watch now: the
+// machine's own list, narrowed to GWatch's choice. It is called before every
+// reading, so a change GWatch sends takes effect on the next one.
+func (rt *agentRuntime) watch(c *sysmetrics.Collector) {
+	eff := rt.effective()
+	c.SetWatch(eff.WatchedServices(), eff.WatchedProcesses())
+}
+
+// watchInventory lists the services and programs this machine could watch,
+// for GWatch to offer as choices. It runs at check-in, not with each
+// reading: listing every service is a systemctl call or a walk of the
+// Service Control Manager, cheap once every quarter of an hour and pointless
+// every minute. When the machine's own file names services or programs,
+// those are all GWatch may choose from, so they are all it is offered.
+func (rt *agentRuntime) watchInventory(ctx context.Context) (services, processes []model.InventoryItem) {
+	rt.mu.Lock()
+	ceiling := rt.ceiling
+	rt.mu.Unlock()
+	services, _ = sysmetrics.ListServices(ctx)
+	processes, _ = sysmetrics.ListProcesses(ctx)
+	return withinCeiling(services, ceiling.WatchedServices()), withinCeiling(processes, ceiling.WatchedProcesses())
+}
+
+// withinCeiling narrows an inventory list to the names a machine's own file
+// allows, keeping each allowed name even when the machine does not have it
+// now (the picker marks it "not seen now"). An empty ceiling allows anything.
+func withinCeiling(items []model.InventoryItem, ceiling []string) []model.InventoryItem {
+	if len(ceiling) == 0 {
+		return items
+	}
+	out := make([]model.InventoryItem, 0, len(ceiling))
+	for _, name := range ceiling {
+		item := model.InventoryItem{Name: name}
+		for _, it := range items {
+			if strings.EqualFold(it.Name, name) {
+				item.Detail = it.Detail
+				break
+			}
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
 // ---- state kept between runs ----
 
 // agentState is what the agent remembers of GWatch's answers, so a restart
@@ -267,6 +311,12 @@ func (p *program) checkInOnce(ctx context.Context, rt *agentRuntime, client *htt
 	}
 	token := rt.token
 	rt.mu.Unlock()
+	if req.Inventory != nil {
+		req.Inventory.Services, req.Inventory.Processes = rt.watchInventory(ctx)
+		// Bounded here as GWatch would bound it, so a machine with
+		// thousands of services still sends a check-in GWatch accepts.
+		*req.Inventory = req.Inventory.Normalize()
+	}
 
 	settings, err := askSettings(ctx, client, p.cfg, token, req)
 	rt.noteCheckIn(err)

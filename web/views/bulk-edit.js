@@ -303,7 +303,7 @@ export async function mount(root, ctx) {
         // family; the datalist offers the families.
         const v = row.value = { ...(row.value || {}) };
         const keyIn = textInput({ value: v.metric || '', list: 'bulk-metric-keys', placeholder: 'e.g. disk or disk:/srv', 'aria-label': 'Metric', oninput: () => { v.metric = keyIn.value; renderSummary(); } });
-        const datalist = h('datalist', { id: 'bulk-metric-keys' }, ...['cpu', 'memory', 'swap', 'load', 'disk', 'inodes', 'net', 'diskio', 'temp', 'psi', 'pool'].map((k) => h('option', { value: k })));
+        const datalist = h('datalist', { id: 'bulk-metric-keys' }, ...['cpu', 'memory', 'swap', 'load', 'disk', 'inodes', 'net', 'diskio', 'temp', 'psi', 'pool', 'service', 'process'].map((k) => h('option', { value: k })));
         const warnIn = numberInput({ value: v.warn ?? '', min: 0, step: 'any', placeholder: 'off', 'aria-label': 'Warning level', oninput: () => { v.warn = warnIn.value === '' ? '' : Number(warnIn.value); renderSummary(); } });
         const critIn = numberInput({ value: v.crit ?? '', min: 0, step: 'any', placeholder: 'off', 'aria-label': 'Critical level', oninput: () => { v.crit = critIn.value === '' ? '' : Number(critIn.value); renderSummary(); } });
         input = h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } }, keyIn, datalist,

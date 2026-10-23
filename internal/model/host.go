@@ -88,6 +88,14 @@ type HostMetrics struct {
 	Pressure     []HostPressure    `json:"pressure,omitempty"`
 	Pools        []HostPool        `json:"pools,omitempty"`
 
+	// Services and Processes are the ones this machine was told to watch,
+	// and only those: each named service with whether it is running, and
+	// each named program with how many copies of it are. Both are empty
+	// unless someone chose names (CollectSelection.Services, .Processes),
+	// which is what keeps them free for every machine nobody asked about.
+	Services  []HostService `json:"services,omitempty"`
+	Processes []HostProcess `json:"processes,omitempty"`
+
 	// Container is set when the reading was taken inside a container that has
 	// its own memory or processor limit. Memory and processor use are then
 	// measured against that limit rather than the host's totals: a container
@@ -205,6 +213,44 @@ func PoolHealthValue(health string) float64 {
 		return 1
 	}
 	return 2
+}
+
+// HostService is one watched service: a systemd unit on Linux, a service in
+// the Service Control Manager on Windows, a launchd job on macOS. Name is the
+// name as it was asked for ("nginx"), which is also the metric instance, so
+// the key stays what someone typed even where the system knows the service
+// by a longer name ("nginx.service").
+type HostService struct {
+	Name    string `json:"name"`
+	Running bool   `json:"running"`
+	// State is the system's own word for it, shown beside the verdict:
+	// "active (running)", "failed", "inactive (dead)" on Linux; "running",
+	// "stopped", "start pending" on Windows; "running" or "not running"
+	// (with the last exit status) on macOS. "not found" means the system
+	// has no service by that name, which is reported as stopped: something
+	// that was meant to be running is not, whatever the reason.
+	State string `json:"state,omitempty"`
+	// Description is the service's own one-line description, or its display
+	// name on Windows, when the system has one.
+	Description string `json:"description,omitempty"`
+}
+
+// ServiceValue is a service's metric: 1 running, 0 not. The way round is
+// chosen for the threshold it makes natural — "critical at or below 0" is
+// "critical when stopped" — and so that a chart of it reads up as up.
+func ServiceValue(s HostService) float64 {
+	if s.Running {
+		return 1
+	}
+	return 0
+}
+
+// HostProcess is one watched program: how many processes are running with
+// that executable name. Zero is a reading like any other — the program is
+// not running — and the default threshold makes it critical.
+type HostProcess struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
 }
 
 // HostContainer describes the container a reading was taken in and the
@@ -408,4 +454,8 @@ type HostSummary struct {
 	Stale    bool         `json:"stale"`
 	Metrics  *HostMetrics `json:"metrics,omitempty"`
 	Warnings []string     `json:"warnings,omitempty"`
+	// Watch is, for the computer GWatch runs on, the services and programs
+	// it watches (an agent's are in Agent.Collect). Absent when it watches
+	// none.
+	Watch *CollectSelection `json:"watch,omitempty"`
 }

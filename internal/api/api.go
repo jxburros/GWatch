@@ -220,6 +220,8 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "GET /api/hosts", s.handleListHosts)
 	s.route(mux, "GET /api/hosts/{key}", s.handleGetHost)
 	s.route(mux, "GET /api/hosts/{key}/history", s.handleHostHistory)
+	s.route(mux, "GET /api/hosts/local/watchable", s.handleLocalWatchable)
+	s.route(mux, "PUT /api/hosts/local/watch", s.handleSetLocalWatch)
 
 	s.route(mux, "GET /api/agents", s.handleListAgents)
 	s.route(mux, "POST /api/agents", s.handleCreateAgent)

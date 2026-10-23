@@ -18,7 +18,8 @@ import (
 // of ("cpu", "memory", "swap", "load"), or family:instance for the ones it may
 // have several of: "disk:/srv", "inodes:/srv", "net:eth0.rx", "net:eth0.tx",
 // "diskio:sda.read", "diskio:sda.write", "diskio:sda.busy",
-// "temp:coretemp/Package id 0", "psi:memory.avg10", "pool:tank".
+// "temp:coretemp/Package id 0", "psi:memory.avg10", "pool:tank",
+// "service:nginx", "process:plex".
 
 // The metric families a hardware check reports.
 const (
@@ -33,10 +34,16 @@ const (
 	MetricTemp   = "temp"   // sensor temperature, °C — one instance per sensor (Linux)
 	MetricPSI    = "psi"    // pressure stall, % — instances <cpu|memory|io>.avg10 and .avg60 (Linux)
 	MetricPool   = "pool"   // ZFS pool health — one instance per pool: 0 healthy, 1 degraded, 2 faulted (Linux)
+
+	// Services and processes are only read for the names a machine is told
+	// to watch (CollectSelection.Services and .Processes), so a machine
+	// nobody has asked about reports none and spends nothing finding them.
+	MetricService = "service" // a watched service — one instance per service: 1 running, 0 stopped or missing
+	MetricProcess = "process" // a watched program — one instance per executable name: how many copies are running
 )
 
 // MetricFamilies lists every family, in the order the editor shows them.
-var MetricFamilies = []string{MetricCPU, MetricMemory, MetricSwap, MetricLoad, MetricDisk, MetricInodes, MetricNet, MetricDiskIO, MetricTemp, MetricPSI, MetricPool}
+var MetricFamilies = []string{MetricCPU, MetricMemory, MetricSwap, MetricLoad, MetricDisk, MetricInodes, MetricNet, MetricDiskIO, MetricTemp, MetricPSI, MetricPool, MetricService, MetricProcess}
 
 // MetricFamilyLabel is the family's name as a person reads it.
 func MetricFamilyLabel(family string) string {
@@ -63,6 +70,10 @@ func MetricFamilyLabel(family string) string {
 		return "Pressure stall"
 	case MetricPool:
 		return "Storage pool health"
+	case MetricService:
+		return "Service"
+	case MetricProcess:
+		return "Process"
 	}
 	return family
 }
@@ -71,7 +82,7 @@ func MetricFamilyLabel(family string) string {
 // interface or device rather than being one reading for the whole machine.
 func MetricFamilyHasInstances(family string) bool {
 	switch family {
-	case MetricDisk, MetricInodes, MetricNet, MetricDiskIO, MetricTemp, MetricPSI, MetricPool:
+	case MetricDisk, MetricInodes, MetricNet, MetricDiskIO, MetricTemp, MetricPSI, MetricPool, MetricService, MetricProcess:
 		return true
 	}
 	return false
@@ -105,6 +116,11 @@ func SystemMetricUnit(key string) string {
 	case MetricPool:
 		// A state rather than a measurement: 0, 1 or 2 (PoolHealthValue).
 		return "state"
+	case MetricService:
+		// Also a state: 1 running, 0 not (ServiceValue).
+		return "running"
+	case MetricProcess:
+		return "count"
 	case MetricLoad:
 		return ""
 	case MetricNet:

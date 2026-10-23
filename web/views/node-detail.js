@@ -285,7 +285,7 @@ export async function mount(root, ctx) {
       // The panel colours its meters by the check's own verdicts, read from
       // the newest result each time it draws, so the bars agree with the
       // check's thresholds rather than with a fixed display cut-off.
-      const panel = hardwarePanel(key, { title: name || 'Hardware', metricStatus: () => metricStatusFor(key) });
+      const panel = hardwarePanel(key, { title: name || 'Hardware', metricStatus: () => metricStatusFor(key), isAdmin: !!ctx.me?.isAdmin });
       state.hardware.set(key, panel);
       hardwareEl.append(panel.el);
     }
@@ -442,7 +442,7 @@ export async function mount(root, ctx) {
   function chartGroups(c) {
     const metrics = checkMetrics(c);
     if (c.type !== 'system') return metrics.map((m) => ({ id: m.name, title: m.name, unit: m.unit, metrics: [m], csv: m.name }));
-    const order = ['cpu', 'memory', 'swap', 'load', 'disk', 'inodes', 'net', 'diskio', 'temp', 'psi', 'pool'];
+    const order = ['cpu', 'memory', 'swap', 'load', 'disk', 'inodes', 'net', 'diskio', 'temp', 'psi', 'pool', 'service', 'process'];
     const groups = new Map();
     for (const m of metrics) {
       const key = m.family === 'cpu' || m.family === 'memory' || m.family === 'swap' ? 'usage' : m.family;

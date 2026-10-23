@@ -102,4 +102,6 @@ legend { font-weight: 700; padding: 0 6px; font-size: 0.875rem; }
 .note.bad { color: var(--down); }
 .log { font-family: var(--mono); font-size: 0.75rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 22rem; overflow: auto; margin: 0; padding: 10px 12px; background: var(--bg); border: 1px solid var(--line-strong); }
 textarea.diag { min-height: 12rem; margin-top: 10px; }
+textarea.watch { min-height: 5rem; }
+.watch-list { max-height: 18rem; overflow-y: auto; }
 .result a { color: var(--accent); }

@@ -88,6 +88,8 @@ const SYSTEM_DEFAULTS = {
   metricThresholds: [
     { metric: 'cpu', warn: 90 }, { metric: 'memory', warn: 90, crit: 97 }, { metric: 'swap', warn: 50 },
     { metric: 'disk', warn: 85, crit: 95 }, { metric: 'inodes', warn: 85, crit: 95 }, { metric: 'load', warn: 2 },
+    { metric: 'pool', warn: 1, crit: 2 },
+    { metric: 'service', crit: 0, below: true }, { metric: 'process', crit: 0, below: true },
   ],
 };
 
@@ -107,6 +109,10 @@ export const METRIC_FAMILIES = [
   { key: 'temp', label: 'Temperature', unit: '°C', instances: 'a sensor, e.g. coretemp/Package id 0 or nvme/Composite', note: 'Linux only: every hardware sensor and thermal zone, each its own reading. Blank means charted but never alerted on — what is hot depends on the part, so set it for the sensors you know.' },
   { key: 'psi', label: 'Pressure stall', unit: '%', instances: 'a resource, e.g. memory (or memory.avg10, memory.avg60)', note: 'Linux only: the share of time work was stalled waiting for the processor, memory or disks, averaged over 10 and 60 seconds. Sustained memory or io pressure is a machine that is short of it.' },
   { key: 'pool', label: 'ZFS pool health', unit: '', instances: 'a pool, e.g. tank', note: 'Linux with ZFS only: 0 is healthy, 1 is degraded (a disk has dropped out), 2 is faulted or unavailable.' },
+  // Services and processes are "less is worse": their levels are crossed at
+  // or below the number, so critical 0 means "stopped" or "none running".
+  { key: 'service', label: 'Services', unit: '', below: true, instances: 'a service, e.g. nginx', note: 'Only the services this machine is told to watch (its hardware settings, or the agent’s own panel). 1 is running, 0 is stopped or not installed; levels are crossed at or below the number, so critical 0 is “critical when stopped”.' },
+  { key: 'process', label: 'Processes', unit: '', below: true, instances: 'a program, e.g. plex', note: 'Only the programs this machine is told to watch. The reading is how many copies are running; levels are crossed at or below the number, so critical 0 is “critical when none is running”.' },
 ];
 
 // legacyMetricThresholds converts the flat per-family fields a hardware check
@@ -1388,8 +1394,8 @@ export async function mount(root, ctx) {
     return h('div', { class: 'threshold-group', 'data-metric': f.key, style: { border: '1px solid var(--line)', padding: '10px 12px 12px' } },
       h('div', { class: 'section-title', style: { marginBottom: '8px' } }, f.label),
       h('div', { class: 'form-grid' },
-        levelField(entry, 'warn', 'Warning', f, def.warn),
-        levelField(entry, 'crit', 'Critical', f, def.crit)),
+        levelField(entry, 'warn', f.below ? 'Warning at or below' : 'Warning', f, def.warn),
+        levelField(entry, 'crit', f.below ? 'Critical at or below' : 'Critical', f, def.crit)),
       f.note ? h('p', { class: 'note', style: { marginTop: '6px' } }, f.note) : null,
       extra ? h('div', { style: { marginTop: '10px' } }, extra) : null);
   }
@@ -1399,7 +1405,7 @@ export async function mount(root, ctx) {
   // level is dropped again on save (see cleanMetricThresholds).
   function familyEntry(cfg, key) {
     let entry = cfg.metricThresholds.find((t) => t.metric === key);
-    if (!entry) { entry = { metric: key }; cfg.metricThresholds.push(entry); }
+    if (!entry) { entry = { metric: key }; if (METRIC_FAMILIES.find((f) => f.key === key)?.below) entry.below = true; cfg.metricThresholds.push(entry); }
     return entry;
   }
 
@@ -1431,8 +1437,8 @@ export async function mount(root, ctx) {
             cfg.metricThresholds.splice(cfg.metricThresholds.indexOf(t), 1); rerender();
           } }, icon('trash'))),
         h('div', { class: 'form-grid' },
-          levelField(t, 'warn', 'Warning', family),
-          levelField(t, 'crit', 'Critical', family))));
+          levelField(t, 'warn', t.below ? 'Warning at or below' : 'Warning', family),
+          levelField(t, 'crit', t.below ? 'Critical at or below' : 'Critical', family))));
     }
     const familySel = selectInput({ options: METRIC_FAMILIES.filter((f) => f.instances).map((f) => ({ value: f.key, label: f.label })), 'aria-label': 'Family of the instance threshold' });
     const instanceIn = textInput({ placeholder: 'e.g. /srv, eth0, sda', 'aria-label': 'Which disk, interface or device' });
@@ -1441,7 +1447,7 @@ export async function mount(root, ctx) {
       if (!instance) { toast('Name the disk, interface or device first.', { kind: 'error' }); return; }
       const key = `${familySel.value}:${instance}`;
       if (cfg.metricThresholds.some((t) => t.metric === key)) { toast(`There is already a threshold for ${key}.`, { kind: 'error' }); return; }
-      cfg.metricThresholds.push({ metric: key });
+      cfg.metricThresholds.push(METRIC_FAMILIES.find((f) => f.key === familySel.value)?.below ? { metric: key, below: true } : { metric: key });
       rerender();
     } }, icon('plus'), 'Add a threshold for one disk / interface');
     box.append(h('div', { class: 'row', style: { gap: '8px', flexWrap: 'wrap', alignItems: 'end' } },

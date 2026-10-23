@@ -242,6 +242,11 @@ var policies = []routePolicy{
 	// and changes nothing, but it sits with the other agent routes: it is only
 	// of interest to whoever installs agents.
 	{"GET", "/api/agents/latest", levelAdmin, keyDeny},
+	// What this computer could watch lists every service and program on it,
+	// and changing what it watches changes what GWatch alerts on: both are
+	// administration, like an agent's collection settings.
+	{"GET", "/api/hosts/local/watchable", levelAdmin, keyDeny},
+	{"PUT", "/api/hosts/local/watch", levelAdmin, keyDeny},
 	{"GET", "/api/agents/pairings", levelAdmin, keyDeny},
 	{"POST", "/api/agents/pairings", levelAdmin, keyDeny},
 	{"GET", "/api/agents/pairings/{id}", levelAdmin, keyDeny},

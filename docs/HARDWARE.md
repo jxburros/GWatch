@@ -203,7 +203,10 @@ What leaves a machine is chosen in two places, and the machine's owner always ha
 the last word:
 
 - **On the machine**, `collect` in `agent.json` (or the control panel) is a
-  *limit*: `{ "metrics": ["cpu", "memory", "disk", "net"], "interfaces": ["eth0"], "disks": [], "mounts": ["/", "/data"] }`.
+  *limit*: `{ "metrics": ["cpu", "memory", "disk", "net"], "interfaces": ["eth0"], "disks": [], "mounts": ["/", "/data"] }`,
+  plus, optionally, the `services` and `processes` to watch (see
+  [Services and programs](#services-and-programs); unlike the other lists, an
+  empty one there means none).
   A list that is empty means "no limit". `metrics` are the kinds of reading
   (`cpu`, `load`, `memory`, `swap`, `disk`, `inodes`, `net`, `diskio`, and on
   Linux `temp`, `psi` and `pool`). A limit written before the Linux kinds
@@ -616,6 +619,60 @@ An agent in a container with no `zpool` simply reports no pool health.
 Every one of these can be turned off for a machine like any other kind of
 reading (`temp`, `psi`, `pool` in `collect`, or the checkboxes on the node).
 
+### Services and programs
+
+A machine can also be told to watch named **services** — "is nginx running?",
+"has smbd stopped?" — and named **programs** — "is Plex running, and how many
+copies?". Each is a reading of its own on the machine's hardware check:
+
+- `service:<name>` is **1 while the service is running and 0 when it is not**:
+  stopped, failed, or not installed at all (the machine page says which, in the
+  system's own words: `active (running)`, `failed`, `inactive (dead)`, `not
+  found`). A service someone named is one they expect to be up, so a new
+  hardware check is **critical at or below 0** — critical when it stops.
+- `process:<name>` is **how many processes are running with that executable
+  name**, and a new hardware check is **critical at or below 0** — critical
+  when none is.
+
+Both are "less is worse" thresholds (`below` in the check's configuration), and
+both can be changed like any other: a warning level, an instance entry for one
+service that should only warn, or an instance entry with both boxes blank for
+one that is never alerted on.
+
+**Nothing is watched until you name it, and nothing is looked for until then.**
+A machine nobody asked about runs no `systemctl`, walks no process table and
+reports no such readings, so this costs nothing by default. The names are
+chosen:
+
+- for a machine with an agent, under **What it collects** on its agent card,
+  or in `collect` in `agent.json` (or the control panel's *What this machine
+  reports*): `{ "services": ["nginx", "docker", "smbd"], "processes": ["plex"] }`.
+  The usual rule holds — names in the machine's own file are both what it
+  watches when GWatch has not chosen and all GWatch may choose from;
+- for the computer GWatch runs on, under **Services and programs to watch** on
+  its hardware panel.
+
+To pick rather than guess, each place offers the machine's own list: an agent
+sends every service it has, and every program running at the time, with its
+check-in (so the list is at most a quarter of an hour old), and the panels for
+this computer and in the agent's control panel make the list when you press
+*List what this computer has*. The list is never part of a reading.
+
+How each platform answers:
+
+| | Services | Programs |
+| --- | --- | --- |
+| Linux | systemd, through `systemctl show` for the watched units (one call, five seconds at most) and `systemctl list-units --type=service --all` for the list. No D-Bus library. `nginx` means `nginx.service`; any other unit type can be named in full (`docker.socket`). The list shows the services systemd has loaded; a disabled one that has never run can still be typed. | `/proc`: the executable name, recovered from the command line when the kernel's 15-character name was cut short. Kernel threads are left out. |
+| Windows | The Service Control Manager, asked only to list (no administrator rights needed). A name matches the service name or its display name, without regard to case (`Spooler`, `Print Spooler`). | A Toolhelp snapshot. Case is ignored and `.exe` is optional (`plex media server` matches `Plex Media Server.exe`). |
+| macOS | `launchctl list`: a job with a PID is running. A name matches the label or its last part (`com.openssh.sshd` or `sshd`). An agent running as root (as installed) sees the system's daemons. | `ps -axco comm`. |
+
+A machine without systemd (Alpine with OpenRC, most containers) cannot report
+services and says so as a warning on the reading rather than calling every
+watched service stopped; programs still work. An agent reading its host through
+`/host` from a container reports the host's programs (from the host's `/proc`)
+but not its services, since `systemctl` in the container would answer for the
+container.
+
 Anything a platform cannot report is recorded as a warning on the reading and
 shown on the machine's page. It never fails the check on its own: knowing the
 disk is full is useful even when the network counters are missing.
@@ -658,7 +715,8 @@ go, but from there on **each metric is its own thing**:
   machine has one of; `disk:/srv`, `inodes:/srv`, `net:eth0.rx`,
   `net:eth0.tx`, `diskio:sda.read`, `diskio:sda.write`, `diskio:sda.busy`,
   and on Linux `temp:coretemp/Package id 0`, `psi:memory.avg10` and
-  `pool:tank`, for the ones it may have several of. The key is how the metric is named
+  `pool:tank`, and for watched services and programs `service:nginx` and
+  `process:plex`, for the ones it may have several of. The key is how the metric is named
   everywhere: in the last result, in charts, in triggers, in the API.
 - **Its own verdict.** Every run judges every metric against the threshold
   that governs it and records the verdict (`up`, `degraded` or `down`) with
@@ -669,7 +727,7 @@ go, but from there on **each metric is its own thing**:
 - **Its own thresholds.** The check carries a list of warning/critical pairs,
   one per metric family (Processor, Memory, Swap, Load per core, Disk space,
   Inodes, Network throughput, Disk I/O, Temperature, Pressure stall, ZFS pool
-  health), edited as boxed groups in the check
+  health, Services, Processes), edited as boxed groups in the check
   editor. Below them, *One disk, interface or device* adds an entry for a
   single instance — `disk:/srv`, `net:eth0` — which replaces the family's
   pair for that instance alone. A media disk that lives at 90% can have its

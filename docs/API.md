@@ -719,6 +719,19 @@ Every other check type leaves `metrics` absent.
   business, because only a check knows the thresholds somebody chose.
 - `GET /api/hosts/{key}` → one `HostSummary`. The key is `local`, `agent:<id>` or
   `url:<check id>`.
+- `GET /api/hosts/local/watchable` → `{ "services": [InventoryItem], "processes": [InventoryItem], "problems": [string] }`.
+  Every service on the computer GWatch runs on (`detail` is `running` or `stopped`,
+  then its description) and every program running on it now (`detail` is how many
+  copies), for choosing which to watch. Made when asked for and never otherwise; a
+  platform that cannot list one of them says why in `problems`. Administrator only,
+  never an API key.
+- `PUT /api/hosts/local/watch` body `{ "services": ["Spooler"], "processes": ["plex"] }` →
+  the stored `{ services, processes }`. Which services and programs the computer
+  GWatch runs on watches; the next sample reports them as `service:<name>` and
+  `process:<name>` metrics (below). An empty body watches nothing. `400` for a name
+  that starts with `-` or contains a control character. Administrator only, never an
+  API key; written to the audit trail. The current list is `watch` on this computer's
+  `HostSummary` (absent when nothing is watched).
 - `GET /api/hosts/{key}/history?range=1h|24h|7d|30d|1y` →
   `{ key, range, from, to, samples }`. A sample is the numeric series only
   (`cpuPct`, `memPct`, `swapPct`, `diskPct`, `loadPerCore`, `netRxBytesPerSec`,
@@ -735,8 +748,13 @@ each reading as a metric of its own (#60).
 a machine has one of. The rest are `family:instance`: `disk:/srv` and `inodes:/srv`
 per filesystem; `net:eth0.rx` and `net:eth0.tx` per interface (bytes/s received and
 sent); `diskio:sda.read`, `diskio:sda.write` (bytes/s) and `diskio:sda.busy` (%) per
-block device. Units follow the family: `%` for everything but `load` (no unit) and
-the throughput keys (`B/s`).
+block device. On Linux, `temp:<chip>/<sensor>` (°C), `psi:<resource>.avg10` and
+`.avg60` (%) and `pool:<name>` (unit `state`: 0 healthy, 1 degraded, 2 faulted). For
+the services and programs a machine is told to watch (#62), `service:<name>` (unit
+`running`: 1 running, 0 stopped or not installed) and `process:<name>` (unit `count`:
+how many copies are running); a machine watching none reports none. Units follow the
+family: `%` for everything but `load` (no unit), the throughput keys (`B/s`) and the
+ones just named.
 
 **Per-metric verdicts.** Every run puts one `MetricResult` per reading in
 `Result.details.metricResults`:
@@ -768,16 +786,18 @@ fails the whole check and carries no metric results.
 
 | field | meaning |
 | --- | --- |
-| `metric` | a family — `cpu`, `memory`, `swap`, `load`, `disk`, `inodes`, `net`, `diskio` — or an instance key. An instance entry replaces its family's for that instance alone; `net:eth0` and `diskio:sda` cover both directions of that interface or device, `net:eth0.rx` one of them. `cpu`, `memory`, `swap` and `load` take no instance. |
+| `metric` | a family — `cpu`, `memory`, `swap`, `load`, `disk`, `inodes`, `net`, `diskio`, `temp`, `psi`, `pool`, `service`, `process` — or an instance key. An instance entry replaces its family's for that instance alone; `net:eth0` and `diskio:sda` cover both directions of that interface or device, `net:eth0.rx` one of them. `cpu`, `memory`, `swap` and `load` take no instance. |
 | `warn`, `crit` | the levels; a missing level is off. Crossing `warn` makes the metric (and so the check) degraded, crossing `crit` makes it down. On an "above" threshold a level of `0` is also off, so an older configuration that said "0 turns it off" still means that. |
 | `below` | `true` for a reading where less is worse: the levels are then crossed at or *below* the number, and `crit` must be at or below `warn`. |
 
 Validation: a percentage family's levels are 0–100, a rate's are non-negative,
 `crit` is at or above `warn` (at or below with `below`), no two entries name the same
-key, and the family must be one of the eight. A family that is listed with no levels,
+key, and the family must be one of those above. A family that is listed with no levels,
 or not listed at all, is still measured and charted; it just never alerts. A check
 saved with an empty list gets `SystemDefaults` (cpu 90; memory 90/97; swap 50; disk
-and inodes 85/95; load 2).
+and inodes 85/95; load 2; pool 1/2; and `service` and `process` critical at or below
+0 — `{ "metric": "service", "crit": 0, "below": true }` — so a watched service
+stopping, or a watched program with no copy running, is critical).
 
 The flat fields that preceded the list — `cpuWarnPct`, `cpuCritPct`, `memWarnPct`,
 `memCritPct`, `swapWarnPct`, `diskWarnPct`, `diskCritPct`, `loadWarnPerCore`,
@@ -833,11 +853,14 @@ routes — an administrator in the browser, never an API key:
 - `POST /api/agents/{id}/rotate/cancel` → 204. Drops a replacement nobody has used.
 - `PUT /api/agents/{id}/collect` body `CollectSelection` → `Agent`. Which readings the
   administrator wants from the machine: `{ "metrics": ["cpu","net"], "interfaces": ["eth0"],
-  "disks": [], "mounts": [] }`. An empty list is "automatic" — every kind of reading, every
-  disk and filesystem, and the interfaces that are not obviously virtual. The agent applies
-  it the next time it checks in, always inside the limit set in its own configuration file:
-  GWatch can narrow what a machine reports, never widen it. `400` for an unknown metric
-  family (`cpu`, `memory`, `swap`, `load`, `disk`, `inodes`, `net`, `diskio`).
+  "disks": [], "mounts": [], "services": ["nginx", "smbd"], "processes": ["plex"] }`. An
+  empty list is "automatic" — every kind of reading, every disk and filesystem, and the
+  interfaces that are not obviously virtual — except `services` and `processes`, the names
+  to watch, where empty means none. The agent applies it the next time it checks in,
+  always inside the limit set in its own configuration file: GWatch can narrow what a
+  machine reports, never widen it. `400` for an unknown metric family (`cpu`, `memory`,
+  `swap`, `load`, `disk`, `inodes`, `net`, `diskio`, `temp`, `psi`, `pool`), or a service
+  or program name that starts with `-` or contains a control character.
 - `GET /api/agents/latest` → `{ "version", "url", "checkedAt", "error"? }`, the newest
   non-pre-release `gwatch-agent` release in the update repository, which the interface
   uses to mark machines running an older agent. It reads the agent's own releases
@@ -931,7 +954,7 @@ per-IP failure budget as a wrong password.
 ### Asking for settings
 
 `POST /ingest/checkin` with `Authorization: Bearer gwa_…` and an optional body
-`{ "version": "0.7.0", "inventory": { "interfaces": [{ "name", "detail", "auto" }], "disks": […], "mounts": […] } }`.
+`{ "version": "0.7.0", "inventory": { "interfaces": [{ "name", "detail", "auto" }], "disks": […], "mounts": […], "services": […], "processes": […] } }`.
 Answers `200` with an `AgentSettings`:
 
 ```json
@@ -951,7 +974,10 @@ interval is clamped to between one minute and a day, a token is taken up only if
 agent's file owns it, and `latestAgent` changes nothing (an agent still fetches and
 verifies releases itself, from the release feed). The agent sends an inventory of what it
 could report so that GWatch can offer checkboxes for a disk or interface it has not been
-told about; only what the machine's own limit allows is listed. Like `/ingest/metrics` the
+told about; only what the machine's own limit allows is listed. `services` and
+`processes` (at most 1024 each) are every service the machine has and every program
+running at check-in time, listed then and never with a reading, for choosing which to
+watch. Like `/ingest/metrics` the
 route is reached with an agent token and nothing else, shares its failure budget, and is
 outside the authorization table. [`AGENT-DECISIONS.md`](AGENT-DECISIONS.md#12-an-agent-asks-gwatch-for-a-small-fixed-set-of-things)
 says why this does not turn GWatch into a control channel.

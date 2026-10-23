@@ -596,6 +596,16 @@ export default [
               "metric": "pool",
               "warn": 1,
               "crit": 2
+            },
+            {
+              "metric": "service",
+              "crit": 0,
+              "below": true
+            },
+            {
+              "metric": "process",
+              "crit": 0,
+              "below": true
             }
           ]
         },
@@ -674,6 +684,16 @@ export default [
               "metric": "pool",
               "warn": 1,
               "crit": 2
+            },
+            {
+              "metric": "service",
+              "crit": 0,
+              "below": true
+            },
+            {
+              "metric": "process",
+              "crit": 0,
+              "below": true
             }
           ]
         },

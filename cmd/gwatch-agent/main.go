@@ -832,6 +832,7 @@ func (p *program) report(ctx context.Context) {
 		// for as long as they run, turning a fleet into a spike the server
 		// sees and the network feels.
 		wait := jittered(p.cfg.interval, p.cfg.interval/10)
+		rt.watch(collector)
 		metrics, err := takeReading(ctx, p.cfg, collector)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -959,11 +960,13 @@ func runOnce(cfg config) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*requestTimeout)
 	defer cancel()
-	metrics, err := collect(ctx, cfg, newCollector(cfg))
+	rt, collector := newRuntime(cfg), newCollector(cfg)
+	rt.watch(collector)
+	metrics, err := collect(ctx, cfg, collector)
 	if err != nil {
 		return fmt.Errorf("cannot read this computer's hardware: %w", err)
 	}
-	return send(ctx, newClient(cfg), cfg, newRuntime(cfg).shape(metrics))
+	return send(ctx, newClient(cfg), cfg, rt.shape(metrics))
 }
 
 // printReading shows what this machine would report. It contacts nothing, so
@@ -971,11 +974,13 @@ func runOnce(cfg config) error {
 func printReading(cfg config) error {
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
-	metrics, err := collect(ctx, cfg, newCollector(cfg))
+	rt, collector := newRuntime(cfg), newCollector(cfg)
+	rt.watch(collector)
+	metrics, err := collect(ctx, cfg, collector)
 	if err != nil {
 		return fmt.Errorf("cannot read this computer's hardware: %w", err)
 	}
-	metrics = newRuntime(cfg).shape(metrics)
+	metrics = rt.shape(metrics)
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(metrics)
@@ -984,6 +989,11 @@ func printReading(cfg config) error {
 func newCollector(cfg config) *sysmetrics.Collector {
 	c := sysmetrics.NewCollector(model.HostKeyLocal)
 	c.AgentVersion = version
+	// The services and programs named in this machine's own file. The
+	// reporting loop narrows this to GWatch's choice before each reading
+	// (agentRuntime.watch); serve mode, which GWatch never chooses for,
+	// watches exactly these.
+	c.SetWatch(cfg.collect.WatchedServices(), cfg.collect.WatchedProcesses())
 	return c
 }
 

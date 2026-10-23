@@ -139,6 +139,10 @@ type Collector struct {
 
 	mu   sync.Mutex
 	prev *raw
+
+	// services and processes are the names to watch (SetWatch). Both are
+	// empty unless someone chose, and then nothing is looked for.
+	services, processes []string
 }
 
 // NewCollector returns a Collector labelling its snapshots with key.
@@ -185,12 +189,25 @@ func (c *Collector) Collect(ctx context.Context) (model.HostMetrics, error) {
 	}
 	c.prev = cur
 	key, version := c.Key, c.AgentVersion
+	services, processes := c.services, c.processes
 	c.mu.Unlock()
 
 	if key == "" {
 		key = model.HostKeyLocal
 	}
-	return snapshot(key, version, prev, cur), nil
+	m := snapshot(key, version, prev, cur)
+	// Services and processes are states, not rates, so they are read once,
+	// after the counters, and only when something is watched (watch.go).
+	if len(services) > 0 || len(processes) > 0 {
+		var warnings []string
+		m.Services, m.Processes, warnings = readWatched(ctx, services, processes)
+		if len(warnings) > 0 {
+			// A fresh slice: m.Warnings shares its array with the reading
+			// kept for next time.
+			m.Warnings = append(append([]string(nil), m.Warnings...), warnings...)
+		}
+	}
+	return m, nil
 }
 
 // Reset forgets the previous reading, so the next Collect primes itself again.

@@ -267,6 +267,8 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     if (['cpu', 'memory', 'swap', 'disk', 'inodes', 'psi'].includes(family)) return '%';
     if (family === 'temp') return '°C';
     if (family === 'pool') return 'state';
+    if (family === 'service') return 'running';
+    if (family === 'process') return 'count';
     if (family === 'net') return 'B/s';
     if (family === 'diskio') return instance.endsWith('.busy') ? '%' : 'B/s';
     return '';
@@ -283,7 +285,7 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
       if (dot > 0 && (family === 'net' || family === 'diskio' || family === 'psi')) { const whole = find(`${family}:${instance.slice(0, dot)}`); if (whole) return whole; }
       return find(family) || null;
     };
-    const fmt = (v, unit) => (unit === '%' ? `${Math.round(v)}%` : unit === 'B/s' ? `${Math.round(v / 1000)} kB/s` : unit === '°C' ? `${Math.round(v)} °C` : unit === 'state' ? (v >= 2 ? 'faulted' : v >= 1 ? 'degraded' : 'healthy') : v.toFixed(2));
+    const fmt = (v, unit) => (unit === '%' ? `${Math.round(v)}%` : unit === 'B/s' ? `${Math.round(v / 1000)} kB/s` : unit === '°C' ? `${Math.round(v)} °C` : unit === 'state' ? (v >= 2 ? 'faulted' : v >= 1 ? 'degraded' : 'healthy') : unit === 'running' ? (v >= 1 ? 'running' : 'stopped') : unit === 'count' ? String(Math.round(v)) : v.toFixed(2));
     const out = [];
     const add = (key, label, value) => {
       if (value == null) return;
@@ -292,8 +294,9 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
       const t = governing(key);
       if (t) {
         const past = (lvl) => lvl != null && lvl !== '' && (t.below ? value <= lvl : lvl > 0 && value >= lvl);
-        if (past(t.crit)) { r.status = 'down'; r.reason = `${label} is ${fmt(value, unit)}, at or above the ${fmt(t.crit, unit)} critical threshold`; }
-        else if (past(t.warn)) { r.status = 'degraded'; r.reason = `${label} is ${fmt(value, unit)}, at or above the ${fmt(t.warn, unit)} warning threshold`; }
+        const side = t.below ? 'at or below' : 'at or above';
+        if (past(t.crit)) { r.status = 'down'; r.reason = `${label} is ${fmt(value, unit)}, ${side} the ${fmt(t.crit, unit)} critical threshold`; }
+        else if (past(t.warn)) { r.status = 'degraded'; r.reason = `${label} is ${fmt(value, unit)}, ${side} the ${fmt(t.warn, unit)} warning threshold`; }
       }
       out.push(r);
     };
@@ -307,6 +310,8 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     for (const t of m.temperatures || []) add(`temp:${t.name}`, `Temperature ${t.name}`, t.celsius);
     for (const p of m.pressure || []) { add(`psi:${p.resource}.avg10`, `Pressure on ${p.resource} (10 s)`, p.avg10); add(`psi:${p.resource}.avg60`, `Pressure on ${p.resource} (60 s)`, p.avg60); }
     for (const p of m.pools || []) add(`pool:${p.name}`, `Pool ${p.name}`, p.health === 'ONLINE' ? 0 : p.health === 'DEGRADED' ? 1 : 2);
+    for (const s of m.services || []) add(`service:${s.name}`, `Service ${s.name}`, s.running ? 1 : 0);
+    for (const p of m.processes || []) add(`process:${p.name}`, `Copies of ${p.name} running`, p.count);
     return out;
   }
 
@@ -1319,10 +1324,30 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     ],
     disks: [{ name: 'sda', auto: true }, { name: 'nvme0n1', auto: true }],
     mounts: [{ name: '/', detail: '/dev/sda2 · ext4', auto: true }, { name: '/srv/media', detail: '/dev/sdb1 · xfs', auto: true }],
+    // What the machine could watch (#62), sent with its check-in.
+    services: [
+      { name: 'cron', detail: 'running · Regular background program processing daemon' },
+      { name: 'docker', detail: 'running · Docker Application Container Engine' },
+      { name: 'nginx', detail: 'stopped · A high performance web server and a reverse proxy server' },
+      { name: 'smbd', detail: 'running · Samba SMB Daemon' },
+      { name: 'ssh', detail: 'running · OpenBSD Secure Shell server' },
+    ],
+    processes: [
+      { name: 'containerd', detail: '1 running' }, { name: 'Plex Media Server', detail: '1 running' },
+      { name: 'smbd', detail: '3 running' }, { name: 'sshd', detail: '2 running' },
+    ],
   });
+  // The services and programs the computer GWatch "runs on" watches, set
+  // from its hardware panel, and the NAS agent's own record. Both are `var`
+  // because the seeded history is generated (initState) before this part of
+  // the mock has run, and a reading taken then must still find them.
+  var localWatch; // eslint-disable-line no-var
+  var nasAgent; // eslint-disable-line no-var
+  function nasWatchDefault() { return { services: ['docker', 'smbd'], processes: ['Plex Media Server'] }; }
   const agents = [
-    { id: 1, name: 'Living room NAS', nodeId: null, prefix: 'gwa_k3m9vq2x', enabled: true, createdBy: 'local', createdAt: ago(21 * DAY), revokedAt: null, lastSeenAt: ago(40e3), lastAddr: '192.168.1.24:52104', lastVersion: '0.5.0', hostname: 'nas.lan', os: 'linux', arch: 'arm64', tokenViewable: true, collect: {}, inventory: mockInventory(), checkedInAt: ago(4 * MIN) },
+    { id: 1, name: 'Living room NAS', nodeId: null, prefix: 'gwa_k3m9vq2x', enabled: true, createdBy: 'local', createdAt: ago(21 * DAY), revokedAt: null, lastSeenAt: ago(40e3), lastAddr: '192.168.1.24:52104', lastVersion: '0.5.0', hostname: 'nas.lan', os: 'linux', arch: 'arm64', tokenViewable: true, collect: nasWatchDefault(), inventory: mockInventory(), checkedInAt: ago(4 * MIN) },
   ];
+  nasAgent = agents[0];
   // The tokens themselves, kept apart from the agent objects the way the server
   // keeps them apart from the list: only the reveal route hands one out.
   const agentTokens = { 1: { current: 'gwa_k3m9vq2xabcdefghij234567abcdefghij234567', pending: '' } };
@@ -1402,16 +1427,41 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
         ],
         pools: [{ name: 'tank', health: 'ONLINE', sizeBytes: 3985729650688, allocBytes: 1979120929996, freeBytes: 2006608720692 }],
       }),
+      // Watched services and programs (#62): the NAS watches what its agent
+      // was told to; this computer whatever its panel names, all running.
+      ...(key === 'local'
+        ? { services: (localWatch?.services || []).map((name) => ({ name, running: true, state: 'running' })), processes: (localWatch?.processes || []).map((name) => ({ name, count: 1 })) }
+        : {
+          services: ((nasAgent ? nasAgent.collect : nasWatchDefault())?.services || []).map((name) => {
+            const known = { docker: 'Docker Application Container Engine', smbd: 'Samba SMB Daemon', nginx: 'A high performance web server and a reverse proxy server' }[name];
+            return name === 'nginx' ? { name, running: false, state: 'failed', description: known } : known ? { name, running: true, state: 'active (running)', description: known } : { name, running: false, state: 'not found' };
+          }),
+          processes: ((nasAgent ? nasAgent.collect : nasWatchDefault())?.processes || []).map((name) => ({ name, count: name === 'Plex Media Server' ? 1 : name === 'smbd' ? 3 : 0 })),
+        }),
       warnings: key === 'local' ? [] : [],
     };
   }
 
   const hostSummaries = () => ([
-    { key: 'local', name: settings.general.instanceName || 'This computer', source: 'local', status: 'up', stale: false, metrics: mockReading('local', 'studio-pc', 11) },
+    { key: 'local', name: settings.general.instanceName || 'This computer', source: 'local', status: 'up', stale: false, metrics: mockReading('local', 'studio-pc', 11), ...((localWatch?.services?.length || localWatch?.processes?.length) ? { watch: clone(localWatch) } : {}) },
     { key: 'agent:1', name: agents[0].name, source: 'agent', agent: clone(agents[0]), nodeId: nas.id, nodeName: nas.name, status: 'up', stale: false, metrics: mockReading('agent:1', 'nas.lan', 29) },
   ]);
 
   on('GET', /^\/api\/hosts$/, () => hostSummaries());
+  on('GET', /^\/api\/hosts\/local\/watchable$/, () => ({
+    services: [
+      { name: 'Spooler', detail: 'running · Print Spooler' }, { name: 'W32Time', detail: 'running · Windows Time' },
+      { name: 'wuauserv', detail: 'stopped · Windows Update' }, { name: 'Plex Update Service', detail: 'running · Plex Update Service' },
+    ],
+    processes: [{ name: 'explorer.exe', detail: '1 running' }, { name: 'Plex Media Server.exe', detail: '1 running' }, { name: 'svchost.exe', detail: '84 running' }],
+    problems: [],
+  }));
+  on('PUT', /^\/api\/hosts\/local\/watch$/, (m, body) => {
+    const tidy = (l) => [...new Set((l || []).map((s) => String(s).trim()).filter(Boolean))].sort();
+    for (const n of [...(body?.services || []), ...(body?.processes || [])]) if (String(n).trim().startsWith('-')) throw err(400, `"${n}" is not a service name`);
+    localWatch = { services: tidy(body?.services), processes: tidy(body?.processes) };
+    return clone(localWatch);
+  });
   on('GET', /^\/api\/hosts\/([^/]+)$/, (m) => {
     const key = decodeURIComponent(m[1]);
     const found = hostSummaries().find((x) => x.key === key);
@@ -1476,7 +1526,7 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     const a = agentById(m[1]);
     const bad = (body?.metrics || []).find((x) => !['cpu', 'memory', 'swap', 'load', 'disk', 'inodes', 'net', 'diskio', 'temp', 'psi', 'pool'].includes(x));
     if (bad) throw err(400, `"${bad}" is not a metric family`);
-    a.collect = { metrics: body?.metrics || [], interfaces: body?.interfaces || [], disks: body?.disks || [], mounts: body?.mounts || [] };
+    a.collect = { metrics: body?.metrics || [], interfaces: body?.interfaces || [], disks: body?.disks || [], mounts: body?.mounts || [], services: body?.services || [], processes: body?.processes || [] };
     return clone(a);
   });
   on('PUT', /^\/api\/agents\/(\d+)$/, (m, body) => { const a = agents.find((x) => x.id === Number(m[1])); if (!a) throw err(404, 'not found'); Object.assign(a, { name: body.name ?? a.name, nodeId: body.nodeId ?? a.nodeId, enabled: body.enabled ?? a.enabled }); return clone(a); });

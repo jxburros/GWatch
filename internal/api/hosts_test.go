@@ -240,6 +240,58 @@ func TestLocalHardwareIsListed(t *testing.T) {
 	}
 }
 
+// This computer's watched services and programs (#62): set by an
+// administrator, shown with the machine, kept across a restart of the
+// sampler, and chosen from a list made only when asked for.
+func TestLocalWatchIsSetListedAndKept(t *testing.T) {
+	ts, srv := newTestServer(t)
+	var hosts []model.HostSummary
+	call(t, ts, "GET", "/api/hosts", nil, &hosts)
+	if hosts[0].Watch != nil {
+		t.Fatalf("nothing is watched until someone chooses: %+v", hosts[0].Watch)
+	}
+
+	var saved model.CollectSelection
+	body := map[string]any{"services": []string{"nginx", " nginx "}, "processes": []string{"plex"}, "metrics": []string{"cpu"}}
+	if code := call(t, ts, "PUT", "/api/hosts/local/watch", body, &saved); code != 200 {
+		t.Fatalf("set: %d", code)
+	}
+	if len(saved.Services) != 1 || len(saved.Processes) != 1 || len(saved.Metrics) != 0 {
+		t.Errorf("only the watch lists are kept, tidied: %+v", saved)
+	}
+	call(t, ts, "GET", "/api/hosts", nil, &hosts)
+	if hosts[0].Watch == nil || hosts[0].Watch.Services[0] != "nginx" {
+		t.Errorf("the machine should say what it watches: %+v", hosts[0].Watch)
+	}
+	var stored model.CollectSelection
+	if err := srv.Store.GetSetting(t.Context(), "local_watch", &stored); err != nil || stored.Processes[0] != "plex" {
+		t.Errorf("stored: %+v %v", stored, err)
+	}
+
+	if code := call(t, ts, "PUT", "/api/hosts/local/watch", map[string]any{"services": []string{"--now"}}, nil); code != 400 {
+		t.Errorf("a name that reads as an option should be refused: %d", code)
+	}
+	var cleared model.CollectSelection
+	if code := call(t, ts, "PUT", "/api/hosts/local/watch", map[string]any{}, &cleared); code != 200 || cleared.Watching() {
+		t.Errorf("clearing: %d %+v", code, cleared)
+	}
+	if srv.Engine.Hosts().LocalWatch().Watching() {
+		t.Error("clearing should stop watching")
+	}
+
+	var list struct {
+		Services  []model.InventoryItem `json:"services"`
+		Processes []model.InventoryItem `json:"processes"`
+		Problems  []string              `json:"problems"`
+	}
+	if code := call(t, ts, "GET", "/api/hosts/local/watchable", nil, &list); code != 200 {
+		t.Fatalf("watchable: %d", code)
+	}
+	if len(list.Processes) == 0 && len(list.Problems) == 0 {
+		t.Errorf("a list of programs, or a reason there is none: %+v", list)
+	}
+}
+
 // mintPairing asks for a pairing code the way the Hardware page does.
 func mintPairing(t *testing.T, ts *httptest.Server, name string) (code string, pairing model.PairingCode) {
 	t.Helper()

@@ -7,8 +7,12 @@
 // when nobody has chosen: every kind of reading, and every interface that is not
 // obviously virtual. The picker therefore only writes a list when someone has
 // narrowed something, so leaving it alone changes nothing.
+//
+// Services and programs to watch (#62) are the exception: empty means none,
+// since "every service" is hundreds of readings nobody wants. They are names
+// typed or picked from what the machine said it has (watchPicker).
 
-import { h } from '../components.js';
+import { h, chipInput } from '../components.js';
 
 /** The kinds of reading an agent collects, in the order they are listed. */
 export const COLLECT_FAMILIES = [
@@ -51,12 +55,14 @@ export function collectionPicker({ value = {}, inventory = null, instances = tru
   });
 
   const kinds = instances ? INSTANCE_KINDS.map((k) => buildKind(id, k, value[k.key] || [], inventory?.[k.key] || [], disabled)) : [];
+  const watch = instances ? watchPicker({ value, inventory }) : null;
 
   const el = h('div', { class: 'stack-sm collect-picker' },
     h('fieldset', { class: 'collect-group' }, h('legend', null, 'Kinds of reading'),
       h('div', { class: 'collect-cols' }, famBoxes.map((b) => b.el))),
     kinds.map((k) => k.el),
-    instances && !inventory ? h('p', { class: 'note' }, 'Which network interfaces, disks and filesystems to report can be chosen once the machine has reported for the first time.') : null);
+    instances && !inventory ? h('p', { class: 'note' }, 'Which network interfaces, disks and filesystems to report can be chosen once the machine has reported for the first time.') : null,
+    watch ? watch.el : null);
 
   const api = {
     el,
@@ -65,6 +71,7 @@ export function collectionPicker({ value = {}, inventory = null, instances = tru
       const ticked = famBoxes.filter((b) => b.input.checked).map((b) => b.key);
       const out = { metrics: ticked.length === famBoxes.length ? [] : ticked };
       for (const k of kinds) out[k.key] = k.value();
+      if (watch) Object.assign(out, watch.value());
       // Nothing narrowed anywhere is "automatic": the empty selection.
       return out;
     },
@@ -79,7 +86,68 @@ export function describeSelection(sel = {}) {
   const parts = [];
   if (sel.metrics?.length) parts.push(`${sel.metrics.length} of ${COLLECT_FAMILIES.length} kinds of reading`);
   for (const k of INSTANCE_KINDS) if (sel[k.key]?.length) parts.push(`${sel[k.key].length} ${k.title.toLowerCase()}`);
-  return parts.length ? parts.join(', ') : 'everything, with virtual interfaces left out';
+  const watched = describeWatch(sel);
+  if (!parts.length) return watched ? `everything, with virtual interfaces left out; watching ${watched}` : 'everything, with virtual interfaces left out';
+  return watched ? `${parts.join(', ')}; watching ${watched}` : parts.join(', ');
+}
+
+/** The services and programs a selection watches, in words, or '' for none. */
+export function describeWatch(sel = {}) {
+  const n = (list) => (list || []).filter(Boolean).length;
+  const parts = [];
+  if (n(sel.services)) parts.push(`${n(sel.services)} service${n(sel.services) === 1 ? '' : 's'}`);
+  if (n(sel.processes)) parts.push(`${n(sel.processes)} program${n(sel.processes) === 1 ? '' : 's'}`);
+  return parts.join(' and ');
+}
+
+/**
+ * watchPicker({ value, inventory, note }) → { el, value(), setInventory(inv) }
+ *
+ * The services and programs to watch, each a list of names. A name can be
+ * typed, or picked from the machine's own list (`inventory.services`,
+ * `inventory.processes`), which an agent sends when it checks in and the
+ * computer GWatch runs on makes when asked. The machine's lists are hundreds
+ * long, so they are offered as suggestions while typing rather than as a
+ * wall of checkboxes. value() is `{ services: [...], processes: [...] }`.
+ */
+export function watchPicker({ value = {}, inventory = null, note = null } = {}) {
+  const kinds = [
+    { key: 'services', title: 'Services to watch', placeholder: 'e.g. nginx, docker, smbd', help: 'Each is a reading of its own: 1 running, 0 stopped. The hardware check is critical when a watched service stops. A systemd unit on Linux, a service name or display name on Windows, a launchd label on macOS.' },
+    { key: 'processes', title: 'Programs to watch', placeholder: 'e.g. plex, postgres', help: 'Each is a count of the copies running, by executable name. The hardware check is critical when none is running.' },
+  ];
+  const parts = kinds.map((k) => {
+    const holder = h('div');
+    let chips = null;
+    const listNote = h('p', { class: 'note' });
+    const build = (inv) => {
+      const items = inv?.[k.key] || [];
+      const current = chips ? chips.value : (value[k.key] || []).filter(Boolean);
+      chips = chipInput({ values: current, placeholder: k.placeholder, suggestions: items.map((i) => i.name) });
+      chips.input.setAttribute('aria-label', k.title);
+      holder.replaceChildren(chips);
+      const running = items.filter((i) => /^running|^\d+ running/.test(i.detail || '')).length;
+      listNote.textContent = items.length
+        ? `${items.length} on this machine${k.key === 'services' ? `, ${running} running` : ''} — start typing to pick one.`
+        : '';
+    };
+    build(inventory);
+    return {
+      key: k.key,
+      build,
+      el: h('fieldset', { class: 'collect-group', 'data-watch': k.key }, h('legend', null, k.title),
+        holder, h('p', { class: 'note' }, k.help), listNote),
+      value: () => chips.value,
+    };
+  });
+  const el = h('div', { class: 'stack-sm watch-picker' },
+    note ? h('p', { class: 'note' }, note) : null,
+    parts.map((p) => p.el));
+  return {
+    el,
+    value: () => Object.fromEntries(parts.map((p) => [p.key, p.value()])),
+    /** Offers a freshly made list of what the machine has, keeping what is chosen. */
+    setInventory(inv) { for (const p of parts) p.build(inv); },
+  };
 }
 
 function buildKind(id, kind, current, items, disabled) {

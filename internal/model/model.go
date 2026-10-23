@@ -552,6 +552,14 @@ func SystemDefaults() CheckConfig {
 			// Temperatures and pressure are charted but have no default:
 			// what is hot depends on the chip, and some report nonsense.
 			{Metric: MetricPool, Warn: Float(1), Crit: Float(2)},
+			// A service or program someone named is one they expect to be
+			// running, so the default is the obvious one: critical when the
+			// service is stopped (its reading is 0) or no copy of the program
+			// is running (a count of 0). Less is worse for both, so these are
+			// "at or below" levels. A machine watching nothing reports no such
+			// readings and these never come into play.
+			{Metric: MetricService, Crit: Float(0), Below: true},
+			{Metric: MetricProcess, Crit: Float(0), Below: true},
 		},
 	}
 }
