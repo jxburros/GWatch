@@ -235,6 +235,20 @@ func (s *Store) OldestResult(ctx context.Context) (*time.Time, error) {
 	return &t, nil
 }
 
+// OldestRollup returns the start of the oldest bucket of the given size, or nil
+// when there is none.
+func (s *Store) OldestRollup(ctx context.Context, bucket int) (*time.Time, error) {
+	var b sql.NullInt64
+	if err := s.queryRow(ctx, "SELECT MIN(bucket_start) FROM rollups WHERE bucket_seconds = ?", bucket).Scan(&b); err != nil {
+		return nil, err
+	}
+	if !b.Valid {
+		return nil, nil
+	}
+	t := time.Unix(b.Int64, 0)
+	return &t, nil
+}
+
 // Counts returns row counts used by Monitor Health.
 func (s *Store) Counts(ctx context.Context) (raw, r5m, r1h, r1d, events int64, err error) {
 	q := func(query string, args ...any) (int64, error) {

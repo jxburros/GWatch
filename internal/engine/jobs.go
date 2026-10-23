@@ -114,7 +114,17 @@ func (e *Engine) retentionLoop() {
 		return
 	case <-time.After(20 * time.Second):
 	}
-	if err := e.RunRetention(e.ctx, true); err != nil {
+	// After the first full backfill, a start only catches up from where the
+	// last one got to (see backfillMark), so a restart or an update no
+	// longer re-rolls the whole history while every result write waits.
+	since := time.Time{}
+	var mark backfillMark
+	if err := e.store.GetSetting(e.ctx, backfillMarkKey, &mark); err == nil && !mark.Through.IsZero() {
+		// Three days back covers readings an agent held through an outage
+		// (at most 48 h) and delivered late.
+		since = mark.Through.Add(-72 * time.Hour)
+	}
+	if err := e.runRetentionSince(e.ctx, true, true, since); err != nil {
 		e.RecordError("retention backfill", err)
 	}
 	ticker := time.NewTicker(5 * time.Minute)
@@ -142,7 +152,48 @@ func (e *Engine) RunRetention(ctx context.Context, backfill bool) error {
 	return e.runRetention(ctx, backfill, true)
 }
 
+// backfillMarkKey names the setting that records how far the last full
+// backfill got.
+const backfillMarkKey = "rollupBackfill"
+
+type backfillMark struct {
+	Through time.Time `json:"through"`
+}
+
+// backfillChunk is how much history one rollup statement covers during a
+// backfill. Each chunk is its own statement, so the database's single writer
+// is released between them and results keep being recorded while months of
+// history are rolled up.
+const backfillChunk = 24 * time.Hour
+
+// chunked calls fn over [from, to) in pieces of step, with every boundary a
+// multiple of step since the epoch (so of every bucket size that divides it).
+func chunked(ctx context.Context, from, to time.Time, step time.Duration, fn func(a, b time.Time) error) error {
+	secs := int64(step / time.Second)
+	a := time.Unix(from.Unix()-from.Unix()%secs, 0)
+	for a.Before(to) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		b := a.Add(step)
+		if b.After(to) {
+			b = to
+		}
+		if err := fn(a, b); err != nil {
+			return err
+		}
+		a = b
+	}
+	return nil
+}
+
 func (e *Engine) runRetention(ctx context.Context, backfill, cleanup bool) error {
+	return e.runRetentionSince(ctx, backfill, cleanup, time.Time{})
+}
+
+// runRetentionSince is runRetention with a backfill that starts at since
+// rather than at the beginning of the data, when since is set.
+func (e *Engine) runRetentionSince(ctx context.Context, backfill, cleanup bool, since time.Time) error {
 	start := time.Now()
 	now := start
 	s := e.Settings().Retention
@@ -159,22 +210,47 @@ func (e *Engine) runRetention(ctx context.Context, backfill, cleanup bool) error
 		if oldest != nil {
 			from5 = *oldest
 		}
+		// hourly/daily are built from the 5-minute tier which may reach
+		// further back than raw data; rebuild from the very beginning.
 		from1h = time.Unix(0, 0)
 		from1d = time.Unix(0, 0)
-		if oldest != nil {
-			// hourly/daily are built from the 5-minute tier which may reach
-			// further back than raw data; rebuild from the very beginning.
-			from1h = time.Unix(0, 0)
+		if !since.IsZero() {
+			from5 = laterOf(from5, since)
+			from1h, from1d = since, since
 		}
 	}
 	var deleted int64
 	var runErr error
-	if _, err := st.RollupFromRaw(ctx, from5, now); err != nil {
-		runErr = fmt.Errorf("5-minute rollup: %w", err)
-	}
-	if runErr == nil {
-		if _, err := st.RollupUp(ctx, store.Bucket5m, store.Bucket1h, from1h, now); err != nil {
+	if backfill {
+		if err := chunked(ctx, from5, now, backfillChunk, func(a, b time.Time) error { _, err := st.RollupFromRaw(ctx, a, b); return err }); err != nil {
+			runErr = fmt.Errorf("5-minute rollup: %w", err)
+		}
+		// Hourly buckets are built from the 5-minute ones, so there is
+		// nothing to roll up before the oldest of those (and walking a week
+		// at a time from 1970 would be thousands of empty statements).
+		if oldest5, err := st.OldestRollup(ctx, store.Bucket5m); err != nil {
 			runErr = fmt.Errorf("hourly rollup: %w", err)
+		} else if oldest5 == nil {
+			from1h = now
+		} else {
+			from1h = laterOf(from1h, *oldest5)
+		}
+		if runErr == nil {
+			if err := chunked(ctx, from1h, now, 7*backfillChunk, func(a, b time.Time) error {
+				_, err := st.RollupUp(ctx, store.Bucket5m, store.Bucket1h, a, b)
+				return err
+			}); err != nil {
+				runErr = fmt.Errorf("hourly rollup: %w", err)
+			}
+		}
+	} else {
+		if _, err := st.RollupFromRaw(ctx, from5, now); err != nil {
+			runErr = fmt.Errorf("5-minute rollup: %w", err)
+		}
+		if runErr == nil {
+			if _, err := st.RollupUp(ctx, store.Bucket5m, store.Bucket1h, from1h, now); err != nil {
+				runErr = fmt.Errorf("hourly rollup: %w", err)
+			}
 		}
 	}
 	if runErr == nil {
@@ -222,6 +298,9 @@ func (e *Engine) runRetention(ctx context.Context, backfill, cleanup bool) error
 		if deleted > 0 {
 			_ = st.Checkpoint(ctx)
 		}
+	}
+	if backfill && runErr == nil {
+		_ = st.PutSetting(ctx, backfillMarkKey, backfillMark{Through: start})
 	}
 	status := e.retentionStatus(ctx, s)
 	status.LastRunAt = ptrTime(start)
@@ -632,4 +711,11 @@ func (e *Engine) NodeStatus(n model.Node) (model.Status, bool) {
 func (e *Engine) hostSampleLoop() {
 	defer e.wg.Done()
 	e.hosts.Run(e.ctx)
+}
+
+func laterOf(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }

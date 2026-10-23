@@ -496,3 +496,25 @@ func TestAlertMailRetriesAndIsBounded(t *testing.T) {
 		t.Fatalf("%d e-mails were sent at once, want at most %d", peak, mailSlots)
 	}
 }
+
+// #107: the backfill is done in day-sized pieces whose boundaries line up
+// with every bucket, and covers the whole range once.
+func TestChunkedCoversTheRangeOnAlignedBoundaries(t *testing.T) {
+	from := time.Date(2026, 10, 1, 13, 7, 0, 0, time.UTC)
+	to := time.Date(2026, 10, 4, 2, 0, 0, 0, time.UTC)
+	var got [][2]time.Time
+	if err := chunked(context.Background(), from, to, 24*time.Hour, func(a, b time.Time) error {
+		got = append(got, [2]time.Time{a, b})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 4 || !got[0][0].Equal(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)) || !got[3][1].Equal(to) {
+		t.Fatalf("chunks = %v", got)
+	}
+	for i := 1; i < len(got); i++ {
+		if !got[i][0].Equal(got[i-1][1]) || got[i][0].Unix()%300 != 0 {
+			t.Fatalf("chunk %d does not follow on from the last on a bucket boundary: %v", i, got)
+		}
+	}
+}
