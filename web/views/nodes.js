@@ -1,7 +1,7 @@
 // Nodes list: searchable, filterable list of everything being monitored.
 
 import { api } from '../api.js';
-import { h, icon, clear, append, preserveFocus, replace, statusSpine, statusWord, checkChip, importanceBadge, tagList, toggle, menuButton, toast, confirmDialog, openModal, emptyState, skeleton } from '../components.js';
+import { h, icon, clear, append, preserveFocus, syncQuery, replace, statusSpine, statusWord, checkChip, importanceBadge, tagList, toggle, menuButton, toast, confirmDialog, openModal, emptyState, skeleton } from '../components.js';
 import { relTime, nodeGroups, inGroup, NODE_SORTS, sortNodes, compareNames } from '../fmt.js';
 import { addAgentNode } from './machines.js';
 
@@ -100,6 +100,9 @@ export async function mount(root, ctx) {
   const sectionEls = new Map();  // group name -> { el, head, rows }
 
   function renderList() {
+    // The filters live in the address too, so a reload, Back and a copied link
+    // keep them. (Sort is remembered per browser, so it is left out.)
+    if (!state.destroyed) syncQuery('/nodes', { q: state.q.trim(), group: state.group, status: state.status, tag: state.tag });
     if (!state.nodes.length) {
       countEl.textContent = '';
       clear(listEl);

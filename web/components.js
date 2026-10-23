@@ -822,6 +822,27 @@ export const CHECK_TYPES = [
 ];
 export function checkTypeLabel(t) { return (CHECK_TYPES.find((x) => x.value === t) || { label: t }).label; }
 
+// syncQuery writes a view's filters into the address, so a reload, Back and
+// Forward and a copied link all keep them. Each key set to '' or null is taken
+// out; the rest of the query is kept. replaceState fires no hashchange, so the
+// view on screen is not built again for it. Nothing is written unless the
+// address is still the view's own (route), so a view finishing a refresh after
+// the user has moved on cannot rewrite someone else's address.
+export function syncQuery(route, values) {
+  const hash = (location.hash || '#/dashboard').slice(1);
+  const [path, query = ''] = hash.split('?');
+  if (path.replace(/\/+$/, '') !== route) return;
+  const params = new URLSearchParams(query);
+  for (const [k, v] of Object.entries(values)) {
+    if (v == null || v === '') params.delete(k); else params.set(k, String(v));
+  }
+  const q = params.toString();
+  const next = `#${path}${q ? `?${q}` : ''}`;
+  if (next !== location.hash) {
+    try { window.history.replaceState(window.history.state, '', next); } catch { /* sandboxed frame: the address stays as it was */ }
+  }
+}
+
 /** Preserve keyboard focus across a synchronous refresh using stable semantic keys. */
 export function preserveFocus(root) {
   const active = document.activeElement;

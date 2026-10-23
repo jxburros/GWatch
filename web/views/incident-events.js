@@ -1,7 +1,7 @@
 // Incident timeline: every event grouped by day with filters and notes.
 
 import { api, qs } from '../api.js';
-import { h, icon, clear, replace, eventIcon, eventMeta, EVENT_META, toast, openModal, field, selectInput, textarea, emptyState, skeleton } from '../components.js';
+import { h, icon, clear, replace, eventIcon, eventMeta, EVENT_META, toast, openModal, field, selectInput, textarea, emptyState, skeleton, syncQuery } from '../components.js';
 import { dayHeading, dayKey, timeShort, relTime, metricLabel } from '../fmt.js';
 
 const TYPE_GROUPS = [
@@ -32,19 +32,24 @@ const TYPE_GROUPS = [
 const PAGE = 100;
 
 export async function mount(root, ctx) {
-  const state = { events: [], nodes: [], type: ctx.query.get('type') || '', nodeId: ctx.query.get('nodeId') || '', hasMore: true, loading: false, destroyed: false };
+  const state = { events: [], nodes: [], type: ctx.query.get('type') || '', nodeId: ctx.query.get('nodeId') || '', hasMore: true, loading: false, destroyed: false, request: 0 };
 
-  const typeSel = selectInput({ options: TYPE_GROUPS, value: state.type, 'aria-label': 'Event type', onchange: () => { state.type = typeSel.value; reload(); } });
-  const nodeSel = selectInput({ options: [{ value: '', label: 'All nodes' }], value: '', 'aria-label': 'Node', onchange: () => { state.nodeId = nodeSel.value; reload(); } });
+  // A filter change goes into the address (so a reload or a shared link keeps
+  // it) and into the export link (so the CSV is what is on screen).
+  const filtersChanged = () => { syncQuery('/incidents', { type: state.type, nodeId: state.nodeId }); exportLink.href = exportHref(); reload(); };
+  const typeSel = selectInput({ options: TYPE_GROUPS, value: state.type, 'aria-label': 'Event type', onchange: () => { state.type = typeSel.value; filtersChanged(); } });
+  const nodeSel = selectInput({ options: [{ value: '', label: 'All nodes' }], value: '', 'aria-label': 'Node', onchange: () => { state.nodeId = nodeSel.value; filtersChanged(); } });
   const toolbar = h('section', { class: 'filter-bar', 'aria-label': 'Filter events' }, h('div', { class: 'toolbar' }, h('div', { style: { minWidth: '220px' } }, typeSel), h('div', { style: { minWidth: '220px' } }, nodeSel)));
   const listEl = h('div', null, skeleton({ lines: 5 }));
   const moreWrap = h('div', { style: { display: 'flex', justifyContent: 'center', marginTop: '8px' } });
   root.append(toolbar, listEl, moreWrap);
 
+  const exportHref = () => `/api/export/events.csv${qs({ nodeId: state.nodeId || null, type: state.type || null, limit: 5000 })}`;
+  const exportLink = h('a', { class: 'btn', href: exportHref(), download: 'events.csv' }, icon('download'), 'Export CSV');
   ctx.setTitle('Incidents', {
     actions: [
       h('a', { class: 'btn', href: '#/audit/events' }, icon('audit'), 'Full audit log'),
-      h('a', { class: 'btn', href: `/api/export/events.csv${qs({ nodeId: state.nodeId || null, limit: 5000 })}`, download: 'events.csv' }, icon('download'), 'Export CSV'),
+      exportLink,
       h('button', { class: 'btn btn-primary', type: 'button', onclick: addNote }, icon('note'), 'Add note'),
     ],
   });
@@ -62,23 +67,29 @@ export async function mount(root, ctx) {
   async function fetchPage(before) {
     return api.get(`/api/events${qs({ limit: PAGE, before, type: state.type, nodeId: state.nodeId })}`);
   }
+  // Every reload is numbered, and an answer to anything but the latest is
+  // dropped: when the filters change quickly, a slow answer for the previous
+  // filter would otherwise land last and show the wrong events.
   async function reload() {
+    const token = ++state.request;
     state.events = []; state.hasMore = true;
     replace(listEl, skeleton({ lines: 5 }));
     try {
       const rows = await fetchPage(null);
-      if (state.destroyed) return;
+      if (state.destroyed || token !== state.request) return;
       state.events = rows || [];
       state.hasMore = state.events.length >= PAGE;
       render();
-    } catch (e) { replace(listEl, h('div', { class: 'card' }, emptyState({ icon: 'alert', title: 'Could not load events', text: e.message }))); }
+    } catch (e) { if (!state.destroyed && token === state.request) replace(listEl, h('div', { class: 'card' }, emptyState({ icon: 'alert', title: 'Could not load events', text: e.message }))); }
   }
   async function loadMore(btn) {
     if (!state.events.length) return;
+    const token = state.request;
     btn.disabled = true; btn.textContent = 'Loading…';
     try {
       const last = state.events[state.events.length - 1];
       const rows = await fetchPage(last.id);
+      if (state.destroyed || token !== state.request) return;
       state.events.push(...(rows || []));
       state.hasMore = (rows || []).length >= PAGE;
       render();
@@ -86,9 +97,10 @@ export async function mount(root, ctx) {
   }
   async function refresh() {
     // Pull the newest page and merge unseen events at the top.
+    const token = state.request;
     try {
       const rows = await fetchPage(null);
-      if (state.destroyed) return;
+      if (state.destroyed || token !== state.request) return;
       const seen = new Set(state.events.map((e) => e.id));
       const fresh = (rows || []).filter((e) => !seen.has(e.id));
       if (fresh.length) { state.events = [...fresh, ...state.events]; render(); }
