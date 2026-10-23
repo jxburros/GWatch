@@ -408,12 +408,23 @@ says where the new token has to go.
 **Rejected: live reload.** An edit applies on restart, which is what was asked
 for and needs no watcher, signal or Windows equivalent of either.
 
-**Held readings are memory only.** Up to `buffer` (six hours by default) of
-readings are held while GWatch is unreachable and sent oldest first, so an
-outage leaves a gap no longer than itself. Not written to disk: the agent stores
-nothing on a machine beyond its configuration, and hours-old readings lost to a
-restart mid-outage are not worth a spool file. GWatch already accepts readings up
-to 48 hours old, which is also the ceiling on `buffer`.
+**Held readings are kept in a small bounded file.** Up to `buffer` (six hours by
+default) of readings are held while GWatch is unreachable and sent oldest first,
+so an outage leaves a gap no longer than itself. *Revised* (issue #74): they were
+memory only at first, on the grounds that the agent should store nothing beyond
+its configuration; but the outages worth surviving are exactly the ones that
+come with a power cut or a reboot, and a buffer that forgets everything then is
+not much of one. So they are now kept in `agent-queue.jsonl` beside `agent.json`,
+under three limits — the `buffer` age, 4,000 readings, about 8 MB — with the
+oldest dropped first, because the watched machine must never be filled up by its
+own agent. Nothing is written while GWatch answers; a held reading is appended
+(one small write per interval through an outage) and the file is rewritten
+atomically only when readings leave its front. GWatch accepts readings up to 48
+hours old, which is also the ceiling on `buffer`. A late reading is marked
+(`X-GWatch-Held`) and GWatch refuses one whose time is implausible rather than
+filing it at arrival, which is what it still does for a live reading from a
+machine with a wrong clock: yesterday's reading stamped "now" would be judged as
+the machine's current state.
 
 ## 14. Automatic collection leaves out what looks like scaffolding.
 

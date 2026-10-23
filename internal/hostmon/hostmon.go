@@ -188,6 +188,29 @@ func (m *Monitor) settleTimestamp(ts time.Time) time.Time {
 	return ts
 }
 
+// CheckHeldTimestamp says whether GWatch can believe the time on a reading that
+// an agent held through an outage and is delivering late. A live reading whose
+// time is implausible is filed at arrival (settleTimestamp), because the machine
+// is plainly reporting now and only its clock is wrong. A held reading is the
+// opposite case: its whole value is when it was taken, and filing yesterday's
+// reading as "now" would have it judged as the machine's current state. So a
+// held reading with no time, one further ahead of GWatch's clock than the
+// allowed skew, or one older than the longest an agent may hold readings, is
+// refused instead; the agent drops a refused reading rather than retrying it.
+func CheckHeldTimestamp(ts, now time.Time) error {
+	switch {
+	case ts.IsZero():
+		return errors.New("a held-back reading must say when it was taken")
+	case ts.After(now.Add(maxClockSkew)):
+		return fmt.Errorf("this held-back reading is timed %s ahead of GWatch's clock (at most %s is allowed); check the machine's clock",
+			ts.Sub(now).Round(time.Second), maxClockSkew)
+	case ts.Before(now.Add(-maxReportAge)):
+		return fmt.Errorf("this held-back reading was taken %s ago, longer than GWatch keeps late readings for (%s)",
+			now.Sub(ts).Round(time.Minute), maxReportAge)
+	}
+	return nil
+}
+
 // LocalHost returns the newest reading for the computer GWatch runs on. It
 // takes one on demand if the sampler has not produced one yet, so a check that
 // runs before the first tick still has something to evaluate.

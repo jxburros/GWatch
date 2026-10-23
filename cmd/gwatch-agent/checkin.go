@@ -1,5 +1,5 @@
-// The agent's occasional question to GWatch, and the queue that keeps readings
-// through an outage.
+// The agent's occasional question to GWatch. (The queue that keeps readings
+// through an outage is in spool.go.)
 //
 // The agent still only ever dials out. Every so often it asks GWatch a small,
 // fixed set of questions and applies the answers, each on its own terms: which
@@ -38,15 +38,6 @@ import (
 // reading has been taken by then, so the inventory it carries is real, and a
 // machine that has just paired shows its checkboxes in GWatch within moments.
 const firstCheckIn = 8 * time.Second
-
-// maxFlushPerCycle bounds how many held readings are sent in one go, so an
-// agent that has been offline for hours catches up over a few cycles rather
-// than in one burst.
-const maxFlushPerCycle = 120
-
-// maxQueued bounds the held readings by count whatever the buffer setting
-// says, so a very short interval with a long buffer cannot grow without limit.
-const maxQueued = 4000
 
 // agentRuntime is the part of the agent that changes while it runs: the token it
 // presents (it can be rotated), what GWatch wants collected, and what this
@@ -380,71 +371,4 @@ func sameSelection(a, b model.CollectSelection) bool {
 	x, _ := json.Marshal(a.Normalize())
 	y, _ := json.Marshal(b.Normalize())
 	return bytes.Equal(x, y)
-}
-
-// ---- holding readings through an outage ----
-
-// sendFailure is a report that did not go through, with whether trying the same
-// reading again later can help.
-type sendFailure struct {
-	err   error
-	retry bool
-}
-
-func (f *sendFailure) Error() string { return f.err.Error() }
-func (f *sendFailure) Unwrap() error { return f.err }
-
-// readingQueue holds readings that could not be delivered, oldest first, so a
-// gap in the network leaves a gap in the history no longer than the gap itself.
-// It lives in memory only: the agent stores nothing on this machine beyond its
-// configuration, and a reading that is hours old and lost to a restart is not
-// worth a spool file.
-type readingQueue struct {
-	max  int
-	held []model.HostMetrics
-}
-
-func newReadingQueue(cfg config) *readingQueue {
-	n := 0
-	if cfg.buffer > 0 && cfg.interval > 0 {
-		n = int(cfg.buffer / cfg.interval)
-	}
-	return &readingQueue{max: max(0, min(n, maxQueued))}
-}
-
-func (q *readingQueue) len() int { return len(q.held) }
-
-// add puts a new reading at the back, dropping the oldest if the queue is full.
-// With no buffer at all the queue holds only what is about to be sent.
-func (q *readingQueue) add(m model.HostMetrics) {
-	q.held = append(q.held, m)
-	if limit := max(q.max, 1); len(q.held) > limit {
-		q.held = q.held[len(q.held)-limit:]
-	}
-}
-
-// flush sends held readings oldest first and stops at the first that cannot go.
-// It reports how many were delivered, and the failure if there was one. A
-// reading the server refuses outright (not an outage, a verdict) is dropped,
-// because holding it would block everything behind it for ever.
-func (q *readingQueue) flush(ctx context.Context, sendOne func(model.HostMetrics) error) (sent int, err error) {
-	for len(q.held) > 0 && sent < maxFlushPerCycle {
-		if ctx.Err() != nil {
-			return sent, ctx.Err()
-		}
-		err := sendOne(q.held[0])
-		if err == nil {
-			q.held = q.held[1:]
-			sent++
-			continue
-		}
-		var sf *sendFailure
-		if errors.As(err, &sf) && !sf.retry {
-			log.Printf("dropping a reading GWatch refused: %v", err)
-			q.held = q.held[1:]
-			continue
-		}
-		return sent, err
-	}
-	return sent, nil
 }

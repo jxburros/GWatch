@@ -770,14 +770,17 @@ func (p *program) restartForUpdate() {
 
 // report sends a reading every interval, backing off when the server cannot
 // be reached and recovering as soon as it can. Readings that could not be
-// delivered are held, oldest first, and sent when it can — the agent keeps
-// nothing on this machine, but it does not throw away the last few hours just
-// because the network was down for them.
+// delivered are held, oldest first, and sent when it can, so the last few hours
+// are not thrown away just because the network was down for them; they are kept
+// in a small bounded file beside agent.json while they wait, so a restart or a
+// power cut during the outage does not throw them away either (spool.go).
 func (p *program) report(ctx context.Context) {
 	collector := newCollector(p.cfg)
 	client := newClient(p.cfg)
 	rt := newRuntime(p.cfg)
-	queue := newReadingQueue(p.cfg)
+	queue := openReadingQueue(p.cfg, queueFile())
+	// Whatever is still held when the agent stops is on disk for the next run.
+	defer queue.sync()
 	log.Printf("gwatch-agent %s reporting to %s every %s (settings: %s)", version, p.cfg.server, p.cfg.interval, p.cfg.configPathOrDefault())
 	if ov := overrides(p.cfg); len(ov) > 0 {
 		for _, o := range ov {
@@ -837,6 +840,7 @@ func (p *program) report(ctx context.Context) {
 				}
 			}
 		}
+		queue.sync()
 		rt.writeStatus(p.cfg, queue.len())
 
 		select {
@@ -877,6 +881,9 @@ func send(ctx context.Context, client *http.Client, cfg config, metrics model.Ho
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+cfg.token)
 	req.Header.Set("User-Agent", userAgent())
+	if isHeld(cfg, metrics, time.Now()) {
+		req.Header.Set(heldHeader, "1")
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -896,6 +903,25 @@ func send(ctx context.Context, client *http.Client, cfg config, metrics model.Ho
 			resp.StatusCode, strings.TrimSpace(string(snippet)))}
 	}
 	return &sendFailure{retry: retry, err: fmt.Errorf("the server answered HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))}
+}
+
+// heldHeader marks a reading that is being delivered late, after it was held
+// through an outage. GWatch keeps the time such a reading was taken, and refuses
+// one whose time it cannot believe rather than filing it as current: a reading
+// from yesterday stamped "now" would be judged as if the machine were in that
+// state now. A live reading carries no mark, so a machine whose clock is simply
+// wrong still has its readings filed, at the time they arrive.
+const heldHeader = "X-GWatch-Held"
+
+// isHeld is whether a reading is being sent late: taken more than an interval
+// ago by this machine's own clock, which is the clock that took it, so the
+// answer does not depend on whether this clock agrees with GWatch's.
+func isHeld(cfg config, m model.HostMetrics, now time.Time) bool {
+	interval := cfg.interval
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	return !m.Timestamp.IsZero() && now.Sub(m.Timestamp) > interval
 }
 
 func runOnce(cfg config) error {
