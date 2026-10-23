@@ -129,6 +129,12 @@ to change:
 Change a value, then restart the agent (`gwatch-agent restart`, or restart the
 machine) and it applies. Durations are written like `"90s"`, `"15m"`, `"6h"`.
 
+The agent keeps a copy of the file beside it, `agent.json.bak`, and brings it
+up to date each time it starts. If the machine loses power while the file is
+being written and it comes back empty or cut off, the agent runs from the copy,
+says so in its log, and writes the file whole again the next time it saves it.
+A mistake made editing the file by hand is still reported, not covered over.
+
 **Precedence**, lowest to highest: built-in defaults, this file, environment
 variables (`GWATCH_SERVER`, `GWATCH_AGENT_TOKEN`, …), command-line flags. Run
 `gwatch-agent config show` to see every setting with the layer that decided it —
@@ -443,12 +449,19 @@ shape works here too — `gwatch-agent print` shows the format.
 | Memory and swap | yes | yes | yes |
 | Filesystem space and inodes | yes | space only | yes |
 | Network throughput and errors | yes | yes | yes |
-| Disk read/write throughput | yes | yes (needs administrator) | **no** |
+| Disk read/write throughput | yes | yes (needs administrator) | yes (from `ioreg`) |
+| Disk busy (utilisation) | yes | yes (needs administrator) | yes (from `ioreg`) |
 
 macOS has no way to read processor utilisation without a native extension, so
 the agent reports **load average per core** instead and says so in the
 reading's warnings. The hardware check falls back to it, so a macOS machine is
 still watched — set a load threshold rather than a processor one.
+
+Disk busy is the share of each second a disk spent servicing requests;
+sustained readings near 100% mean the disk, not the processor, is what the
+machine is waiting on. On Windows and macOS it is worked out from the time
+the disk spent on reads and writes, which counts overlapping requests twice, so
+a fast SSD with many requests in flight can read high before it is the limit.
 
 Windows disk throughput needs the process to be able to open
 `\\.\PhysicalDriveN`, which the service account can and an ordinary user
