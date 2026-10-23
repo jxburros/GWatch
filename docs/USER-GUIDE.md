@@ -203,7 +203,7 @@ Each node carries:
 ### Templates
 
 **Add node** starts from a template, which prefills sensible checks and
-thresholds. There are ten:
+thresholds. There are eleven:
 
 | Template | Checks it creates |
 |---|---|
@@ -211,6 +211,7 @@ thresholds. There are ten:
 | **Home server** | *Reachable (ping)*, *SSH port 22* (TCP), *Web interface* (HTTP, TLS errors ignored) |
 | **Network device** | *Reachable (ping)*, *Internet name lookup* (DNS for `google.com`), *Admin page port 80* (TCP) |
 | **SNMP device** | *Reachable (ping)*, *SNMP readings* (v2c, community `public`, uptime and device name) — then **Pick interfaces** for the ports |
+| **Matter device** | *Matter server port 5580* (TCP), *Matter readings* — then **Load devices** to pick the device and its readings |
 | **Ping only** | *Reachable (ping)* — the quickest way to add a printer or a camera |
 | **API endpoint** | *API responds* (HTTP, expects 200-299), *Status value* (JSON, `status` must equal `ok`) |
 | **TCP service** | *Port accepts connections* — port 32400, i.e. Plex, ready to change |
@@ -461,6 +462,30 @@ refused. Up to 64 readings per check, fetched in one request per run.
 > result message says so, but it cannot tell them apart for you.
 
 See [`SNMP.md`](SNMP.md) for enabling SNMP on the device end.
+
+### Matter
+
+Reads Matter sensors, plugs and bridges — temperature, humidity, on/off, door
+and window contacts, occupancy, light level and battery — through
+**python-matter-server**, the Matter controller Home Assistant uses, running
+beside GWatch. GWatch asks it over a WebSocket and stores only its address; the
+Matter fabric and its credentials stay in the server's own storage.
+
+1. Run python-matter-server (see [`MATTER.md`](MATTER.md) for a Docker Compose
+   file) and add a node from the **Matter device** template with that machine as
+   its host — or add a **Matter** check to any node and fill in **Matter
+   server** (`ws://host:5580/ws`).
+2. To add a device to the Matter server, open **Add a device to the Matter
+   server** in the check and paste its pairing code. A device already in Apple
+   Home, Google Home, Alexa or SmartThings gives a fresh code from that app and
+   stays there too.
+3. Press **Load devices**, pick the device, tick the readings and **Add
+   readings**. A bridge lists every device behind it.
+
+States are charted as 1 and 0 — on, open and occupied are 1 — so a state is an
+alert with a threshold: **Crit > 0** on a contact marks the check down while the
+door is open. A device the Matter server cannot reach marks the check down. Thread
+devices need a Thread border router on the same network as the Matter server.
 
 ---
 

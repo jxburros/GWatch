@@ -45,8 +45,10 @@ The agent is unchanged and stays at **gwatch-agent 0.5.0**. Full detail in
 - **Check types**: Ping, HTTP/S, HTTPS certificate, TCP port, DNS, Keyword, JSON, Custom
   script (run your own command), Hardware health (this computer, or any machine you
   install the small agent on — processor, memory, swap, load, disks, inodes, network and
-  disk throughput) and SNMP (readings off a router, switch or access point — test the
-  connection and pick ports by name, no OIDs to look up).
+  disk throughput), SNMP (readings off a router, switch or access point — test the
+  connection and pick ports by name, no OIDs to look up) and Matter (sensors, plugs and
+  bridges read through a python-matter-server sidecar — load its devices and tick the
+  readings).
 - **Every reading stands on its own**: each hardware metric, each SNMP OID and a JSON
   check's recorded value has its own value, status, threshold, chart, incident and
   trigger variable.
@@ -144,6 +146,7 @@ deliberately does and does not do on a machine.
 | [`docs/HARDWARE.md`](docs/HARDWARE.md) | Hardware health, the agent, its trust model, and what each platform can measure |
 | [`docs/AGENT-DECISIONS.md`](docs/AGENT-DECISIONS.md) | Why the agent is built the way it is: self-update, what GWatch deliberately cannot do to a machine, and the options not taken |
 | [`docs/SNMP.md`](docs/SNMP.md) | SNMP checks: enabling SNMP on a router or switch, choosing OIDs, interface traffic in bits per second |
+| [`docs/MATTER.md`](docs/MATTER.md) | Matter devices: running python-matter-server beside GWatch, commissioning with a pairing code, the readings and what Thread needs |
 | [`docs/RECIPES.md`](docs/RECIPES.md) | Ready-made trigger/endpoint recipes: Home Assistant, Slack/Discord, ntfy/Pushover, Docker, git |
 | [`docs/REMOTE-ACCESS.md`](docs/REMOTE-ACCESS.md) | Reaching GWatch from outside your network safely — accounts, API keys, Tailscale, a TLS proxy |
 | [`docs/RESTORE.md`](docs/RESTORE.md) | Moving GWatch to a new machine: backup, restore, and what does and doesn't come across |

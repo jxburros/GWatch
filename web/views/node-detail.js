@@ -470,7 +470,7 @@ export async function mount(root, ctx) {
     const groups = chartGroups(c);
     if (!groups.length) return null;
     const n = state.node;
-    const heading = c.type === 'snmp' ? 'SNMP readings' : c.type === 'system' ? 'hardware metrics' : 'recorded value';
+    const heading = c.type === 'snmp' ? 'SNMP readings' : c.type === 'matter' ? 'Matter readings' : c.type === 'system' ? 'hardware metrics' : 'recorded value';
     const section = h('div', { class: 'stack-sm', 'data-check': c.id }, h('div', { class: 'section-title' }, `${c.name} — ${heading}`));
     let drew = false;
     for (const g of groups) {
@@ -493,6 +493,7 @@ export async function mount(root, ctx) {
     if (!drew) {
       section.append(h('p', { class: 'note' }, c.type === 'snmp'
         ? 'No readings recorded in this period yet. A counter also needs two runs before it has a rate to chart.'
+        : c.type === 'matter' ? 'No readings recorded in this period yet. A reading the device reports no value for is not charted.'
         : c.type === 'system' ? 'No hardware readings recorded in this period yet.'
           : 'No value recorded in this period yet. Only a number is charted; text is kept in the last result.'));
     }

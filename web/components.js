@@ -814,6 +814,7 @@ export const CHECK_TYPES = [
   { value: 'cert', label: 'HTTPS certificate', desc: 'Check that the TLS certificate is valid and warn before it expires.' },
   { value: 'tcp', label: 'TCP port', desc: 'Can a connection be opened on a port? Good for SSH (22), Plex (32400), databases.' },
   { value: 'snmp', label: 'SNMP', desc: 'Read a switch, router, firewall, access point, printer or UPS directly: each port’s link and traffic, uptime, processor load. Test the connection and pick ports — no OIDs needed.' },
+  { value: 'matter', label: 'Matter', desc: 'Read Matter sensors, plugs and bridges through a python-matter-server: temperature, humidity, on/off, door contacts, motion, light level and battery, each with its own thresholds.' },
   { value: 'dns', label: 'DNS', desc: 'Does the hostname resolve, optionally to the addresses you expect?' },
   { value: 'keyword', label: 'Keyword', desc: 'Load a page and check that some text is present (or absent).' },
   { value: 'json', label: 'JSON', desc: 'Call an API and check that a value at a path matches what you expect.' },

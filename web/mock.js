@@ -84,6 +84,24 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     mkCheck(ha.id, 'ping', 'Ping', { config: { pingCount: 4 }, base: 1.4, noise: 0.5 }),
     mkCheck(ha.id, 'http', 'Frontend', { config: { target: 'http://homeassistant.local:8123/', expectedStatus: '200', certCheck: false, latencyWarnMs: 800 }, base: 140, noise: 0.5, interval: 120 }),
     mkCheck(ha.id, 'json', 'API alive', { config: { target: 'http://homeassistant.local:8123/api/', jsonPath: 'message', jsonExpected: 'API running.', headers: { Authorization: 'Bearer ••••••' } }, base: 95, noise: 0.4, interval: 300 }),
+    // Matter sensors behind a bridge, read through the python-matter-server
+    // add-on on the same box (#45): the node host stands in for the server
+    // address, so the check names none of its own.
+    mkCheck(ha.id, 'matter', 'Matter sensors', {
+      interval: 120,
+      config: {
+        matterNodeId: 4,
+        matterReadings: [
+          { endpoint: 2, kind: 'temperature', name: 'Living room temperature', unit: '°C', warnAbove: 26, critAbove: 30 },
+          { endpoint: 2, kind: 'humidity', name: 'Living room humidity', unit: '%', warnAbove: 65 },
+          { endpoint: 3, kind: 'contact', name: 'Front door open', critAbove: 0 },
+          { endpoint: 4, kind: 'onoff', name: 'Heater plug' },
+          { endpoint: 2, kind: 'battery', name: 'Living room battery', unit: '%', warnBelow: 20, critBelow: 10 },
+        ],
+      },
+      base: 38, noise: 0.4,
+      message: '5 readings read from node 4 in 38 ms · Living room temperature 21.4 °C, Living room humidity 47.2 %, Front door open shut and 2 more',
+    }),
   ];
   const site = mkNode({ name: 'Family website', host: 'https://www.example.org', group: 'Internet', tags: ['public', 'wordpress'], importance: 'high', template: 'website', notes: 'Hosted at a shared host. Certificate renews automatically via Let\u2019s Encrypt — check why it is late.' });
   site.checks = [
@@ -196,6 +214,28 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     return v;
   }
 
+  // matterReading invents one reading of a Matter check at time t, shaped like
+  // internal/checks' MatterValue: a gentle daily wave for a measurement, a
+  // state as its word and its 1 or 0. The door stays shut, so the demo check
+  // is up; the battery drains slowly over the month.
+  function matterReading(rd, t, r) {
+    const paths = { temperature: '1026/0', humidity: '1029/0', contact: '69/0', onoff: '6/0', occupancy: '1030/0', illuminance: '1024/0', battery: '47/12' };
+    const v = { name: rd.name, endpoint: rd.endpoint, path: `${rd.endpoint}/${paths[rd.kind] || `${rd.cluster}/${rd.attribute}`}`, unit: rd.unit || '' };
+    const day = Math.sin((t / DAY) * Math.PI * 2);
+    switch (rd.kind) {
+      case 'temperature': v.value = +(21 + 1.6 * day + r() * 0.2).toFixed(2); break;
+      case 'humidity': v.value = +(48 - 6 * day + r() * 0.5).toFixed(2); break;
+      case 'illuminance': v.value = Math.max(0, Math.round(300 * day + r() * 20)); break;
+      case 'battery': v.value = +(82 - ((t % (30 * DAY)) / DAY) * 0.3).toFixed(1); break;
+      case 'contact': v.value = 0; v.raw = 'shut'; return v;
+      case 'onoff': v.value = day > 0 ? 0 : 1; v.raw = v.value ? 'on' : 'off'; return v;
+      case 'occupancy': v.value = r() > 0.7 ? 1 : 0; v.raw = v.value ? 'occupied' : 'clear'; return v;
+      default: v.value = Math.round(r() * 100); break;
+    }
+    v.raw = String(v.value);
+    return v;
+  }
+
   // jsonReading is the number a recording json check reads at time t: a slow
   // daily wave around a third, which is what a Pi-hole's blocked percentage
   // tends to look like. Deterministic in t so a chart's points and the last
@@ -210,6 +250,7 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   function checkMetricUnits(c) {
     const units = {};
     if (c.type === 'snmp') for (const o of c.config?.snmpOids || []) if (o.name) units[o.name] = o.unit || '';
+    if (c.type === 'matter') for (const rd of c.config?.matterReadings || []) if (rd.name) units[rd.name] = rd.unit || '';
     if (c.type === 'json' && c.config?.jsonRecord) units[(c.config.jsonMetric || '').trim() || 'value'] = c.config.jsonUnit || '';
     // A hardware check measures whatever its newest reading carried, the way
     // the service's checkHasMetric accepts a key from the latest result.
@@ -357,6 +398,13 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
         }
         res.message = res.message || `${res.details.snmp.length} readings read in ${latency.toFixed(0)} ms`;
         if (p.warn) res.warnings = [p.warn];
+        break;
+      }
+      case 'matter': {
+        if (failed) { res.error = p.message || `Matter node ${check.config.matterNodeId} is unavailable`; break; }
+        res.details = { matter: (check.config.matterReadings || []).map((rd) => matterReading(rd, t, r)), matterServer: `ws://${node.host}:5580/ws` };
+        res.metrics = Object.fromEntries(res.details.matter.filter((v) => v.value != null).map((v) => [v.name, v.value]));
+        res.message = res.message || `${res.details.matter.length} readings read from node ${check.config.matterNodeId} in ${latency.toFixed(0)} ms`;
         break;
       }
     }
@@ -576,12 +624,14 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     const units = checkMetricUnits(c);
     if (!(metric in units)) throw Object.assign(new Error(`check ${checkId} does not measure "${metric}"`), { status: 400 });
     const o = (c.config?.snmpOids || []).find((x) => x.name === metric);
+    const mr = (c.config?.matterReadings || []).find((x) => x.name === metric);
     const r = rng(c.id * 977 + metric.length);
     const points = base.points.map((p) => {
       if (p.avgMs == null && c.type !== 'system') return { ...p, avgMs: null, minMs: null, maxMs: null, value: null };
       let v;
       if (c.type === 'system') v = systemMetricResults(c, mockReading('agent:1', 'nas.lan', 29, +new Date(p.ts))).find((m) => m.key === metric)?.value;
       else if (o) { const reading = snmpReading(o, +new Date(p.ts), r); v = reading.value != null ? reading.value : reading.rate; }
+      else if (mr) v = matterReading(mr, +new Date(p.ts), r).value;
       else v = jsonReading(c, +new Date(p.ts));
       return { ...p, value: v ?? null, avgMs: v ?? null, minMs: v ?? null, maxMs: v ?? null, jitterMs: null, lossPct: null };
     });
@@ -988,6 +1038,54 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     const picked = rows.filter((r) => r.oid === root || r.oid.startsWith(`${root}.`)).sort((x, y) => (key(x.oid) < key(y.oid) ? -1 : 1));
     const max = Math.min(500, Number(body.max) || 500);
     return { rows: picked.slice(0, max), truncated: picked.length > max, max: 500 };
+  });
+  // "Load devices": a python-matter-server holding a sensor bridge and a
+  // plug, summarised the way internal/matter.Summarize describes them. An
+  // address containing "down" is not running, so the failure path can be
+  // seen too.
+  const matterNodes = [
+    { nodeId: 4, available: true, isBridge: true, vendor: 'Aqara', product: 'Hub M2', label: 'Hall bridge', endpoints: [
+      { id: 0, deviceTypes: [], clusters: [29, 40, 47], readings: [] },
+      { id: 1, deviceTypes: ['Aggregator (bridge)'], clusters: [29], readings: [] },
+      { id: 2, label: 'Living room sensor', deviceTypes: ['Temperature sensor', 'Bridged node'], clusters: [29, 47, 57, 1026, 1029], readings: [
+        { kind: 'temperature', name: 'Temperature', unit: '°C', cluster: 1026, attribute: 0, current: '21.4' },
+        { kind: 'humidity', name: 'Humidity', unit: '%', cluster: 1029, attribute: 0, current: '47.2' },
+        { kind: 'battery', name: 'Battery', unit: '%', cluster: 47, attribute: 12, current: '81' }] },
+      { id: 3, label: 'Front door', deviceTypes: ['Contact sensor', 'Bridged node'], clusters: [29, 57, 69], readings: [
+        { kind: 'contact', name: 'Open', unit: '', cluster: 69, attribute: 0, current: 'shut' }] },
+      { id: 5, label: 'Hall motion', deviceTypes: ['Occupancy sensor', 'Light sensor', 'Bridged node'], clusters: [29, 57, 1024, 1030], readings: [
+        { kind: 'occupancy', name: 'Occupied', unit: '', cluster: 1030, attribute: 0, current: 'clear' },
+        { kind: 'illuminance', name: 'Illuminance', unit: 'lx', cluster: 1024, attribute: 0, current: '112.2' }] },
+    ] },
+    { nodeId: 7, available: true, isBridge: false, vendor: 'Eve Systems', product: 'Eve Energy', label: '', endpoints: [
+      { id: 0, deviceTypes: [], clusters: [29, 40], readings: [] },
+      { id: 1, deviceTypes: ['On/off plug-in unit'], clusters: [6, 29], readings: [{ kind: 'onoff', name: 'On', unit: '', cluster: 6, attribute: 0, current: 'on' }] },
+    ] },
+  ];
+  const matterServerOf = (body) => {
+    const own = String(body?.server || '').trim();
+    const host = String(body?.host || '').trim().replace(/^[a-z]+:\/\//i, '').replace(/[/:].*$/, '');
+    const url = own || (host ? `ws://${host}:5580/ws` : '');
+    if (!url) throw err(400, 'a Matter server address (or a host) is required');
+    if (!/^wss?:\/\//i.test(url)) throw err(400, 'the Matter server URL must start with ws:// or wss:// (for example ws://192.168.1.20:5580/ws)');
+    if (/down/.test(url)) throw err(502, `could not reach the Matter server at ${url}: dial tcp: connect: connection refused`);
+    return url;
+  };
+  on('POST', /^\/api\/matter\/nodes$/, (m, body) => {
+    const server = matterServerOf(body);
+    return { server, serverInfo: { schema_version: 11, sdk_version: '2024.11.4', bluetooth_enabled: false }, nodes: matterNodes, standards: [] };
+  });
+  on('POST', /^\/api\/matter\/commission$/, (m, body) => {
+    const server = matterServerOf(body);
+    const code = String(body?.code || '').trim().replace(/[-\s]/g, '');
+    if (!/^(MT:.{10,}|\d{11}|\d{21})$/i.test(code)) throw err(400, 'that is not a Matter pairing code: use the 11-digit manual code (dashes are fine) or the QR code text starting with MT:');
+    if (body.networkOnly === false) throw err(400, 'this Matter server has no Bluetooth, so it can only add devices that are already on the network');
+    const node = { nodeId: 8 + matterNodes.length, available: true, isBridge: false, vendor: 'Nanoleaf', product: 'Essentials Bulb', label: '', endpoints: [
+      { id: 0, deviceTypes: [], clusters: [29, 40], readings: [] },
+      { id: 1, deviceTypes: ['Dimmable light'], clusters: [6, 8, 29], readings: [{ kind: 'onoff', name: 'On', unit: '', cluster: 6, attribute: 0, current: 'off' }] },
+    ] };
+    matterNodes.push(node);
+    return { server, node };
   });
   on('GET', /^\/api\/events$/, (m, body, u) => {
     const q = (u.searchParams.get('q') || '').toLowerCase();

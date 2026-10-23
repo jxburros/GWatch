@@ -167,6 +167,7 @@ export const SPLITS = [
 export function namedMetrics(c, last) {
   const cfg = c?.config || {};
   if (c?.type === 'snmp') return (cfg.snmpOids || []).filter((o) => o.name).map((o) => ({ name: o.name, unit: o.unit || '', label: o.name }));
+  if (c?.type === 'matter') return (cfg.matterReadings || []).filter((r) => r.name).map((r) => ({ name: r.name, unit: r.unit || '', label: r.name }));
   if (c?.type === 'json' && cfg.jsonRecord) { const name = (cfg.jsonMetric || '').trim() || 'value'; return [{ name, unit: (cfg.jsonUnit || '').trim(), label: name }]; }
   if (c?.type === 'system') {
     const rows = last?.details?.metricResults || [];

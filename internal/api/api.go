@@ -26,6 +26,7 @@ import (
 	"github.com/jxburros/GWatch/internal/discovery"
 	"github.com/jxburros/GWatch/internal/engine"
 	"github.com/jxburros/GWatch/internal/logging"
+	"github.com/jxburros/GWatch/internal/matter"
 	"github.com/jxburros/GWatch/internal/model"
 	"github.com/jxburros/GWatch/internal/store"
 )
@@ -140,6 +141,8 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "GET /api/checks/{id}/state", s.handleCheckState)
 
 	s.route(mux, "POST /api/snmp/walk", s.handleSNMPWalk)
+	s.route(mux, "POST /api/matter/nodes", s.handleMatterNodes)
+	s.route(mux, "POST /api/matter/commission", s.handleMatterCommission)
 
 	s.route(mux, "GET /api/history", s.handleHistory)
 	s.route(mux, "GET /api/history/multi", s.handleHistoryMulti)
@@ -823,6 +826,8 @@ type checkDestination struct {
 	HostSource      model.HostSource
 	AgentID         int64
 	MetricsURL      string
+	MatterServer    string
+	MatterNodeID    uint64
 }
 
 // destinationOf reads a check's destination. The node host stands in for a
@@ -843,6 +848,8 @@ func destinationOf(c model.Check, nodeHost string) checkDestination {
 		HostSource:      cfg.HostSource,
 		AgentID:         cfg.AgentID,
 		MetricsURL:      strings.TrimSpace(cfg.MetricsURL),
+		MatterServer:    strings.TrimSpace(cfg.MatterServer),
+		MatterNodeID:    cfg.MatterNodeID,
 	}
 	if d.Target == "" {
 		d.Target = strings.TrimSpace(nodeHost)
@@ -1176,6 +1183,32 @@ func (s *Server) normalizeNode(n *model.Node) error {
 				}
 				if o.Scale == 0 {
 					o.Scale = 1
+				}
+			}
+		}
+		if c.Type == model.CheckMatter {
+			// A standard reading saved without a name or unit takes the
+			// ones the editor would have shown, so a reading added through
+			// the API charts under the same name as one picked in the
+			// browser. The cluster and attribute of a standard reading are
+			// implied by its kind, so stray ones are cleared rather than
+			// stored to confuse the next reader.
+			c.Config.MatterServer = strings.TrimSpace(c.Config.MatterServer)
+			for i := range c.Config.MatterReadings {
+				rd := &c.Config.MatterReadings[i]
+				rd.Kind = strings.ToLower(strings.TrimSpace(rd.Kind))
+				rd.Name = strings.TrimSpace(rd.Name)
+				rd.Unit = strings.TrimSpace(rd.Unit)
+				if st, ok := matter.StandardFor(matter.Kind(rd.Kind)); ok {
+					if rd.Name == "" {
+						rd.Name = st.Name
+					}
+					if rd.Unit == "" {
+						rd.Unit = st.Unit
+					}
+					rd.Cluster, rd.Attribute, rd.Scale = 0, 0, 0
+				} else if rd.Scale == 0 {
+					rd.Scale = 1
 				}
 			}
 		}
