@@ -875,6 +875,24 @@ Approximate round trip times in milli-seconds:
 	}
 }
 
+// A ping stopped before it printed its summary reports the replies it saw, not
+// the requests it never sent as lost.
+func TestSettleSentWhenPingWasCutShort(t *testing.T) {
+	cut := parsePingOutput(`PING 10.0.0.1 (10.0.0.1) 56(84) bytes of data.
+64 bytes from 10.0.0.1: icmp_seq=1 ttl=64 time=0.5 ms
+64 bytes from 10.0.0.1: icmp_seq=2 ttl=64 time=0.6 ms`)
+	if pr := settleSent(cut, 20, true); pr.Sent != 2 || pr.Received != 2 {
+		t.Errorf("cut short: %+v, want 2 sent and 2 received", pr)
+	}
+	if pr := settleSent(cut, 20, false); pr.Sent != 20 {
+		t.Errorf("ran to the end without a summary: sent %d, want 20", pr.Sent)
+	}
+	full := parsePingOutput("4 packets transmitted, 3 received, 25% packet loss")
+	if pr := settleSent(full, 4, true); pr.Sent != 4 || pr.Received != 3 {
+		t.Errorf("a summary was overridden: %+v", pr)
+	}
+}
+
 func TestValidate(t *testing.T) {
 	yes := true
 	_ = yes

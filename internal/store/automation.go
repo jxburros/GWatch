@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/jxburros/GWatch/internal/model"
@@ -407,6 +408,51 @@ func (s *Store) SaveRule(ctx context.Context, r model.Rule) (model.Rule, error) 
 		return r, ErrNotFound
 	}
 	return s.GetRule(ctx, r.ID)
+}
+
+// PruneRuleReferences takes the conditions that name deleted nodes or checks
+// out of every rule. A rule left pointing at something that no longer exists
+// could never fire — an "all" rule waits for a member that cannot go down, an
+// "at least N" rule for more members than remain — and nothing said so. A
+// rule's "at least" count is brought down to what remains, and a rule with no
+// conditions left is switched off. It returns a line for each rule changed.
+func (s *Store) PruneRuleReferences(ctx context.Context, nodeIDs, checkIDs []int64) ([]string, error) {
+	if len(nodeIDs) == 0 && len(checkIDs) == 0 {
+		return nil, nil
+	}
+	gone := func(ids []int64, id *int64) bool { return id != nil && slices.Contains(ids, *id) }
+	rules, err := s.ListRules(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var changed []string
+	for _, r := range rules {
+		keep := r.Conditions[:0:0]
+		for _, c := range r.Conditions {
+			if !gone(nodeIDs, c.NodeID) && !gone(checkIDs, c.CheckID) {
+				keep = append(keep, c)
+			}
+		}
+		removed := len(r.Conditions) - len(keep)
+		if removed == 0 {
+			continue
+		}
+		r.Conditions = keep
+		note := fmt.Sprintf("Rule %s: %d condition(s) removed with what they named", r.Name, removed)
+		if r.Join == model.RuleJoinAtLeast && r.AtLeast > len(keep) {
+			r.AtLeast = len(keep)
+			note += fmt.Sprintf("; now needs %d", r.AtLeast)
+		}
+		if len(keep) == 0 && r.Enabled {
+			r.Enabled = false
+			note += "; switched off, as it has no conditions left"
+		}
+		if _, err := s.SaveRule(ctx, r); err != nil {
+			return changed, err
+		}
+		changed = append(changed, note)
+	}
+	return changed, nil
 }
 
 // DeleteRule removes a rule and its state.

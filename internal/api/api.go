@@ -1284,8 +1284,22 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 		checks.ForgetCheck(id)
 	}
 	detail := describeNodeChange(existing, updated, len(deleted))
+	if pruned := s.pruneRules(r.Context(), nil, deleted); len(pruned) > 0 {
+		detail += ". " + strings.Join(pruned, ". ")
+	}
 	s.configChanged(r.Context(), &updated, fmt.Sprintf("Updated node %s", updated.Name), detail)
 	writeJSON(w, http.StatusOK, s.decorateNode(r, updated, s.Engine.States(), nil))
+}
+
+// pruneRules takes deleted nodes and checks out of the rules that named them
+// (see store.PruneRuleReferences). A failure is logged rather than failing the
+// deletion, which has already happened.
+func (s *Server) pruneRules(ctx context.Context, nodeIDs, checkIDs []int64) []string {
+	pruned, err := s.Store.PruneRuleReferences(ctx, nodeIDs, checkIDs)
+	if err != nil {
+		s.Log.Errorf("update rules after a deletion: %v", err)
+	}
+	return pruned
 }
 
 func describeNodeChange(before, after model.Node, deletedChecks int) string {
@@ -1363,10 +1377,16 @@ func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	checkIDs := make([]int64, 0, len(n.Checks))
 	for _, c := range n.Checks {
 		checks.ForgetCheck(c.ID)
+		checkIDs = append(checkIDs, c.ID)
 	}
-	s.configChanged(r.Context(), nil, fmt.Sprintf("Deleted node %s", n.Name), fmt.Sprintf("Removed %d check(s) and their history.", len(n.Checks)))
+	detail := fmt.Sprintf("Removed %d check(s) and their history.", len(n.Checks))
+	if pruned := s.pruneRules(r.Context(), []int64{id}, checkIDs); len(pruned) > 0 {
+		detail += " " + strings.Join(pruned, ". ") + "."
+	}
+	s.configChanged(r.Context(), nil, fmt.Sprintf("Deleted node %s", n.Name), detail)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

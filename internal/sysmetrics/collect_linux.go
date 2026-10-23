@@ -5,12 +5,14 @@ package sysmetrics
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -298,8 +300,8 @@ func readMounts() ([]model.HostFilesystem, []string) {
 		if mountRoot != "" {
 			at = filepath.Join(mountRoot, mount)
 		}
-		var st syscall.Statfs_t
-		if err := statfs(at, &st); err != nil {
+		st, err := statfsWithin(at, statfsTimeout)
+		if err != nil {
 			if len(warnings) < 3 {
 				warnings = append(warnings, "filesystem "+mount+": "+err.Error())
 			}
@@ -329,6 +331,49 @@ func readMounts() ([]model.HostFilesystem, []string) {
 		out = append(out, fs)
 	}
 	return out, warnings
+}
+
+// statfsTimeout is how long one filesystem may take to say how full it is.
+const statfsTimeout = 2 * time.Second
+
+var (
+	statfsMu      sync.Mutex
+	statfsPending = map[string]bool{} // mounts whose statfs has not come back
+)
+
+// statfsWithin is statfs with a time limit. A network share whose server has
+// gone away (a dead CIFS mount) can block statfs indefinitely, and waiting on
+// it stopped the whole reading: the hardware check went stale and stopping the
+// service hung. The call that is stuck is left to finish on its own, and the
+// mount is skipped, with a warning, until it has.
+func statfsWithin(path string, limit time.Duration) (syscall.Statfs_t, error) {
+	statfsMu.Lock()
+	if statfsPending[path] {
+		statfsMu.Unlock()
+		return syscall.Statfs_t{}, errors.New("not responding (a network share whose server cannot be reached?)")
+	}
+	statfsPending[path] = true
+	statfsMu.Unlock()
+
+	type answer struct {
+		st  syscall.Statfs_t
+		err error
+	}
+	done := make(chan answer, 1)
+	go func() {
+		var st syscall.Statfs_t
+		err := statfs(path, &st)
+		statfsMu.Lock()
+		delete(statfsPending, path)
+		statfsMu.Unlock()
+		done <- answer{st, err}
+	}()
+	select {
+	case a := <-done:
+		return a.st, a.err
+	case <-time.After(limit):
+		return syscall.Statfs_t{}, fmt.Errorf("did not answer within %s (a network share whose server cannot be reached?)", limit)
+	}
 }
 
 // unescapeMount decodes the octal escapes /proc/mounts uses for spaces and

@@ -369,8 +369,11 @@ func (e *Engine) schedulerLoop() {
 func (e *Engine) tick(now time.Time) {
 	e.mu.Lock()
 	// Detect the computer having been asleep / offline: the ticker should fire
-	// every second, so a large gap means we were not running.
-	if gap := now.Sub(e.lastTick); gap > 90*time.Second {
+	// every second, so a large gap means we were not running. The gap is
+	// measured on the wall clock (Round(0) drops the monotonic reading): on
+	// Linux and macOS the monotonic clock stops while the machine sleeps, so
+	// measured on it a night asleep looked like one second.
+	if gap := now.Round(0).Sub(e.lastTick.Round(0)); gap > 90*time.Second {
 		e.lastGap = &model.GapInfo{From: e.lastTick, To: now, Seconds: int64(gap.Seconds())}
 		e.mu.Unlock()
 		e.recordEvent(model.Event{Type: model.EventMonitorGap, Title: "Monitoring paused (computer asleep or offline)",

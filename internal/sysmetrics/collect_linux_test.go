@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // fakeProc writes a directory of procfs files and points the collector at it,
@@ -344,5 +345,41 @@ func TestHostRootMustBeAHost(t *testing.T) {
 	}
 	if err := SetHostRoot("/"); err != nil || hostRoot != "" {
 		t.Errorf(`"/" should mean no host root: err=%v hostRoot=%q`, err, hostRoot)
+	}
+}
+
+// A filesystem that never answers (a dead network share) costs one timeout and
+// is then skipped until its call returns, rather than stopping the reading.
+func TestStatfsWithinGivesUpOnAHungMount(t *testing.T) {
+	restore := statfs
+	t.Cleanup(func() { statfs = restore })
+	release := make(chan struct{})
+	statfs = func(path string, st *syscall.Statfs_t) error {
+		if path == "/mnt/dead" {
+			<-release
+		}
+		st.Blocks = 1
+		return nil
+	}
+	start := time.Now()
+	if _, err := statfsWithin("/mnt/dead", 50*time.Millisecond); err == nil {
+		t.Fatal("a hung mount answered")
+	}
+	if _, err := statfsWithin("/mnt/dead", time.Second); err == nil || time.Since(start) > 500*time.Millisecond {
+		t.Fatalf("a mount still pending was waited on again (err %v, %s)", err, time.Since(start))
+	}
+	if st, err := statfsWithin("/", time.Second); err != nil || st.Blocks != 1 {
+		t.Fatalf("a healthy mount: %+v %v", st, err)
+	}
+	close(release)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if st, err := statfsWithin("/mnt/dead", time.Second); err == nil && st.Blocks == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the mount was never tried again after it answered")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
