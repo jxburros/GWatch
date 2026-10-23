@@ -1032,7 +1032,9 @@ result marked `held` (kept through an outage, by the collector's own clock) is a
 check's history at its own time and judges nothing, like a held hardware reading, and is
 refused (rejected) if it has no time, is ahead of GWatch's clock or is more than 48 hours
 old. `403` when collecting is turned off for the agent in GWatch, or the agent has not said
-its own configuration allows it; the agent drops what it holds rather than retrying. Like
+its own configuration allows it; the agent drops what it holds rather than retrying.
+`503` with `Retry-After` while a restore has monitoring paused; the agent holds the batch
+and sends it again. Like
 the other `/ingest/` routes it takes an agent token and nothing else, shares their failure
 budget and is outside the authorization table.
 

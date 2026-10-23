@@ -311,3 +311,38 @@ func TestQuietCollectorRaisesOneAlertNotOnePerCheck(t *testing.T) {
 		t.Fatalf("SNMP after the collector came back: %+v", s)
 	}
 }
+
+// While a restore has the engine paused, a collector's batch is refused
+// without writing anything, and the collector is still counted as alive.
+func TestCollectorResultsWaitOutAPause(t *testing.T) {
+	e, st, _, _ := setup(t)
+	ctx := context.Background()
+	node, agent := collectedSite(t, st)
+	if err := e.ReloadConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Pause(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ping := node.Checks[0].ID
+	_, err := e.IngestCollectorResults(ctx, agent, model.CollectorBatch{Results: []model.CollectorResult{collectorResult(ping, true, time.Now())}})
+	if !errors.Is(err, ErrPaused) {
+		t.Fatalf("a batch during a pause: %v", err)
+	}
+	if n := len(resultsOf(t, st, ping)); n != 0 {
+		t.Fatalf("%d result(s) written during a pause", n)
+	}
+	e.mu.Lock()
+	w := e.collectors[agent.ID]
+	e.mu.Unlock()
+	if w == nil || time.Since(w.lastSeen) > time.Minute {
+		t.Fatal("the collector should still count as alive")
+	}
+	e.Resume()
+	if _, err := e.IngestCollectorResults(ctx, agent, model.CollectorBatch{Results: []model.CollectorResult{collectorResult(ping, true, time.Now())}}); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(resultsOf(t, st, ping)); n != 1 {
+		t.Fatalf("after resuming: %d results", n)
+	}
+}

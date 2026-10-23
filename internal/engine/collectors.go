@@ -169,6 +169,22 @@ func collectorGrace(checks []model.Check) time.Duration {
 func (e *Engine) IngestCollectorResults(ctx context.Context, agent model.Agent, batch model.CollectorBatch) (model.CollectorBatchReply, error) {
 	now := time.Now()
 	var reply model.CollectorBatchReply
+	// While a restore runs (pause.go) nothing is written: the batch is refused
+	// with ErrPaused, which the API answers with a 503 the collector holds its
+	// results through and retries. The collector is still remembered as alive,
+	// in memory only, so a restore that takes a few minutes does not end with
+	// every collector called unreachable.
+	if !e.enterWork() {
+		e.mu.Lock()
+		if w := e.collectors[agent.ID]; w != nil {
+			w.lastSeen = now
+		} else {
+			e.collectors[agent.ID] = &collectorWatch{lastSeen: now}
+		}
+		e.mu.Unlock()
+		return reply, ErrPaused
+	}
+	defer e.leaveWork()
 	e.noteCollectorSeen(ctx, agent, now)
 
 	type item struct {

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/jxburros/GWatch/internal/engine"
 	"github.com/jxburros/GWatch/internal/model"
 	"github.com/jxburros/GWatch/internal/store"
 )
@@ -65,6 +66,13 @@ func (s *Server) handleIngestResults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reply, err := s.Engine.IngestCollectorResults(ctx, agent, batch)
+	if errors.Is(err, engine.ErrPaused) {
+		// A restore is running. The collector holds the batch and tries again,
+		// as it does through any outage.
+		w.Header().Set("Retry-After", "10")
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
 	if err != nil {
 		s.fail(w, err)
 		return

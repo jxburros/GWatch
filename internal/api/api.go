@@ -1093,8 +1093,14 @@ const maxCheckGroups = 10
 const maxChecksPerNode = 500
 
 // normalizeNode validates and fills defaults on a node and its checks.
+// It also refuses a "check from" naming an agent that does not exist or has
+// been revoked; a restore, which goes through normalizeNodeWith alone, keeps
+// whatever the archive says, and a missing collector then shows as unknown.
 func (s *Server) normalizeNode(n *model.Node) error {
-	return normalizeNodeWith(n, s.Engine.Settings())
+	if err := normalizeNodeWith(n, s.Engine.Settings()); err != nil {
+		return err
+	}
+	return s.checkCollector(n)
 }
 
 // normalizeNodeWith is normalizeNode under the given settings (the defaults
@@ -1125,9 +1131,6 @@ func normalizeNodeWith(n *model.Node, settings model.Settings) error {
 	// The style of the line to the parent: a colour or dash that is not one of
 	// the allowed forms is refused here, rather than stored for a map to draw.
 	if err := n.CleanLinkStyle(); err != nil {
-		return err
-	}
-	if err := s.checkCollector(n); err != nil {
 		return err
 	}
 	if n.Checks == nil {

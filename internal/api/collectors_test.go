@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -110,6 +111,16 @@ func TestCollectorNeedsBothSidesAndThenRunsTheNodesChecks(t *testing.T) {
 	if got := getAgent(t, ts, id); got.CollectorStatus != model.CollectorRunning || got.CollectorSeenAt == nil {
 		t.Fatalf("agent after results: %+v", got)
 	}
+
+	// A restore pauses the engine: the batch is refused with a 503 the
+	// collector holds its results through.
+	if err := srv.Engine.Pause(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := postResults(t, ts, a.Token, model.CollectorBatch{}); code != http.StatusServiceUnavailable {
+		t.Fatalf("results during a pause: %d", code)
+	}
+	srv.Engine.Resume()
 
 	// Off again: no checks at the next check-in, and results are refused.
 	setCollector(t, ts, id, false)
