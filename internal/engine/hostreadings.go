@@ -35,6 +35,14 @@ func (e *Engine) IngestHostReading(ctx context.Context, agent model.Agent, metri
 	if err != nil {
 		return model.HostMetrics{}, err
 	}
+	// While a restore runs (pause.go) the reading is kept as the machine's
+	// latest, for the hardware views, but not judged or recorded: the checks
+	// it would be recorded against are being replaced. The agent sends
+	// another within its interval.
+	if !e.enterWork() {
+		return stored, nil
+	}
+	defer e.leaveWork()
 	type target struct {
 		check model.Check
 		node  model.Node

@@ -109,6 +109,12 @@ func (e *Engine) backupLoop() {
 // exposed (unexported but package-testable) so tests can call it directly
 // instead of waiting on the ticker.
 func (e *Engine) maybeRunScheduledBackup(now time.Time) {
+	// No scheduled backup of a database a restore is half-way through
+	// (pause.go); it is still due on the next minute's tick after.
+	if !e.enterWork() {
+		return
+	}
+	defer e.leaveWork()
 	s := e.Settings().Backups
 	if !s.Enabled || s.Password == "" {
 		return

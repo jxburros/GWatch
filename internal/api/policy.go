@@ -204,6 +204,10 @@ var policies = []routePolicy{
 	{"DELETE", "/api/backups/{name}", levelAdmin, keyDeny},
 	{"POST", "/api/backups/restore", levelAdmin, keyDeny},
 	{"POST", "/api/backups/restore-existing", levelAdmin, keyDeny},
+	// A preview reads the whole of an archive's configuration, accounts and
+	// all, so it is held to the same standing as the restore it precedes.
+	{"POST", "/api/backups/inspect", levelAdmin, keyDeny},
+	{"POST", "/api/backups/inspect-existing", levelAdmin, keyDeny},
 	{"GET", "/api/export/config.json", levelAdmin, keyDeny},
 	{"POST", "/api/triggers", levelAdmin, keyDeny},
 	{"PUT", "/api/triggers/{id}", levelAdmin, keyDeny},

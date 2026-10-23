@@ -1158,8 +1158,30 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   on('GET', /^\/api\/backups$/, () => ({ backups: clone(backups), dir: 'C:\\ProgramData\\GWatch\\backups', status: backupStatus }));
   on('POST', /^\/api\/backups$/, (m, body) => { if (!body?.password) throw err(400, 'password is required'); const d = new Date(); const b = { fileName: `gwatch-${d.toISOString().slice(0, 10)}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}${body.includeHistory ? '' : '-config'}.gwbackup`, createdAt: iso(Date.now()), sizeBytes: body.includeHistory ? 13_400_000 : 41_000, includeHistory: !!body.includeHistory, encrypted: true }; backups.unshift(b); backupStatus = { lastBackupAt: b.createdAt, lastBackupOk: true, lastBackupFile: b.fileName, lastError: '', lastRestoreAt: backupStatus.lastRestoreAt }; addEvent('backup', { title: 'Backup created', detail: b.fileName }); return b; });
   on('DELETE', /^\/api\/backups\/([^/]+)$/, (m) => { const name = decodeURIComponent(m[1]); const i = backups.findIndex((b) => b.fileName === name); if (i < 0) throw err(404, 'backup not found'); backups.splice(i, 1); return { ok: true }; });
-  on('POST', /^\/api\/backups\/restore$/, (m, body) => { if (body instanceof FormData && body.get('password') === 'wrong') throw err(400, 'wrong password or corrupt archive'); backupStatus.lastRestoreAt = iso(Date.now()); addEvent('restore', { title: 'Restored from uploaded backup' }); return { ok: true, nodes: nodes.length, checks: nodes.flatMap((n) => n.checks).length, results: 38110 }; });
-  on('POST', /^\/api\/backups\/restore-existing$/, (m, body) => { if (!backups.some((b) => b.fileName === body.fileName)) throw err(404, 'backup not found'); if (body.password === 'wrong') throw err(400, 'wrong password or corrupt archive'); backupStatus.lastRestoreAt = iso(Date.now()); addEvent('restore', { title: 'Restored from backup', detail: body.fileName }); return { ok: true, nodes: nodes.length, checks: nodes.flatMap((n) => n.checks).length, results: body.includeHistory ? 38110 : 0 }; });
+  // The preview a restore dialog shows before anything is applied (#148).
+  // The demo archive is the demo's own configuration, with a few of the
+  // things the preview exists to point out, so the dialog has something to
+  // show. A password of "invalid" stands for an archive that fails
+  // validation.
+  const backupPreview = (password, fileName) => {
+    if (password === 'wrong') throw err(400, 'wrong password or corrupt archive');
+    const b = backups.find((x) => x.fileName === fileName) || backups[0];
+    const checks = nodes.flatMap((n) => n.checks).length;
+    return {
+      manifest: { format: 2, appVersion: '0.9.0', createdAt: b?.createdAt || iso(Date.now() - DAY), includeHistory: !!b?.includeHistory, nodes: nodes.length, checks, results: 38110, rollups: 4120, events: 212 },
+      counts: { nodes: nodes.length, checks, dashboards: 2, maintenance: 1, triggers: 2, endpoints: 1, rules: 1, charts: 3, wallboards: 1, reports: 0, users: 3, apiKeys: 2, agents: 1, incidents: 4, history: !!b?.includeHistory, results: 38110, rollups: 4120, events: 212 },
+      accounts: [{ username: 'sam', role: 'admin', admin: true }], accountsRecreatedAnyway: false,
+      agents: [], apiKeys: [{ name: 'Home Assistant', prefix: 'gw_9f2a', scope: 'read', revoked: false }],
+      commands: [{ kind: 'trigger', name: 'Plex server › Restart Plex', detail: 'script (bash)' }],
+      tokenlessEndpoints: [], accessChanges: ['LAN access is turned on: other devices on the network will be able to open GWatch.'], problems: password === 'invalid' ? invalidBackupProblems : [],
+    };
+  };
+  const invalidBackupProblems = ['trigger "Restart on failure": with a custom interpreter GWatch cannot quote placeholder values safely', 'endpoint "Deploy": a token is required; generate one or explicitly allow calls without a token'];
+  const refuseInvalidBackup = (password) => { if (password === 'invalid') throw Object.assign(err(400, `the backup’s configuration is not valid, so nothing was restored (${invalidBackupProblems.length} problems)`), { body: { problems: invalidBackupProblems } }); };
+  on('POST', /^\/api\/backups\/inspect$/, (m, body) => backupPreview(body instanceof FormData ? body.get('password') : '', ''));
+  on('POST', /^\/api\/backups\/inspect-existing$/, (m, body) => { if (!backups.some((b) => b.fileName === body.fileName)) throw err(404, 'backup not found'); return backupPreview(body.password, body.fileName); });
+  on('POST', /^\/api\/backups\/restore$/, (m, body) => { if (body instanceof FormData && body.get('password') === 'wrong') throw err(400, 'wrong password or corrupt archive'); if (body instanceof FormData) refuseInvalidBackup(body.get('password')); backupStatus.lastRestoreAt = iso(Date.now()); addEvent('restore', { title: 'Restored from uploaded backup' }); return { ok: true, nodes: nodes.length, checks: nodes.flatMap((n) => n.checks).length, results: 38110 }; });
+  on('POST', /^\/api\/backups\/restore-existing$/, (m, body) => { if (!backups.some((b) => b.fileName === body.fileName)) throw err(404, 'backup not found'); if (body.password === 'wrong') throw err(400, 'wrong password or corrupt archive'); refuseInvalidBackup(body.password); backupStatus.lastRestoreAt = iso(Date.now()); addEvent('restore', { title: 'Restored from backup', detail: body.fileName }); return { ok: true, nodes: nodes.length, checks: nodes.flatMap((n) => n.checks).length, results: body.includeHistory ? 38110 : 0 }; });
   on('GET', /^\/api\/logs$/, (m, body, u) => ({ lines: logLines.slice(-(Number(u.searchParams.get('limit')) || 200)), file: 'C:\\ProgramData\\GWatch\\logs\\gwatch.log' }));
   on('GET', /^\/api\/export\/history\.csv$/, (m, body, u) => { const metric = u.searchParams.get('metric'); const hs = metric ? metricHistory(u.searchParams.get('checkId'), u.searchParams.get('range') || '30d', metric) : history(u.searchParams.get('checkId'), u.searchParams.get('range') || '30d'); if (metric) return { __csv: ['timestamp,value,unit,availability_pct', ...hs.points.map((p) => [p.ts, p.value ?? '', hs.metricUnit || '', p.availability].join(','))].join('\n') }; return { __csv: ['timestamp,avg_ms,min_ms,max_ms,jitter_ms,loss_pct,availability_pct,count,failures', ...hs.points.map((p) => [p.ts, p.avgMs ?? '', p.minMs ?? '', p.maxMs ?? '', p.jitterMs ?? '', p.lossPct ?? '', p.availability, p.count, p.failures].join(','))].join('\n') }; });
   on('GET', /^\/api\/export\/results\.csv$/, (m, body, u) => ({ __csv: ['timestamp,success,status,message,latency_ms', ...(resultLog[u.searchParams.get('checkId')] || []).map((r) => [r.ts, r.success, r.status, JSON.stringify(r.message), r.latencyMs ?? ''].join(','))].join('\n') }));
@@ -1587,7 +1609,9 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
         if (out && out.__csv != null) return new Response(out.__csv, { status: 200, headers: { 'Content-Type': 'text/csv' } });
         return new Response(JSON.stringify(out ?? {}), { status: 200, headers: { 'Content-Type': 'application/json' } });
       } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), { status: e.status || 500, headers: { 'Content-Type': 'application/json' } });
+        // An error may carry more of the body the real API answers with (a
+        // refused restore's list of problems, say).
+        return new Response(JSON.stringify({ ...(e.body || {}), error: e.message }), { status: e.status || 500, headers: { 'Content-Type': 'application/json' } });
       }
     }
     return new Response(JSON.stringify({ error: `mock: no route for ${method} ${u.pathname}` }), { status: 404, headers: { 'Content-Type': 'application/json' } });

@@ -36,6 +36,17 @@ func (s *Server) ruleDocs(list []model.Rule) []ruleDoc {
 // a check condition's node is filled in from the check, so the interface
 // can show it), then each action the way triggers and endpoints are.
 func (s *Server) normalizeRule(ctx context.Context, r *model.Rule) error {
+	nodes, err := s.Store.ListNodes(ctx)
+	if err != nil {
+		return err
+	}
+	return s.normalizeRuleIn(r, nodes)
+}
+
+// normalizeRuleIn is normalizeRule against the given nodes rather than the
+// database's: a restore checks an archive's rules against the archive's own
+// nodes and checks.
+func (s *Server) normalizeRuleIn(r *model.Rule, nodes []model.Node) error {
 	r.Name = strings.TrimSpace(r.Name)
 	r.Join = strings.ToLower(strings.TrimSpace(r.Join))
 	if r.Join == "" {
@@ -59,10 +70,6 @@ func (s *Server) normalizeRule(ctx context.Context, r *model.Rule) error {
 		}
 	}
 	if err := r.Validate(); err != nil {
-		return err
-	}
-	nodes, err := s.Store.ListNodes(ctx)
-	if err != nil {
 		return err
 	}
 	nodeByID := map[int64]model.Node{}

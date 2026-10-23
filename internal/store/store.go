@@ -46,6 +46,13 @@ type Store struct {
 	secretsErr error
 
 	lastMigration *MigrationReport
+
+	// tx and root are set only on a store handed out by InTx (db.go): tx is
+	// the transaction every statement then runs in, and root the store it
+	// was opened on, which keeps the state that has to outlive the
+	// transaction (the secrets health below).
+	tx   *wtx
+	root *Store
 }
 
 // Open opens (creating if needed) the SQLite database at path and applies
@@ -73,12 +80,19 @@ func loadSecrets(keyFile string) (*secrets.Box, error) {
 // (for example a key file that cannot decrypt the stored values). It returns
 // nil while everything decrypts cleanly.
 func (s *Store) SecretsHealthy() error {
+	if s.root != nil {
+		return s.root.SecretsHealthy()
+	}
 	s.secmu.RLock()
 	defer s.secmu.RUnlock()
 	return s.secretsErr
 }
 
 func (s *Store) setSecretsErr(err error) {
+	if s.root != nil {
+		s.root.setSecretsErr(err)
+		return
+	}
 	s.secmu.Lock()
 	s.secretsErr = err
 	s.secmu.Unlock()

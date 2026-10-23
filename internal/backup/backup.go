@@ -102,6 +102,58 @@ type RestoreOptions struct {
 	// older backup would otherwise bring a deleted administrator back with
 	// their old password, and a purged agent's token would work again.
 	RecreateAccounts bool
+	// Validate, when set, is given the archive's configuration after it has
+	// been read and before anything is written, and may tidy it in place
+	// (fill defaults, normalise) the way the API tidies what it is sent.
+	// An error refuses the restore with nothing changed; an *InvalidError
+	// lists every problem found. The API passes its own validation here
+	// (internal/api), since this package cannot import it: without it an
+	// archive whose password is known could carry configuration the API
+	// would never accept, such as a trigger that runs a malformed script.
+	Validate func(*Config) error
+}
+
+// InvalidError is a restore refused because the archive's configuration did
+// not pass validation (RestoreOptions.Validate). Nothing was written.
+type InvalidError struct {
+	Problems []string
+}
+
+func (e *InvalidError) Error() string {
+	if len(e.Problems) == 1 {
+		return "the backup's configuration is not valid, so nothing was restored: " + e.Problems[0]
+	}
+	return fmt.Sprintf("the backup's configuration is not valid, so nothing was restored (%d problems): %s", len(e.Problems), strings.Join(e.Problems, "; "))
+}
+
+// HistoryError is a restore whose configuration was restored and committed
+// but whose history import then failed part-way. The configuration is
+// complete and in force; the history holds what the Summary returned with
+// it counts (results, rollups and events imported before the failure), on
+// top of nothing: a history restore empties the history in the same
+// transaction as the configuration. Restoring the safety backup the API
+// takes first, or restoring this archive again, puts it right.
+type HistoryError struct {
+	Err error
+}
+
+func (e *HistoryError) Error() string {
+	return "the configuration was restored, but importing the history stopped part-way: " + e.Err.Error()
+}
+
+func (e *HistoryError) Unwrap() error { return e.Err }
+
+// restoreFault, when set by a test, is called between the steps of the
+// configuration restore with the step's name, and an error from it fails
+// the restore there. It is how the tests prove that a failure part-way
+// through leaves nothing behind.
+var restoreFault func(step string) error
+
+func faultAt(step string) error {
+	if restoreFault != nil {
+		return restoreFault(step)
+	}
+	return nil
 }
 
 var safeName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -406,6 +458,26 @@ func Inspect(path, password string) (Manifest, error) {
 	return readManifest(&zr.Reader)
 }
 
+// Read returns the manifest and the configuration of an archive without
+// touching any database: what a preview of a restore (Plan) and the API's
+// early validation work from. The history is not read.
+func Read(path, password string) (Manifest, Config, error) {
+	zr, cleanup, err := Open(path, password)
+	if err != nil {
+		return Manifest{}, Config{}, err
+	}
+	defer cleanup()
+	m, err := readManifest(&zr.Reader)
+	if err != nil {
+		return m, Config{}, err
+	}
+	var cfg Config
+	if err := readJSON(&zr.Reader, "config.json", maxConfigBytes, &cfg); err != nil {
+		return m, Config{}, err
+	}
+	return m, cfg, nil
+}
+
 // readManifest reads and checks manifest.json.
 func readManifest(zr *zip.Reader) (Manifest, error) {
 	var m Manifest
@@ -476,15 +548,30 @@ func RestoreWith(ctx context.Context, st *store.Store, path, password string, op
 	}
 	includeHistory = includeHistory && sum.Manifest.IncludeHistory && hasFile(&zr.Reader, "results.jsonl")
 	sum.History = includeHistory
-	// Everything that can make the import fail for size is checked before
-	// the first write, so an oversized archive never leaves a half-restored
-	// installation behind.
+	// Everything that can refuse the restore is checked before the first
+	// write: the configuration's validity, and every size limit of the
+	// history, so neither an invalid nor an oversized archive leaves a
+	// half-restored installation behind.
+	if opts.Validate != nil {
+		if err := opts.Validate(&cfg); err != nil {
+			return sum, err
+		}
+	}
 	if includeHistory {
 		if err := preflightHistory(&zr.Reader, sum.Manifest); err != nil {
 			return sum, err
 		}
 	}
 
+	// The configuration goes in as one transaction (restoreConfig), so it is
+	// either all restored or not at all. The history cannot sensibly go in
+	// the same transaction: it can be hundreds of millions of rows, and one
+	// transaction that size would hold the writer for an hour, grow the
+	// SQLite WAL (or a server's undo log) to the size of the history, and
+	// still fail at the end on a server's transaction limits. So it follows
+	// in batches once the configuration has committed, and a failure there
+	// is reported as a HistoryError: configuration restored, history
+	// partly.
 	if err := restoreConfig(ctx, st, cfg, &sum, includeHistory, opts.RecreateAccounts); err != nil {
 		return sum, err
 	}
@@ -498,10 +585,13 @@ func RestoreWith(ctx context.Context, st *store.Store, path, password string, op
 					batch = append(batch, r)
 				}
 			}
+			if err := st.InsertResultsBatch(ctx, batch); err != nil {
+				return err
+			}
 			sum.Results += len(batch)
-			return st.InsertResultsBatch(ctx, batch)
+			return faultAt("results")
 		}); err != nil {
-			return sum, err
+			return sum, &HistoryError{Err: fmt.Errorf("results: %w", err)}
 		}
 		if err := importLines(&zr.Reader, "rollups.jsonl", sum.Manifest, &budget, func(lines [][]byte) error {
 			batch := make([]model.Rollup, 0, len(lines))
@@ -511,10 +601,13 @@ func RestoreWith(ctx context.Context, st *store.Store, path, password string, op
 					batch = append(batch, r)
 				}
 			}
+			if err := st.InsertRollupsBatch(ctx, batch); err != nil {
+				return err
+			}
 			sum.Rollups += len(batch)
-			return st.InsertRollupsBatch(ctx, batch)
+			return nil
 		}); err != nil {
-			return sum, err
+			return sum, &HistoryError{Err: fmt.Errorf("rollups: %w", err)}
 		}
 		if err := importLines(&zr.Reader, "events.jsonl", sum.Manifest, &budget, func(lines [][]byte) error {
 			batch := make([]model.Event, 0, len(lines))
@@ -524,10 +617,13 @@ func RestoreWith(ctx context.Context, st *store.Store, path, password string, op
 					batch = append(batch, e)
 				}
 			}
+			if err := st.InsertEventsBatch(ctx, batch); err != nil {
+				return err
+			}
 			sum.Events += len(batch)
-			return st.InsertEventsBatch(ctx, batch)
+			return nil
 		}); err != nil {
-			return sum, err
+			return sum, &HistoryError{Err: fmt.Errorf("events: %w", err)}
 		}
 		// Archives from before hardware readings became results carry a
 		// hostsamples.jsonl. It is not read: every reading in it was also the
@@ -552,8 +648,41 @@ const batchSize = 2000
 // Wallboards are present in the archive as a whole or not at all, so they
 // are replaced when the archive has them and untouched otherwise (a
 // format-1 archive).
+//
+// All of it is one write transaction (store.InTx): every table the
+// configuration touches, and with includeHistory the emptying of the
+// history tables, commit together or not at all. sum is only updated once
+// the transaction has committed.
+//
+// Why a transaction rather than restoring into a staging SQLite file and
+// swapping it in at the end: the swap would only work for SQLite (a server
+// database cannot be swapped under its own connections), it would have to
+// close and reopen the store's pools underneath every other goroutine that
+// holds them, and it would need its own care for the WAL and for the three
+// SQLite drivers. One transaction gives the same all-or-nothing guarantee on
+// all three backends through the code that already writes each table.
 func restoreConfig(ctx context.Context, st *store.Store, cfg Config, sum *Summary, includeHistory, recreateAccounts bool) error {
+	var staged Summary
+	err := st.InTx(ctx, func(tx *store.Store) error {
+		staged = Summary{}
+		return restoreConfigTx(ctx, tx, cfg, &staged, includeHistory, recreateAccounts)
+	})
+	if err != nil {
+		return err
+	}
+	sum.Nodes, sum.Checks, sum.Wallboards = staged.Nodes, staged.Checks, staged.Wallboards
+	sum.Users, sum.APIKeys, sum.Agents = staged.Users, staged.APIKeys, staged.Agents
+	sum.SkippedUsers, sum.SkippedAgents = staged.SkippedUsers, staged.SkippedAgents
+	return nil
+}
+
+// restoreConfigTx is restoreConfig's body, run on a store bound to the
+// restore's transaction.
+func restoreConfigTx(ctx context.Context, st *store.Store, cfg Config, sum *Summary, includeHistory, recreateAccounts bool) error {
 	if err := st.RestoreNodes(ctx, cfg.Nodes, includeHistory); err != nil {
+		return err
+	}
+	if err := faultAt("nodes"); err != nil {
 		return err
 	}
 	if err := st.SaveSettings(ctx, cfg.Settings); err != nil {
@@ -595,6 +724,9 @@ func restoreConfig(ctx context.Context, st *store.Store, cfg Config, sum *Summar
 		if _, err := st.SaveTrigger(ctx, t); err != nil {
 			return err
 		}
+	}
+	if err := faultAt("triggers"); err != nil {
+		return err
 	}
 	for _, e := range cfg.Endpoints {
 		e.ID = 0
@@ -669,7 +801,7 @@ func restoreConfig(ctx context.Context, st *store.Store, cfg Config, sum *Summar
 			sum.APIKeys++
 		}
 	}
-	return nil
+	return faultAt("accounts")
 }
 
 // Copy moves everything from src into dst without going through an archive

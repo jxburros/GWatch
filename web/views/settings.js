@@ -897,12 +897,19 @@ export async function mount(root, ctx) {
     const restoreBtn = h('button', { class: 'btn btn-danger', type: 'button', onclick: async () => {
       if (!file.files?.[0]) { toast('Choose a backup file first', { kind: 'error' }); return; }
       if (!rpw.value) { toast('Enter the backup password', { kind: 'error' }); rpw.focus(); return; }
-      const ok = await confirmDialog({ title: 'Restore from file?', message: 'This replaces the current configuration (nodes, checks, dashboards, maintenance windows, automation and settings) with the contents of the backup. History is replaced if selected and present in the backup. Otherwise, history for matching checks and the event timeline are kept. Checks absent from the backup and their history are removed.', confirmLabel: 'Restore', danger: true });
+      const form = () => { const fd = new FormData(); fd.append('file', file.files[0]); fd.append('password', rpw.value); fd.append('includeHistory', rHist.input.checked ? 'true' : 'false'); fd.append('restoreAccounts', rAccounts.input.checked ? 'true' : 'false'); return fd; };
+      // First the preview (#148): nothing is changed until it has been read
+      // and confirmed.
+      let done = busy(restoreBtn, 'Reading the backup…');
+      let preview;
+      try { preview = await api.upload('/api/backups/inspect', form()); }
+      catch (e) { done(); replace(restoreResult, restoreFailure('Cannot restore this backup', e)); return; }
+      done();
+      const ok = await confirmRestore('Restore from file?', preview, { includeHistory: rHist.input.checked, restoreAccounts: rAccounts.input.checked });
       if (!ok) return;
-      const fd = new FormData(); fd.append('file', file.files[0]); fd.append('password', rpw.value); fd.append('includeHistory', rHist.input.checked ? 'true' : 'false'); fd.append('restoreAccounts', rAccounts.input.checked ? 'true' : 'false');
-      const done = busy(restoreBtn, 'Restoring…');
-      try { const r = await api.upload('/api/backups/restore', fd); replace(restoreResult, banner('up', `Restored ${plural(r.nodes ?? 0, 'node')}, ${plural(r.checks ?? 0, 'check')} and ${num(r.results ?? 0)} results.${restoreNotes(r)}`)); toast('Restore complete', { kind: 'success' }); load(); }
-      catch (e) { replace(restoreResult, banner('down', `Restore failed: ${e.message}`)); }
+      done = busy(restoreBtn, 'Restoring…');
+      try { const r = await api.upload('/api/backups/restore', form()); replace(restoreResult, banner('up', `Restored ${plural(r.nodes ?? 0, 'node')}, ${plural(r.checks ?? 0, 'check')} and ${num(r.results ?? 0)} results.${restoreNotes(r)}`)); toast('Restore complete', { kind: 'success' }); load(); }
+      catch (e) { replace(restoreResult, restoreFailure('Restore failed', e)); if (e.body?.configRestored) load(); }
       done();
     } }, icon('upload'), 'Restore from file');
     const restoreCard = h('section', { class: 'card' }, h('h2', null, 'Restore from a file'), h('p', { class: 'lead' }, 'Moving to a new computer? Install GWatch, then restore the archive you downloaded from the old one.'),
@@ -922,11 +929,58 @@ export async function mount(root, ctx) {
       const pwIn = h('input', { type: 'password', autocomplete: 'off', placeholder: 'Backup password' });
       const hist = checkbox({ label: 'Also restore history and events', checked: b.includeHistory, disabled: !b.includeHistory });
       const accounts = accountsCheckbox();
-      const ok = await confirmDialog({ title: `Restore ${b.fileName}?`, confirmLabel: 'Restore', danger: true, body: h('div', { class: 'stack-sm' }, banner('warn', 'This replaces the current configuration. Nodes, checks, dashboards, maintenance windows, automation and settings will be overwritten. History is replaced if selected and present in the backup. Otherwise, history for matching checks and the event timeline are kept. Checks absent from the backup and their history are removed.'), field({ label: 'Password', input: pwIn }), hist, accounts) });
+      const ok = await confirmDialog({ title: `Restore ${b.fileName}?`, confirmLabel: 'Continue', body: h('div', { class: 'stack-sm' }, h('p', null, 'Enter the backup’s password. You will see what it contains, and what it would change, before anything is restored.'), field({ label: 'Password', input: pwIn }), hist, accounts) });
       if (!ok) return;
       if (!pwIn.value) { toast('The backup password is required', { kind: 'error' }); return; }
-      try { const r = await api.post('/api/backups/restore-existing', { fileName: b.fileName, password: pwIn.value, includeHistory: hist.input.checked, restoreAccounts: accounts.input.checked }); toast(`Restored ${plural(r.nodes ?? 0, 'node')} and ${plural(r.checks ?? 0, 'check')}.${restoreNotes(r)}`, { kind: 'success', timeout: 10000 }); load(); }
-      catch (e) { toast(`Restore failed: ${e.message}`, { kind: 'error' }); }
+      const opts = { includeHistory: hist.input.checked, restoreAccounts: accounts.input.checked };
+      let preview;
+      try { preview = await api.post('/api/backups/inspect-existing', { fileName: b.fileName, password: pwIn.value, restoreAccounts: opts.restoreAccounts }); }
+      catch (e) { toast(`Cannot restore this backup: ${failureText(e)}`, { kind: 'error', timeout: 10000 }); return; }
+      if (!await confirmRestore(`Restore ${b.fileName}?`, preview, opts)) return;
+      try { const r = await api.post('/api/backups/restore-existing', { fileName: b.fileName, password: pwIn.value, ...opts }); toast(`Restored ${plural(r.nodes ?? 0, 'node')} and ${plural(r.checks ?? 0, 'check')}.${restoreNotes(r)}`, { kind: 'success', timeout: 10000 }); load(); }
+      catch (e) { toast(`Restore failed: ${failureText(e)}`, { kind: 'error', timeout: 10000 }); if (e.body?.configRestored) load(); }
+    }
+    // A refusal for the archive's content carries the list of problems.
+    function failureText(e) { return e.body?.problems?.length ? `${e.body.problems.length === 1 ? 'one problem' : plural(e.body.problems.length, 'problem')}: ${e.body.problems.join('; ')}` : e.message; }
+    function restoreFailure(title, e) {
+      const problems = e.body?.problems || [];
+      return banner('down', problems.length
+        ? h('div', null, h('b', null, `${title}: its configuration does not pass validation, so nothing was changed.`), h('ul', { class: 'restore-problems' }, problems.map((p) => h('li', null, p))))
+        : `${title}: ${e.message}`);
+    }
+    // The preview of a restore (POST /api/backups/inspect, #148): what the
+    // backup holds, and everything in it that matters for security, shown
+    // before the administrator confirms. A backup with validation problems
+    // cannot be restored, so its dialog only lists them.
+    async function confirmRestore(title, p, { includeHistory, restoreAccounts }) {
+      if (p.problems?.length) {
+        await confirmDialog({ title: 'This backup cannot be restored', confirmLabel: 'Close', body: h('div', { class: 'stack-sm' },
+          banner('down', `Its configuration does not pass the checks GWatch applies when the same things are saved by hand, so it would be refused. ${plural(p.problems.length, 'problem')}:`),
+          h('ul', { class: 'restore-problems' }, p.problems.map((x) => h('li', null, x)))) });
+        return false;
+      }
+      const c = p.counts || {};
+      const parts = [plural(c.nodes ?? 0, 'node'), plural(c.checks ?? 0, 'check'), plural(c.dashboards ?? 0, 'dashboard'), plural(c.triggers ?? 0, 'trigger'), plural(c.endpoints ?? 0, 'endpoint'), plural(c.rules ?? 0, 'notification rule'), plural(c.wallboards ?? 0, 'wallboard'), plural(c.users ?? 0, 'account'), plural(c.apiKeys ?? 0, 'API key'), plural(c.agents ?? 0, 'agent')];
+      const made = p.manifest?.createdAt ? ` Made ${dateTime(p.manifest.createdAt)}${p.manifest.appVersion ? ` by GWatch ${p.manifest.appVersion}` : ''}.` : '';
+      const history = includeHistory && c.history ? ` History: ${num(c.results ?? 0)} results, ${num(c.rollups ?? 0)} rollups and ${num(c.events ?? 0)} events replace the current history.` : ' The current history is kept.';
+      const willAdd = restoreAccounts || p.accountsRecreatedAnyway;
+      const notes = [];
+      if (p.accounts?.length) {
+        const names = p.accounts.map((a) => `${a.username}${a.admin ? ' (administrator)' : ''}`).join(', ');
+        notes.push(willAdd ? `${plural(p.accounts.length, 'account')} will be added: ${names}.` : `${plural(p.accounts.length, 'account')} in the backup ${p.accounts.length === 1 ? 'is' : 'are'} not on this server and will be left out: ${names}.`);
+      }
+      if (p.agents?.length) notes.push(willAdd ? `${plural(p.agents.length, 'agent')} will be added: ${p.agents.join(', ')}.` : `${plural(p.agents.length, 'agent')} not on this server will be left out: ${p.agents.join(', ')}.`);
+      if (p.apiKeys?.length) notes.push(`${plural(p.apiKeys.length, 'API key')} will be added: ${p.apiKeys.map((k) => `${k.name} (${k.scope === 'readwrite' ? 'read & write' : 'read only'}${k.revoked ? ', revoked' : ''})`).join(', ')}.`);
+      for (const x of p.commands || []) notes.push(`Runs a command on this computer: ${x.kind} ${x.name} — ${x.detail}.`);
+      for (const slug of p.tokenlessEndpoints || []) notes.push(`/hook/${slug} can be called by anyone who can reach GWatch, without a token.`);
+      for (const line of p.accessChanges || []) notes.push(line);
+      const security = notes.length
+        ? banner('warn', h('div', null, h('b', null, 'Check these before you restore:'), h('ul', { class: 'restore-notes' }, notes.map((n) => h('li', null, n)))))
+        : banner('info', 'Nothing in this backup adds accounts or API keys, runs commands, opens an endpoint without a token, or changes network access or sign-in.');
+      return confirmDialog({ title, confirmLabel: 'Restore', danger: true, body: h('div', { class: 'stack-sm restore-preview' },
+        h('p', null, `This backup holds ${parts.join(', ')}.${made}${history}`),
+        security,
+        h('p', { class: 'note' }, 'Restoring replaces the current configuration: nodes, checks, dashboards, maintenance windows, automation and settings. Nodes and checks absent from the backup are removed with their history. A backup of what is here now is taken first.')) });
     }
     const autoEnabled = toggle({ label: 'Create backups automatically', checked: !!bk.enabled, onChange: (v) => { bk.enabled = v; } });
     const autoInterval = numField(bk, 'intervalHours', 'Every', { unitLabel: 'hours', min: 1 });

@@ -187,6 +187,8 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "DELETE /api/backups/{name}", s.handleDeleteBackup)
 	s.route(mux, "POST /api/backups/restore", s.handleRestoreUpload)
 	s.route(mux, "POST /api/backups/restore-existing", s.handleRestoreExisting)
+	s.route(mux, "POST /api/backups/inspect", s.handleInspectUpload)
+	s.route(mux, "POST /api/backups/inspect-existing", s.handleInspectExisting)
 
 	s.route(mux, "GET /api/export/history.csv", s.handleExportHistory)
 	s.route(mux, "GET /api/export/results.csv", s.handleExportResults)
@@ -1088,7 +1090,14 @@ const maxChecksPerNode = 500
 
 // normalizeNode validates and fills defaults on a node and its checks.
 func (s *Server) normalizeNode(n *model.Node) error {
-	settings := s.Engine.Settings()
+	return normalizeNodeWith(n, s.Engine.Settings())
+}
+
+// normalizeNodeWith is normalizeNode under the given settings (the defaults
+// and the minimum interval come from them). A restore validates an archive's
+// nodes under the archive's own settings, which are what will be in force
+// once it is applied.
+func normalizeNodeWith(n *model.Node, settings model.Settings) error {
 	n.Name = strings.TrimSpace(n.Name)
 	n.Host = strings.TrimSpace(n.Host)
 	// A body may carry groups, the older single group, or both; SyncGroups

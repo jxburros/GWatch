@@ -236,3 +236,52 @@ test('settings Alerts edits the grouping window and the warning digest', async (
   assert.equal(saved.alerts.groupWindowSeconds, 60);
   assert.equal(saved.alerts.warningDigest, 'daily');
 });
+
+// #148: restoring a backup asks for its password, then shows what the backup
+// holds and everything in it that matters for security, and restores only
+// once that is confirmed. A backup that fails validation cannot be restored
+// from the dialog at all.
+test('settings Backups previews a restore before applying it', async (t) => {
+  t.after(() => { document.querySelectorAll('.modal-backdrop').forEach((b) => b.remove()); });
+  const { root } = await mountView(settingsView, { params: { tab: 'backups' } }, t);
+  const restoreButton = () => waitFor(() => [...root.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Restore'));
+  const visibleModal = () => [...document.querySelectorAll('.modal')].at(-1);
+  const before = (await api.get('/api/backups')).status.lastRestoreAt;
+
+  (await restoreButton()).click();
+  let modal = await waitFor(() => visibleModal());
+  modal.querySelector('input[type="password"]').value = 'secret';
+  [...modal.querySelectorAll('button')].find((b) => b.textContent === 'Continue').click();
+  modal = await waitFor(() => [...document.querySelectorAll('.modal')].find((m) => /Check these before you restore/.test(m.textContent)));
+  assert.match(modal.textContent, /This backup holds \d+ nodes/);
+  assert.match(modal.textContent, /sam \(administrator\)/, 'the account not on this server, marked as an administrator');
+  assert.match(modal.textContent, /left out/, 'without re-create ticked, missing accounts are left out');
+  assert.match(modal.textContent, /Home Assistant \(read only\)/, 'the API key that would be added');
+  assert.match(modal.textContent, /Runs a command on this computer: trigger Plex server › Restart Plex — script \(bash\)/);
+  assert.match(modal.textContent, /LAN access is turned on/);
+  [...modal.querySelectorAll('button')].find((b) => b.textContent === 'Cancel').click();
+  await waitFor(() => !document.querySelector('.modal'));
+  assert.equal((await api.get('/api/backups')).status.lastRestoreAt, before, 'cancelling the preview restores nothing');
+
+  // A backup whose configuration does not validate lists its problems and
+  // offers no way to go on.
+  (await restoreButton()).click();
+  modal = await waitFor(() => visibleModal());
+  modal.querySelector('input[type="password"]').value = 'invalid';
+  [...modal.querySelectorAll('button')].find((b) => b.textContent === 'Continue').click();
+  modal = await waitFor(() => [...document.querySelectorAll('.modal')].find((m) => /cannot be restored/.test(m.textContent)));
+  assert.match(modal.textContent, /custom interpreter/);
+  assert.ok(![...modal.querySelectorAll('button')].some((b) => b.textContent === 'Restore'), 'no Restore button for an invalid backup');
+  [...modal.querySelectorAll('button')].find((b) => b.textContent === 'Close').click();
+  await waitFor(() => !document.querySelector('.modal'));
+
+  // Confirmed, the restore goes ahead.
+  (await restoreButton()).click();
+  modal = await waitFor(() => visibleModal());
+  modal.querySelector('input[type="password"]').value = 'secret';
+  [...modal.querySelectorAll('button')].find((b) => b.textContent === 'Continue').click();
+  modal = await waitFor(() => [...document.querySelectorAll('.modal')].find((m) => /Check these before you restore/.test(m.textContent)));
+  [...modal.querySelectorAll('button')].find((b) => b.textContent === 'Restore').click();
+  await waitFor(() => [...document.querySelectorAll('.toast')].some((el) => /Restored \d+ nodes/.test(el.textContent)));
+  assert.notEqual((await api.get('/api/backups')).status.lastRestoreAt, before);
+});

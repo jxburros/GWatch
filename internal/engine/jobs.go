@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"runtime"
@@ -33,6 +34,13 @@ func (e *Engine) maintenanceLoop() {
 
 // trackMaintenance records began/ended events when windows change state.
 func (e *Engine) trackMaintenance(now time.Time) {
+	// A window opening or closing writes an event and moves the rules; both
+	// wait until a restore is over (pause.go), and the change is seen on the
+	// first pass after it.
+	if !e.enterWork() {
+		return
+	}
+	defer e.leaveWork()
 	e.mu.Lock()
 	var began, ended []model.MaintenanceWindow
 	seen := map[int64]bool{}
@@ -125,7 +133,7 @@ func (e *Engine) retentionLoop() {
 		// (at most 48 h) and delivered late.
 		since = mark.Through.Add(-72 * time.Hour)
 	}
-	if err := e.runRetentionSince(e.ctx, true, true, since); err != nil {
+	if err := e.runRetentionSince(e.ctx, true, true, since); err != nil && !errors.Is(err, ErrPaused) {
 		e.RecordError("retention backfill", err)
 	}
 	ticker := time.NewTicker(5 * time.Minute)
@@ -137,7 +145,12 @@ func (e *Engine) retentionLoop() {
 			return
 		case <-ticker.C:
 			cleanup := time.Since(lastCleanup) >= time.Hour
-			if err := e.runRetention(e.ctx, false, cleanup); err != nil {
+			err := e.runRetention(e.ctx, false, cleanup)
+			if errors.Is(err, ErrPaused) {
+				// Skipped for a restore; the cleanup is still due next time.
+				continue
+			}
+			if err != nil {
 				e.RecordError("retention", err)
 			}
 			if cleanup {
@@ -195,6 +208,12 @@ func (e *Engine) runRetention(ctx context.Context, backfill, cleanup bool) error
 // runRetentionSince is runRetention with a backfill that starts at since
 // rather than at the beginning of the data, when since is set.
 func (e *Engine) runRetentionSince(ctx context.Context, backfill, cleanup bool, since time.Time) error {
+	// Rollups and deletions over a history a restore is re-importing would
+	// race it (pause.go).
+	if !e.enterWork() {
+		return ErrPaused
+	}
+	defer e.leaveWork()
 	start := time.Now()
 	now := start
 	s := e.Settings().Retention

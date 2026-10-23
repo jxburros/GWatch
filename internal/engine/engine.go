@@ -123,6 +123,10 @@ type Engine struct {
 	retention model.RetentionStatus
 	backup    model.BackupStatus
 
+	// gate keeps the engine's own writes out of the way of a restore; see
+	// pause.go.
+	gate workGate
+
 	subMu sync.Mutex
 	subs  map[chan Update]struct{}
 }
@@ -436,6 +440,14 @@ func (e *Engine) tick(now time.Time) {
 		e.mu.Lock()
 	}
 	e.lastTick = now
+	// While the engine is paused for a restore (pause.go) the clock above
+	// keeps moving, so the pause is not mistaken for sleep, but nothing is
+	// scheduled and no state is written.
+	if !e.enterWork() {
+		e.mu.Unlock()
+		return
+	}
+	defer e.leaveWork()
 	var due []model.Check
 	for id, c := range e.checks {
 		st := e.states[id]
@@ -477,11 +489,17 @@ func (e *Engine) tick(now time.Time) {
 	for _, c := range due {
 		select {
 		case sem <- struct{}{}:
+			// Each run holds the gate itself, since it outlives this tick.
+			if !e.enterWork() {
+				<-sem
+				continue
+			}
 			e.running[c.ID] = true
 			e.states[c.ID].Running = true
 			e.wg.Add(1)
 			go func(c model.Check) {
 				defer e.wg.Done()
+				defer e.leaveWork()
 				defer func() { <-sem }()
 				e.runAndProcess(e.ctx, c.ID, 0)
 			}(c)
@@ -563,6 +581,10 @@ func (e *Engine) runAndProcess(ctx context.Context, checkID int64, depth int) (m
 
 // RunNow executes a check immediately, records the result and returns it.
 func (e *Engine) RunNow(ctx context.Context, checkID int64) (model.Result, error) {
+	if !e.enterWork() {
+		return model.Result{}, ErrPaused
+	}
+	defer e.leaveWork()
 	return e.runAndProcess(ctx, checkID, 0)
 }
 
@@ -579,6 +601,12 @@ func (e *Engine) RunNodeNow(ctx context.Context, nodeID int64) ([]model.Result, 
 // alongside — not on top of — whatever the schedule has in flight. A caller
 // that gives up while waiting for a slot gets the results finished so far.
 func (e *Engine) RunNodeChecks(ctx context.Context, nodeID int64, allow func(model.Check) bool) ([]model.Result, error) {
+	// The runs below finish before this returns (wg.Wait), so holding the
+	// gate here covers them all.
+	if !e.enterWork() {
+		return nil, ErrPaused
+	}
+	defer e.leaveWork()
 	e.mu.Lock()
 	n, ok := e.nodes[nodeID]
 	sem := e.sem
