@@ -849,6 +849,16 @@ func (s *Server) handleIngestMetrics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "the body is not a GWatch hardware reading")
 		return
 	}
+	// A reading the agent held through an outage is worth having only at the
+	// time it was taken, so one whose time cannot be believed is refused (422,
+	// which the agent takes as "drop it", not "try again") rather than filed as
+	// current. See hostmon.CheckHeldTimestamp.
+	if heldReading(r) {
+		if err := hostmon.CheckHeldTimestamp(metrics.Timestamp, time.Now()); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+	}
 	stored, err := s.Engine.IngestHostReading(ctx, agent, metrics, s.remoteAddr(r))
 	if err != nil {
 		s.fail(w, err)
@@ -861,6 +871,18 @@ func (s *Server) handleIngestMetrics(w http.ResponseWriter, r *http.Request) {
 		"ts":              stored.Timestamp,
 		"intervalSeconds": int(hostmon.DefaultSampleInterval.Seconds()),
 	})
+}
+
+// heldReading is whether the agent marked a reading as delivered late, after
+// holding it through an outage (the X-GWatch-Held header). An agent that does
+// not send the mark — an older one, or a curl one-liner — is treated as
+// reporting live, and its timestamp is settled the way it always was.
+func heldReading(r *http.Request) bool {
+	switch strings.ToLower(strings.TrimSpace(r.Header.Get("X-GWatch-Held"))) {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
 }
 
 // bearerToken reads the credential from an Authorization header, accepting the

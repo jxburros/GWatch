@@ -196,13 +196,13 @@ func TestQueueHoldsOldestFirstAndForgetsTheOldestWhenFull(t *testing.T) {
 	for i := 1; i <= 5; i++ {
 		q.add(reading(i))
 	}
-	if q.len() != 3 || q.held[0].Timestamp.Unix() != 3 {
+	if q.len() != 3 || q.held[0].m.Timestamp.Unix() != 3 {
 		t.Fatalf("a full queue keeps the newest: %v", q.held)
 	}
 	none := newReadingQueue(config{buffer: 0, interval: time.Minute})
 	none.add(reading(1))
 	none.add(reading(2))
-	if none.len() != 1 || none.held[0].Timestamp.Unix() != 2 {
+	if none.len() != 1 || none.held[0].m.Timestamp.Unix() != 2 {
 		t.Errorf("with no buffer only the reading in flight is kept: %v", none.held)
 	}
 }
@@ -221,7 +221,7 @@ func TestQueueSendsInOrderAndStopsWhereTheNetworkDoes(t *testing.T) {
 		sent = append(sent, m.Timestamp.Unix())
 		return nil
 	})
-	if n != 2 || !errors.Is(err, fail) || q.len() != 3 || q.held[0].Timestamp.Unix() != 3 {
+	if n != 2 || !errors.Is(err, fail) || q.len() != 3 || q.held[0].m.Timestamp.Unix() != 3 {
 		t.Fatalf("sent=%d err=%v held=%v", n, err, q.held)
 	}
 	if sent[0] != 1 || sent[1] != 2 {

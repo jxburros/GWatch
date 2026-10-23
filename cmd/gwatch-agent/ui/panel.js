@@ -205,7 +205,7 @@ function buildSettings() {
     name: textField('f-name', 'Name for this machine', st.name, 'Leave empty to use this computer’s own name.'),
     interval: textField('f-interval', 'Send a reading every', st.interval, `Like 30s or 1m. At least 10s. Default ${state.defaults.interval}.`),
     checkIn: textField('f-checkin', 'Ask GWatch for settings every', st.checkIn, `Like 15m or 1h. Default ${state.defaults.checkIn}.`),
-    buffer: textField('f-buffer', 'Keep readings if GWatch is unreachable for up to', st.buffer, `Held in memory and sent when GWatch is back. 0s keeps nothing. Default ${state.defaults.buffer}, at most 48h.`),
+    buffer: textField('f-buffer', 'Keep readings if GWatch is unreachable for up to', st.buffer, `Kept in a small file beside agent.json (so a restart does not lose them) and sent when GWatch is back. 0s keeps nothing. Default ${state.defaults.buffer}, at most 48h.`),
     pin: textField('f-pin', 'Pinned server certificate', st.certPin, 'Optional SHA-256 of the server’s public key.'),
   };
   const auto = checkField('f-auto', 'Keep this agent up to date', 'Installs new signed agent releases by itself.', st.autoUpdate);

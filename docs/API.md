@@ -757,7 +757,9 @@ routes — an administrator in the browser, never an API key:
   Issues a replacement token. By default the old token keeps working until the new one is
   first used; an agent holding the old one is handed the new one when it next checks in
   (below), writes it to its file and switches over, and its first request with the new token
-  retires the old. `retireOld: true` is for a token that may have leaked: the old token stops
+  retires the old (both are accepted until then, so there is no gap; an agent that never
+  takes the new one up — its token comes from an environment variable or a flag — keeps
+  using the old one until the rotation is cancelled or replaced). `retireOld: true` is for a token that may have leaked: the old token stops
   working at once, nothing is delivered over the network, and the new token has to be put on
   the machine by hand. `409` for a revoked agent.
 - `POST /api/agents/{id}/rotate/cancel` → 204. Drops a replacement nobody has used.
@@ -837,7 +839,18 @@ and the server in `agent-settings.json`; an agent that finds those moves them in
 ### Submitting a reading
 
 `POST /ingest/metrics` with `Authorization: Bearer gwa_…` and a `HostMetrics` body.
-Answers `202` with `{ accepted, ts, intervalSeconds }`.
+Answers `202` with `{ accepted, ts, intervalSeconds }`; `ts` is the time the reading was
+filed at.
+
+GWatch keeps the reading's own `ts` — when the machine took it — so readings an agent held
+through an outage are filed when they were taken. A reading that arrives after a newer one
+is added to the history at its own time without being judged as current, and one GWatch
+already has a result for at about that time is ignored, so a replay does no harm. An
+agent marks a reading it is delivering late with `X-GWatch-Held: 1`. A held reading with
+no `ts`, one more than five minutes ahead of GWatch's clock, or one more than 48 hours old
+is refused with `422` (the agent drops it rather than retrying). An unmarked reading is
+taken to be live: if its `ts` is missing or implausible it is filed at the time it
+arrived, so a machine with a wrong clock still reports.
 
 This route is deliberately outside the authorization table above. It is reached with an
 agent token and nothing else; the token names exactly one machine, the reading is filed

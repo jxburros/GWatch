@@ -120,7 +120,7 @@ to change:
 | `name` | What the machine calls itself in GWatch. Empty uses the computer's own name. |
 | `interval` | How often a reading is sent (at least `10s`). |
 | `checkIn` | How often the agent asks GWatch for its settings (see below). `1m` to `24h`. |
-| `buffer` | How long readings are held in memory while GWatch cannot be reached, then sent oldest first. `0s` keeps nothing; at most `48h`. |
+| `buffer` | How long readings are held while GWatch cannot be reached, then sent oldest first and filed at the time they were taken. They are kept in `agent-queue.jsonl` beside this file so a restart does not lose them, bounded by this, 4,000 readings and about 8 MB (oldest dropped first). `0s` keeps nothing; at most `48h`. See [When GWatch is unreachable](#when-gwatch-is-unreachable). |
 | `autoUpdate` | Whether the agent installs new signed releases by itself. |
 | `insecure`, `certPin` | Accept a self-signed certificate, or pin the server's public key. These are about the server named above, and are dropped if the agent is pointed at a different one for a run. |
 | `collect` | The machine's own limit on what it will report (below). |
@@ -181,7 +181,14 @@ different worries:
   readings. It only works for an agent whose token lives in `agent.json`: one
   whose token comes from an environment variable or a flag would be given the old
   token back at its next restart, so it leaves the file alone and logs that you
-  need to update it where the token comes from.
+  need to update it where the token comes from. The new token is written to
+  `agent.json` before it is first used, so a restart or power cut in between
+  leaves the agent holding the token GWatch is waiting for; and if the answer
+  carrying it is lost, the next check-in carries it again. The old token stops
+  working at one defined moment — the first request made with the new one — and
+  not before, so an agent that is offline during the rotation simply picks the
+  new token up when it is back. While the rotation waits, the node shows it, and
+  **Cancel rotation** drops the new token.
 - **Replace now** — for a token that may have leaked. The old token stops
   working at once and nothing is sent to the machine; you put the new token in
   `agent.json` yourself and restart the agent. (The ordinary rotation hands the
@@ -229,12 +236,32 @@ reasoning in [`AGENT-DECISIONS.md`](AGENT-DECISIONS.md#12-an-agent-asks-gwatch-f
 
 ### When GWatch is unreachable
 
-The agent keeps nothing on the machine beyond its configuration — but it does not
-throw away the last few hours because the network was down for them. A reading
-that cannot be delivered is held in memory (up to `buffer`, six hours by
-default) and sent, oldest first, as soon as GWatch answers. History therefore
-has a gap no longer than the outage, and often none. Held readings are not
-written to disk: a restart during an outage loses them.
+The agent does not throw away the last few hours because the network was down for
+them. A reading that cannot be delivered is held (up to `buffer`, six hours by
+default) and sent, oldest first, as soon as GWatch answers; GWatch files each one
+at the time it was taken, adds it to the history without judging it as current
+(so catching up never raises an alert for something already over), and ignores
+one it already has. History therefore has a gap no longer than the outage, and
+often none.
+
+Held readings are kept in `agent-queue.jsonl` beside `agent.json`, so a restart,
+an update or a power cut in the middle of an outage does not lose them. The file
+is small and bounded, because the machine being watched must never be filled up
+by its own agent: nothing older than `buffer` is kept, at most 4,000 readings and
+about 8 MB, and the oldest reading goes first whichever limit is reached. Nothing
+is written while GWatch is answering — a reading that goes straight out never
+touches the disk — and the file is removed once everything has been delivered.
+It is private like `agent.json` (0600, or SYSTEM and administrators on Windows).
+With `buffer` set to `0s` nothing is held and no file is kept. When the agent
+starts it sends what an earlier run left, after dropping anything that has since
+become older than `buffer`.
+
+A reading delivered late is marked as such (`X-GWatch-Held`, see
+[`API.md`](API.md#submitting-a-reading)). GWatch refuses a held reading whose
+time it cannot believe — more than five minutes ahead of its own clock, or more
+than 48 hours old — rather than filing it as current, and the agent drops a
+refused reading instead of retrying it. A live reading from a machine whose clock
+is wrong is still accepted and filed at the time it arrived.
 
 ### The control panel
 
