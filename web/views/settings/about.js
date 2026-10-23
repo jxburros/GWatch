@@ -14,7 +14,6 @@ const GWATCH_COPYRIGHT = 'Copyright (c) 2026 JX Holdings. Original developers: J
 // Go module dependencies from go.mod, with licenses confirmed by reading each
 // module's LICENSE file under $(go env GOMODCACHE).
 const DEPENDENCIES = [
-  { name: 'kardianos/service', use: 'runs GWatch as a background service on Windows, macOS and Linux', license: 'zlib' },
   { name: 'modernc.org/sqlite', use: 'the embedded database that stores history, events and settings', license: 'BSD-3-Clause' },
   { name: 'jackc/pgx', use: 'talks to a PostgreSQL server when Settings › Database points at one', license: 'MIT' },
   { name: 'go-sql-driver/mysql', use: 'talks to a MySQL or MariaDB server when Settings › Database points at one', license: 'MPL-2.0' },

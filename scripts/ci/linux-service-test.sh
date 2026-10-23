@@ -178,6 +178,10 @@ binary)
 	[ $# -eq 2 ] || { echo "usage: $0 binary <gwatch-binary>" >&2; exit 2; }
 	bin=$2
 	say "gwatch install"
+	# GitHub's runners leave /usr/local/bin writable by the runner user, and
+	# gwatch install refuses a directory anyone but root can write to.
+	sudo chown root:root /usr/local /usr/local/bin
+	sudo chmod go-w /usr/local /usr/local/bin
 	sudo "$bin" install --listen "${url#http://}"
 	check_service
 	exercise

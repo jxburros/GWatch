@@ -1522,11 +1522,11 @@ type PingStatus struct {
 	Configured         string     `json:"configured"` // GeneralSettings.PingMethod
 	Auto               string     `json:"auto"`       // a PingVia* value
 	Unprivileged       bool       `json:"unprivileged"`
-	UnprivilegedReason string     `json:"unprivilegedReason,omitempty"`
+	UnprivilegedReason string     `json:"unprivilegedReason"`
 	Raw                bool       `json:"raw"`
-	RawReason          string     `json:"rawReason,omitempty"`
-	SystemPing         string     `json:"systemPing,omitempty"` // path of the ping command, if there is one
-	Summary            string     `json:"summary"`              // one sentence, as logged at startup
+	RawReason          string     `json:"rawReason"`
+	SystemPing         string     `json:"systemPing"` // path of the ping command, if there is one
+	Summary            string     `json:"summary"`    // one sentence, as logged at startup
 	LastFallback       string     `json:"lastFallback,omitempty"`
 	LastFallbackAt     *time.Time `json:"lastFallbackAt,omitempty"`
 	CheckedAt          time.Time  `json:"checkedAt"`

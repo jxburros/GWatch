@@ -287,7 +287,7 @@ func Validate(check model.Check, nodeHost string) error {
 			return err
 		}
 	case model.CheckSystem:
-		if err := validateSystemCheck(cfg); err != nil {
+		if err := validateSystemCheck(cfg, check.Enabled); err != nil {
 			return err
 		}
 	case model.CheckCustom:

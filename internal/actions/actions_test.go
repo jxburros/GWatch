@@ -363,3 +363,33 @@ func TestHeaderValuesCannotInjectHeaders(t *testing.T) {
 		t.Fatalf("X-Note = %q", got.Get("X-Note"))
 	}
 }
+
+func TestFindInterpreterSkipsStoreAlias(t *testing.T) {
+	stub := `C:\Users\Admin\AppData\Local\Microsoft\WindowsApps\python3.exe`
+	paths := map[string]string{"python3": stub, "python": `C:\Python314\python.exe`}
+	old := lookPath
+	lookPath = func(name string) (string, error) {
+		if p, ok := paths[name]; ok {
+			return p, nil
+		}
+		return "", exec.ErrNotFound
+	}
+	t.Cleanup(func() { lookPath = old })
+
+	cands := [][]string{{"python3", "{{file}}"}, {"python", "{{file}}"}, {"py", "{{file}}"}}
+	exe, args := findInterpreter(cands, "s.py")
+	if exe != paths["python"] || len(args) != 1 || args[0] != "s.py" {
+		t.Errorf("picked %q %v, want the installed Python over the Store alias", exe, args)
+	}
+	// With only the alias, it is still used: it may be a real Store install.
+	delete(paths, "python")
+	if exe, _ := findInterpreter(cands, "s.py"); exe != stub {
+		t.Errorf("picked %q, want the alias as a last resort", exe)
+	}
+	if !isStoreAlias(`c:/users/x/appdata/local/Microsoft/WindowsApps/python.exe`) || isStoreAlias(`C:\Windows\py.exe`) {
+		t.Error("isStoreAlias misread a path")
+	}
+	if c := pythonCmds("windows"); c[0][0] != "py" {
+		t.Errorf("windows tries %v first, want the py launcher", c[0])
+	}
+}

@@ -393,7 +393,7 @@ func installBinary(dst string) error {
 		}
 		st, ok := fi.Sys().(*syscall.Stat_t)
 		if !fi.IsDir() || !ok || st.Uid != 0 || fi.Mode().Perm()&0022 != 0 {
-			return fmt.Errorf("refusing to install into %s: %s is not a root-owned directory that only root can write to", dir, d)
+			return fmt.Errorf("refusing to install into %s: %s is not a root-owned directory that only root can write to (whoever else can write there could replace the program the service runs); fix it with `sudo chown root:root %s && sudo chmod go-w %s`", dir, d, d, d)
 		}
 		if filepath.Dir(d) == d {
 			break

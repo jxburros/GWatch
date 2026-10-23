@@ -246,6 +246,10 @@ jobs:
       # The full lifecycle is the linux-service job; this is the quick check.
       run: |
         go build -o "$RUNNER_TEMP/gwatch-install-test" .
+        # The runner leaves /usr/local/bin writable by its own user; gwatch
+        # install refuses a directory anyone but root can write to.
+        sudo chown root:root /usr/local /usr/local/bin
+        sudo chmod go-w /usr/local /usr/local/bin
         sudo "$RUNNER_TEMP/gwatch-install-test" install --listen 127.0.0.1:7239 --no-start
         sudo systemd-analyze verify /etc/systemd/system/gwatch.service
         systemctl cat gwatch | grep -q 'RestartSec=5s'

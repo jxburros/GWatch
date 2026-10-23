@@ -22,6 +22,17 @@ disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ### Fixed
 
+- **A backup taken while a machine was being paired restores again.** The node a
+  pairing code creates waits with a switched-off hardware check and no machine;
+  restore refused it ("choose which registered machine this check reads"), so the
+  server's own backup could not be restored. A switched-off agent check may now wait
+  for its machine; one that is switched on must still name it.
+- Restoring a backup with its history no longer loses the "Pre-restore backup
+  created" event: it is recorded again, at the time the safety backup was taken.
+- On Windows, a Python script action prefers the `py` launcher and a real
+  `python.exe` over the Microsoft Store's "Python was not found" alias.
+- `gwatch install` on Linux says how to fix a `/usr/local/bin` that someone other
+  than root can write to.
 - **The agent comes back after a power cut** (#170). A power cut while `agent.json` was
   being written could leave it empty, zeroed or cut off, and the agent then refused to
   start (exit 78, which the packaged service never restarts). Every save now also keeps

@@ -450,13 +450,16 @@ func plural(n int, unit string) string {
 }
 
 // validateSystemCheck reports a configuration the hardware check cannot run.
-func validateSystemCheck(cfg model.CheckConfig) error {
+// A switched-off check that reads an agent may have no machine yet: it is the
+// one a pairing code's node waits with until the code is redeemed (and keeps
+// if the code is cancelled or expires), and a backup of it must restore.
+func validateSystemCheck(cfg model.CheckConfig, enabled bool) error {
 	if cfg.HostSource != "" && !cfg.HostSource.Valid() {
 		return fmt.Errorf("unsupported hardware source %q (use local, agent or url)", cfg.HostSource)
 	}
 	switch cfg.HostSource {
 	case model.HostSourceAgent:
-		if cfg.AgentID <= 0 {
+		if cfg.AgentID < 0 || (cfg.AgentID == 0 && enabled) {
 			return errors.New("choose which registered machine this check reads")
 		}
 	case model.HostSourceURL:

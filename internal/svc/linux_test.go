@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -40,7 +41,7 @@ func TestSystemdInstallUninstall(t *testing.T) {
 	if !strings.Contains(unit, "ExecStart="+agentExe+` "run"`) {
 		t.Errorf("unit:\n%s", unit)
 	}
-	if fi, _ := os.Stat(root.path("/etc/systemd/system/GWatchAgent.service")); fi.Mode().Perm() != 0644 {
+	if fi, _ := os.Stat(root.path("/etc/systemd/system/GWatchAgent.service")); runtime.GOOS != "windows" && fi.Mode().Perm() != 0644 {
 		t.Errorf("unit mode %v", fi.Mode().Perm())
 	}
 
@@ -118,7 +119,7 @@ func TestOpenRC(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.expect(t, "rc-update add GWatchAgent default")
-	if fi, _ := os.Stat(root.path("/etc/init.d/GWatchAgent")); fi.Mode().Perm() != 0755 {
+	if fi, _ := os.Stat(root.path("/etc/init.d/GWatchAgent")); runtime.GOOS != "windows" && fi.Mode().Perm() != 0755 {
 		t.Errorf("script mode %v", fi.Mode().Perm())
 	}
 	if s := readRoot(t, root, "/etc/init.d/GWatchAgent"); !strings.Contains(s, "command='"+agentExe+"'") {
@@ -150,6 +151,9 @@ func TestOpenRC(t *testing.T) {
 }
 
 func TestSysV(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SysV runlevel links are symlinks, which Windows only makes for administrators")
+	}
 	root := fsRoot(t.TempDir())
 	for _, d := range []string{"/etc/rc2.d", "/etc/rc3.d", "/etc/rc0.d"} {
 		if err := os.MkdirAll(root.path(d), 0755); err != nil {

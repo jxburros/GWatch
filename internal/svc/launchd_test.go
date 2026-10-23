@@ -3,6 +3,7 @@ package svc
 import (
 	"errors"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -40,7 +41,7 @@ func TestLaunchd(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.expect(t) // installing does not load it
-	if fi, _ := os.Stat(plist); fi.Mode().Perm() != 0644 {
+	if fi, _ := os.Stat(plist); runtime.GOOS != "windows" && fi.Mode().Perm() != 0644 {
 		t.Errorf("plist mode %v", fi.Mode().Perm())
 	}
 	if s := readRoot(t, root, "/Library/LaunchDaemons/GWatchAgent.plist"); !strings.Contains(s, "<string>"+agentExe+"</string>") {

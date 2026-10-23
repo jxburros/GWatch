@@ -712,6 +712,7 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request, path, password 
 	// part-way) can itself be undone from Settings › Backups. Monitoring
 	// carries on while it is written; it is paused only for the restore.
 	safety := ""
+	var safetyEvent model.Event
 	if s.BackupDir != "" {
 		info, err := s.Engine.RunBackup(ctx, s.BackupDir, password, true, 0, "Pre-restore backup")
 		if err != nil {
@@ -719,6 +720,7 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request, path, password 
 			return
 		}
 		safety = info.FileName
+		safetyEvent = engine.BackupCreatedEvent("Pre-restore backup", info, time.Now())
 	}
 
 	// Pause the engine for the restore (engine/pause.go): no check runs, and
@@ -794,6 +796,11 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request, path, password 
 	}
 	if safety != "" {
 		detail += " The data as it was before is in " + safety + "."
+		// Restoring the history replaced every event, the safety backup's
+		// "created" among them; put it back, at the time it was taken.
+		if sum.History {
+			s.Engine.RecordEvent(safetyEvent)
+		}
 	}
 	s.recordEvent(ctx, model.Event{Type: model.EventRestore, Title: title, Detail: detail})
 	if err := s.Engine.RunRetention(ctx, true); err != nil {
