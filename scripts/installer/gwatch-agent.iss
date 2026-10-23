@@ -475,6 +475,19 @@ begin
   PairedName := GetIniString('result', 'name', '', InstallResultFile);
   Service := GetIniString('result', 'service', '', InstallResultFile);
   Why := GetIniString('result', 'message', '', InstallResultFile);
+  { The agent names the machine only once GWatch has paired it, so a failure
+    that still carries a name failed after pairing: most often the service
+    would not start, or the first reading did not go through. }
+  if (PairOutcome = 2) and (PairedName <> '') then
+  begin
+    WizardForm.FinishedHeadingLabel.Caption := 'Paired, but not reporting yet';
+    WizardForm.FinishedLabel.Caption :=
+      'Paired with ' + GetServer + ' as ' + PairedName + ', but then:' + #13#10 + #13#10 +
+      Why + #13#10 + #13#10 +
+      'The GWatch Agent control panel in the Start menu shows the service and its ' +
+      'log, and can start it or pair the machine again.';
+    Exit;
+  end;
   if PairedName = '' then
     PairedName := GetMachineName;
   if Service = '' then
