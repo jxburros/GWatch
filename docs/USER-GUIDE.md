@@ -580,17 +580,18 @@ lines curved, straight or right-angled; narrows the map to a group or a tag
 nodes with no dependency. Those choices are remembered in this browser.
 
 **Clusters** (this replaces the layout that was called *Radial*; a map saved
-that way keeps working and now draws as clusters) draws a node with things plugged into it in the middle of a
-ring of them. A switch sits in the centre of a circle of the machines plugged
-into it; a line joins the switch to the router it is plugged into; and the
-switches that hang off the router sit in a circle round the router — circles
-around circles, to as many levels as there are. A node with a single node
-under it puts that one straight out beyond itself, so a chain of switches
-reads as a chain. Where there are several separate trees, the biggest is drawn
-as above and the others sit on a ring round it; nodes with no dependency are
-kept in rows underneath, since a ring would suggest they hang off something.
-Rings are made big enough that nothing overlaps, so a switch with a great many
-nodes on it makes a large circle — zoom in, or press **0** to fit it all.
+that way keeps working and now draws as clusters) draws each node with the
+things that depend on it spread round it, branching off in whatever direction
+has room — the way you would sketch the network on a whiteboard. Nothing is
+put on a circle: lines to single devices are short, a line to a switch with a
+crowd of machines behind it is longer so that crowd has space, and a node's
+children fan out away from the node above it. A switch with many machines
+staggers them at two distances rather than stringing them round one huge
+circle. Where there are several separate trees, the biggest is drawn in the
+middle and the others are set down in the nearest free space round it; nodes
+with no dependency are kept in rows underneath. No two boxes overlap and no
+line runs through a box it does not join, and the same nodes always give the
+same picture.
 In this layout a line is straight, or gently curved if **Line shape** is
 *Curved*; right-angled lines belong to the tree layouts and are drawn straight.
 

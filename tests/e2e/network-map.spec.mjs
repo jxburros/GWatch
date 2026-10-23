@@ -65,7 +65,8 @@ test('in clusters no two nodes overlap on the page, and a switch sits among the 
       expect(apart, `boxes ${i} and ${j} overlap`).toBe(true);
     }
   }
-  // The Office switch is the middle of a ring of the five nodes that depend on it.
+  // The Office switch has its five nodes branching off it, at varied
+  // distances rather than round a circle, each with a line of its own.
   const { swtch } = await ids(page);
   const centres = await page.evaluate((id) => {
     const centre = (el) => { const r = el.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; };
@@ -75,10 +76,8 @@ test('in clusters no two nodes overlap on the page, and a switch sits among the 
   }, swtch);
   expect(centres.kids.length).toBe(5);
   const radii = centres.kids.map(([x, y]) => Math.hypot(x - centres.middle[0], y - centres.middle[1]));
-  for (const r of radii) expect(Math.abs(r - radii[0])).toBeLessThan(1.5);
-  const meanX = centres.kids.reduce((s, k) => s + k[0], 0) / 5, meanY = centres.kids.reduce((s, k) => s + k[1], 0) / 5;
-  expect(Math.abs(meanX - centres.middle[0])).toBeLessThan(1.5);
-  expect(Math.abs(meanY - centres.middle[1])).toBeLessThan(1.5);
+  expect(Math.max(...radii) - Math.min(...radii)).toBeGreaterThan(4);
+  await expect(page.locator('.netmap-legend')).toContainText('branches off the node it depends on');
 });
 
 test('a link\'s own style wins over the map\'s, and an outage stays red whatever the colour', async ({ page }) => {
