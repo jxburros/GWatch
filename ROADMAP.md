@@ -26,7 +26,7 @@ became, and what still needs a human:
 | 2.5 read-only remote access | viewer role + read-only keys, `docs/REMOTE-ACCESS.md` | Decision: bring your own VPN/reverse proxy; GWatch never becomes internet-facing |
 | 3.1 / 3.2 MCP server | separate module `mcp/` (`gwatch-mcp`), read-only by default; Settings › AI & MCP, `skill/` | Resolved: the tag scheme is `mcp/vX.Y.Z` (`docs/RELEASING.md`), and the in-app set-up page plus the versioned agent skill (#56) cover the "how do I set it up" gap |
 | 3.3 trigger recipes | `docs/RECIPES.md` | — |
-| 4.1 Windows installer | `scripts/installer/gwatch.iss`, `docs/INSTALL.md` | Not yet compiled on a Windows machine; run the CI job once and test install/upgrade/uninstall by hand |
+| 4.1 Windows installer | `scripts/installer/gwatch.iss`, `docs/INSTALL.md` | CI compiles this and the agent's installer on every run (`scripts/installer/gwatch-agent.iss`) with Inno Setup on Windows; CI does not install them, so install, upgrade and uninstall are checked by hand |
 
 Work that has landed since the phases above, none of which was on this roadmap when it
 was written:
@@ -41,7 +41,27 @@ was written:
 | Notification rules across nodes (#31) | `internal/engine/rules.go`, Settings › Rules, `docs/API.md` → Rules | Hold timers and metric conditions deliberately deferred — see Open decisions |
 | JSON checks record their value (#55) | `jsonRecord` and friends in `internal/checks/http.go`, `docs/RECIPES.md` | — |
 | Settings › AI & MCP and the agent skill (#56) | `internal/api/mcp.go`, `skill/` | — |
+| Network discovery (#42) | `internal/discovery`, `internal/api/discovery.go`, `docs/API.md` → Discovery | Came off the brief's non-goals — see the constraints at the bottom |
 | Accessibility pass (#38) | `web/`, `tests/e2e/` (Playwright + axe in CI) | — |
+
+### Known gaps
+
+What the current release still ships without. The list at 0.1.0 in `CHANGELOG.md` is
+kept as it was written; of its three items, endpoint tokens and action credentials have
+since been encrypted at rest (`docs/PRIVACY.md`), and the rest are below.
+
+- **Unsigned installers.** Neither Windows setup program is Authenticode-signed, so
+  SmartScreen warns about an unknown publisher (`docs/INSTALL.md` → Known limitations,
+  `docs/RELEASING.md`). The executables and update assets are signed with GWatch's own
+  release key (1.3); that is a different thing from Authenticode.
+- **Re-running the GWatch setup program keeps the first install's port and LAN
+  setting.** It only registers the service when there is none, so changing either through
+  the installer means uninstalling first (`docs/INSTALL.md` → Upgrading).
+- **Docker's first account.** In a container on the default bridge network the first
+  administrator is created with `docker exec` (`docs/DOCKER.md`), because nothing reaches
+  GWatch over loopback there.
+
+Anything else that is known to be wrong is an [open issue](https://github.com/jxburros/GWatch/issues).
 
 ## Phase 1 — Now: security hardening (blocking; do before any public release)
 
@@ -277,10 +297,15 @@ a home server that still answers a ping while its disk fills is exactly the fail
 tool exists to catch. What keeps it from being the thin end of the wedge is the shape of
 what shipped, and that shape is the constraint to hold:
 
-- **One binary, one direction, one permission.** `gwatch-agent` posts a reading and hangs
-  up. GWatch never connects to it and holds no credential for it; the agent's token can
-  submit that one machine's readings and nothing else. There is no remote execution, no
-  remote configuration and no fleet management — and none should be added.
+- **One binary, one direction, one permission.** In its usual mode `gwatch-agent` posts a
+  reading and hangs up: GWatch never connects to it and holds no credential for it, and the
+  agent's token can submit that one machine's readings and nothing else. The exception is
+  opt-in: `gwatch-agent serve` listens for GWatch to poll it, and then GWatch does connect
+  to the machine and keeps that endpoint's bearer token (the check's `metricsToken`). Either
+  way the agent only hands out readings. There is no remote execution and no fleet
+  management, and the only remote configuration is the administrator narrowing which
+  readings a machine sends, inside the limit in the machine's own file — and nothing more
+  should be added.
 - **No metric language.** Readings are a fixed struct: processor, memory, filesystem,
   network, disk throughput. Not a metrics pipeline, not arbitrary series, not something
   with a query language. A new reading is a field, reviewed like any other field.
@@ -290,3 +315,17 @@ what shipped, and that shape is the constraint to hold:
 Temperatures and SMART were considered and left out: both are patchy across vendors on
 Windows, and SMART needs elevated privileges on the watched machine. Revisit only if
 someone actually wants them, and only within the constraints above.
+
+**Network discovery was on the brief's non-goals and shipped anyway** (#42, 0.2.2 —
+`internal/discovery`, `docs/API.md` → Discovery). It was decided at the 2026-09-19
+planning meeting for fast onboarding — adding every device by hand is the slow part of
+setting GWatch up, and other monitors treat a subnet scan as table stakes. What keeps it
+from becoming network inventory is its shape:
+
+- **A sweep, started by a person, then forgotten.** Ping a range of at most 4,096
+  addresses, look up each responder's name, try at most 24 TCP ports (ten by default),
+  suggest a template. Administrator only, one run at a time, results kept in memory
+  until the next run or a restart. Nothing is added until you tick it.
+- **No scheduled or continuous scanning, no inventory, no fingerprinting.** No `nmap`,
+  no service or OS detection, no SNMP probing during a sweep, and no alert when a new
+  device appears.

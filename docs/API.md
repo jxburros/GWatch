@@ -173,8 +173,12 @@ is sent `frame-ancestors *` and no `X-Frame-Options`. Everything else refuses to
 **Public routes**, reachable without any credential: `GET /api/health` (liveness only —
 `{"serviceRunning","schedulerRunning","now"}` — until the caller identifies itself),
 `GET /api/version`, `GET /api/me`, `GET /api/auth/setup`, `POST /api/auth/login`,
-`POST /api/auth/logout`, the static UI, and `/hook/…`, which is guarded by each
-endpoint's own token rather than by the sign-in.
+`POST /api/auth/logout`, the static UI (including `/wall`), and the routes that
+take a credential of their own in place of the sign-in:
+`GET /api/wallboards/{id}/view` (the token of a board whose sharing is switched on;
+every other caller is refused), `POST /api/agents/pair` (a one-use pairing code, with
+wrong codes counted against the same per-IP budget as wrong passwords), `/ingest/metrics`
+and `/ingest/checkin` (an agent token), and `/hook/…` (each endpoint's own token).
 
 Anything not listed in the policy table is admin-only with API keys denied, so a new
 route is closed until it is opened on purpose.
@@ -764,6 +768,13 @@ routes — an administrator in the browser, never an API key:
   it the next time it checks in, always inside the limit set in its own configuration file:
   GWatch can narrow what a machine reports, never widen it. `400` for an unknown metric
   family (`cpu`, `memory`, `swap`, `load`, `disk`, `inodes`, `net`, `diskio`).
+- `GET /api/agents/latest` → `{ "version", "url", "checkedAt", "error"? }`, the newest
+  non-pre-release `gwatch-agent` release in the update repository, which the interface
+  uses to mark machines running an older agent. It reads the agent's own releases
+  (its own tags), not GWatch's; the answer is cached for six hours (ten minutes after a failed
+  lookup, and a failed lookup never replaces a good answer). When `updates.checkAutomatically`
+  is off, or the build has no updater, it returns an empty release
+  and makes no network request. Administrator only, never an API key.
 
 ### Pairing codes
 
@@ -1281,8 +1292,8 @@ stripped from `GET /api/export/config.json` like the SMTP password.
 - `POST /api/backups` body `{ "password": "...", "includeHistory": true }` → BackupInfo. (Manual backups are never pruned.)
 - `GET /api/backups/{fileName}/download` → file (`application/octet-stream`).
 - `DELETE /api/backups/{fileName}` → `{ok:true}`.
-- `POST /api/backups/restore` multipart form: `file`, `password`, `includeHistory` ("true"/"false") → `{ "ok": true, "nodes": n, "checks": n, "results": n }`. A body over 2 GiB (plus 1 MiB for the form) is refused with 413, as is an archive over any of the limits in [`RESTORE.md`](RESTORE.md#size-limits); either way nothing is changed.
-- `POST /api/backups/restore-existing` body `{ "fileName": "...", "password": "...", "includeHistory": bool }` → same.
+- `POST /api/backups/restore` multipart form: `file`, `password`, `includeHistory` ("true"/"false"), `restoreAccounts` ("true"/"false", default false: accounts and agents no longer on this server are left out and listed) → `{ "ok": true, "nodes": n, "checks": n, "results": n, "skippedUsers": [...], "skippedAgents": [...], "safetyBackup": "file name" }`. A full backup of the current data is taken first under the same password; if it cannot be, nothing is restored. A body over 2 GiB (plus 1 MiB for the form) is refused with 413, as is an archive over any of the limits in [`RESTORE.md`](RESTORE.md#size-limits); either way nothing is changed.
+- `POST /api/backups/restore-existing` body `{ "fileName": "...", "password": "...", "includeHistory": bool, "restoreAccounts": bool }` → same.
 
 See [`RESTORE.md`](RESTORE.md) for the end-to-end restore-to-a-new-machine procedure.
 
@@ -1298,7 +1309,15 @@ See [`RESTORE.md`](RESTORE.md) for the end-to-end restore-to-a-new-machine proce
   columns are written as they are. Use `/api/events` or `/api/checks/{id}/results` for
   the raw values.
 - `GET /api/export/logs.txt?limit=1000` → the recent service log as text.
-- `GET /api/export/config.json` → nodes+checks+dashboards+maintenance+triggers+endpoints+saved charts as JSON (no passwords).
+- `GET /api/export/config.json` → settings, nodes and checks, dashboards, maintenance
+  windows, triggers, rules, endpoints, saved charts, wallboards and report definitions as
+  JSON, meant to be readable and shareable. Secrets come out empty: the access, SMTP and
+  backup passwords; every check credential (metrics token, SNMP community and passphrases,
+  request body, header and environment values); every action credential (tokens, user
+  keys, webhook and request URLs, bodies, headers); endpoint tokens and wallboard share
+  tokens. Accounts, API keys, agents and incidents are left out, and reports lose their
+  recipients and are switched off. Administrator only, never an API key. It is not a
+  backup: use an encrypted backup for a complete recoverable copy.
 
 ## Logs
 

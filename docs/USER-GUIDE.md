@@ -1012,7 +1012,7 @@ token can read that one board and nothing else.
 
 ## 15. Settings, tab by tab
 
-Seventeen tabs. Three of them — *Appearance*, *Monitor health* and *About* — are
+Sixteen tabs. Three of them — *Appearance*, *Monitor health* and *About* — are
 visible to viewer accounts; the rest are administrator-only.
 
 | Tab | What lives there |
@@ -1025,7 +1025,6 @@ visible to viewer accounts; the rest are administrator-only.
 | **Alerts** | Email and SMTP, as in [section 10](#10-email-alerts) |
 | **Automation** | Triggers and custom endpoints, as in [section 12](#12-automation-triggers-and-endpoints) |
 | **Rules** | Notification rules, as in [section 11](#11-notification-rules) |
-| **Hardware** | Registered machines, pairing codes, agent tokens, revoking and purging |
 | **AI & MCP** | Setting up the optional MCP companion, and the downloadable agent skill |
 | **Retention** | How long each resolution of history is kept, current storage, and where your files are |
 | **Maintenance** | One-off and weekly recurring maintenance windows |
@@ -1035,12 +1034,19 @@ visible to viewer accounts; the rest are administrator-only.
 | **Monitor health** | Whether GWatch itself is well |
 | **About** | Version, licence, and the terms, privacy and disclaimer documents |
 
+There is no Hardware tab any more: a machine with the agent is a node, so it is
+paired from **Nodes › Add node › A machine with the GWatch agent**, and its
+agent (token, rotation, what it collects, revoking and deleting) is managed on
+that node's page.
+
 A few worth calling out:
 
 ### Retention
 
-Recent data stays detailed; older data is summarised so the database never
-grows without limit. `0` means keep forever.
+Recent data stays detailed; older data is summarised and the detail deleted, so
+the database grows slowly rather than with every result. It does still grow: daily
+summaries are kept forever by default (one row per check per day), so set a limit
+there if that matters to you. `0` means keep forever.
 
 | Setting | Default |
 |---|---|

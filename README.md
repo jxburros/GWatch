@@ -13,14 +13,16 @@ served on `http://127.0.0.1:7230` (optionally to the rest of your LAN).
 
 No cloud account, no AI features in the product itself, never exposed to the internet
 by itself. (An optional, separate MCP companion can let an assistant *read* your
-monitoring if you set one up — see [`mcp/README.md`](mcp/README.md).) The product
-brief that defines the scope lives in [`local-network-monitoring-product-brief.md`](local-network-monitoring-product-brief.md).
+monitoring if you set one up — see [`mcp/README.md`](mcp/README.md).) The original
+product brief is [`local-network-monitoring-product-brief.md`](local-network-monitoring-product-brief.md);
+some of its non-goals have since shipped in a narrow form, and [`ROADMAP.md`](ROADMAP.md)
+is where the current scope and its limits are kept.
 
 > **GWatch is in beta (0.5.0).** It works and it looks after your data, but the
 > interface and the JSON API can still change between releases, and bugs are likelier
 > now than they will be at 1.0 — which is reserved for the first public, stable
-> release. [`CHANGELOG.md`](CHANGELOG.md) lists what is in this version and the gaps it
-> ships with. Please [report anything that looks wrong](https://github.com/jxburros/GWatch/issues).
+> release. [`CHANGELOG.md`](CHANGELOG.md) lists what is in each version, and
+> [`ROADMAP.md`](ROADMAP.md#known-gaps) the known gaps it still ships with. Please [report anything that looks wrong](https://github.com/jxburros/GWatch/issues).
 
 ## What's new in 0.5.0
 
@@ -62,7 +64,9 @@ The agent is unchanged and stays at **gwatch-agent 0.5.0**. Full detail in
   down" — joined by all, any or at-least-N, with the same actions triggers use.
 - **Incident timeline**, **dashboards**, a **Charts** tab (with timestacked charts that lay a
   metric over its own earlier days, weeks or months) and an **Audit** tab with full
-  history — retained and rolled up automatically so the database never grows without bound.
+  history — rolled up and pruned automatically, so the database grows by roughly one daily
+  summary per check per day once the finer data ages out (daily summaries are kept forever
+  unless you set a limit).
 - **Automation**: triggers and custom inbound endpoints run webhooks, Slack/Teams/ntfy/
   Pushover notifications, git commands or scripts when something changes.
 - **Wallboards** for a spare monitor or tablet, with an optional no-sign-in projected view.
@@ -169,6 +173,8 @@ terms, privacy and disclaimer documents above before it installs anything.
 
 GWatch is developed by **Jeffrey Guntly** and **Garrett Guntly**, and published by
 **JX Holdings, LLC**.
+
+Copyright (c) 2026 JX Holdings. Original developers: Jeffrey Guntly and Garrett Guntly.
 
 For signed Linux installation, systemd, headless setup and Raspberry Pi builds, see [Installing on Linux](docs/INSTALL-LINUX.md).
 
