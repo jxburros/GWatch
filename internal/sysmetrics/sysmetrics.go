@@ -67,7 +67,30 @@ type raw struct {
 	interfaces  []ifaceCounters
 	disks       []diskCounters
 
+	temperatures []model.HostTemperature
+	pressure     []model.HostPressure
+	pools        []model.HostPool
+
+	// cgroup is the container's own accounting, when the reading was taken
+	// inside a container with a limit (Linux, cgroup v2). nil otherwise.
+	cgroup *cgroupReading
+
 	warnings []string
+}
+
+// cgroupReading is what a container's cgroup says about its limits and its
+// use of them. The processor figures are cumulative microseconds, turned into
+// a utilisation the same way /proc/stat's are: by comparing two readings.
+type cgroupReading struct {
+	kind string
+
+	memLimit uint64 // memory.max; 0 when unlimited
+	memUsed  uint64 // memory.current less reclaimable file cache
+	memCache uint64 // file cache inside the cgroup
+
+	cpuLimit                     float64 // cpu.max quota / period, in cores; 0 when unlimited
+	usageUsec, userUsec, sysUsec uint64
+	haveCPU                      bool
 }
 
 // cpuTimes holds cumulative processor time in seconds, split by mode.
@@ -191,6 +214,9 @@ func snapshot(key, agentVersion string, prev, cur *raw) model.HostMetrics {
 		AgentVersion: agentVersion,
 		Timestamp:    cur.at,
 		Filesystems:  cur.filesystems,
+		Temperatures: cur.temperatures,
+		Pressure:     cur.pressure,
+		Pools:        cur.pools,
 		Warnings:     cur.warnings,
 	}
 	if !cur.bootTime.IsZero() {
@@ -232,6 +258,8 @@ func snapshot(key, agentVersion string, prev, cur *raw) model.HostMetrics {
 			m.Memory.SwapUsedPct = &pct
 		}
 	}
+
+	applyContainer(&m, prev, cur, elapsed)
 
 	prevIf := make(map[string]ifaceCounters, len(prev.interfaces))
 	for _, n := range prev.interfaces {
@@ -279,7 +307,66 @@ func snapshot(key, agentVersion string, prev, cur *raw) model.HostMetrics {
 	sort.Slice(m.Filesystems, func(i, j int) bool { return m.Filesystems[i].Mount < m.Filesystems[j].Mount })
 	sort.Slice(m.Interfaces, func(i, j int) bool { return m.Interfaces[i].Name < m.Interfaces[j].Name })
 	sort.Slice(m.Disks, func(i, j int) bool { return m.Disks[i].Name < m.Disks[j].Name })
+	sort.Slice(m.Temperatures, func(i, j int) bool { return m.Temperatures[i].Name < m.Temperatures[j].Name })
+	sort.Slice(m.Pools, func(i, j int) bool { return m.Pools[i].Name < m.Pools[j].Name })
 	return m
+}
+
+// applyContainer measures memory and processor use against a container's own
+// limits instead of the host's totals. Inside a container /proc/meminfo and
+// /proc/stat describe the whole machine, so a container capped at 2 GiB on a
+// 64 GiB host would read as 3% full at the moment it is being killed for
+// running out of memory. Each limit is applied on its own — a container with
+// a memory cap and no processor cap gets the host's processor figures — and
+// only when it is actually tighter than what the machine has.
+func applyContainer(m *model.HostMetrics, prev, cur *raw, elapsed float64) {
+	cg := cur.cgroup
+	if cg == nil {
+		return
+	}
+	c := &model.HostContainer{Kind: cg.kind, HostMemoryBytes: m.Memory.TotalBytes, HostCores: cur.cores}
+	applied := false
+
+	if cg.memLimit > 0 && (m.Memory.TotalBytes == 0 || cg.memLimit < m.Memory.TotalBytes) {
+		used := cg.memUsed
+		if used > cg.memLimit {
+			used = cg.memLimit
+		}
+		m.Memory.TotalBytes = cg.memLimit
+		m.Memory.UsedBytes = used
+		m.Memory.AvailableBytes = cg.memLimit - used
+		m.Memory.CachedBytes = cg.memCache
+		m.Memory.UsedPct = usedPct(used, cg.memLimit)
+		c.MemoryLimitBytes = cg.memLimit
+		applied = true
+	}
+
+	if cg.cpuLimit > 0 && (cur.cores == 0 || cg.cpuLimit < float64(cur.cores)) {
+		limit := cg.cpuLimit
+		c.CPULimitCores = &limit
+		applied = true
+		// The share of the quota used: a container allowed 1.5 cores that
+		// is using 1.5 cores is at 100%, however idle the other 30 are.
+		// iowait and steal have no cgroup equivalent, so they go rather
+		// than being left as the host's figures beside the container's.
+		m.CPU.UsagePct, m.CPU.UserPct, m.CPU.SystemPct, m.CPU.IOWaitPct, m.CPU.StealPct = nil, nil, nil, nil, nil
+		if p := prev.cgroup; p != nil && p.haveCPU && cg.haveCPU && elapsed > 0 {
+			span := elapsed * limit * 1e6 // microseconds of processor the quota allowed
+			pct := func(prev, cur uint64) *float64 {
+				if cur < prev {
+					return nil
+				}
+				v := clampPct(float64(cur-prev) / span * 100)
+				return &v
+			}
+			m.CPU.UsagePct = pct(p.usageUsec, cg.usageUsec)
+			m.CPU.UserPct = pct(p.userUsec, cg.userUsec)
+			m.CPU.SystemPct = pct(p.sysUsec, cg.sysUsec)
+		}
+	}
+	if applied {
+		m.Container = c
+	}
 }
 
 // rate converts two cumulative counter readings into a per-second rate. It

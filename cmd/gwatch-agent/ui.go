@@ -466,6 +466,9 @@ func (s *uiServer) buildState() map[string]any {
 			{"key": model.MetricInodes, "label": "Inodes (needs disk space)"},
 			{"key": model.MetricNet, "label": "Network throughput"},
 			{"key": model.MetricDiskIO, "label": "Disk throughput"},
+			{"key": model.MetricTemp, "label": "Temperatures (Linux)"},
+			{"key": model.MetricPSI, "label": "Pressure stall (Linux)"},
+			{"key": model.MetricPool, "label": "ZFS pool health (Linux)"},
 		},
 	}
 	if status, err := readAgentStatus(); err == nil {

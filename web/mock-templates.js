@@ -532,6 +532,11 @@ export default [
             {
               "metric": "load",
               "warn": 2
+            },
+            {
+              "metric": "pool",
+              "warn": 1,
+              "crit": 2
             }
           ]
         },
@@ -605,6 +610,11 @@ export default [
             {
               "metric": "load",
               "warn": 2
+            },
+            {
+              "metric": "pool",
+              "warn": 1,
+              "crit": 2
             }
           ]
         },

@@ -134,6 +134,24 @@ func TestApplyAnImpossibleSelectionSendsNothingRatherThanEverything(t *testing.T
 	}
 }
 
+// The Linux-only families can be turned off like any other, and a selection
+// that names only other families leaves them out.
+func TestApplyGatesTemperaturesPressureAndPools(t *testing.T) {
+	m := model.HostMetrics{
+		Temperatures: []model.HostTemperature{{Name: "coretemp/Package id 0", Celsius: 50}},
+		Pressure:     []model.HostPressure{{Resource: "cpu", Avg10: 1}},
+		Pools:        []model.HostPool{{Name: "tank", Health: "ONLINE"}},
+	}
+	all := Apply(m, model.CollectSelection{}, true)
+	if len(all.Temperatures) != 1 || len(all.Pressure) != 1 || len(all.Pools) != 1 {
+		t.Fatalf("automatic dropped something: %+v", all)
+	}
+	some := Apply(m, model.CollectSelection{Metrics: []string{model.MetricTemp}}, true)
+	if len(some.Temperatures) != 1 || some.Pressure != nil || some.Pools != nil {
+		t.Errorf("only temperatures were chosen: %+v", some)
+	}
+}
+
 func TestInventoryListsEverythingWithItsAutomaticFlag(t *testing.T) {
 	inv := InventoryOf(sample())
 	if len(inv.Interfaces) != 3 || len(inv.Disks) != 2 || len(inv.Mounts) != 2 {

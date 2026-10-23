@@ -482,6 +482,12 @@ func SystemDefaults() CheckConfig {
 			{Metric: MetricDisk, Warn: Float(85), Crit: Float(95)},
 			{Metric: MetricInodes, Warn: Float(85), Crit: Float(95)},
 			{Metric: MetricLoad, Warn: Float(2)},
+			// A ZFS pool that has lost a disk is the one storage problem
+			// nobody wants to find out about from the second disk. Machines
+			// without ZFS report no pool readings, so this costs them nothing.
+			// Temperatures and pressure are charted but have no default:
+			// what is hot depends on the chip, and some report nonsense.
+			{Metric: MetricPool, Warn: Float(1), Crit: Float(2)},
 		},
 	}
 }
