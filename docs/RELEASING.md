@@ -71,7 +71,7 @@ Pushing a tag such as `v0.1.0` additionally runs the `release` job (below) and t
 
 | Path | Purpose |
 |---|---|
-| `main.go` | CLI, cross-platform service wrapper (kardianos/service), HTTP server bound to localhost by default |
+| `main.go` | CLI, service commands (through `internal/svc`), HTTP server bound to localhost by default |
 | `migrate_db.go` | `gwatch migrate-db`: copies a SQLite install into a PostgreSQL/MySQL database |
 | `internal/model` | Shared data types and JSON wire format |
 | `internal/dbconfig` | Which database to open: flags, `GWATCH_DB_*`, `database.json`, then the SQLite default |
@@ -85,6 +85,8 @@ Pushing a tag such as `v0.1.0` additionally runs the `release` job (below) and t
 | `internal/hostmon` | The newest hardware reading of each machine, in memory: samples this machine, accepts agent pushes (the engine then has the machine's check judge them) |
 | `internal/sysmetrics` | The platform-tagged collectors behind `hostmon` (`collect_linux.go`, `collect_darwin.go`, `collect_windows.go`) |
 | `internal/update` | GitHub release check, download, checksum, signature verification and executable swap |
+| `internal/svc` | Background-service hosting for both programs: Windows Service Control Manager, launchd, systemd (OpenRC and System V as fallbacks) — see [the checklist below](#service-hosting-manual-checks) |
+| `internal/serviceinstall` | The protected copy of the program a service runs, and the server's own hardened systemd installation |
 | `internal/mailer` | SMTP delivery and alert email rendering |
 | `internal/backup` | Encrypted backup archives and restore |
 | `internal/logging` | The size-rotated file + in-memory service log behind `/api/logs` |
@@ -256,6 +258,60 @@ accepted. To rotate without stranding installed copies:
 If a key is compromised, drop its line at once and release with a new one. Users
 on older binaries will not accept that release and must reinstall by hand — say
 so in the release notes.
+
+## Service hosting: manual checks
+
+Both programs register, control and run themselves as a background service
+through `internal/svc` (which replaced the kardianos/service library in #46).
+What can be tested without a service manager is: the unit, property list and
+init scripts it writes, and the sequence of `systemctl`, `rc-service` and
+`launchctl` commands it runs, are covered by `go test ./internal/svc` on
+every platform; the Windows state mapping and registration settings by the
+same tests on the Windows CI job. On top of that the `linux-service` CI job
+(`scripts/ci/linux-service-test.sh binary`) installs the server on a real
+systemd runner, runs `gwatch status`, `stop`, `start` and `restart`, and
+uninstalls it, and the agent-packaging jobs install the packaged agent unit.
+
+Nothing in CI talks to the Windows Service Control Manager or to launchd, so
+before a release that changes `internal/svc`, or a release of either program
+after one did, run this by hand on a Windows machine (from an Administrator
+prompt) and on a Mac (with `sudo`), once with `gwatch` and once with
+`gwatch-agent` (`install --server … --token …` for the agent):
+
+1. **Fresh install.** `install` reports the service installed and started.
+   Windows: `sc qc GWatch` (or `GWatchAgent`) shows `AUTO_START`,
+   `WIN32_OWN_PROCESS`, the display name and `"C:\Program Files\GWatch\gwatch.exe" run …`;
+   `sc qfailure GWatch` shows `RESTART -- Delay = 5000 milliseconds` on each
+   line. macOS: `/Library/LaunchDaemons/GWatch.plist` (or `GWatchAgent.plist`)
+   exists, is owned by root and mode 0644, and `sudo launchctl print system/GWatch`
+   says `state = running`.
+2. **Status.** `status` says `running`; from an ordinary (non-Administrator)
+   Windows prompt too, and on the agent's settings page (`gwatch-agent ui`).
+3. **Stop, start, restart.** `stop` then `status` says `stopped` (macOS: and the
+   process is gone and stays gone — KeepAlive must not bring it back); `start`
+   brings it back; `restart` replaces the process (a new PID).
+4. **Crash recovery.** Kill the process (`taskkill /F /IM gwatch.exe`,
+   `sudo kill -9 <pid>`). It is running again within about ten seconds.
+5. **Reboot.** After a restart of the machine the service is running without
+   anyone signing in.
+6. **Self-update.** On a build older than the latest release, apply the update
+   from Settings › Updates (agent: `gwatch-agent update`). The service comes back
+   on the new version by itself.
+7. **Install twice.** A second `install` without uninstalling fails with "already
+   exists" / "already installed" and leaves the running service alone.
+8. **Upgrade over an old install.** On a machine where a release from before #46
+   installed the service, replace the program and run `restart`, `status` and
+   finally `uninstall`; all three work on the old registration.
+9. **Uninstall.** `uninstall` stops and removes it: `sc query GWatch` says the
+   service does not exist; the plist is gone and `launchctl print system/GWatch`
+   says it could not find the service. The data directory is kept.
+10. **Foreground run.** `gwatch run` from a terminal runs in the foreground and
+    Ctrl+C stops it cleanly, on both.
+
+On Linux, the same steps are worth running by hand on an OpenRC machine
+(Alpine) when `internal/svc/linux.go` changes, since CI has none: `install`
+writes `/etc/init.d/GWatch` and adds it to the default runlevel, and the
+service reads `/etc/gwatch/gwatch.env`.
 
 ## The installer artefacts
 

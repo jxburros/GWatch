@@ -13,9 +13,9 @@ import (
 )
 
 // The agent's unit is serviceinstall.SystemdScript with its environment file
-// swapped; it must come out exactly as the kardianos library rendered it, so
-// that an agent installed by an earlier release and one installed now run
-// the same unit.
+// swapped; for the paths it is installed at it must come out as the kardianos
+// library rendered it, so that an agent installed by an earlier release and
+// one installed now run the same unit.
 func TestSystemdUnitFromSystemdScript(t *testing.T) {
 	c := Config{
 		Name:        "GWatchAgent",

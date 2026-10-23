@@ -46,11 +46,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kardianos/service"
-
 	"github.com/jxburros/GWatch/internal/model"
 	"github.com/jxburros/GWatch/internal/permissions"
 	"github.com/jxburros/GWatch/internal/serviceinstall"
+	"github.com/jxburros/GWatch/internal/svc"
 	"github.com/jxburros/GWatch/internal/sysmetrics"
 )
 
@@ -424,14 +423,14 @@ func main() {
 	}
 
 	prg := &program{cfg: cfg, mode: cmd}
-	svc, err := newService(prg, cfg, cmd)
+	service, err := newService(prg, cfg, cmd)
 	if err != nil {
 		fatal(err)
 	}
 
 	switch cmd {
 	case "run", "serve":
-		if err := svc.Run(); err != nil {
+		if err := service.Run(); err != nil {
 			fatal(err)
 		}
 	case "install":
@@ -442,40 +441,36 @@ func main() {
 		if err := persistConfig(cfg); err != nil {
 			fatal(err)
 		}
-		if err := svc.Install(); err != nil {
+		if err := service.Install(); err != nil {
 			fatal(fmt.Errorf("install failed: %w (on Windows run this from an Administrator prompt)", err))
 		}
 		fmt.Printf("Installed service %q. Its settings are in %s.\n", serviceName, cfg.configPathOrDefault())
 		if noStart {
 			return
 		}
-		if err := svc.Start(); err != nil {
+		if err := service.Start(); err != nil {
 			fatal(fmt.Errorf("service installed but could not be started: %w", err))
 		}
 		fmt.Println("Service started. This computer will appear in GWatch within a minute.")
 		noteInstallResult(nil, "running")
 	case "uninstall":
-		_ = svc.Stop()
-		if err := svc.Uninstall(); err != nil {
+		_ = service.Stop()
+		if err := service.Uninstall(); err != nil {
 			fatal(fmt.Errorf("uninstall failed: %w", err))
 		}
 		fmt.Printf("Service %q removed.\n", serviceName)
 	case "start", "stop", "restart":
-		if err := service.Control(svc, cmd); err != nil {
+		if err := service.Control(cmd); err != nil {
 			fatal(err)
 		}
 		fmt.Printf("Service %s: done.\n", cmd)
 	case "status":
-		st, err := svc.Status()
+		st, err := service.Status()
 		if err != nil {
 			fmt.Println("Service status: not installed or unavailable:", err)
 			return
 		}
-		fmt.Printf("Service status: %s\n", map[service.Status]string{
-			service.StatusRunning: "running",
-			service.StatusStopped: "stopped",
-			service.StatusUnknown: "unknown",
-		}[st])
+		fmt.Printf("Service status: %s\n", st)
 	default:
 		usage()
 		os.Exit(2)
@@ -661,10 +656,19 @@ func (c config) serviceArgs(cmd string) []string {
 	return args
 }
 
+// agentEnvFile is the optional environment file the Linux service reads
+// before it starts, for settings given as GWATCH_AGENT_* variables.
+const agentEnvFile = "/etc/gwatch-agent/agent.env"
+
 // newService describes the background service to the platform's service
 // manager. It is here rather than inline so that the commands which only need
 // to ask after the service — update, for one — describe it the same way.
-func newService(prg *program, cfg config, cmd string) (service.Service, error) {
+//
+// Windows restarts the service five seconds after it fails (svc's default
+// RestartDelay); the systemd unit says the same with RestartSec=, and launchd
+// restarts it whenever it exits. On a Linux machine without systemd the
+// OpenRC or System V script reads the same environment file the unit does.
+func newService(prg *program, cfg config, cmd string) (*svc.Service, error) {
 	exe := ""
 	if cmd == "install" {
 		var err error
@@ -673,19 +677,20 @@ func newService(prg *program, cfg config, cmd string) (service.Service, error) {
 			return nil, err
 		}
 	}
-	return service.New(prg, &service.Config{
+	return svc.New(prg, svc.Config{
 		Executable:  exe,
 		Name:        serviceName,
 		DisplayName: serviceDisplay,
 		Description: serviceDesc,
 		Arguments:   cfg.serviceArgs(cmd),
-		Option:      service.KeyValue{"StartType": "automatic", "OnFailure": "restart", "OnFailureDelayDuration": "5s", "SystemdScript": strings.ReplaceAll(serviceinstall.SystemdScript, "/etc/gwatch/gwatch.env", "/etc/gwatch-agent/agent.env")},
+		SystemdUnit: strings.ReplaceAll(serviceinstall.SystemdScript, "/etc/gwatch/gwatch.env", agentEnvFile),
+		EnvFile:     agentEnvFile,
 	})
 }
 
 // agentService is newService for a caller that has no program to run: asking
 // whether the service exists, and nothing else.
-func agentService(cfg config, cmd string) (service.Service, error) {
+func agentService(cfg config, cmd string) (*svc.Service, error) {
 	return newService(&program{cfg: cfg, mode: cmd}, cfg, cmd)
 }
 
@@ -714,7 +719,7 @@ type program struct {
 	done   chan struct{}
 }
 
-func (p *program) Start(service.Service) error {
+func (p *program) Start(*svc.Service) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	p.mu.Lock()
 	p.cancel = cancel
@@ -724,7 +729,7 @@ func (p *program) Start(service.Service) error {
 	return nil
 }
 
-func (p *program) Stop(service.Service) error {
+func (p *program) Stop(*svc.Service) error {
 	p.mu.Lock()
 	cancel, done := p.cancel, p.done
 	p.mu.Unlock()

@@ -152,6 +152,22 @@ check_gone() {
 	echo "clean"
 }
 
+# gwatch status, stop, start and restart go through internal/svc's systemd
+# code (#46) rather than the install path, so they get a round of their own.
+control() {
+	say "gwatch status / stop / start / restart"
+	sudo "$1" status | grep -qx 'Service status: running' || fail "gwatch status did not say running"
+	sudo "$1" stop
+	systemctl is-active --quiet gwatch && fail "gwatch stop left the service running"
+	sudo "$1" status | grep -qx 'Service status: stopped' || fail "gwatch status did not say stopped"
+	sudo "$1" start
+	wait_health
+	sudo "$1" restart
+	systemctl is-active --quiet gwatch || fail "gwatch restart left the service stopped"
+	wait_health
+	echo "controlled"
+}
+
 version_of() {
 	curl -fsS -o "$work/version.json" "$url/api/version"
 	json "$work/version.json" 'd["version"]'
@@ -165,6 +181,7 @@ binary)
 	sudo "$bin" install --listen "${url#http://}"
 	check_service
 	exercise
+	control "$bin"
 	# Self-update to a locally signed build is not exercised here. The
 	# updater only talks to api.github.com (update.Client.APIBase cannot be
 	# set on a running service) and trusts the keys built into the binary,

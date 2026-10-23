@@ -10,9 +10,10 @@ package serviceinstall
 const (
 	// UnitName is the service's name to systemctl and journalctl.
 	UnitName = "gwatch.service"
-	// LegacyUnitName is the unit kardianos/service wrote for releases before
-	// this one, named after the Windows service. Installing over it migrates
-	// it; nothing writes it any more.
+	// LegacyUnitName is the unit the generic service code (then the
+	// kardianos/service library) wrote for releases before this one, named
+	// after the Windows service. Installing over it migrates it; nothing
+	// writes it any more.
 	LegacyUnitName = "GWatch.service"
 
 	unitDir        = "/etc/systemd/system"

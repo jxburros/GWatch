@@ -79,10 +79,15 @@ func copyExecutable(src, dst string) error {
 	return os.Rename(out.Name(), dst)
 }
 
-// SystemdScript is the unit kardianos/service writes for the hardware agent
+// SystemdScript is the unit internal/svc writes for the hardware agent
 // (cmd/gwatch-agent). The server no longer uses it on a systemd machine: there
 // `gwatch install` writes a unit of its own, hardened and run as a dedicated
 // user (systemd_linux.go).
+//
+// It is a text/template over svc's unit fields (.Description, .Path,
+// .Arguments, .UserName) and its cmd and cmdEscape quoting functions, which
+// are the ones the kardianos/service library offered before #46 replaced it,
+// so that the unit an earlier release installed is the unit this one writes.
 const SystemdScript = `[Unit]
 Description={{.Description}}
 After=network-online.target

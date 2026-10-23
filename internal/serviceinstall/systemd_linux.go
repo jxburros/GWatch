@@ -3,8 +3,9 @@
 package serviceinstall
 
 // `gwatch install` and `gwatch uninstall` on a Linux machine that runs
-// systemd. This replaces kardianos/service's generic unit for the server
-// (the hardware agent still uses that one): the service gets a user of its
+// systemd. This replaces the generic unit internal/svc writes from
+// SystemdScript for the server (the hardware agent still uses that one): the
+// service gets a user of its
 // own, a program file it cannot overwrite, a data directory under /var/lib and
 // a hardened unit (unit_linux.go), and running install a second time updates
 // all of it rather than failing with "Init already exists".
@@ -31,7 +32,8 @@ import (
 
 // SystemdAvailable reports whether this machine's service manager is systemd,
 // which is what the rest of this file needs. Anything else (OpenRC, a
-// container without an init) keeps the generic kardianos/service behaviour.
+// container without an init) keeps the generic service internal/svc installs
+// there, as earlier releases did.
 func SystemdAvailable() bool {
 	fi, err := os.Stat("/run/systemd/system")
 	return err == nil && fi.IsDir()

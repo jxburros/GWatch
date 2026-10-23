@@ -27,8 +27,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kardianos/service"
-
 	"github.com/jxburros/GWatch/internal/api"
 	"github.com/jxburros/GWatch/internal/checks"
 	"github.com/jxburros/GWatch/internal/dbconfig"
@@ -38,6 +36,7 @@ import (
 	"github.com/jxburros/GWatch/internal/permissions"
 	"github.com/jxburros/GWatch/internal/serviceinstall"
 	"github.com/jxburros/GWatch/internal/store"
+	"github.com/jxburros/GWatch/internal/svc"
 	"github.com/jxburros/GWatch/internal/update"
 )
 
@@ -218,12 +217,18 @@ func main() {
 	}
 
 	prg := &program{cfg: cfg}
-	svcConfig := &service.Config{
+	// Windows restarts the service five seconds after it fails (svc's
+	// default RestartDelay); the unit and the launchd daemon say the same in
+	// their own terms. On Linux the environment file carries the settings,
+	// for systemd through the unit and for OpenRC and System V through the
+	// init script.
+	svcConfig := svc.Config{
 		Name:        name,
 		DisplayName: serviceDisplay,
 		Description: serviceDesc,
 		Arguments:   []string{"run", "--data-dir", cfg.dataDir, "--listen", cfg.listen},
-		Option:      service.KeyValue{"StartType": "automatic", "OnFailure": "restart", "OnFailureDelayDuration": "5s", "SystemdScript": serviceinstall.SystemdScript},
+		SystemdUnit: serviceinstall.SystemdScript,
+		EnvFile:     serviceinstall.EnvPath,
 	}
 	if cfg.trustedProxies != "" {
 		svcConfig.Arguments = append(svcConfig.Arguments, "--trusted-proxies", cfg.trustedProxies)
@@ -253,16 +258,15 @@ func main() {
 		}
 		svcConfig.Executable = exe
 	}
-	svc, err := service.New(prg, svcConfig)
+	service, err := svc.New(prg, svcConfig)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
-	prg.svc = svc
 
 	switch cmd {
 	case "run":
-		if err := svc.Run(); err != nil {
+		if err := service.Run(); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
@@ -285,7 +289,7 @@ func main() {
 			}
 			fmt.Printf("Database settings saved to %s (%s).\n", dbconfig.Path(cfg.dataDir), dbCfg.Describe())
 		}
-		if err := svc.Install(); err != nil {
+		if err := service.Install(); err != nil {
 			fmt.Fprintln(os.Stderr, "error: install failed:", err, "(on Windows run this from an Administrator prompt)")
 			os.Exit(1)
 		}
@@ -293,42 +297,40 @@ func main() {
 		if cfg.noStart {
 			return
 		}
-		if err := svc.Start(); err != nil {
+		if err := service.Start(); err != nil {
 			fmt.Fprintln(os.Stderr, "warning: service installed but could not be started:", err)
 			os.Exit(1)
 		}
 		fmt.Printf("Service started. Open http://%s in your browser (or run: gwatch open).\n", browserHost(cfg.listen))
 	case "uninstall":
-		_ = svc.Stop()
-		if err := svc.Uninstall(); err != nil {
+		_ = service.Stop()
+		if err := service.Uninstall(); err != nil {
 			fmt.Fprintln(os.Stderr, "error: uninstall failed:", err)
 			os.Exit(1)
 		}
 		fmt.Printf("Service %q removed. Data in %s was kept.\n", serviceName, cfg.dataDir)
 	case "start", "stop", "restart":
-		if err := service.Control(svc, cmd); err != nil {
+		if err := service.Control(cmd); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
 		fmt.Printf("Service %s: done.\n", cmd)
 	case "status":
-		st, err := svc.Status()
+		st, err := service.Status()
 		if err != nil {
 			fmt.Println("Service status: not installed or unavailable:", err)
 			return
 		}
-		names := map[service.Status]string{service.StatusRunning: "running", service.StatusStopped: "stopped", service.StatusUnknown: "unknown"}
-		fmt.Printf("Service status: %s\n", names[st])
+		fmt.Printf("Service status: %s\n", st)
 	default:
 		usage()
 		os.Exit(2)
 	}
 }
 
-// program implements service.Interface.
+// program is what the service runs (svc.Program).
 type program struct {
 	cfg    config
-	svc    service.Service
 	cancel context.CancelFunc
 	done   chan struct{}
 
@@ -395,12 +397,12 @@ func (p *program) afterStop() {
 	os.Exit(0)
 }
 
-func (p *program) Start(s service.Service) error {
+func (p *program) Start(*svc.Service) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
 	p.done = make(chan struct{})
 	mode := "console"
-	if !service.Interactive() && (runtime.GOOS == "windows" || os.Getenv("INVOCATION_ID") != "") {
+	if !svc.Interactive() && (runtime.GOOS == "windows" || os.Getenv("INVOCATION_ID") != "") {
 		mode = "service"
 	}
 	p.mode = mode
@@ -420,7 +422,7 @@ func (p *program) Start(s service.Service) error {
 			return
 		}
 		p.afterStop()
-		if mode == "console" && service.Interactive() {
+		if mode == "console" && svc.Interactive() {
 			// Ctrl+C or a restart request in console mode: leave the
 			// process instead of waiting for a service manager.
 			os.Exit(0)
@@ -429,7 +431,7 @@ func (p *program) Start(s service.Service) error {
 	return nil
 }
 
-func (p *program) Stop(s service.Service) error {
+func (p *program) Stop(*svc.Service) error {
 	if p.cancel != nil {
 		p.cancel()
 	}

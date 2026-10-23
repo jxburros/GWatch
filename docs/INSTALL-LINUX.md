@@ -58,7 +58,7 @@ On a machine that runs systemd, `sudo gwatch install`:
 
 Install is safe to run again. Re-running it updates the program and the unit and restarts the service; `--listen` or `--data-dir` change those settings, and leaving them out keeps what the last install chose. `sudo gwatch install --listen 0.0.0.0:7230` is how to open the interface to the LAN from the command line.
 
-Machines that do not run systemd (OpenRC, a container with no init) get the generic service the earlier releases installed, run as root.
+Machines that do not run systemd get the plain service the earlier releases installed, run as root: an OpenRC script (`/etc/init.d/GWatch`, added to the default runlevel and kept running by `supervise-daemon`) on Alpine and the other OpenRC systems, and a System V init script anywhere else, a container with no init among them. Both read `/etc/gwatch/gwatch.env` before starting the service, and log to `/var/log/gwatch.log` and `/var/log/gwatch.err`.
 
 ### Upgrading from an earlier release
 

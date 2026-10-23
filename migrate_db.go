@@ -10,14 +10,15 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
-	"github.com/kardianos/service"
-
 	"github.com/jxburros/GWatch/internal/backup"
 	"github.com/jxburros/GWatch/internal/dbconfig"
+	"github.com/jxburros/GWatch/internal/serviceinstall"
 	"github.com/jxburros/GWatch/internal/store"
+	"github.com/jxburros/GWatch/internal/svc"
 )
 
 // migrateDB is "gwatch migrate-db": it copies the SQLite database in the
@@ -118,9 +119,16 @@ go back to it.`))
 // installed service reports itself running, or something answering as GWatch
 // is listening on the address this one would use.
 func gwatchRunning(ctx context.Context, cfg config) (string, bool) {
-	if svc, err := service.New(&program{cfg: cfg}, &service.Config{Name: serviceName}); err == nil {
-		if st, err := svc.Status(); err == nil && st == service.StatusRunning {
-			return "the " + serviceName + " service is running", true
+	// On a systemd machine the service is gwatch.service (or, not yet
+	// migrated, the GWatch.service of earlier releases), not the Windows
+	// name; asking after the latter there would always say "not running".
+	name := serviceName
+	if runtime.GOOS == "linux" && serviceinstall.SystemdAvailable() {
+		name = serviceinstall.SystemdServiceName()
+	}
+	if service, err := svc.New(nil, svc.Config{Name: name}); err == nil {
+		if st, err := service.Status(); err == nil && st == svc.StatusRunning {
+			return "the " + name + " service is running", true
 		}
 	}
 	host, port, err := net.SplitHostPort(cfg.listen)

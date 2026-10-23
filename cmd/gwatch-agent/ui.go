@@ -61,9 +61,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kardianos/service"
-
 	"github.com/jxburros/GWatch/internal/model"
+	"github.com/jxburros/GWatch/internal/svc"
 	"github.com/jxburros/GWatch/web"
 )
 
@@ -726,7 +725,7 @@ func (s *uiServer) fileText() string {
 
 // ---- the service ----
 
-func (s *uiServer) serviceHandle() (service.Service, error) {
+func (s *uiServer) serviceHandle() (*svc.Service, error) {
 	return newService(&program{cfg: s.cfg, mode: "status"}, s.cfg, "status")
 }
 
@@ -734,30 +733,26 @@ func (s *uiServer) serviceState() serviceState {
 	if p, ok := currentPackaging(); ok && p.ownsService {
 		return serviceState{Managed: false, Manager: p.manager, State: "managed by " + p.manager, Hint: p.serviceCommand("restart")}
 	}
-	svc, err := s.serviceHandle()
+	service, err := s.serviceHandle()
 	if err != nil {
 		return serviceState{Managed: true, State: "unknown", Error: err.Error()}
 	}
-	st, err := svc.Status()
+	st, err := service.Status()
 	if err != nil {
-		if errors.Is(err, service.ErrNotInstalled) {
+		if errors.Is(err, svc.ErrNotInstalled) {
 			return serviceState{Managed: true, State: "not installed", Hint: "Install it with `gwatch-agent install` (from an Administrator terminal on Windows)."}
 		}
 		return serviceState{Managed: true, State: "unknown", Error: err.Error()}
 	}
-	state := map[service.Status]string{service.StatusRunning: "running", service.StatusStopped: "stopped"}[st]
-	if state == "" {
-		state = "unknown"
-	}
-	return serviceState{Managed: true, State: state}
+	return serviceState{Managed: true, State: st.String()}
 }
 
 func (s *uiServer) controlService(action string) error {
-	svc, err := s.serviceHandle()
+	service, err := s.serviceHandle()
 	if err != nil {
 		return err
 	}
-	return service.Control(svc, action)
+	return service.Control(action)
 }
 
 func (s *uiServer) handleService(w http.ResponseWriter, r *http.Request) {

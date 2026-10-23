@@ -2,8 +2,8 @@
 
 package serviceinstall
 
-// Everywhere but Linux the service is installed by kardianos/service as it
-// always was (Windows service, launchd daemon). These stand-ins let main.go be
+// Everywhere but Linux the service is installed by internal/svc as it always
+// was (Windows service, launchd daemon). These stand-ins let main.go be
 // written once; SystemdAvailable being false means none of the others is
 // ever called.
 
