@@ -896,6 +896,7 @@ export async function mount(root, ctx) {
     const listBox = h('div', { class: 'stack-sm' });
     let releases = null;      // null until loaded; [] when the fetch failed
     let showPre = !!u.includePrerelease;
+    let packaged = false;     // installed by a package manager: nothing here installs
     const repo = textInput({ value: g.updateRepo || 'jxburros/GWatch', class: 'mono', placeholder: 'owner/repository', oninput: () => { g.updateRepo = repo.value; } });
 
     const install = async (btn, version, label) => {
@@ -934,7 +935,14 @@ export async function mount(root, ctx) {
           last.assetName ? ` The release includes ${last.assetName} for this platform.` : ' The release has no executable for this platform; build from source or use the installer.')));
         if (last.releaseNotes) box.append(h('details', { class: 'collapsible' }, h('summary', null, icon('chevronRight'), 'Release notes'), h('div', { class: 'update-notes' }, last.releaseNotes)));
       }
-      if (!st.canApply && st.executable) box.append(h('p', { class: 'note' }, icon('lock'), ' The executable directory is not writable by the service, so updates cannot be installed from here. Re-run the installer with the new build instead.'));
+      // A package manager owns a packaged build: GWatch still says what is
+      // new, but installing it is the package manager's job (#126).
+      const wasPackaged = packaged;
+      packaged = !!st.packagedBy;
+      applyBtn.disabled = packaged;
+      if (packaged) box.append(h('p', { class: 'note' }, icon('lock'), ` Updated by ${st.packageManager || st.packagedBy}: this copy was installed from a package, so GWatch does not replace it. To update, ${st.packageCommand}`));
+      else if (!st.canApply && st.executable) box.append(h('p', { class: 'note' }, icon('lock'), ' The executable directory is not writable by the service, so updates cannot be installed from here. Re-run the installer with the new build instead.'));
+      if (wasPackaged !== packaged && releases !== null) renderList();
     };
 
     // The version list. Anything newer than what is running can be installed,
@@ -954,7 +962,7 @@ export async function mount(root, ctx) {
         if (r.running) tags.push(h('span', { class: 'pill' }, 'Running'));
         if (r.prerelease) tags.push(h('span', { class: 'pill pill-warn' }, 'Pre-release'));
         if (!r.installable) tags.push(h('span', { class: 'pill' }, 'No build for this platform'));
-        const btn = h('button', { class: 'btn btn-sm', type: 'button', disabled: !r.newer || !r.installable, onclick: () => install(btn, r.version) },
+        const btn = h('button', { class: 'btn btn-sm', type: 'button', disabled: packaged || !r.newer || !r.installable, onclick: () => install(btn, r.version) },
           icon('rocket'), r.newer ? 'Install' : 'Older');
         listBox.append(h('div', { class: 'release-row' },
           h('div', { class: 'release-main' },

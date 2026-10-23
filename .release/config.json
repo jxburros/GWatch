@@ -16,7 +16,12 @@
         "scripts/install.sh",
         "go.mod",
         "go.sum",
-        "cmd/gwatch-sign/**"
+        "cmd/gwatch-sign/**",
+        "packaging.go",
+        "packaging_test.go",
+        "packaging/build-server.sh",
+        "packaging/nfpm/gwatch.yaml",
+        "packaging/nfpm/gwatch/**"
       ],
       "versionFiles": [
         {
@@ -42,6 +47,7 @@
         "gwatch-linux-arm64",
         "gwatch-linux-arm64.sha256",
         "gwatch-linux-arm64.sig",
+        "gwatch-linux-packages-{version}.sha256",
         "gwatch-mcp-darwin-amd64",
         "gwatch-mcp-darwin-amd64.sha256",
         "gwatch-mcp-darwin-amd64.sig",
@@ -70,6 +76,12 @@
         "gwatch-windows-arm64.exe",
         "gwatch-windows-arm64.exe.sha256",
         "gwatch-windows-arm64.exe.sig",
+        "gwatch-{version}-1.aarch64.rpm",
+        "gwatch-{version}-1.armv7hl.rpm",
+        "gwatch-{version}-1.x86_64.rpm",
+        "gwatch_{version}-1_amd64.deb",
+        "gwatch_{version}-1_arm64.deb",
+        "gwatch_{version}-1_armhf.deb",
         "install.sh"
       ],
       "security": "standard",

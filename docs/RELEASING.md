@@ -48,6 +48,8 @@ request with the following jobs:
 | `linux` ("Test (Linux)") | `ubuntu-latest` | gofmt, vet, staticcheck, build, full test and race suites (root and mcp/), the migration/store/backup/api/engine/hostmon suites against PostgreSQL 16 and MySQL 8 service containers ([`DATABASE.md`](DATABASE.md#for-developers)), `govulncheck` for both modules, and the browser accessibility suite (`npm run test:e2e` — Playwright drives Chromium through every route with an axe-core scan) |
 | `macos` ("Test (macOS)") | `macos-latest` | vet + test only — deliberately lean, but this is what actually compiles and exercises `internal/sysmetrics/collect_darwin.go` |
 | `docker` ("Container image") | `ubuntu-latest` | builds the `Dockerfile` for `linux/amd64` and `linux/arm/v7`, checks `gwatch version` inside it, then starts the container and waits for `/api/health` to answer 200 |
+| `server-packaging` ("Server packages") | `ubuntu-latest` | builds the server's `.deb`/`.rpm` for all three architectures and checks the `.deb`'s contents, then `scripts/ci/linux-service-test.sh package`: install, the same service assertions as `linux-service` (exposure at most 2.0), refuse to self-update or register a second service, upgrade to a newer `.deb` with the data intact, remove (data kept) and purge (nothing left) — see ["The server packages"](#the-server-packages) |
+| `linux-service` ("Service lifecycle (Linux)") | `ubuntu-latest` | `scripts/ci/linux-service-test.sh binary`: `gwatch install`, then asserts the unit runs as `gwatch` with `/var/lib/gwatch` and only `CAP_NET_RAW`, passes `systemd-analyze verify` and scores at most 4.5 in `systemd-analyze security`, answers `/api/health`, takes a first administrator, a sign-in and a ping check with a result, and leaves nothing behind after `gwatch uninstall --purge --yes` |
 | `agent-packaging` ("Agent packages") | `ubuntu-latest` | builds the agent's `.deb`/`.rpm` for all three architectures, installs the `.deb` on the runner's systemd and takes it through install → refuse to self-update → configure → run → purge, renders the Homebrew formula (`ruby -c`) and the winget manifests (validated against winget's 1.6.0 schemas), builds the agent image and has it read the runner through a mounted host root, and checks no package output is named like a self-update asset — see ["The agent packages"](#the-agent-packages) |
 
 Windows builds the Inno Setup installers and validates PowerShell scripts. Linux tests
@@ -423,6 +425,27 @@ install unattended.
 
 The `.deb`'s `Maintainer` field is `JX Holdings, LLC <https://github.com/jxburros/GWatch>`
 (`packaging/nfpm/nfpm.yaml`); put a real contact address there if one is wanted.
+
+## The server packages
+
+The server is also published as a `.deb` and an `.rpm` for amd64, arm64 and armhf
+([`INSTALL-LINUX.md`](INSTALL-LINUX.md#from-a-deb-or-rpm-package)). `server-linux-packages`
+runs in a GWatch release after `gwatch-build` and `server-packaging` (the pull-request job
+that built and exercised the same packages), checks the tag against `VERSION`, builds them
+with `packaging/nfpm/gwatch/package.sh` and hands `gwatch_<v>-1_{amd64,arm64,armhf}.deb`,
+`gwatch-<v>-1.{x86_64,aarch64,armv7hl}.rpm` and `gwatch-linux-packages-<v>.sha256` to
+`assemble-gwatch`, which publishes them with the rest of the release (they are required
+assets in `.release/config.json`). `make server-packages` builds the same files locally.
+
+As with the agent, the packaged binaries are different binaries: `packaging/build-server.sh`
+adds `-X main.packagedBy=deb` (or `rpm`), which makes Settings › Updates report releases
+without installing them and `gwatch install`/`uninstall` defer to the package's unit. They
+are never uploaded under a `gwatch-<os>-<arch>` name, the job is not given
+`GWATCH_SIGNING_KEY`, and the packages are outside the signed self-update chain.
+
+There is no apt or dnf repository yet, so a packaged server is updated by installing the next
+release's file. Hosting a signed repository needs an external account and a repository key,
+and is a follow-up.
 
 ## The container image
 

@@ -194,6 +194,15 @@ NFPM ?= go run github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
 agent-packages:
 	NFPM='$(NFPM)' sh packaging/nfpm/package.sh $(AGENT_VERSION) dist/packages
 
+# ---- Server packages (docs/INSTALL-LINUX.md#from-a-deb-or-rpm-package) ----
+#
+# The GWatch server's .deb and .rpm for amd64, arm64 and armhf, into
+# dist/server-packages, the way the server-linux-packages release job builds
+# them; the binaries inside are built with -X main.packagedBy=deb/rpm.
+.PHONY: server-packages
+server-packages:
+	NFPM='$(NFPM)' sh packaging/nfpm/gwatch/package.sh $(VERSION) dist/server-packages
+
 # The agent's container image for this machine's platform (the Docker host
 # watcher — docs/HARDWARE.md#in-a-container).
 agent-image:

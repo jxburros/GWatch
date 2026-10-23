@@ -1,6 +1,33 @@
 # Installing GWatch on Linux
 
-Use the signed standalone binary for a systemd service. Use [Docker](DOCKER.md) when you already manage containers. The server does not yet publish deb/rpm packages; those packages are available for the [hardware agent](HARDWARE.md).
+Install the `.deb` or `.rpm` package where you can: it runs GWatch as its own unprivileged user in a hardened systemd unit, and your package manager owns the updates. The signed standalone binary works on any systemd distribution. Use [Docker](DOCKER.md) when you already manage containers.
+
+## From a .deb or .rpm package
+
+Each GWatch release carries `gwatch_<version>-1_{amd64,arm64,armhf}.deb` and `gwatch-<version>-1.{x86_64,aarch64,armv7hl}.rpm`, with their SHA-256 sums in `gwatch-linux-packages-<version>.sha256`. Download the one for your machine (armhf/armv7hl is 32-bit Raspberry Pi OS), check it against the sums file, then:
+
+```sh
+sudo apt install ./gwatch_<version>-1_amd64.deb      # or: sudo dnf install ./gwatch-<version>-1.x86_64.rpm
+```
+
+The package installs `/usr/bin/gwatch`, the `gwatch` systemd unit and `/etc/gwatch/gwatch.env` (root-only, kept across upgrades), creates the system user `gwatch`, and enables and starts the service on `http://127.0.0.1:7230`. The installer prints the address and the command that creates the first administrator (see below).
+
+The service runs as `gwatch`, not root, and can write only `/var/lib/gwatch` (database, key, logs, backups). Its single capability is `CAP_NET_RAW`, for the built-in ping. The unit also sets `NoNewPrivileges`, `ProtectSystem=strict`, a system-call filter and the rest of systemd's sandboxing; `systemd-analyze security gwatch` rates it about 1.7 ("OK"). Command actions and custom-script checks run inside the same sandbox. To let them write elsewhere, or to listen on a port below 1024, add a drop-in with `sudo systemctl edit gwatch` (examples are in the unit file's header) instead of editing the unit.
+
+```sh
+sudo systemctl status gwatch
+sudo journalctl -u gwatch -f
+```
+
+Settings go in `/etc/gwatch/gwatch.env` (`GWATCH_LISTEN`, `GWATCH_DB_*`, `GWATCH_TRUSTED_PROXIES`); restart with `sudo systemctl restart gwatch`. `gwatch install` and `gwatch uninstall` refuse to run on a packaged copy, because the package manages the service.
+
+**Updates.** A packaged GWatch reports new releases in Settings > Updates but never replaces itself: the page shows "Updated by apt" (or dnf) and the command to run. Because the packages are release files, not an apt or dnf repository, you update by installing the next release's package the same way; `apt upgrade` does not see it yet. Upgrading restarts the service on the new version and keeps your data and your edits to `gwatch.env`.
+
+**Removal.** `sudo apt remove gwatch` (or `sudo dnf remove gwatch`) stops and removes the service and keeps `/var/lib/gwatch` and the `gwatch` user, so reinstalling picks up where you left off. `sudo apt purge gwatch` also deletes `/var/lib/gwatch`, `/etc/gwatch` and the `gwatch` user; export a backup first. rpm has no purge: remove those by hand.
+
+Switching from `gwatch install` to the package: run `sudo /usr/local/libexec/gwatch/gwatch uninstall` first and keep `/var/lib/gwatch`. The package's service takes the directory over, and systemd hands its ownership to the `gwatch` user on first start. If dpkg asks about `/etc/gwatch/gwatch.env`, keep your version.
+
+**Not yet: an apt/dnf repository.** A signed repository would let `apt upgrade` and `dnf upgrade` keep GWatch current unattended. It needs hosting and a repository signing key held outside this repository (for example a Cloudsmith or packagecloud account, or a GitHub Pages repository signed in a protected release job). That is a planned follow-up and is not part of the release workflow today.
 
 ## Verified installation
 

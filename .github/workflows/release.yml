@@ -368,6 +368,58 @@ jobs:
     needs:
     - plan
     if: needs.plan.outputs.selected == 'true'
+  server-packaging:
+    name: Server packages
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ needs.plan.outputs.sha }}
+    - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+      with:
+        go-version: 1.26.x
+        check-latest: true
+        cache: true
+    - name: Lint the package scripts
+      run: shellcheck packaging/build-server.sh packaging/nfpm/gwatch/*.sh scripts/ci/linux-service-test.sh
+    - name: Build the .deb and .rpm
+      run: |
+        version="$(tr -d ' \t\r\n' < VERSION)"
+        echo "GWATCH_VERSION=$version" >> "$GITHUB_ENV"
+        sh packaging/nfpm/gwatch/package.sh "$version" dist/server-packages amd64 arm64 arm
+        # A newer .deb of the same tree, to upgrade over the first one.
+        FORMATS=deb sh packaging/nfpm/gwatch/package.sh "${version}+ci" dist/server-upgrade amd64
+    - name: Inspect the .deb
+      run: |
+        deb="dist/server-packages/gwatch_${GWATCH_VERSION}-1_amd64.deb"
+        dpkg-deb -I "$deb"
+        dpkg-deb -c "$deb" | tee contents.txt
+        for want in ./usr/bin/gwatch ./usr/lib/systemd/system/gwatch.service ./usr/lib/sysusers.d/gwatch.conf ./etc/gwatch/gwatch.env; do
+          grep -q " $want\$" contents.txt || { echo "::error::$deb does not contain $want"; exit 1; }
+        done
+        grep -q '^-rw------- .* ./etc/gwatch/gwatch.env$' contents.txt || { echo "::error::gwatch.env must be 0600: it may hold a database password"; exit 1; }
+        dpkg-deb -I "$deb" conffiles | grep -qx /etc/gwatch/gwatch.env
+        for arch in amd64 arm64 armhf; do test -s "dist/server-packages/gwatch_${GWATCH_VERSION}-1_${arch}.deb"; done
+        for arch in x86_64 aarch64 armv7hl; do test -s "dist/server-packages/gwatch-${GWATCH_VERSION}-1.${arch}.rpm"; done
+    - name: Install, upgrade, remove and purge the .deb
+      env:
+        # The packaged unit scores 1.7 on systemd 255; anything above 2.0
+        # means some of its hardening went missing.
+        GWATCH_MAX_EXPOSURE: '2.0'
+      run: |
+        sh scripts/ci/linux-service-test.sh package \
+          "./dist/server-packages/gwatch_${GWATCH_VERSION}-1_amd64.deb" \
+          "./dist/server-upgrade/gwatch_${GWATCH_VERSION}+ci-1_amd64.deb"
+    - name: No package can pass for a self-update asset
+      run: |
+        if find dist/server-packages dist/server-upgrade -type f | xargs -n1 basename \
+             | grep -E '^gwatch[-_](linux|darwin|windows)[-_](amd64|arm64|arm)(\.exe)?$'; then
+          echo "::error::a package output is named like a self-update asset"; exit 1
+        fi
+    needs:
+    - plan
+    if: needs.plan.outputs.selected == 'true'
   agent-packaging:
     name: Agent packages
     runs-on: ubuntu-latest
@@ -595,6 +647,49 @@ jobs:
         name: signed-native-gwatch
         path: dist/*
         if-no-files-found: error
+  server-linux-packages:
+    name: Server .deb and .rpm
+    if: needs.plan.outputs.selected == 'true' && fromJSON(needs.plan.outputs.apps)['gwatch'].selected
+    needs:
+    - plan
+    - gwatch-build
+    - server-packaging
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ needs.plan.outputs.sha }}
+    - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+      with:
+        go-version: 1.26.x
+        check-latest: true
+        cache: true
+    - name: Tag matches VERSION
+      run: |
+        tag="${RELEASE_TAG#v}"
+        file="$(tr -d ' \t\r\n' < VERSION)"
+        if [ "$tag" != "$file" ]; then
+          echo "::error::tag ${RELEASE_TAG} does not match the VERSION file (${file})."
+          exit 1
+        fi
+        echo "GWATCH_VERSION=$file" >> "$GITHUB_ENV"
+    - name: Build the packages
+      run: |
+        sh packaging/nfpm/gwatch/package.sh "$GWATCH_VERSION" dist/server-packages amd64 arm64 arm
+        (cd dist/server-packages && sha256sum *.deb *.rpm > "gwatch-linux-packages-${GWATCH_VERSION}.sha256")
+        cat "dist/server-packages/gwatch-linux-packages-${GWATCH_VERSION}.sha256"
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: server-linux-packages
+        path: dist/server-packages/*
+        if-no-files-found: error
+    env:
+      RELEASE_TAG: ${{ fromJSON(needs.plan.outputs.apps)['gwatch'].tag }}
+      RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch'].version }}
+      RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
   gwatch-agent-build:
     name: Release the agent
     if: needs.plan.outputs.selected == 'true' && fromJSON(needs.plan.outputs.apps)['gwatch-agent'].selected
@@ -886,6 +981,7 @@ jobs:
     needs:
     - plan
     - gwatch-sign
+    - server-linux-packages
     if: needs.plan.outputs.selected == 'true' && fromJSON(needs.plan.outputs.apps)['gwatch'].selected
     env:
       RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
@@ -899,6 +995,10 @@ jobs:
       with:
         name: signed-native-gwatch
         path: artifacts/core
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: server-linux-packages
+        path: artifacts/linux
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: JX-Holdings-LLC/release-infrastructure
