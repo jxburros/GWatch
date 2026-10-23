@@ -95,17 +95,17 @@ type Engine struct {
 	// from every machine that reports in.
 	hosts *hostmon.Monitor
 
-	sem      chan struct{}
-	ctx      context.Context
-	cancel   context.CancelFunc
+	sem    chan struct{}
+	ctx    context.Context
+	cancel context.CancelFunc
 	// work is what alert e-mails, trigger actions and rule actions run
 	// under. It outlives ctx, so an alert being sent as the service stops
 	// still goes out, but Stop cancels it once the grace period is over.
 	work       context.Context
 	cancelWork context.CancelFunc
 	wg         sync.WaitGroup
-	started  bool
-	stopping bool
+	started    bool
+	stopping   bool
 
 	startedAt    time.Time
 	lastTick     time.Time
