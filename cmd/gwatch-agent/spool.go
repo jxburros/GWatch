@@ -119,11 +119,8 @@ type spool[T any] struct {
 	warned       bool
 }
 
-// readingQueue and heldReading are the spool as the report loop uses it.
-type (
-	readingQueue = spool[model.HostMetrics]
-	heldReading  = heldItem[model.HostMetrics]
-)
+// readingQueue is the spool as the report loop uses it.
+type readingQueue = spool[model.HostMetrics]
 
 // newReadingQueue is a queue held in memory only.
 func newReadingQueue(cfg config) *readingQueue {

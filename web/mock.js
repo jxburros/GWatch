@@ -726,7 +726,7 @@ import { install as installHistory } from './mock/history.js';
   on('POST', /^\/api\/matter\/commission$/, (m, body) => {
     const server = matterServerOf(body);
     const code = String(body?.code || '').trim().replace(/[-\s]/g, '');
-    if (!/^(MT:.{10,}|\d{11}|\d{21})$/i.test(code)) throw err(400, 'that is not a Matter pairing code: use the 11-digit manual code (dashes are fine) or the QR code text starting with MT:');
+    if (!/^(MT:.{10,}|\d{11}|\d{21})$/i.test(code)) throw err(400, 'that is not a Matter pairing code: use the 11-digit manual code (dashes are fine) or the QR code text (it starts with MT:) as it is');
     if (body.networkOnly === false) throw err(400, 'this Matter server has no Bluetooth, so it can only add devices that are already on the network');
     const node = { nodeId: 8 + matterNodes.length, available: true, isBridge: false, vendor: 'Nanoleaf', product: 'Essentials Bulb', label: '', endpoints: [
       { id: 0, deviceTypes: [], clusters: [29, 40], readings: [] },

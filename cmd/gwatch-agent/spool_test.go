@@ -169,7 +169,8 @@ func TestTheFileIsBounded(t *testing.T) {
 		t.Fatalf("held %d, want the 10 the buffer allows", q.len())
 	}
 	b, _ := os.ReadFile(path)
-	if lines := strings.Count(string(b), "\n"); lines > 10+max(10/10, 1)+1 {
+	const held = 10
+	if lines := strings.Count(string(b), "\n"); lines > held+max(held/10, 1)+1 {
 		t.Errorf("the file kept %d lines for a queue of 10", lines)
 	}
 	again := openReadingQueue(config{buffer: time.Hour, interval: 6 * time.Minute}, path)

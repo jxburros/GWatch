@@ -99,10 +99,6 @@ var runCommand = func(name string, args ...string) error {
 // directory and unit are all in place.
 func InstallSystemd(o SystemdInstall) (SystemdResult, error) {
 	var res SystemdResult
-	out := o.Out
-	if out == nil {
-		out = io.Discard
-	}
 	if os.Geteuid() != 0 {
 		return res, errors.New("installing the service needs root: run it with sudo")
 	}

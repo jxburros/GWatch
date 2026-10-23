@@ -112,7 +112,7 @@ func normalizePairingCode(code string) (string, error) {
 		c = "MT:" + c[3:]
 	}
 	if !pairingCode.MatchString(c) {
-		return "", errors.New("that is not a Matter pairing code: use the 11-digit manual code (dashes are fine) or the QR code text starting with MT:")
+		return "", errors.New("that is not a Matter pairing code: use the 11-digit manual code (dashes are fine) or the QR code text (it starts with MT:) as it is")
 	}
 	return c, nil
 }
