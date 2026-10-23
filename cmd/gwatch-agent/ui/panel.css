@@ -99,3 +99,7 @@ legend { font-weight: 700; padding: 0 6px; font-size: 0.875rem; }
 .tag { font-family: var(--mono); font-size: 0.6875rem; color: var(--muted); border: 1px solid var(--line-strong); padding: 0 5px; margin-left: 6px; }
 .token { font-family: var(--mono); overflow-wrap: anywhere; padding: 10px 12px; background: var(--bg); border: 1px solid var(--line-strong); }
 .problems { color: var(--down); margin: 10px 0 0; padding-left: 18px; }
+.note.bad { color: var(--down); }
+.log { font-family: var(--mono); font-size: 0.75rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 22rem; overflow: auto; margin: 0; padding: 10px 12px; background: var(--bg); border: 1px solid var(--line-strong); }
+textarea.diag { min-height: 12rem; margin-top: 10px; }
+.result a { color: var(--accent); }

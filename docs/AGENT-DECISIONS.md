@@ -5,7 +5,7 @@ and several of them close off options that look obvious from the outside — so
 they are written down, with the reasoning, rather than left to be rediscovered
 or quietly reversed.
 
-Dated 2026-09-21; entries 10 and 11 added 2026-09-27; entries 12 to 15 and the update to 6 added 2026-10-14. Each entry says what was
+Dated 2026-09-21; entries 10 and 11 added 2026-09-27; entries 12 to 15 and the update to 6 added 2026-10-14; further updates to 6 (the log, elevation, the Windows tray) 2026-10-23. Each entry says what was
 decided, what was rejected, and what would have to change for the decision to
 be worth revisiting.
 
@@ -131,7 +131,22 @@ prove annoying.
 file (last report, last check-in, readings held, what the machine could
 collect) after each report; the panel reads it. It holds no token and no
 readings, and it is the only thing the two processes share besides the
-configuration file.
+configuration file. (Since 2026-10-23 the service also keeps its own log there,
+`agent.log`, so the panel can show the end of it: owner-only, capped at 1 MiB
+plus one older file, tokens removed as it is written. It is the one thing the
+agent now writes besides its configuration and the status file, and it is
+there because a Windows service's log otherwise goes nowhere at all.)
+
+**Asking for rights (2026-10-23).** Opened from a Start menu, an application
+menu or the tray, `sudo` is no answer, so the panel uses the desktop's own
+elevation prompt (UAC, polkit's `pkexec`, the macOS administrator dialog) in two
+places only: a service button the service manager refused, and opening the
+panel over settings this account cannot read. In the second case the elevated
+copy serves the panel and the unelevated one opens the browser: the elevated
+copy writes the one-time page into a private folder the unelevated copy made
+and passed by path, so the code is still never on a command line and no
+browser runs as root. Declining the prompt leaves things as they were, with the
+same "use sudo" advice.
 
 **What guards it:** loopback only; a Host check against DNS rebinding; a random
 one-time code in the address, traded for a separate cookie and dropped from the
@@ -158,6 +173,16 @@ reporting makes its machine unhealthy on the dashboard and raises the alert.
 **Revisit if:** the panel ships and people want it glanceable. By then the tray
 is a thin shim over an interface that exists, buildable on the platforms where
 it is easy.
+
+**Revisited for Windows (2026-10-23, #53).** `gwatch-agent tray` is that shim,
+on the one platform where it is easy: pure Go over user32 and shell32, no cgo,
+no second binary, off by default, started at sign-in only if the setup
+program's box is ticked (a per-user Run value the uninstaller removes). It
+shows the service's state and the status file and opens the panel; it can do
+nothing the panel cannot. To let it read the status file unelevated, the
+service gives that one file an access list readable by signed-in users; the
+folder, the configuration and the token stay the administrators'. macOS and
+Linux stay deferred for the reasons above, which have not changed.
 
 ## 7. Network throughput will be shown in bits, with bytes alongside.
 

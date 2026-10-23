@@ -114,6 +114,9 @@ func (rt *agentRuntime) writeStatus(cfg config, held int) {
 	}
 	// World-readable on purpose: it holds nothing secret, and the panel is run
 	// by whoever is at the keyboard, not by the account the service runs as.
+	// On Windows the mode bits mean nothing, so the file is given an ACL that
+	// says the same thing (status_share_windows.go), for the tray icon.
+	shareStatusFile(tmp)
 	_ = os.Rename(tmp, path)
 }
 

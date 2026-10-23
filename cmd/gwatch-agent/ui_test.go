@@ -45,6 +45,15 @@ func newPanel(t *testing.T) *panel {
 	ui.state = func() serviceState { return serviceState{Managed: true, State: "running"} }
 	ui.testReading = func(context.Context, config) error { return nil }
 	ui.checkUpdate = func(context.Context, config) (model.UpdateInfo, error) { return model.UpdateInfo{}, nil }
+	ui.installUpdate = func(context.Context, config, model.UpdateInfo) error {
+		t.Error("installUpdate was not expected")
+		return nil
+	}
+	ui.pair = func(*config) error { t.Error("pair was not expected"); return nil }
+	ui.elevate = nil // whatever desktop the tests run on, never a real prompt
+	oldJournal := journalTail
+	journalTail = func(string, int) ([]string, error) { return nil, os.ErrNotExist }
+	t.Cleanup(func() { journalTail = oldJournal })
 	return &panel{t: t, ts: ts, ui: ui, secret: "s3cret", dir: dir}
 }
 
@@ -452,6 +461,9 @@ func TestAPanelOverAFileItCannotReadSaysHowToGetAccess(t *testing.T) {
 	}
 	cfg := defaultConfig()
 	cfg.configPath = path
+	// No administrator prompt here, whatever desktop the tests run on: this
+	// is the answer where there is none (over SSH, say).
+	t.Setenv("SSH_CONNECTION", "192.0.2.1 22 192.0.2.2 22")
 	err := runUI(cfg, "127.0.0.1:0", false)
 	if err == nil || !strings.Contains(err.Error(), "sudo gwatch-agent ui") {
 		t.Fatalf("want advice to use sudo, got %v", err)
@@ -460,5 +472,243 @@ func TestAPanelOverAFileItCannotReadSaysHowToGetAccess(t *testing.T) {
 	// how a machine gets set up.
 	if err := checkConfigReadable(filepath.Join(dir, "not-yet.json")); err != nil {
 		t.Errorf("a missing file should be fine: %v", err)
+	}
+}
+
+// ---- issue #64: log, diagnostics, update now, pairing again ----
+
+const otherToken = "gwa_someothertoken0000000000000"
+
+func TestTheNewActionsAreGuardedLikeTheRest(t *testing.T) {
+	p := newPanel(t)
+	_, port, _ := strings.Cut(p.ui.addr, ":")
+	for _, path := range []string{"/api/log", "/api/diagnostics"} {
+		if resp, _ := p.do("GET", path, nil, opts{}); resp.StatusCode != 403 {
+			t.Errorf("GET %s without the cookie: %d", path, resp.StatusCode)
+		}
+		if resp, _ := p.do("GET", path, nil, opts{cookie: true, host: "evil.example:" + port}); resp.StatusCode != 403 {
+			t.Errorf("GET %s under a rebound name: %d", path, resp.StatusCode)
+		}
+	}
+	pairBody := map[string]any{"server": "https://s:7230", "code": "ABCD-2345"}
+	for _, path := range []string{"/api/update-now", "/api/pair"} {
+		for name, o := range map[string]opts{
+			"no cookie":      {header: true},
+			"no header":      {cookie: true},
+			"foreign origin": {cookie: true, header: true, origin: "https://evil.example"},
+			"rebound name":   {cookie: true, header: true, host: "evil.example:" + port},
+		} {
+			if resp, _ := p.do("POST", path, pairBody, o); resp.StatusCode != 403 {
+				t.Errorf("POST %s with %s: %d", path, name, resp.StatusCode)
+			}
+		}
+	}
+	// And a GET cannot reach either of them.
+	for _, path := range []string{"/api/update-now", "/api/pair"} {
+		if resp, _ := p.do("GET", path, nil, opts{cookie: true}); resp.StatusCode == 200 {
+			t.Errorf("GET %s should not do anything", path)
+		}
+	}
+}
+
+func TestTheLogIsShownWithoutTheToken(t *testing.T) {
+	p := newPanel(t)
+	var lines []string
+	for i := 0; i < 80; i++ {
+		lines = append(lines, fmt.Sprintf("2026/10/23 10:00:%02d report %d", i%60, i))
+	}
+	lines = append(lines, "note: token "+oldToken+" in use", "a rotated one: "+otherToken)
+	writeFile(t, logFile(), strings.Join(lines, "\n")+"\n")
+
+	var got recentLog
+	json.Unmarshal(p.ok("GET", "/api/log", nil), &got)
+	if len(got.Lines) != logTailLines || got.Source != logFile() {
+		t.Fatalf("want the last %d lines of %s, got %d from %s", logTailLines, logFile(), len(got.Lines), got.Source)
+	}
+	text := strings.Join(got.Lines, "\n")
+	if strings.Contains(text, oldToken) || strings.Contains(text, otherToken) || !strings.Contains(text, "token removed") {
+		t.Errorf("the token reached the panel:\n%s", text)
+	}
+	if !strings.Contains(got.Lines[len(got.Lines)-3], "report 79") {
+		t.Errorf("the lines should be the newest, in order: %q", got.Lines[len(got.Lines)-3:])
+	}
+
+	// No log yet: a sentence, not an empty box.
+	os.Remove(logFile())
+	got = recentLog{}
+	json.Unmarshal(p.ok("GET", "/api/log", nil), &got)
+	if len(got.Lines) != 0 || got.Note == "" {
+		t.Errorf("no log: %+v", got)
+	}
+}
+
+func TestTheServiceLogRollsOverAndNeverKeepsAToken(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.log")
+	cl, err := openCappedLog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := []byte("report failed with token " + oldToken + strings.Repeat(".", 1000) + "\n")
+	for i := 0; i < 2*maxLogFile/len(line); i++ {
+		cl.Write(line)
+	}
+	cl.Close()
+	cur, _ := os.ReadFile(path)
+	old, _ := os.ReadFile(path + ".1")
+	if len(old) == 0 || len(cur) == 0 || len(cur) > maxLogFile || len(old) > maxLogFile {
+		t.Errorf("rollover: current %d bytes, previous %d", len(cur), len(old))
+	}
+	if bytes.Contains(cur, []byte(oldToken)) || bytes.Contains(old, []byte(oldToken)) {
+		t.Error("the token was written to the log file")
+	}
+	if runtime.GOOS != "windows" {
+		if st, _ := os.Stat(path); st.Mode().Perm() != 0o600 {
+			t.Errorf("the log is %v; it should be the owner's alone", st.Mode().Perm())
+		}
+	}
+}
+
+func TestDiagnosticsAreEverythingButTheToken(t *testing.T) {
+	p := newPanel(t)
+	writeFile(t, logFile(), "2026/10/23 report failed: the server rejected "+oldToken+"\n")
+	var out map[string]string
+	json.Unmarshal(p.ok("GET", "/api/diagnostics", nil), &out)
+	text := out["text"]
+	for _, want := range []string{version, runtime.GOOS + "/" + runtime.GOARCH, "https://s:7230", `"name": "nas"`, "Service:      running", "report failed", "token removed"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("diagnostics lack %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, oldToken) {
+		t.Errorf("diagnostics carry the token:\n%s", text)
+	}
+}
+
+func TestUpdateNowTakesTheUpdatersPathAndRestarts(t *testing.T) {
+	p := newPanel(t)
+	// Up to date: nothing is installed.
+	resp, b := p.do("POST", "/api/update-now", nil, opts{cookie: true, header: true})
+	if resp.StatusCode != 200 || !strings.Contains(string(b), "newest release") {
+		t.Fatalf("up to date: %d %s", resp.StatusCode, b)
+	}
+
+	info := model.UpdateInfo{UpdateAvailable: true, LatestVersion: "9.9.9"}
+	p.ui.checkUpdate = func(context.Context, config) (model.UpdateInfo, error) { return info, nil }
+	var installed []string
+	p.ui.installUpdate = func(_ context.Context, c config, i model.UpdateInfo) error {
+		installed = append(installed, i.LatestVersion+" for "+c.server)
+		return nil
+	}
+	var did []string
+	p.ui.control = func(a string) error { did = append(did, a); return nil }
+	var out map[string]any
+	json.Unmarshal(p.ok("POST", "/api/update-now", nil), &out)
+	if out["ok"] != true || strings.Join(installed, ",") != "9.9.9 for https://s:7230" || strings.Join(did, ",") != "restart" {
+		t.Errorf("installed %v, did %v, answer %v", installed, did, out["message"])
+	}
+
+	// A location this account cannot write: say how to get the rights.
+	p.ui.installUpdate = func(context.Context, config, model.UpdateInfo) error {
+		return fmt.Errorf("cannot replace it: %w", os.ErrPermission)
+	}
+	if resp, b := p.do("POST", "/api/update-now", nil, opts{cookie: true, header: true}); resp.StatusCode != 403 || !strings.Contains(string(b), "sudo gwatch-agent ui") {
+		t.Errorf("unwritable: %d %s", resp.StatusCode, b)
+	}
+
+	// A packaged agent belongs to its package manager (entry 10), and the
+	// panel never gets as far as installing anything.
+	asPackaged(t, "winget")
+	p.ui.installUpdate = func(context.Context, config, model.UpdateInfo) error {
+		t.Error("a packaged agent must not install an update")
+		return nil
+	}
+	if resp, b := p.do("POST", "/api/update-now", nil, opts{cookie: true, header: true}); resp.StatusCode != 409 || !strings.Contains(string(b), "winget upgrade") {
+		t.Errorf("packaged: %d %s", resp.StatusCode, b)
+	}
+	var st map[string]any
+	json.Unmarshal(p.ok("GET", "/api/state", nil), &st)
+	if u, _ := st["updates"].(map[string]any); u == nil || u["canUpdate"] != false || u["manager"] != "winget" {
+		t.Errorf("the state should say who updates a packaged agent: %v", st["updates"])
+	}
+}
+
+func TestPairingAgainRunsPairAndRestartsTheService(t *testing.T) {
+	p := newPanel(t)
+	writeFile(t, filepath.Join(p.dir, "agent.json"), `{"server":"https://s:7230","token":"`+oldToken+`","certPin":"abcd","name":"nas"}`)
+	var seen config
+	p.ui.pair = func(c *config) error {
+		seen = *c
+		c.token, c.pairedAs, c.pairedNode = otherToken, "nas-2", 42
+		return nil
+	}
+	var did []string
+	p.ui.control = func(a string) error { did = append(did, a); return nil }
+
+	if resp, _ := p.do("POST", "/api/pair", map[string]any{"server": "https://s:7230"}, opts{cookie: true, header: true}); resp.StatusCode != 400 {
+		t.Errorf("no code: %d", resp.StatusCode)
+	}
+
+	var out map[string]any
+	json.Unmarshal(p.ok("POST", "/api/pair", map[string]any{"server": "https://other:7230", "code": "abcd 2345", "name": "nas-2", "insecure": true}), &out)
+	if seen.server != "https://other:7230" || seen.code != "abcd 2345" || seen.name != "nas-2" || !seen.insecure {
+		t.Errorf("pair was given %+v", seen)
+	}
+	if seen.certPin != "" || seen.token != "" {
+		t.Error("a different server must start with no pinned certificate and no token")
+	}
+	if out["ok"] != true || !strings.Contains(fmt.Sprint(out["message"]), `"nas-2"`) || out["link"] != "https://other:7230/#/nodes/42" {
+		t.Errorf("answer %v / %v", out["message"], out["link"])
+	}
+	if strings.Join(did, ",") != "restart" {
+		t.Errorf("the service should be restarted onto the new token: %v", did)
+	}
+
+	// A failure is reported, not hidden.
+	p.ui.pair = func(*config) error {
+		return errors.New("pairing failed: The code presented is unknown, expired, cancelled or already used.")
+	}
+	out = nil
+	json.Unmarshal(p.ok("POST", "/api/pair", map[string]any{"server": "https://s:7230", "code": "ABCD2345"}), &out)
+	if out["ok"] != false || !strings.Contains(fmt.Sprint(out["message"]), "already used") {
+		t.Errorf("failure: %v", out)
+	}
+}
+
+func TestServiceControlAsksTheSystemForRights(t *testing.T) {
+	p := newPanel(t)
+	p.ui.control = func(string) error { return errors.New("Access is denied.") }
+	var asked []string
+	p.ui.elevate = func(a string) error { asked = append(asked, a); return nil }
+	p.ok("POST", "/api/service/restart", nil)
+	if strings.Join(asked, ",") != "restart" {
+		t.Errorf("asked %v", asked)
+	}
+	// Saying no to the prompt is an answer: the usual advice, not an error.
+	p.ui.elevate = func(string) error { return errElevationDeclined }
+	if resp, b := p.do("POST", "/api/service/stop", nil, opts{cookie: true, header: true}); resp.StatusCode != 403 || !strings.Contains(string(b), "sudo gwatch-agent ui") {
+		t.Errorf("declined: %d %s", resp.StatusCode, b)
+	}
+}
+
+func TestTheHandedOverPageIsNewAndGoesWithTheDirectory(t *testing.T) {
+	dir := t.TempDir()
+	page, cleanup, err := writeHandoffPage(dir, "http://127.0.0.1:1/?k=c0de")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(page); !strings.Contains(string(b), "k=c0de") {
+		t.Errorf("page %s", b)
+	}
+	// Never written over something already there.
+	if _, _, err := writeHandoffPage(dir, "http://127.0.0.1:1/?k=other"); err == nil {
+		t.Error("a second page should not replace the first")
+	}
+	cleanup()
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Error("the directory should be gone once the page has been used")
+	}
+	if _, _, err := writeHandoffPage(filepath.Join(t.TempDir(), "missing"), "x"); err == nil {
+		t.Error("a directory that is not there is refused")
 	}
 }

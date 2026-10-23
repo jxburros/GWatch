@@ -97,10 +97,17 @@ Before you start, get a pairing code:
 
 Then, on the other machine, run `gwatch-agent-setup-<version>.exe` and fill in the
 **Connect to GWatch** page: the server's address (for example
-`http://gwatch.lan:7230`), the pairing code, and optionally a name. The installer
-exchanges the code for a credential that can do exactly one thing — submit that
-machine's readings — and registers the `GWatchAgent` service. The machine should appear
-on its own node within a minute.
+`http://gwatch.lan:7230`), the pairing code, and optionally a name. **Test connection**
+checks the address answers as a GWatch before anything is installed, without using the
+code (Next runs the same check if you skip it). The installer then exchanges the code for
+a credential that can do exactly one thing — submit that machine's readings — and
+registers the `GWatchAgent` service. The last page says what GWatch called the machine
+and whether the service is running, with a box to open the machine in GWatch — or, if
+pairing failed, the reason. The machine should appear on its own node within a minute.
+
+Afterwards, **GWatch Agent control panel** in the Start menu shows what the agent is doing
+and lets you change its settings, update it, read its log or pair it again. The last page
+also offers, unticked, an icon in the notification area.
 
 Nothing is opened up on the machine running the agent: it dials out to GWatch and hangs
 up, and GWatch is given no way back in. To install across several machines at once:

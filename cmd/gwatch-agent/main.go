@@ -112,6 +112,11 @@ type config struct {
 	fileServer  string
 	tokenSource string
 	sources     map[string]string
+
+	// pairedAs and pairedNode are what GWatch called this machine and the node
+	// it belongs to, once pair() has succeeded (probe.go, ui_actions.go).
+	pairedAs   string
+	pairedNode int64
 }
 
 func usage() {
@@ -134,6 +139,10 @@ Usage:
         open the control panel: status, settings, what is collected and the
         token, in a browser. It runs as you, only on this machine, and closes by
         itself when it is not being used.
+  gwatch-agent probe --server URL [--insecure]
+        check that URL is a GWatch this computer can reach, without pairing
+  gwatch-agent tray [start-at-login|stop-at-login]
+        Windows: show the agent's state in the notification area
   gwatch-agent config [show|path|validate] [--show-token]
         show every setting and where it came from, print the configuration
         file's location, or check the file for mistakes
@@ -246,6 +255,9 @@ func main() {
 	fs.StringVar(&uiAddr, "ui-listen", "127.0.0.1:0", "ui: loopback address for the control panel (port 0 picks a free one)")
 	var uiNoBrowser bool
 	fs.BoolVar(&uiNoBrowser, "no-browser", false, "ui: print the address instead of opening a browser")
+	fs.StringVar(&uiHandoffDir, "ui-handoff", "", "ui: used when the panel restarts itself with elevation (elevate.go)")
+	fs.StringVar(&resultFile, "result-file", "", "probe, install: also write the outcome to this file (for the setup program)")
+	resultTarget = &cfg
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -313,6 +325,16 @@ func main() {
 		return
 	case "rollback":
 		if err := runRollback(); err != nil {
+			fatal(err)
+		}
+		return
+	case "probe":
+		if err := runProbe(cfg); err != nil {
+			fatal(err)
+		}
+		return
+	case "tray":
+		if err := runTray(cfg, fs.Args()); err != nil {
 			fatal(err)
 		}
 		return
@@ -431,6 +453,7 @@ func main() {
 			fatal(fmt.Errorf("service installed but could not be started: %w", err))
 		}
 		fmt.Println("Service started. This computer will appear in GWatch within a minute.")
+		noteInstallResult(nil, "running")
 	case "uninstall":
 		_ = svc.Stop()
 		if err := svc.Uninstall(); err != nil {
@@ -735,6 +758,7 @@ func (p *program) run(ctx context.Context) {
 	if p.cfg.configPath != "" {
 		keepConfigBackup(p.cfg.configPath)
 	}
+	defer startServiceLog()() // agentlog.go: a copy of the log the control panel can show
 
 	// Keeping itself current is only the reporting agent's job. serve mode is
 	// driven by GWatch asking for readings, and an agent that restarted itself
@@ -1035,7 +1059,8 @@ func pair(cfg *config) error {
 	var out struct {
 		Token string `json:"token"`
 		Agent struct {
-			Name string `json:"name"`
+			Name   string `json:"name"`
+			NodeID *int64 `json:"nodeId"`
 		} `json:"agent"`
 	}
 	if err := json.Unmarshal(payload, &out); err != nil || out.Token == "" {
@@ -1074,6 +1099,11 @@ func pair(cfg *config) error {
 		name = hostname
 	}
 	fmt.Printf("Paired with GWatch as %q.\n", name)
+	cfg.pairedAs = name
+	if out.Agent.NodeID != nil {
+		cfg.pairedNode = *out.Agent.NodeID
+	}
+	fmt.Printf("See it in GWatch: %s\n", machineLink(*cfg))
 	if path != "" {
 		fmt.Printf("Token and settings saved to %s (readable only by this account); edit that file to change them.\n", path)
 	}
@@ -1293,6 +1323,7 @@ func envBool(key string, def bool) bool {
 }
 
 func fatal(err error) {
+	noteInstallResult(err, "")
 	fmt.Fprintln(os.Stderr, "error:", err)
 	os.Exit(1)
 }

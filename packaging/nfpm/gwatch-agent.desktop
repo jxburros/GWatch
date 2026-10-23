@@ -1,0 +1,17 @@
+# The agent's control panel in the desktop's application menu (issue #64).
+# `gwatch-agent ui` serves the panel on this machine's loopback address and
+# opens it in the browser. The package keeps the agent's settings and token in
+# /var/lib/gwatch-agent, which only root can read, so the panel asks for an
+# administrator's password through polkit (pkexec) and then opens the page in
+# the person's own browser; see cmd/gwatch-agent/elevate.go.
+[Desktop Entry]
+Type=Application
+Name=GWatch Agent
+GenericName=Hardware agent control panel
+Comment=Status, settings, the log, updates and pairing for this machine's GWatch agent
+Exec=gwatch-agent ui
+Icon=gwatch-agent
+Terminal=false
+StartupNotify=false
+Categories=System;Monitor;
+Keywords=GWatch;monitoring;agent;hardware;
