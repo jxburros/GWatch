@@ -424,6 +424,54 @@ Placeholders a rule's actions can use, beside the usual ones: `{{rule.name}}`,
 Hold timers ("only if this lasts 5 minutes") and metric conditions are not
 part of rules yet.
 
+## 10. Matter sensors: a door left open, a cold room, a flat battery
+
+Not an automation recipe either, but it is what the triggers above respond to:
+a **Matter** check turns a Matter sensor's state into an up/degraded/down
+verdict, so "the back door has been open for ten minutes" becomes an ordinary
+down event a trigger can send to ntfy or Home Assistant. GWatch reads the
+devices through a python-matter-server sidecar — [MATTER.md](MATTER.md) has the
+Docker Compose file and how to add devices with a pairing code.
+
+Add a node from the **Matter device** template with the sidecar's machine as
+its host (or, if Home Assistant's Matter Server add-on is already running, its
+host with port 5580 exposed). In its *Matter readings* check, press **Load
+devices**, pick the bridge or sensor, and tick:
+
+- **Back door — Contact (open / shut)**. It records 1 while the door is open.
+  Set **Crit >** `0`. Set the check's **interval** to 60 s and its **failure
+  threshold** to 10: the node goes down — and alerts — only after the door has
+  been open for ten consecutive runs.
+- **Nursery — Temperature**: **Warn <** `17`, **Crit <** `15`, and
+  **Warn >** `24`, **Crit >** `27`.
+- **Nursery — Battery**: arrives with **Warn <** `20` and **Crit <** `10`
+  already set.
+
+Over the API the same check is:
+
+```json
+{ "type": "matter", "name": "Matter readings", "intervalSeconds": 60, "failureThreshold": 10,
+  "config": { "matterServer": "ws://192.168.1.20:5580/ws", "matterNodeId": 4,
+              "matterReadings": [
+                { "endpoint": 3, "kind": "contact", "name": "Back door open", "critAbove": 0 },
+                { "endpoint": 2, "kind": "temperature", "name": "Nursery temperature",
+                  "warnBelow": 17, "critBelow": 15, "warnAbove": 24, "critAbove": 27 },
+                { "endpoint": 2, "kind": "battery", "name": "Nursery battery", "warnBelow": 20, "critBelow": 10 } ] } }
+```
+
+Then give the node a trigger on `down` and `degraded` with recipe 4's ntfy
+action: `{{message}}` reads *Back door open (3/69/0) is 1, above the critical
+threshold of 0*. Each reading is also charted on the node page, so the
+nursery's overnight temperature is a chart away, and a `metric_over` trigger
+condition can name any reading (`Nursery temperature`) the way it names an
+SNMP OID.
+
+Put door contacts and slow-moving sensors in separate checks when they need
+different failure thresholds: the threshold belongs to the check, not to one
+reading. And remember the sidecar itself: the template's *Matter server port
+5580* check goes down on its own when the sidecar stops, which is what tells a
+dead sidecar apart from an open door.
+
 ## Testing a recipe
 
 Before saving, or any time after, use **Test this action** in the trigger or

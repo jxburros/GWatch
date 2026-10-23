@@ -320,6 +320,35 @@ echoed as written, so an `Authorization` header on an HTTP check is stored in th
   A device that does not answer makes the check down with the usual network wording;
   note that SNMP v2c answers a *wrong community* with silence, so a wrong community and
   an unreachable device produce the same timeout — the message says so.
+- The `matter` check type (`Check.type == "matter"`) reads Matter devices through a
+  python-matter-server sidecar over its WebSocket API, one `read_attribute` per run for
+  every reading. See [MATTER.md](MATTER.md) for the sidecar, commissioning and the
+  conversions. Its config:
+
+  | field | meaning |
+  | --- | --- |
+  | `matterServer` | the sidecar's WebSocket URL, `ws://` or `wss://`; blank means the node host on `ws://<host>:5580/ws`, and `host[:port]` alone is accepted |
+  | `matterNodeId` | the node id the sidecar gave the device (required) |
+  | `matterReadings` | 1–64 readings, see below |
+
+  Each entry of `matterReadings` is `{ endpoint, kind, cluster, attribute, scale, name,
+  unit, warnAbove, critAbove, warnBelow, critBelow }`. `kind` is one of the standard
+  readings — `temperature` (°C), `humidity` (%), `onoff` (1 on / 0 off), `contact`
+  (1 open / 0 shut), `occupancy` (1 occupied), `illuminance` (lux), `battery` (%) —
+  whose cluster, attribute and conversion are fixed (and `cluster`, `attribute` and
+  `scale` are cleared on save), or `attribute`, which reads `cluster`/`attribute`
+  (decimal ids, cluster required) as a number times `scale`. A standard reading saved
+  without a `name` or `unit` gets the default ones (`Temperature`, `°C`, …). Names must
+  be non-empty and unique within the check; thresholds work exactly as an SNMP
+  reading's.
+
+  A run reports every reading in `Result.details.matter`, an array of
+  `{ name, endpoint, path, raw, unit, value }` — `path` is `endpoint/cluster/attribute`,
+  `raw` is the reading in words (`21.37`, `open`, `on`), `value` the number it was
+  judged and charted as — and the sidecar it asked in `Result.details.matterServer`.
+  Every reading with a number is in `Result.metrics`. An attribute the endpoint does not
+  have, an unavailable or unknown node and an unreachable sidecar make the check down; a
+  sensor reporting `null` makes it degraded. `latencyMs` is the live read's round trip.
 - `POST /api/checks/{id}/run` → `Result` (recorded and processed through alerting).
 - `POST /api/checks/{id}/enable` body `{ "enabled": bool }` → Check, masked (and for an API key stripped) the same way as in `GET /api/nodes/{id}`.
 - `POST /api/checks/{id}/silence` body `{ "minutes": 60 }` (0 = unsilence) → CheckState.
@@ -380,6 +409,7 @@ falls back to `general.latencyWarnMs` / `general.packetLossWarnPct`).
 | `custom` | `command`, `workDir`, `env` — see the output contract above |
 | `system` | `hostSource`, `agentId`, `metricsUrl`, `metricsToken`, `metricThresholds`, `diskMounts`, `staleAfterSeconds` — see [Hardware check metrics](#hardware-check-metrics) |
 | `snmp` | the `snmp*` fields in the table above |
+| `matter` | `matterServer`, `matterNodeId`, `matterReadings` — see the `matter` table above |
 
 `contentWatch` turns an `http`, `keyword` or `json` check into a change watch as well:
 `""` (off), `"hash"` (the body's digest), `"header"` (the header named by
@@ -434,6 +464,27 @@ per-packet round-trip times in milliseconds).
   credential and an address of the caller's choosing, makes GWatch talk to whatever is
   there, and reports what came back — that is a probe, and it belongs to the person in
   front of the machine rather than to an integration.
+
+### Matter devices and commissioning
+
+- `POST /api/matter/nodes` body `{ "server", "host" }` → `{ "server", "serverInfo",
+  "nodes": [{ "nodeId", "available", "isBridge", "vendor", "product", "label",
+  "endpoints": [{ "id", "label", "deviceTypes", "clusters", "readings": [{ "kind",
+  "name", "unit", "cluster", "attribute", "current" }] }] }], "standards": [...] }`.
+  Asks the sidecar at `server` (or `host` on port 5580) for every commissioned node
+  (`get_nodes`) and describes it from the sidecar's cache, with the standard readings
+  each endpoint offers and their current values. 502 when the sidecar cannot be reached.
+- `POST /api/matter/commission` body `{ "server", "host", "code", "networkOnly" }` →
+  `{ "server", "node": {…as above} }`. Relays a pairing code — an 11- or 21-digit manual
+  code (dashes and spaces are stripped) or `MT:` QR text — to `commission_with_code`.
+  `networkOnly` defaults to `true` (multi-admin, or a device already on the network);
+  `false` needs Bluetooth on the sidecar and is refused up front when it has none. Waits
+  up to three minutes, and records a `config_changed` event either way.
+
+  **Administrator only, and refused to API keys of every scope**, like the SNMP walk:
+  both make GWatch connect to an address of the caller's choosing, and commissioning
+  adds a device to a Matter controller. GWatch stores no Matter credential; the fabric
+  stays in the sidecar's storage.
 
 ## Discovery (find devices on the network)
 
