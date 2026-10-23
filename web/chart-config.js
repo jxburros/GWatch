@@ -274,7 +274,9 @@ export function metricPicker(nodes, selected = [], { onChange, loadNode = (id) =
       const det = h('details', { class: 'metric-check', 'data-check': c.id },
         h('summary', null, icon('chevronRight'), h('span', { class: 'truncate', style: { flex: '1', minWidth: '0' }, title: name }, c.name), badge, h('span', { class: 'tag' }, c.type)),
         opts);
-      det.dataset.search = name.toLowerCase();
+      // A check's own groups (#36) are searchable too: "certificates" finds
+      // every check in an "HTTPS certificates" group.
+      det.dataset.search = [name, ...(c.config?.groups || [])].join(' ').toLowerCase();
       const picked = () => [...sel.values()].filter((s) => s.checkId === Number(c.id)).length;
       const setBadge = () => { const k = picked(); badge.textContent = k ? `${k} ticked` : ''; };
       badges.push(setBadge);

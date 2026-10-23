@@ -14,7 +14,7 @@ function remembered(key, fallback) { try { return localStorage.getItem(key) || f
 function remember(key, v) { try { localStorage.setItem(key, v); } catch { /* private window: forgotten on reload */ } }
 
 export async function mount(root, ctx) {
-  const state = { nodes: [], groups: { groups: [], tags: [] }, templates: null, q: ctx.query.get('q') || '', group: ctx.query.get('group') || '', status: ctx.query.get('status') || '', tag: ctx.query.get('tag') || '', destroyed: false };
+  const state = { nodes: [], groups: { groups: [], tags: [] }, templates: null, q: ctx.query.get('q') || '', group: ctx.query.get('group') || '', status: ctx.query.get('status') || '', tag: ctx.query.get('tag') || '', checkGroup: ctx.query.get('checkGroup') || '', destroyed: false };
   state.sort = NODE_SORTS.some((o) => o.value === ctx.query.get('sort')) ? ctx.query.get('sort') : remembered(SORT_KEY, 'status');
   if (!NODE_SORTS.some((o) => o.value === state.sort)) state.sort = 'status';
   state.sections = remembered(SECTIONS_KEY, 'group') === 'none' ? 'none' : 'group';
@@ -73,12 +73,15 @@ export async function mount(root, ctx) {
       chipRow('Group', state.groups.groups.map((g) => ({ value: g.name, label: `${g.name} (${g.count})` })), state.group, (v) => { state.group = v; renderFilters(); renderList(); }),
       chipRow('Status', STATUS_ORDER.filter((s) => counts[s]).map((s) => ({ value: s, label: `${s[0].toUpperCase()}${s.slice(1)} (${counts[s]})` })), state.status, (v) => { state.status = v; renderFilters(); renderList(); }),
       chipRow('Tag', state.groups.tags.map((t) => ({ value: t.name, label: t.name })), state.tag, (v) => { state.tag = v; renderFilters(); renderList(); }),
+      chipRow('Check group', (state.groups.checkGroups || []).map((g) => ({ value: g.name, label: `${g.name} (${g.count})` })), state.checkGroup, (v) => { state.checkGroup = v; renderFilters(); renderList(); }),
     ]);
     restore();
   }
 
   function matches(n) {
     if (state.group && !inGroup(n, state.group)) return false;
+    // A check group (#36) shows the nodes with a check in it.
+    if (state.checkGroup && !(n.checks || []).some((c) => (c.config?.groups || []).some((g) => g.toLowerCase() === state.checkGroup.toLowerCase()))) return false;
     if (state.status && (n.status || 'unknown') !== state.status) return false;
     if (state.tag && !(n.tags || []).includes(state.tag)) return false;
     if (state.q) {
@@ -102,7 +105,7 @@ export async function mount(root, ctx) {
   function renderList() {
     // The filters live in the address too, so a reload, Back and a copied link
     // keep them. (Sort is remembered per browser, so it is left out.)
-    if (!state.destroyed) syncQuery('/nodes', { q: state.q.trim(), group: state.group, status: state.status, tag: state.tag });
+    if (!state.destroyed) syncQuery('/nodes', { q: state.q.trim(), group: state.group, status: state.status, tag: state.tag, checkGroup: state.checkGroup });
     if (!state.nodes.length) {
       countEl.textContent = '';
       clear(listEl);
@@ -115,7 +118,7 @@ export async function mount(root, ctx) {
       : `${rows.length} of ${state.nodes.length} nodes`;
     if (!rows.length) {
       clear(listEl);
-      listEl.append(h('div', { class: 'card' }, emptyState({ icon: 'search', title: 'No nodes match', text: 'Try a different search or clear the filters.', compact: true, actions: h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { state.q = ''; state.group = ''; state.status = ''; state.tag = ''; searchInput.value = ''; renderFilters(); renderList(); } }, 'Clear filters') })));
+      listEl.append(h('div', { class: 'card' }, emptyState({ icon: 'search', title: 'No nodes match', text: 'Try a different search or clear the filters.', compact: true, actions: h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { state.q = ''; state.group = ''; state.status = ''; state.tag = ''; state.checkGroup = ''; searchInput.value = ''; renderFilters(); renderList(); } }, 'Clear filters') })));
       return;
     }
     // Group sections. A node in several groups is listed once rather than

@@ -424,6 +424,14 @@ export async function mount(root, ctx) {
     card.append(h('div', { class: 'section-title', style: { marginTop: '22px' } }, `${checkTypeLabel(c.type)} settings`));
     card.append(typeFields(c, err));
 
+    // Check groups (#36): folded away unless the check already has some, so
+    // the common case — a check that is in no group of its own — looks as
+    // it always has.
+    const checkGroupsIn = chipInput({ values: c.config.groups || [], placeholder: 'Add a check group and press Enter', suggestions: (state.groups.checkGroups || []).map((g) => g.name), onChange: (v) => { c.config.groups = v; } });
+    card.append(h('details', { class: 'collapsible', open: !!(c.config.groups || []).length, style: { marginTop: '12px' } },
+      h('summary', null, icon('chevronRight'), 'Check groups', (c.config.groups || []).length ? h('span', { class: 'sub' }, ` · ${c.config.groups.join(', ')}`) : null),
+      field({ label: 'Groups for this check', input: checkGroupsIn, help: 'Optional, and separate from the node’s groups: put checks from different nodes together (“HTTPS certificates”, “Plex ports”) to filter, chart and bulk-edit them as a set.' })));
+
     // Alert overrides
     card.append(alertOverrides(c));
 

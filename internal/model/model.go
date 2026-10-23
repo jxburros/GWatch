@@ -256,6 +256,12 @@ type CheckConfig struct {
 	// URL for http, keyword, json (scheme optional, https assumed).
 	Target string `json:"target,omitempty"`
 
+	// Groups are the check's own groups, across nodes: "HTTPS certificates",
+	// "Plex ports". They are separate from the node's groups, optional, and
+	// any type of check can have them; they are kept with the rest of the
+	// check's settings so backups, exports and bulk edits carry them as is.
+	Groups []string `json:"groups,omitempty"`
+
 	// Ping
 	PingCount  int    `json:"pingCount,omitempty"`  // packets per run (default 4, max 20)
 	PingMethod string `json:"pingMethod,omitempty"` // "" = use GeneralSettings.PingMethod, else "auto" | "builtin" | "system"

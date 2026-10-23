@@ -1068,6 +1068,9 @@ func normalizeTags(tags []string) []string {
 	return out
 }
 
+// maxCheckGroups bounds how many check groups one check may be in.
+const maxCheckGroups = 10
+
 // maxChecksPerNode bounds how many checks one node may hold. A real device
 // has a handful; the limit is far above that and is there so that one 4 MiB
 // request cannot store a node whose "run now" is thousands of checks.
@@ -1112,6 +1115,15 @@ func (s *Server) normalizeNode(n *model.Node) error {
 		c.Name = strings.TrimSpace(c.Name)
 		if c.Name == "" {
 			c.Name = c.Type.Label()
+		}
+		c.Config.Groups = normalizeTags(c.Config.Groups)
+		if len(c.Config.Groups) > maxCheckGroups {
+			return fmt.Errorf("check %q: at most %d check groups", c.Name, maxCheckGroups)
+		}
+		for _, g := range c.Config.Groups {
+			if len(g) > 64 {
+				return fmt.Errorf("check %q: a check group name is at most 64 characters", c.Name)
+			}
 		}
 		if !c.Type.Valid() {
 			return fmt.Errorf("check %q: unsupported type %q", c.Name, c.Type)
@@ -1530,6 +1542,11 @@ func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	checkGroups, err := s.Store.CheckGroupCounts(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
 	type entry struct {
 		Name  string `json:"name"`
 		Count int    `json:"count"`
@@ -1548,7 +1565,7 @@ func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
 		}
 		return out
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"groups": toList(groups), "tags": toList(tags)})
+	writeJSON(w, http.StatusOK, map[string]any{"groups": toList(groups), "tags": toList(tags), "checkGroups": toList(checkGroups)})
 }
 
 // ---- checks ----

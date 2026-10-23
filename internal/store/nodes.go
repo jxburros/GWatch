@@ -285,6 +285,33 @@ func (s *Store) GroupCounts(ctx context.Context) (groups map[string]int, tags ma
 	return groups, tags, nil
 }
 
+// CheckGroupCounts counts the checks in each check group (#36). The names are
+// case-insensitive, as node groups are; the first spelling seen is kept.
+func (s *Store) CheckGroupCounts(ctx context.Context) (map[string]int, error) {
+	nodes, err := s.ListNodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]int{}
+	spelling := map[string]string{}
+	for _, n := range nodes {
+		for _, c := range n.Checks {
+			for _, g := range c.Config.Groups {
+				g = strings.TrimSpace(g)
+				if g == "" {
+					continue
+				}
+				k := strings.ToLower(g)
+				if _, ok := spelling[k]; !ok {
+					spelling[k] = g
+				}
+				out[spelling[k]]++
+			}
+		}
+	}
+	return out, nil
+}
+
 // ---- bulk editing ----
 
 // BulkResult counts what a BulkUpdate wrote.

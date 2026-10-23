@@ -87,10 +87,10 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   ];
   const site = mkNode({ name: 'Family website', host: 'https://www.example.org', group: 'Internet', tags: ['public', 'wordpress'], importance: 'high', template: 'website', notes: 'Hosted at a shared host. Certificate renews automatically via Let\u2019s Encrypt — check why it is late.' });
   site.checks = [
-    mkCheck(site.id, 'http', 'HTTPS', { config: { expectedStatus: '200-399', followRedirects: true, certCheck: true, certWarnDays: 14, latencyWarnMs: 1500, contentWatch: 'redirect' }, base: 420, noise: 0.35, status: 'degraded', message: 'OK 200 in 438 ms · certificate expires in 9 days', warn: 'Certificate expires in 9 days', cert: { days: 9 }, interval: 300 }),
+    mkCheck(site.id, 'http', 'HTTPS', { config: { expectedStatus: '200-399', followRedirects: true, certCheck: true, certWarnDays: 14, latencyWarnMs: 1500, contentWatch: 'redirect', groups: ['HTTPS certificates'] }, base: 420, noise: 0.35, status: 'degraded', message: 'OK 200 in 438 ms · certificate expires in 9 days', warn: 'Certificate expires in 9 days', cert: { days: 9 }, interval: 300 }),
     mkCheck(site.id, 'keyword', 'Homepage text', { config: { keyword: 'Welcome to the family site', followRedirects: true }, base: 445, noise: 0.35, interval: 600 }),
     mkCheck(site.id, 'dns', 'DNS', { config: { expectedIps: ['93.184.215.14'], recordType: 'A' }, base: 24, noise: 0.5, interval: 900 }),
-    mkCheck(site.id, 'cert', 'Certificate', { config: { port: 443, certWarnDays: 14 }, base: 210, noise: 0.2, status: 'degraded', message: 'Certificate valid, expires in 9 days', warn: 'Certificate expires in 9 days', cert: { days: 9 }, interval: 3600 }),
+    mkCheck(site.id, 'cert', 'Certificate', { config: { port: 443, certWarnDays: 14, groups: ['HTTPS certificates'] }, base: 210, noise: 0.2, status: 'degraded', message: 'Certificate valid, expires in 9 days', warn: 'Certificate expires in 9 days', cert: { days: 9 }, interval: 3600 }),
   ];
   const weather = mkNode({ name: 'Weather API', host: 'https://api.example.com', group: 'Internet', tags: ['api', 'public'], template: 'api-endpoint' });
   weather.checks = [
@@ -797,8 +797,10 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   on('GET', /^\/api\/templates$/, () => templates);
   on('GET', /^\/api\/groups$/, () => {
     const g = new Map(); const t = new Map();
-    for (const n of nodes) { for (const name of groupsOf(n)) g.set(name, (g.get(name) || 0) + 1); for (const tag of n.tags || []) t.set(tag, (t.get(tag) || 0) + 1); }
-    return { groups: [...g].map(([name, count]) => ({ name, count })).sort((a, b) => a.name.localeCompare(b.name)), tags: [...t].map(([name, count]) => ({ name, count })).sort((a, b) => a.name.localeCompare(b.name)) };
+    const cg = new Map();
+    for (const n of nodes) { for (const name of groupsOf(n)) g.set(name, (g.get(name) || 0) + 1); for (const tag of n.tags || []) t.set(tag, (t.get(tag) || 0) + 1); for (const c of n.checks || []) for (const name of c.config?.groups || []) cg.set(name, (cg.get(name) || 0) + 1); }
+    const list = (m) => [...m].map(([name, count]) => ({ name, count })).sort((a, b) => a.name.localeCompare(b.name));
+    return { groups: list(g), tags: list(t), checkGroups: list(cg) };
   });
   on('GET', /^\/api\/nodes$/, () => nodes.map((n) => nodeOut(n)));
   on('GET', /^\/api\/nodes\/(\d+)$/, (m) => { const n = findNode(m[1]); if (!n) throw err(404, 'node not found'); return nodeOut(n, { withResults: true }); });

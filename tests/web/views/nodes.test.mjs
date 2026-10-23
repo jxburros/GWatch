@@ -56,3 +56,12 @@ test('live refresh preserves the focused filter by group and value', async (t) =
   await instance.refresh();
   assert.equal(document.activeElement.dataset.focusKey, 'Group:Home Network');
 });
+
+// #36: a check group is a filter of its own on the Nodes list.
+test('the Nodes list filters by check group', async (t) => {
+  const all = (await mountView(nodesView, undefined, t)).root.querySelectorAll('.node-row').length;
+  const { root } = await mountView(nodesView, { query: new URLSearchParams('checkGroup=HTTPS certificates') }, t);
+  const rows = root.querySelectorAll('.node-row');
+  assert.ok(rows.length > 0 && rows.length < all, `only the nodes with a check in the group are shown (${rows.length} of ${all})`);
+  assert.match(root.textContent, /Check group/);
+});

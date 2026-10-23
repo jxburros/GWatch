@@ -171,3 +171,24 @@ func TestPruneRuleReferences(t *testing.T) {
 		t.Errorf("a rule naming nothing deleted was changed: %+v", got)
 	}
 }
+
+// #36: check groups are counted across nodes, case-insensitively.
+func TestCheckGroupCounts(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	for _, name := range []string{"a", "b"} {
+		if _, err := s.CreateNode(ctx, model.Node{Name: name, Host: "10.0.0.1", Enabled: true, Checks: []model.Check{
+			{Type: model.CheckCert, Name: "Cert", Enabled: true, IntervalSeconds: 3600, TimeoutSeconds: 5, Config: model.CheckConfig{Groups: []string{map[string]string{"a": "HTTPS certificates", "b": "https certificates"}[name]}}},
+			{Type: model.CheckPing, Name: "Ping", Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.CheckGroupCounts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got["HTTPS certificates"] != 2 {
+		t.Fatalf("counts = %v", got)
+	}
+}

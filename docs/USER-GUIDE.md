@@ -183,6 +183,11 @@ Each node carries:
   matches *any* of them, and a name that differs only in case is folded onto
   the first spelling you used. Maximum 16.
 - **Tags** — free-form labels for filtering.
+- **Check groups** — separate from the node's groups, a check can be put in
+  groups of its own (under *Check groups* in each check's settings), so that
+  checks on different nodes can be handled as a set: "HTTPS certificates",
+  "Plex ports". The Nodes list and bulk edit filter by them, and the chart
+  picker finds them by name. Up to 10 a check.
 - **Importance** — *low*, *normal*, *high* or *critical*. Critical and high
   nodes are listed first on a wallboard.
 - **Depends on** — a parent node. While the parent is down, alerts for this
@@ -223,7 +228,7 @@ changing what a node does is a matter of editing its checks, not its template.
 
 **Nodes** is a searchable, filterable list. The search box matches a node's
 name, host, groups, tags **and its check names**. Above it sit chip filters for
-status, group and tag, with live counts.
+status, group, tag and check group, with live counts.
 
 > **The filters travel in the address bar.** Filter the list down to what you
 > want and the URL changes with it, so you can bookmark "everything critical

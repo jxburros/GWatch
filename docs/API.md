@@ -237,7 +237,7 @@ companion that lets an AI assistant use this API with a key, is documented in
 - `POST /api/nodes/{id}/silence` body `{ "minutes": 60 }` (0 = unsilence) → silences every check of the node → Node.
 - `PATCH /api/nodes/bulk` — one change across many nodes and checks. See **Bulk edit** below.
 - `GET /api/templates` → `[NodeTemplate]` (website, home-server, router — shown as "Network device", ping, api, tcp-service, this-computer, agent-machine, dns).
-- `GET /api/groups` → `{ "groups": [{"name":"...","count":3}], "tags": [{"name":"...","count":2}] }`. A node in several groups is counted once in each of them, so the counts can add up to more than the number of nodes.
+- `GET /api/groups` → `{ "groups": [{"name":"...","count":3}], "tags": [{"name":"...","count":2}], "checkGroups": [{"name":"...","count":4}] }`. `checkGroups` counts checks by their own groups (`config.groups` on a check, up to 10 names of at most 64 characters, case-insensitive). A node in several groups is counted once in each of them, so the counts can add up to more than the number of nodes.
 
 **Credentials inside a check's config** — `metricsToken` (hardware health via a metrics
 URL) and `snmpCommunity`, `snmpAuthPass`, `snmpPrivPass` (SNMP) — follow the same

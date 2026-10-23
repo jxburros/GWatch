@@ -19,7 +19,7 @@ const STATUS_ORDER = ['down', 'degraded', 'unknown', 'maintenance', 'up', 'pause
 export async function mount(root, ctx) {
   const state = {
     nodes: [], groups: { groups: [], tags: [] },
-    q: '', group: ctx.query.get('group') || '', status: '', tag: '',
+    q: '', group: ctx.query.get('group') || '', status: '', tag: '', checkGroup: '',
     nodeIds: new Set(),   // nodes whose node-level settings change
     checkIds: new Set(),  // checks whose check-level settings change
     types: new Set(),     // narrow the check patch to these types; empty = all
@@ -67,6 +67,7 @@ export async function mount(root, ctx) {
       if (state.group && !inGroup(n, state.group)) return false;
       if (state.status && (n.status || 'unknown') !== state.status) return false;
       if (state.tag && !(n.tags || []).includes(state.tag)) return false;
+      if (state.checkGroup && !checksOf(n).some((c) => inCheckGroup(c, state.checkGroup))) return false;
       if (state.q) {
         const q = state.q.toLowerCase();
         const hay = [n.name, n.host, ...nodeGroups(n), ...(n.tags || []), ...(n.checks || []).map((c) => c.name)].filter((x) => x != null).join(' ').toLowerCase();
@@ -92,7 +93,19 @@ export async function mount(root, ctx) {
       chipRow('Group', state.groups.groups.map((g) => ({ value: g.name, label: `${g.name} (${g.count})` })), state.group, (v) => { state.group = v; renderFilters(); renderPick(); }),
       chipRow('Status', STATUS_ORDER.filter((s) => counts[s]).map((s) => ({ value: s, label: `${s[0].toUpperCase()}${s.slice(1)} (${counts[s]})` })), state.status, (v) => { state.status = v; renderFilters(); renderPick(); }),
       chipRow('Tag', state.groups.tags.map((t) => ({ value: t.name, label: t.name })), state.tag, (v) => { state.tag = v; renderFilters(); renderPick(); }),
+      // Picking a check group (#36) shows the nodes that have one and ticks
+      // exactly the checks in it, so "every HTTPS certificate" is one click.
+      chipRow('Check group', (state.groups.checkGroups || []).map((g) => ({ value: g.name, label: `${g.name} (${g.count})` })), state.checkGroup, (v) => { state.checkGroup = v; renderFilters(); renderPick(); if (v) selectCheckGroup(v); }),
     );
+  }
+
+  const inCheckGroup = (c, g) => (c.config?.groups || []).some((x) => x.trim().toLowerCase() === g.trim().toLowerCase());
+  function selectCheckGroup(g) {
+    for (const n of state.nodes) {
+      for (const c of checksOf(n)) if (inCheckGroup(c, g)) state.checkIds.add(c.id);
+      rowSync.get(n.id)?.();
+    }
+    afterSelection();
   }
 
   /** Every check id of a node, as strings are never used for ids here. */
