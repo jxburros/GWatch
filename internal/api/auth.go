@@ -694,10 +694,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		// No such user: spend the same argon2 time a real account would, so
+		// No such user: spend the same hashing time a real account would, so
 		// that an unknown name cannot be told from a wrong password by how
 		// quickly it is rejected (#91).
-		auth.SpendVerifyTime(body.Password)
+		auth.SpendVerifyTime(body.Password, s.passwordAlgorithm())
 	}
 	if err != nil || verifyPassword(hash, body.Password) != nil {
 		s.auditAuthFailure(ctx, "Sign-in failed", fmt.Sprintf("Wrong user name or password for %q.", username), ip)
@@ -707,6 +707,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.passwordCheckPassed(username, ip)
+	s.rehashOnLogin(ctx, u.ID, hash, body.Password)
 
 	token, err := auth.NewSessionToken()
 	if err != nil {
@@ -818,7 +819,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	newHash, err := auth.HashPassword(body.New)
+	newHash, err := s.hashPassword(body.New)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -875,7 +876,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		// install would have accounts but nobody able to manage them.
 		role = auth.RoleAdmin
 	}
-	hash, err := auth.HashPassword(body.Password)
+	hash, err := s.hashPassword(body.Password)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -946,7 +947,7 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		hash, err := auth.HashPassword(*body.Password)
+		hash, err := s.hashPassword(*body.Password)
 		if err != nil {
 			s.fail(w, err)
 			return
@@ -1082,4 +1083,47 @@ func (s *Server) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 	s.auditAuth(ctx, "API key revoked: "+k.Name, "It can no longer be used.")
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// passwordAlgorithm is the hashing algorithm the settings currently select for
+// new password hashes (#49). A value that does not parse — which validation
+// on save should make impossible — falls back to the Argon2id default.
+func (s *Server) passwordAlgorithm() auth.Algorithm {
+	alg, _ := auth.ParseAlgorithm(s.Engine.Settings().General.PasswordHashing)
+	return alg
+}
+
+// hashPassword hashes a new account password with the selected algorithm.
+// Every place that stores a fresh password goes through here — creating an
+// account, an administrator resetting one, the owner changing their own — so
+// the setting applies to all of them.
+func (s *Server) hashPassword(pw string) (string, error) {
+	return auth.HashPasswordWith(pw, s.passwordAlgorithm())
+}
+
+// rehashOnLogin replaces a just-verified password hash with one made by the
+// selected algorithm when it was made by the other one, or with weaker
+// parameters (#49). A successful sign-in is the only time the plaintext is at
+// hand, so this is how switching the setting reaches existing accounts: each
+// moves over the next time its owner signs in, and an account nobody signs in
+// to simply keeps verifying with the hash it has.
+//
+// The update is conditional on the stored hash still being the one that was
+// verified, so a password change that lands in between is never overwritten
+// with the old password, and it leaves the account's sessions alone — unlike
+// SetUserPassword, since the password itself has not changed. A failure is
+// only logged: the sign-in has already succeeded and the old hash still works.
+func (s *Server) rehashOnLogin(ctx context.Context, userID int64, oldHash, pw string) {
+	alg := s.passwordAlgorithm()
+	if !auth.NeedsRehash(oldHash, alg) {
+		return
+	}
+	newHash, err := auth.HashPasswordWith(pw, alg)
+	if err != nil {
+		s.Log.Errorf("rehash password: %v", err)
+		return
+	}
+	if err := s.Store.ReplacePasswordHash(ctx, userID, oldHash, newHash); err != nil && !errors.Is(err, store.ErrNotFound) {
+		s.Log.Errorf("rehash password: %v", err)
+	}
 }

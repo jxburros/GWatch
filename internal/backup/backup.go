@@ -214,16 +214,20 @@ func create(ctx context.Context, st *store.Store, dir, password string, includeH
 }
 
 func writeArchive(ctx context.Context, st *store.Store, w io.Writer, password string, includeHistory bool, appVersion string, now time.Time) error {
-	bw := bufio.NewWriterSize(w, 1<<16)
-	enc, err := NewEncryptWriter(bw, password)
-	if err != nil {
-		return err
-	}
-	zw := zip.NewWriter(enc)
 	cfg, err := ExportConfig(ctx, st)
 	if err != nil {
 		return err
 	}
+	// The key derivation follows the password-hashing setting, so an owner
+	// who opted in to the standard-library-only PBKDF2 gets it for backups as
+	// well (#49). The configuration is exported first only so that this
+	// setting is known before the header is written.
+	bw := bufio.NewWriterSize(w, 1<<16)
+	enc, err := NewEncryptWriterKDF(bw, password, KDFForSetting(cfg.Settings.General.PasswordHashing))
+	if err != nil {
+		return err
+	}
+	zw := zip.NewWriter(enc)
 	manifest := Manifest{Format: Format, AppVersion: appVersion, CreatedAt: now, IncludeHistory: includeHistory, Nodes: len(cfg.Nodes),
 		Wallboards: len(cfg.Wallboards), Users: len(cfg.Users), APIKeys: len(cfg.APIKeys), Agents: len(cfg.Agents)}
 	for _, n := range cfg.Nodes {

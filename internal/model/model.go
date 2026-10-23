@@ -918,6 +918,14 @@ type GeneralSettings struct {
 	// other client. It only takes effect once at least one account exists, so
 	// it can never lock the owner out of a fresh install.
 	RequireLoginLocally bool `json:"requireLoginLocally"`
+	// PasswordHashing chooses how new account password hashes and backup
+	// encryption keys are derived: "argon2id" (the default and the
+	// recommendation; empty means the same) or "pbkdf2-sha256", the
+	// standard-library-only alternative for owners who would rather not
+	// depend on golang.org/x/crypto (#49). Existing hashes keep verifying
+	// whichever is selected; each account moves to the selected algorithm the
+	// next time it signs in.
+	PasswordHashing string `json:"passwordHashing"`
 }
 
 // BackupSettings controls scheduled, unattended backups. Backups are always
@@ -1135,6 +1143,7 @@ func DefaultSettings() Settings {
 			Theme:                "dark",
 			AccentColor:          "#43c9c0",
 			UpdateRepo:           "jxburros/GWatch",
+			PasswordHashing:      "argon2id",
 		},
 		Alerts: AlertSettings{
 			Enabled:          false,

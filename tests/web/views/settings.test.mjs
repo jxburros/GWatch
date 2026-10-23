@@ -6,6 +6,7 @@ import '../../../web/mock.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as settingsView from '../../../web/views/settings.js';
+import { api } from '../../../web/api.js';
 import { mountView, waitFor } from '../view-harness.mjs';
 
 test('settings view (admin) lists every tab and opens on General', async (t) => {
@@ -132,4 +133,28 @@ test('settings no longer has a Hardware section, and the old link goes to Nodes'
   const { root, ctx } = await mountView(settingsView, { params: { tab: 'hardware' } }, t);
   assert.deepEqual(ctx.navigated, ['/nodes']);
   assert.equal(root.querySelector('.settings-nav'), null, 'nothing of Settings is drawn for a link that is passed on');
+});
+
+// #49: Users & access carries the password-hashing choice. Argon2id is the
+// default and labelled as recommended; choosing PBKDF2 saves the setting
+// straight away, like the other switches on this tab.
+test('settings Users & access offers the password hashing choice and saves it', async (t) => {
+  const { root } = await mountView(settingsView, { params: { tab: 'users' } }, t);
+  const panel = root.querySelector('.settings-panel');
+  await waitFor(() => [...panel.querySelectorAll('h2')].some((el) => el.textContent === 'Password hashing'));
+  const select = [...panel.querySelectorAll('select')].find((el) => [...el.options].some((o) => o.value === 'pbkdf2-sha256'));
+  assert.ok(select, 'the password hashing select');
+  assert.deepEqual([...select.options].map((o) => o.value), ['argon2id', 'pbkdf2-sha256']);
+  assert.match(select.options[0].textContent, /Argon2id \(recommended\)/);
+  assert.match(select.options[1].textContent, /PBKDF2 \(standard library only\)/);
+  assert.equal(select.value, 'argon2id'); // web/mock.js's settings.general.passwordHashing
+  assert.match(panel.textContent, /Argon2id remains the recommendation/);
+
+  select.value = 'pbkdf2-sha256';
+  select.dispatchEvent(new window.Event('change'));
+  await waitFor(() => [...document.querySelectorAll('.toast')].find((el) => /Settings saved/.test(el.textContent)));
+  const saved = await api.get('/api/settings');
+  assert.equal(saved.general.passwordHashing, 'pbkdf2-sha256');
+  // Put the mock back the way the other tests expect it.
+  await api.put('/api/settings', { ...saved, general: { ...saved.general, passwordHashing: 'argon2id' } });
 });
