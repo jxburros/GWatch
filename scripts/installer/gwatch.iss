@@ -61,6 +61,14 @@ UninstallDisplayName={#AppName} {#AppVersion}
 ; can point straight at the executable.
 UninstallDisplayIcon={app}\gwatch.exe
 SetupLogging=yes
+; Authenticode (#120). The release passes /DCodeSign plus the matching
+; /S<name>=<command> (scripts/authenticode.ps1 -Action IsccArgs prints both),
+; and Inno Setup then signs the uninstaller it embeds and the finished setup
+; program. Without them the setup program is built unsigned, as it always was.
+#ifdef CodeSign
+SignTool={#CodeSign}
+SignedUninstaller=yes
+#endif
 
 ; ---- Branding -------------------------------------------------------------
 ; The licence page carries the GWatch Community License verbatim plus a plain

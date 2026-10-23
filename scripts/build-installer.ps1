@@ -11,6 +11,13 @@
 #
 # -Which selects what to build: Monitor, Agent or Both (the default). The
 # finished setup programs are copied into dist\ next to the executables.
+#
+# Authenticode signing is optional and off unless a signer is set up: put a
+# code-signing certificate's thumbprint (from Cert:\CurrentUser\My) in
+# GWATCH_SIGNING_CERT_THUMBPRINT and each executable is signed before it is
+# packaged, then the setup program and its uninstaller as Inno Setup builds them.
+# That needs PowerShell 7 (pwsh) and the Windows SDK's signtool.exe; see
+# scripts\authenticode.ps1 and docs/RELEASING.md.
 [CmdletBinding()]
 param(
     [string]$Version,
@@ -51,9 +58,21 @@ function Build-Exe([string]$Package, [string]$Output, [string]$BuildVersion) {
     if ($LASTEXITCODE -ne 0) { throw "go build failed for $Package" }
 }
 
+$signer = Join-Path $PSScriptRoot "authenticode.ps1"
+$signing = [bool]($env:GWATCH_SIGNING_CERT_THUMBPRINT -or ($env:GWATCH_SIGNING_DLIB -and $env:GWATCH_SIGNING_METADATA))
+
 function Build-Setup([string]$Script, [string]$Exe, [string]$BuildVersion) {
+    $signArgs = @()
+    if ($signing) {
+        # The executable first, so the setup program packages the signed file.
+        Write-Host "Signing $Exe..."
+        & pwsh -NoProfile -File $signer -Action Sign $Exe
+        if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed for $Exe" }
+        $signArgs = @(& pwsh -NoProfile -File $signer -Action IsccArgs)
+        if ($LASTEXITCODE -ne 0) { throw "could not set up Inno Setup's sign tool" }
+    }
     Write-Host "Compiling $Script..."
-    & $isccPath "/DAppVersion=$BuildVersion" "/DExePath=$Exe" (Join-Path $installer $Script)
+    & $isccPath @signArgs "/DAppVersion=$BuildVersion" "/DExePath=$Exe" (Join-Path $installer $Script)
     if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed for $Script" }
 }
 

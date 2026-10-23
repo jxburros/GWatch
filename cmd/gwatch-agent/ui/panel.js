@@ -117,6 +117,8 @@ function renderOverview() {
         h('button', { type: 'button', onclick: () => serviceAction('restart') }, 'Restart'))
     : h('p', { class: 'note' }, `The service is managed by ${svc.manager}. To restart it: `, h('code', null, svc.hint || ''));
 
+  const upd = state.updates || {};
+  const lastError = s && (s.reportError || s.checkInError);
   box.replaceChildren(
     h('p', { class: 'lead' }, hl.line),
     h('dl', { class: 'facts' },
@@ -126,12 +128,66 @@ function renderOverview() {
       fact('Last reading sent', s && s.lastReport ? `${ago(s.lastReport)}${s.reportOk ? '' : ' (failed)'}` : 'never'),
       fact('Last asked GWatch for settings', s && s.lastCheckIn ? `${ago(s.lastCheckIn)}${s.checkInError ? ' (failed)' : ''}` : 'not yet'),
       fact('Readings waiting to be sent', s ? String(s.held || 0) : '—'),
+      fact('Collecting', s ? describeCollecting(s.collecting) : '—'),
+      fact('Automatic updates', upd.manager ? `by ${upd.manager}` : (upd.auto ? 'on' : 'off')),
+      fact('Version', `${state.version} (${state.platform})`),
+      fact('Settings and token file', state.paths ? state.paths.config : state.file.path),
       s && s.latestAgent ? fact('Newest agent GWatch knows of', s.latestAgent) : null),
+    lastError ? h('p', { class: 'note bad' }, 'Last error: ', s.reportError || `asking GWatch for settings: ${s.checkInError}`) : null,
     controls,
     h('div', { class: 'row' },
       h('button', { type: 'button', onclick: testReading }, 'Send a test reading'),
-      h('button', { type: 'button', onclick: checkUpdates }, 'Check for updates')),
-    ui.result || (ui.result = h('p', { class: 'result', role: 'status', 'aria-live': 'polite' })));
+      h('button', { type: 'button', onclick: checkUpdates }, 'Check for updates'),
+      upd.canUpdate === false ? null : h('button', { type: 'button', onclick: updateNow }, 'Update now'),
+      h('button', { type: 'button', onclick: copyDiagnostics }, 'Copy diagnostics')),
+    upd.canUpdate === false ? h('p', { class: 'note' }, `This copy was installed from ${upd.source}, which keeps it up to date: `, h('code', null, upd.command || '')) : null,
+    ui.result || (ui.result = h('p', { class: 'result', role: 'status', 'aria-live': 'polite' })),
+    ui.diag || (ui.diag = h('textarea', { class: 'diag', hidden: true, readonly: true, 'aria-label': 'Diagnostics', spellcheck: 'false' })));
+}
+
+function describeCollecting(c) {
+  if (!c) return 'everything';
+  const kinds = (c.metrics && c.metrics.length) ? c.metrics.join(', ') : 'every kind of reading';
+  const only = ['interfaces', 'disks', 'mounts'].filter((k) => c[k] && c[k].length).map((k) => `${c[k].length} ${k}`);
+  const named = (l) => (l || []).filter(Boolean).length;
+  const watch = [named(c.services) ? `${named(c.services)} services` : '', named(c.processes) ? `${named(c.processes)} programs` : ''].filter(Boolean);
+  const out = only.length ? `${kinds}; only ${only.join(', ')}` : kinds;
+  return watch.length ? `${out}; watching ${watch.join(' and ')}` : out;
+}
+
+async function updateNow(ev) {
+  const btn = ev.target;
+  if (!confirm('Download, check and install the newest agent release now, then restart the agent onto it?')) return;
+  btn.disabled = true;
+  say('Looking for a newer agent, and installing it if there is one. This can take a minute…');
+  try {
+    const out = await api('POST', '/api/update-now');
+    if (out.service) { state = Object.assign(state, out); renderOverview(); }
+    say(out.message, out.ok);
+  } catch (e) { say(e.message, false); }
+  btn.disabled = false;
+}
+
+async function copyDiagnostics(ev) {
+  const btn = ev.target;
+  btn.disabled = true;
+  try {
+    const out = await api('GET', '/api/diagnostics');
+    ui.diag.value = out.text;
+    try {
+      await navigator.clipboard.writeText(out.text);
+      ui.diag.hidden = true;
+      say('Diagnostics copied: paste them wherever you are asking for help. The token is not in them.', true);
+    } catch {
+      // Some browsers only allow copying straight from a click, and the
+      // fetch above is not one; show the text, selected, for Ctrl-C.
+      ui.diag.hidden = false;
+      ui.diag.focus();
+      ui.diag.select();
+      say('Select-all and copy the diagnostics below. The token is not in them.', true);
+    }
+  } catch (e) { say(e.message, false); }
+  btn.disabled = false;
 }
 
 function say(text, good) {
@@ -205,14 +261,14 @@ function buildSettings() {
     name: textField('f-name', 'Name for this machine', st.name, 'Leave empty to use this computer’s own name.'),
     interval: textField('f-interval', 'Send a reading every', st.interval, `Like 30s or 1m. At least 10s. Default ${state.defaults.interval}.`),
     checkIn: textField('f-checkin', 'Ask GWatch for settings every', st.checkIn, `Like 15m or 1h. Default ${state.defaults.checkIn}.`),
-    buffer: textField('f-buffer', 'Keep readings if GWatch is unreachable for up to', st.buffer, `Held in memory and sent when GWatch is back. 0s keeps nothing. Default ${state.defaults.buffer}, at most 48h.`),
+    buffer: textField('f-buffer', 'Keep readings if GWatch is unreachable for up to', st.buffer, `Kept in a small file beside agent.json (so a restart does not lose them) and sent when GWatch is back. 0s keeps nothing. Default ${state.defaults.buffer}, at most 48h.`),
     pin: textField('f-pin', 'Pinned server certificate', st.certPin, 'Optional SHA-256 of the server’s public key.'),
   };
   const auto = checkField('f-auto', 'Keep this agent up to date', 'Installs new signed agent releases by itself.', st.autoUpdate);
   const insecure = checkField('f-insecure', 'Accept a self-signed certificate', 'Only if you recognise the server’s certificate. A pinned certificate is safer.', st.insecure);
   const problems = h('div');
-  const save = h('button', { type: 'submit', class: 'primary', disabled: readOnly() }, 'Save settings');
-  const form = h('form', { class: 'grid', novalidate: true, onsubmit: async (ev) => {
+  const save = h('button', { type: 'submit', form: 'settings-form', class: 'primary', disabled: readOnly() }, 'Save settings');
+  const form = h('form', { class: 'grid', id: 'settings-form', novalidate: true, onsubmit: async (ev) => {
     ev.preventDefault();
     save.disabled = true;
     try {
@@ -281,11 +337,14 @@ function buildCollect() {
     };
   });
 
+  const watch = buildWatch(coll);
+
   const problems = h('div');
   const save = h('button', { type: 'button', class: 'primary', disabled: readOnly(), onclick: async () => {
     const ticked = famBoxes.filter((b) => b.input.checked).map((b) => b.fam.key);
     const collect = { metrics: ticked.length === famBoxes.length ? [] : ticked };
     for (const c of cats) collect[c.key] = c.value();
+    Object.assign(collect, watch.value());
     save.disabled = true;
     try {
       state = await api('PUT', '/api/settings', { collect });
@@ -302,7 +361,62 @@ function buildCollect() {
   return card('What this machine reports',
     h('p', { class: 'lead' }, 'These are the limits of what leaves this machine. An administrator in GWatch can narrow them further for this machine, never widen them.'),
     h('fieldset', null, h('legend', null, 'Kinds of reading'), h('div', { class: 'cols' }, famBoxes.map((b) => b.el))),
-    cats.map((c) => c.el), problems, h('div', { class: 'row' }, save), h('p', { class: 'note' }, gwText));
+    cats.map((c) => c.el), watch.el, problems, h('div', { class: 'row' }, save), h('p', { class: 'note' }, gwText));
+}
+
+/* Services and programs to watch (#62). Each is a list of names, one per line;
+   nothing is watched until a name is given. The machine's own list is long
+   (hundreds of services on Windows), so it is fetched only when asked and
+   offered as boxes to tick under a filter, ticking adding the name to the list. */
+const WATCH_KINDS = [
+  { key: 'services', title: 'Services to watch', hint: 'One per line. A systemd unit on Linux (nginx), a service or display name on Windows (Spooler), a launchd label on macOS. GWatch reports each as running or stopped, and a stopped one is critical by default.' },
+  { key: 'processes', title: 'Programs to watch', hint: 'One per line, by executable name (plex, postgres). GWatch reports how many copies are running, and none is critical by default.' },
+];
+
+function buildWatch(coll) {
+  const kinds = WATCH_KINDS.map((k) => {
+    const text = h('textarea', { id: `watch-${k.key}`, rows: 4, class: 'watch', 'aria-label': k.title, placeholder: k.key === 'services' ? 'nginx\ndocker' : 'plex' });
+    text.value = (coll[k.key] || []).filter(Boolean).join('\n');
+    const names = () => text.value.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+    const filter = h('input', { type: 'text', placeholder: 'Filter', 'aria-label': `Filter ${k.title.toLowerCase()}`, hidden: true });
+    const list = h('div', { class: 'cols watch-list' });
+    let items = [];
+    const draw = () => {
+      const chosen = new Set(names());
+      const q = filter.value.trim().toLowerCase();
+      list.replaceChildren(...items.filter((i) => !q || i.name.toLowerCase().includes(q) || (i.detail || '').toLowerCase().includes(q)).slice(0, 200).map((i, idx) => {
+        const input = h('input', { type: 'checkbox', id: `watch-${k.key}-${idx}`, checked: chosen.has(i.name) });
+        input.addEventListener('change', () => {
+          const now = names().filter((n) => n !== i.name);
+          if (input.checked) now.push(i.name);
+          text.value = now.join('\n');
+        });
+        return h('label', { class: 'check', for: input.id }, input, h('span', { class: 't' }, h('span', null, i.name), i.detail ? h('span', { class: 'd' }, i.detail) : null));
+      }));
+    };
+    filter.addEventListener('input', draw);
+    text.addEventListener('change', draw);
+    return {
+      key: k.key,
+      el: h('fieldset', { 'data-watch': k.key }, h('legend', null, k.title), text, h('p', { class: 'note' }, k.hint), filter, list),
+      offer(found) { items = found || []; filter.hidden = items.length === 0; draw(); },
+      value: () => [...new Set(names())],
+    };
+  });
+  const listNote = h('p', { class: 'note' });
+  const listBtn = h('button', { type: 'button', onclick: async () => {
+    listBtn.disabled = true;
+    try {
+      const out = await api('GET', '/api/watchable');
+      for (const k of kinds) k.offer(out[k.key]);
+      listNote.textContent = `${(out.services || []).length} services and ${(out.processes || []).length} running programs on this machine.${(out.problems || []).length ? ' ' + out.problems.join('; ') : ''}`;
+    } catch (e) { banner('bad', e.message); }
+    listBtn.disabled = false;
+  } }, 'List what this machine has');
+  return {
+    el: h('div', null, kinds.map((k) => k.el), h('div', { class: 'row' }, listBtn), listNote),
+    value: () => Object.fromEntries(kinds.map((k) => [k.key, k.value()])),
+  };
 }
 
 /* ---------- token ---------- */
@@ -351,16 +465,69 @@ function buildFile() {
     h('p', { class: 'note' }, 'The same settings as above, as text. The agent refuses to save a file it could not run with.'));
 }
 
+/* ---------- the log ---------- */
+
+function buildLog() {
+  const view = h('pre', { class: 'log', tabindex: '0', 'aria-label': 'Recent log' }, 'Loading…');
+  const where = h('p', { class: 'note' });
+  const load = async () => {
+    try {
+      const out = await api('GET', '/api/log');
+      const lines = out.lines || [];
+      view.textContent = lines.length ? lines.join('\n') : (out.note || 'Nothing logged yet.');
+      view.scrollTop = view.scrollHeight;
+      where.textContent = `The last ${lines.length || 'few'} lines, from ${out.source}. Anything that looks like a token is taken out.`;
+    } catch (e) { view.textContent = e.message; }
+  };
+  load();
+  return card('Recent log', view, where,
+    h('div', { class: 'row' }, h('button', { type: 'button', onclick: load }, 'Refresh')));
+}
+
+/* ---------- pairing again ---------- */
+
+function buildPair() {
+  const f = {
+    server: textField('p-server', 'GWatch server', state.settings.server, 'The address of your GWatch, with the port.'),
+    code: textField('p-code', 'Pairing code', '', 'From GWatch: Nodes › Add node › GWatch agent, or the machine’s node › Agent › Pair again. Good once, for about fifteen minutes.'),
+    name: textField('p-name', 'Name for this machine (optional)', state.settings.name, 'Leave empty to use this computer’s own name.'),
+  };
+  const insecure = checkField('p-insecure', 'The server uses a self-signed certificate', 'Its key is pinned when the machine pairs, so it is not accepted blindly afterwards.', false);
+  const out = h('p', { class: 'result', role: 'status', 'aria-live': 'polite' });
+  const go = h('button', { type: 'submit', form: 'pair-form', class: 'primary', disabled: readOnly() }, 'Pair this machine');
+  const form = h('form', { class: 'grid', id: 'pair-form', novalidate: true, onsubmit: async (ev) => {
+    ev.preventDefault();
+    if (state.tokenSet && !confirm('Pair this machine again? It gets a new token, and the one it has now stops being used here.')) return;
+    go.disabled = true;
+    out.className = 'result';
+    out.textContent = 'Pairing, and sending a first reading…';
+    try {
+      const res = await api('POST', '/api/pair', {
+        server: f.server.input.value, code: f.code.input.value, name: f.name.input.value, insecure: insecure.input.checked,
+      });
+      if (res.service) state = Object.assign(state, res);
+      out.className = `result ${res.ok ? 'good' : 'bad'}`;
+      out.replaceChildren(res.message, res.link ? ' ' : '', res.link ? h('a', { href: res.link, target: '_blank', rel: 'noopener noreferrer' }, 'See it in GWatch') : '');
+      if (res.ok) { f.code.input.value = ''; afterSave('settings', 'token', 'file'); clearBanner(); }
+    } catch (e) { out.className = 'result bad'; out.textContent = e.message; }
+    go.disabled = readOnly();
+  } }, Object.values(f).map((x) => x.el), insecure.el);
+  return card('Pair this machine again',
+    h('p', { class: 'lead' }, 'For a machine whose token was revoked, or that is moving to a different GWatch. A code from GWatch is exchanged for a new token, kept in the configuration file, and the agent is restarted with it.'),
+    form, h('div', { class: 'row' }, go), out);
+}
+
 /* ---------- page ---------- */
 
 function renderAll(rebuildForms = true) {
   if (rebuildForms) {
     const app = $('#app');
-    ui.cards = { settings: buildSettings(), collect: buildCollect(), token: buildToken(), file: buildFile() };
+    ui.cards = { settings: buildSettings(), collect: buildCollect(), token: buildToken(), file: buildFile(), log: buildLog(), pair: buildPair() };
     ui.result = null;
+    ui.diag = null;
     app.replaceChildren(
       h('section', { class: 'card' }, h('div', { class: 'head' }, h('h2', null, 'Status')), h('div', { class: 'body', id: 'overview-body' })),
-      ui.cards.settings, ui.cards.collect, ui.cards.token, ui.cards.file);
+      ui.cards.log, ui.cards.settings, ui.cards.collect, ui.cards.token, ui.cards.pair, ui.cards.file);
   }
   renderOverview();
   const f = state.file;

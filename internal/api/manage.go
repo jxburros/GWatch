@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jxburros/GWatch/internal/auth"
 	"github.com/jxburros/GWatch/internal/backup"
 	"github.com/jxburros/GWatch/internal/engine"
 	"github.com/jxburros/GWatch/internal/mailer"
@@ -265,6 +267,7 @@ func maskSettings(st model.Settings) model.Settings {
 	if st.Backups.Password != "" {
 		st.Backups.Password = passwordMask
 	}
+	st.Alerts.Channels = maskAlertChannels(st.Alerts.Channels)
 	return st
 }
 
@@ -290,11 +293,44 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	if st.Backups.Password == passwordMask {
 		st.Backups.Password = current.Backups.Password
 	}
+	if err := s.validateSettings(&st, current, func() (int, error) { return s.Store.CountAdmins(r.Context()) }); err != nil {
+		var bad settingsError
+		if errors.As(err, &bad) {
+			writeError(w, http.StatusBadRequest, bad.Error())
+			return
+		}
+		s.fail(w, err)
+		return
+	}
+	if err := s.Store.SaveSettings(r.Context(), st); err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.configChanged(r.Context(), nil, "Settings updated", describeSettingsChange(current, st))
+	writeJSON(w, http.StatusOK, maskSettings(s.Engine.Settings()))
+}
+
+// settingsError is a settings document refused by validateSettings, which a
+// save answers with 400.
+type settingsError string
+
+func (e settingsError) Error() string { return string(e) }
+
+func badSettings(msg string) error { return settingsError(msg) }
+
+// validateSettings validates and tidies a settings document the way
+// PUT /api/settings does, against the settings in force (current), which
+// decide what counts as switching something on. countAdmins says how many
+// administrators there will be once the document applies; turning on a
+// sign-in on this computer is refused when the answer is none. A document
+// that does not validate is refused with a settingsError; any other error
+// is the database's. A restore holds an archive's settings to the same
+// rules (restore_check.go).
+func (s *Server) validateSettings(st *model.Settings, current model.Settings, countAdmins func() (int, error)) error {
 	def := model.DefaultSettings()
 	g := &st.General
 	if g.ListenPort < 0 || g.ListenPort > 65535 {
-		writeError(w, http.StatusBadRequest, "listen port must be between 1 and 65535 (or zero for the startup default)")
-		return
+		return badSettings("listen port must be between 1 and 65535 (or zero for the startup default)")
 	}
 	if strings.TrimSpace(g.InstanceName) == "" {
 		g.InstanceName = def.General.InstanceName
@@ -302,27 +338,31 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	if g.RequireLoginLocally && !current.General.RequireLoginLocally {
 		// Turning this on with no administrator to sign in as would lock the
 		// owner out of their own monitor.
-		n, err := s.Store.CountAdmins(r.Context())
+		n, err := countAdmins()
 		if err != nil {
-			s.fail(w, err)
-			return
+			return err
 		}
 		if n == 0 {
-			writeError(w, http.StatusBadRequest, "create an administrator account before requiring a sign-in on this computer")
-			return
+			return badSettings("create an administrator account before requiring a sign-in on this computer")
 		}
 	}
+	// The hashing algorithm (#49). Empty is how every settings document saved
+	// before the option existed looks, so it means the Argon2id default;
+	// anything else that is not a known name is refused rather than quietly
+	// replaced, because it decides how passwords and backups are protected.
+	alg, ok := auth.ParseAlgorithm(g.PasswordHashing)
+	if !ok {
+		return badSettings(fmt.Sprintf(`password hashing must be %q or %q`, auth.Argon2id, auth.PBKDF2))
+	}
+	g.PasswordHashing = string(alg)
 	if g.DefaultIntervalSecs < 10 || g.DefaultIntervalSecs > 86400 {
-		writeError(w, http.StatusBadRequest, "default interval must be between 10 seconds and 1 day")
-		return
+		return badSettings("default interval must be between 10 seconds and 1 day")
 	}
 	if g.DefaultTimeoutSecs < 1 || g.DefaultTimeoutSecs > 300 {
-		writeError(w, http.StatusBadRequest, "default timeout must be between 1 and 300 seconds")
-		return
+		return badSettings("default timeout must be between 1 and 300 seconds")
 	}
 	if g.MaxConcurrentChecks < 1 || g.MaxConcurrentChecks > 64 {
-		writeError(w, http.StatusBadRequest, "max concurrent checks must be between 1 and 64")
-		return
+		return badSettings("max concurrent checks must be between 1 and 64")
 	}
 	if g.MinIntervalSecs < 5 {
 		g.MinIntervalSecs = 5
@@ -331,8 +371,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		g.WallboardRefreshSecs = def.General.WallboardRefreshSecs
 	}
 	if g.LatencyWarnMS < 0 || g.PacketLossWarnPct < 0 || g.PacketLossWarnPct > 100 {
-		writeError(w, http.StatusBadRequest, "warning thresholds must be positive (packet loss up to 100%)")
-		return
+		return badSettings("warning thresholds must be positive (packet loss up to 100%)")
 	}
 	// An empty ping method is how every settings document written before this
 	// setting existed looks, so it means the default rather than an error.
@@ -341,8 +380,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		g.PingMethod = def.General.PingMethod
 	}
 	if !model.ValidPingMethod(g.PingMethod) {
-		writeError(w, http.StatusBadRequest, `ping method must be "auto", "builtin" or "system"`)
-		return
+		return badSettings(`ping method must be "auto", "builtin" or "system"`)
 	}
 	switch g.Theme {
 	case "dark", "light", "system":
@@ -354,8 +392,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		g.AccentColor = def.General.AccentColor
 	}
 	if !hexColor.MatchString(g.AccentColor) {
-		writeError(w, http.StatusBadRequest, "accent colour must be a hex value like #43c9c0")
-		return
+		return badSettings("accent colour must be a hex value like #43c9c0")
 	}
 	g.AccessPassword = strings.TrimSpace(g.AccessPassword)
 	g.UpdateRepo = strings.TrimSpace(g.UpdateRepo)
@@ -363,8 +400,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		g.UpdateRepo = def.General.UpdateRepo
 	}
 	if !update.ValidRepo(g.UpdateRepo) {
-		writeError(w, http.StatusBadRequest, "update repository must look like owner/name")
-		return
+		return badSettings("update repository must look like owner/name")
 	}
 	a := &st.Alerts
 	if a.FailureThreshold < 1 {
@@ -376,6 +412,15 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	if a.CertWarnDays < 1 {
 		a.CertWarnDays = def.Alerts.CertWarnDays
 	}
+	if a.GroupWindowSeconds < 0 || a.GroupWindowSeconds > model.MaxAlertGroupWindowSeconds {
+		return badSettings(fmt.Sprintf("the alert grouping window must be between 0 (off) and %d seconds", model.MaxAlertGroupWindowSeconds))
+	}
+	if !model.ValidWarningDigest(a.WarningDigest) {
+		return badSettings("the warning digest must be off, hourly or daily")
+	}
+	if a.WarningDigest == "" {
+		a.WarningDigest = model.WarningDigestOff
+	}
 	recips := make([]string, 0, len(a.Recipients))
 	for _, rcp := range a.Recipients {
 		rcp = strings.TrimSpace(rcp)
@@ -383,41 +428,46 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if !strings.Contains(rcp, "@") {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("%q is not an email address", rcp))
-			return
+			return badSettings(fmt.Sprintf("%q is not an email address", rcp))
 		}
 		recips = append(recips, rcp)
 	}
 	a.Recipients = recips
+	channels, err := s.normalizeAlertChannels(a.Channels, current.Alerts.Channels)
+	if err != nil {
+		return badSettings(err.Error())
+	}
+	a.Channels = channels
 	if a.SMTP.Security == "" {
 		a.SMTP.Security = "starttls"
 	}
 	if a.SMTP.Port <= 0 {
 		a.SMTP.Port = 587
 	}
+	// Alerts can go out by e-mail, through the "also notify" channels, or
+	// both. Whichever is configured has to work: e-mail recipients need SMTP
+	// settings that validate, and with no recipients at least one channel
+	// has to be switched on, or enabling alerts would send nothing at all.
 	if a.Enabled {
-		if err := mailer.Validate(a.SMTP); err != nil {
-			writeError(w, http.StatusBadRequest, "alerts cannot be enabled: "+err.Error())
-			return
+		if len(a.Recipients) == 0 && enabledAlertChannels(a.Channels) == 0 {
+			return badSettings("alerts cannot be enabled without at least one recipient or notification channel")
 		}
-		if len(a.Recipients) == 0 {
-			writeError(w, http.StatusBadRequest, "alerts cannot be enabled without at least one recipient")
-			return
+		if len(a.Recipients) > 0 {
+			if err := mailer.Validate(a.SMTP); err != nil {
+				return badSettings("alerts cannot be enabled: " + err.Error())
+			}
 		}
 	}
 	rt := &st.Retention
 	if rt.RawDays < 1 || rt.RawDays > 3650 {
-		writeError(w, http.StatusBadRequest, "raw results must be kept between 1 and 3650 days")
-		return
+		return badSettings("raw results must be kept between 1 and 3650 days")
 	}
 	if rt.HostDays < 1 || rt.HostDays > 3650 {
-		writeError(w, http.StatusBadRequest, "hardware check results must be kept between 1 and 3650 days")
-		return
+		return badSettings("hardware check results must be kept between 1 and 3650 days")
 	}
 	for _, v := range []int{rt.FiveMinDays, rt.HourlyDays, rt.DailyDays, rt.EventDays} {
 		if v < 0 || v > 36500 {
-			writeError(w, http.StatusBadRequest, "retention days must be between 0 (forever) and 36500")
-			return
+			return badSettings("retention days must be between 0 (forever) and 36500")
 		}
 	}
 	bk := &st.Backups
@@ -425,42 +475,32 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		bk.IntervalHours = def.Backups.IntervalHours
 	}
 	if bk.IntervalHours < 1 || bk.IntervalHours > 720 {
-		writeError(w, http.StatusBadRequest, "backup interval must be between 1 and 720 hours")
-		return
+		return badSettings("backup interval must be between 1 and 720 hours")
 	}
 	if bk.Keep <= 0 {
 		bk.Keep = def.Backups.Keep
 	}
 	if bk.Keep < 1 || bk.Keep > 365 {
-		writeError(w, http.StatusBadRequest, "the number of backups to keep must be between 1 and 365")
-		return
+		return badSettings("the number of backups to keep must be between 1 and 365")
 	}
 	if bk.Enabled && strings.TrimSpace(bk.Password) == "" {
-		writeError(w, http.StatusBadRequest, "scheduled backups cannot be enabled without a password")
-		return
+		return badSettings("scheduled backups cannot be enabled without a password")
 	}
 	up := &st.Updates
 	if up.CheckIntervalHours <= 0 {
 		up.CheckIntervalHours = def.Updates.CheckIntervalHours
 	}
 	if up.CheckIntervalHours < 1 || up.CheckIntervalHours > 720 {
-		writeError(w, http.StatusBadRequest, "the update check interval must be between 1 and 720 hours")
-		return
+		return badSettings("the update check interval must be between 1 and 720 hours")
 	}
 	// An unknown condition or colour would simply never light up in the
 	// browser, which reads as a bug rather than as a setting that was not
 	// taken, so it is refused here with the reason.
 	if err := model.ValidateIndicators(st.Indicators); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+		return badSettings(err.Error())
 	}
 	st.Indicators = model.NormalizeIndicators(st.Indicators)
-	if err := s.Store.SaveSettings(r.Context(), st); err != nil {
-		s.fail(w, err)
-		return
-	}
-	s.configChanged(r.Context(), nil, "Settings updated", describeSettingsChange(current, st))
-	writeJSON(w, http.StatusOK, maskSettings(s.Engine.Settings()))
+	return nil
 }
 
 func describeSettingsChange(before, after model.Settings) string {
@@ -474,6 +514,9 @@ func describeSettingsChange(before, after model.Settings) string {
 	if strings.Join(before.Alerts.Recipients, ",") != strings.Join(after.Alerts.Recipients, ",") {
 		parts = append(parts, "recipients changed")
 	}
+	if alertChannelsSummary(before.Alerts.Channels) != alertChannelsSummary(after.Alerts.Channels) {
+		parts = append(parts, fmt.Sprintf("alert channels changed (%d enabled)", enabledAlertChannels(after.Alerts.Channels)))
+	}
 	if before.Retention != after.Retention {
 		parts = append(parts, "retention policy changed")
 	}
@@ -485,6 +528,11 @@ func describeSettingsChange(before, after model.Settings) string {
 	}
 	if before.General.RequireLoginLocally != after.General.RequireLoginLocally {
 		parts = append(parts, "sign-in on this computer "+map[bool]string{true: "required", false: "no longer required"}[after.General.RequireLoginLocally])
+	}
+	// How passwords and backups are protected is a security decision, so it
+	// gets a line of its own in the audit trail.
+	if before.General.PasswordHashing != after.General.PasswordHashing {
+		parts = append(parts, "password hashing set to "+after.General.PasswordHashing)
 	}
 	if before.General.Theme != after.General.Theme || before.General.AccentColor != after.General.AccentColor {
 		parts = append(parts, "appearance changed")
@@ -621,51 +669,170 @@ func (s *Server) handleDeleteBackup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-func (s *Server) restore(w http.ResponseWriter, r *http.Request, path, password string, includeHistory bool) {
+// restoreTimeout bounds a restore, which carries on if the browser that asked
+// for it goes away: stopping a restore half-way is how a database ends up
+// emptied, so the request's own cancellation is not passed on.
+const restoreTimeout = 2 * time.Hour
+
+func (s *Server) restore(w http.ResponseWriter, r *http.Request, path, password string, includeHistory, recreateAccounts bool) {
 	if strings.TrimSpace(password) == "" {
 		writeError(w, http.StatusBadRequest, "password is required")
 		return
 	}
-	// Verify the archive before touching the database.
-	if _, err := backup.Inspect(path, password); err != nil {
-		if errors.Is(err, backup.ErrArchiveTooLarge) {
-			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+	// Accounts missing from this server are only re-created when asked, or
+	// when there are none at all (a restore onto a fresh installation).
+	if !recreateAccounts {
+		if n, err := s.Store.CountUsers(r.Context()); err == nil && n == 0 {
+			recreateAccounts = true
+		}
+	}
+	// Read and validate the archive before touching the database, or taking
+	// the safety backup: an archive that is unreadable, too large or not
+	// valid (checkArchive) is refused here with nothing changed.
+	_, cfg, err := backup.Read(path, password)
+	if err == nil {
+		err = s.checkArchive(r.Context(), &cfg, recreateAccounts)
+	}
+	if err != nil {
+		s.writeArchiveError(w, err)
+		return
+	}
+	// One restore at a time: while another holds the engine paused, this one
+	// is refused before it takes a safety backup. (Pause below is what
+	// actually enforces it; this only answers sooner.)
+	if s.Engine.Paused() {
+		writeError(w, http.StatusConflict, "another restore is in progress; wait for it to finish")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), restoreTimeout)
+	defer cancel()
+
+	// A safety net first: everything as it is now, history included, under
+	// the same password, so a restore that was a mistake (or that fails
+	// part-way) can itself be undone from Settings › Backups. Monitoring
+	// carries on while it is written; it is paused only for the restore.
+	safety := ""
+	var safetyEvent model.Event
+	if s.BackupDir != "" {
+		info, err := s.Engine.RunBackup(ctx, s.BackupDir, password, true, 0, "Pre-restore backup")
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not take a backup of the current data before restoring, so nothing was changed: "+err.Error())
+			return
+		}
+		safety = info.FileName
+		safetyEvent = engine.BackupCreatedEvent("Pre-restore backup", info, time.Now())
+	}
+
+	// Pause the engine for the restore (engine/pause.go): no check runs, and
+	// nothing it does on its own writes, until the restored configuration is
+	// loaded. Whatever happens below, the engine reloads its configuration
+	// and resumes before this returns.
+	if err := s.Engine.Pause(ctx); err != nil {
+		if errors.Is(err, engine.ErrAlreadyPaused) {
+			writeError(w, http.StatusConflict, "another restore is in progress; wait for it to finish")
 			return
 		}
 		s.fail(w, err)
 		return
 	}
-	sum, err := backup.Restore(r.Context(), s.Store, path, password, includeHistory)
-	if errors.Is(err, backup.ErrArchiveTooLarge) {
-		// Refused before anything was written.
-		writeError(w, http.StatusRequestEntityTooLarge, err.Error())
-		return
+	resumed := false
+	var reloadErr error
+	resume := func() {
+		if resumed {
+			return
+		}
+		resumed = true
+		reloadErr = s.Engine.ReloadConfig(ctx)
+		s.Engine.Resume()
 	}
-	if err != nil {
-		s.recordEvent(r.Context(), model.Event{Type: model.EventRestore, Title: "Restore failed", Detail: err.Error()})
+	defer resume()
+
+	sum, err := backup.RestoreWith(ctx, s.Store, path, password, backup.RestoreOptions{IncludeHistory: includeHistory, RecreateAccounts: recreateAccounts,
+		// Checked again on the copy actually restored, which is the one that
+		// counts should the file have changed since it was read above.
+		Validate: func(c *backup.Config) error { return s.checkArchive(ctx, c, recreateAccounts) }})
+	resume()
+	var partial *backup.HistoryError
+	if err != nil && !errors.As(err, &partial) {
+		// Refused, or failed and rolled back: the configuration is as it was.
+		var invalid *backup.InvalidError
+		if errors.As(err, &invalid) || errors.Is(err, backup.ErrArchiveTooLarge) {
+			s.writeArchiveError(w, err)
+			return
+		}
+		detail := err.Error() + " Nothing was changed."
+		if safety != "" {
+			detail += fmt.Sprintf(" The data as it was before is also in %s.", safety)
+		}
+		s.recordEvent(ctx, model.Event{Type: model.EventRestore, Title: "Restore failed", Detail: detail})
+		if safety != "" {
+			writeError(w, http.StatusInternalServerError, "restore failed: "+detail)
+			return
+		}
 		s.fail(w, err)
 		return
 	}
-	if err := s.Engine.ReloadConfig(r.Context()); err != nil {
-		s.fail(w, err)
-		return
+	// The configuration was restored (and with partial, the history only
+	// in part).
+	if reloadErr != nil {
+		s.Log.Errorf("reload after restore: %v", reloadErr)
 	}
 	status := s.Engine.BackupStatus()
 	now := time.Now()
 	status.LastRestoreAt = &now
-	s.Engine.SetBackupStatus(r.Context(), status)
-	s.recordEvent(r.Context(), model.Event{Type: model.EventRestore, Title: "Backup restored", Detail: fmt.Sprintf("%d node(s), %d check(s)%s restored from %s.", sum.Nodes, sum.Checks, map[bool]string{true: fmt.Sprintf(", %d results, %d events", sum.Results, sum.Events), false: ""}[sum.History], filepath.Base(path))})
-	if err := s.Engine.RunRetention(r.Context(), true); err != nil {
+	s.Engine.SetBackupStatus(ctx, status)
+	detail := fmt.Sprintf("%d node(s), %d check(s)%s restored from %s.", sum.Nodes, sum.Checks, map[bool]string{true: fmt.Sprintf(", %d results, %d events", sum.Results, sum.Events), false: ""}[sum.History], filepath.Base(path))
+	if len(sum.SkippedUsers) > 0 {
+		detail += fmt.Sprintf(" Not re-created, as they are no longer on this server: %d account(s) (%s).", len(sum.SkippedUsers), strings.Join(sum.SkippedUsers, ", "))
+	}
+	if len(sum.SkippedAgents) > 0 {
+		detail += fmt.Sprintf(" Not re-created: %d agent(s) (%s).", len(sum.SkippedAgents), strings.Join(sum.SkippedAgents, ", "))
+	}
+	title := "Backup restored"
+	if partial != nil {
+		title = "Backup restored without all of its history"
+		detail = fmt.Sprintf("The configuration was restored (%d node(s), %d check(s)), but importing the history stopped part-way after %d results, %d rollups and %d events: %v.",
+			sum.Nodes, sum.Checks, sum.Results, sum.Rollups, sum.Events, partial.Err)
+	}
+	if safety != "" {
+		detail += " The data as it was before is in " + safety + "."
+		// Restoring the history replaced every event, the safety backup's
+		// "created" among them; put it back, at the time it was taken.
+		if sum.History {
+			s.Engine.RecordEvent(safetyEvent)
+		}
+	}
+	s.recordEvent(ctx, model.Event{Type: model.EventRestore, Title: title, Detail: detail})
+	if err := s.Engine.RunRetention(ctx, true); err != nil {
 		s.Log.Errorf("retention after restore: %v", err)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "nodes": sum.Nodes, "checks": sum.Checks, "results": sum.Results, "rollups": sum.Rollups, "events": sum.Events, "history": sum.History})
+	if partial != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "restore incomplete: " + detail, "configRestored": true,
+			"nodes": sum.Nodes, "checks": sum.Checks, "results": sum.Results, "rollups": sum.Rollups, "events": sum.Events, "history": sum.History,
+			"skippedUsers": nonNil(sum.SkippedUsers), "skippedAgents": nonNil(sum.SkippedAgents), "safetyBackup": safety})
+		return
+	}
+	if reloadErr != nil {
+		s.fail(w, reloadErr)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "nodes": sum.Nodes, "checks": sum.Checks, "results": sum.Results, "rollups": sum.Rollups, "events": sum.Events, "history": sum.History,
+		"skippedUsers": nonNil(sum.SkippedUsers), "skippedAgents": nonNil(sum.SkippedAgents), "safetyBackup": safety})
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 func (s *Server) handleRestoreExisting(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		FileName       string `json:"fileName"`
-		Password       string `json:"password"`
-		IncludeHistory bool   `json:"includeHistory"`
+		FileName        string `json:"fileName"`
+		Password        string `json:"password"`
+		IncludeHistory  bool   `json:"includeHistory"`
+		RestoreAccounts bool   `json:"restoreAccounts"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeDecodeError(w, err)
@@ -680,7 +847,7 @@ func (s *Server) handleRestoreExisting(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "backup not found")
 		return
 	}
-	s.restore(w, r, p, body.Password, body.IncludeHistory)
+	s.restore(w, r, p, body.Password, body.IncludeHistory, body.RestoreAccounts)
 }
 
 // restoreUploadLimit caps a restore upload: the largest archive a restore
@@ -689,39 +856,14 @@ func (s *Server) handleRestoreExisting(w http.ResponseWriter, r *http.Request) {
 var restoreUploadLimit = backup.MaxArchiveBytes + 1<<20
 
 func (s *Server) handleRestoreUpload(w http.ResponseWriter, r *http.Request) {
-	// ParseMultipartForm's argument only decides what is kept in memory
-	// rather than spooled to disk; the body itself is capped here.
-	r.Body = http.MaxBytesReader(w, r.Body, restoreUploadLimit)
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		var tooBig *http.MaxBytesError
-		if errors.As(err, &tooBig) {
-			writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("backup file is larger than the %d MiB limit", backup.MaxArchiveBytes>>20))
-			return
-		}
-		writeError(w, http.StatusBadRequest, "invalid upload: "+err.Error())
+	path, done, ok := s.receiveBackupUpload(w, r)
+	if !ok {
 		return
 	}
-	defer r.MultipartForm.RemoveAll()
-	file, _, err := r.FormFile("file")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "a backup file is required")
-		return
-	}
-	defer file.Close()
-	tmp, err := os.CreateTemp("", "gwatch-upload-*"+backup.Extension)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	defer os.Remove(tmp.Name())
-	if _, err := io.Copy(tmp, file); err != nil {
-		tmp.Close()
-		s.fail(w, err)
-		return
-	}
-	tmp.Close()
+	defer done()
 	includeHistory := strings.EqualFold(r.FormValue("includeHistory"), "true")
-	s.restore(w, r, tmp.Name(), r.FormValue("password"), includeHistory)
+	recreateAccounts := strings.EqualFold(r.FormValue("restoreAccounts"), "true")
+	s.restore(w, r, path, r.FormValue("password"), includeHistory, recreateAccounts)
 }
 
 // ---- export ----
@@ -729,6 +871,10 @@ func (s *Server) handleRestoreUpload(w http.ResponseWriter, r *http.Request) {
 func csvWriter(w http.ResponseWriter, name string) *csv.Writer {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name))
+	// A byte-order mark first: without it Excel opens a UTF-8 file as the
+	// system code page, and every em dash, accent and › in a node name or
+	// message comes out garbled. Other spreadsheets ignore it.
+	_, _ = io.WriteString(w, "\uFEFF")
 	return csv.NewWriter(w)
 }
 
@@ -854,6 +1000,7 @@ func (s *Server) handleExportConfig(w http.ResponseWriter, r *http.Request) {
 		cfg.Wallboards[i].Share.Token = ""
 	}
 	cfg.Settings.Alerts.SMTP.Password = ""
+	cfg.Settings.Alerts.Channels = blankAlertChannels(cfg.Settings.Alerts.Channels)
 	cfg.Settings.Backups.Password = ""
 	// A configuration export is meant to be readable and shareable, so the
 	// checks' credentials come out empty for the same reason the passwords do.

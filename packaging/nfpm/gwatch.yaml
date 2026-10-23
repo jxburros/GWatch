@@ -1,0 +1,95 @@
+# The GWatch server .deb and .rpm, built by nfpm (https://nfpm.goreleaser.com).
+# (The agent's are nfpm.yaml beside this file.)
+#
+# Run from the repository root; packaging/nfpm/gwatch/package.sh does it for
+# every architecture and both formats, and is what CI and
+# `make server-packages` use. nfpm expands ${VARS} from the environment
+# before it reads this file:
+#
+#   GWATCH_VERSION     the server's version (VERSION)
+#   NFPM_ARCH          amd64, arm64 or arm7 — nfpm maps these to amd64/arm64/armhf
+#                      for the .deb and x86_64/aarch64/armv7hl for the .rpm
+#
+# The binary is read from dist/nfpm-server/gwatch (nfpm does not expand
+# variables in a source path), where package.sh copies the packaged binary it
+# has just built with -X main.packagedBy=deb (or rpm) — never the
+# self-updating release binary — before each run.
+#
+# What the package does is in docs/INSTALL-LINUX.md. In short: the service
+# runs as the system user gwatch in a hardened unit, keeps everything in
+# /var/lib/gwatch, and is enabled and started on install; the binary never
+# replaces itself (apt or dnf owns it).
+name: gwatch
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${GWATCH_VERSION}
+release: 1
+section: net
+priority: optional
+maintainer: "JX Holdings, LLC <https://github.com/jxburros/GWatch>"
+vendor: "JX Holdings, LLC"
+homepage: https://github.com/jxburros/GWatch
+license: LicenseRef-GWatch-Community-License-1.0
+description: |-
+  Monitors the devices, servers and websites on your network.
+  GWatch watches the machines, services and websites on a home or small
+  office network with ping, TCP, HTTP, DNS, certificate and hardware checks,
+  keeps their history, and alerts you when something goes down. It runs as a
+  sandboxed service with its own web interface, served on this machine only
+  until you choose otherwise. Installed from this package, it is kept up to
+  date by the package manager and never replaces itself.
+
+# For systemd-sysusers and useradd, which postinstall.sh uses to create the
+# gwatch user; both are in every systemd distribution's base system.
+depends:
+  - adduser | passwd
+overrides:
+  rpm:
+    depends:
+      - shadow-utils
+
+contents:
+  - src: dist/nfpm-server/gwatch
+    dst: /usr/bin/gwatch
+    file_info:
+      mode: 0755
+
+  - src: packaging/nfpm/gwatch/gwatch.service
+    dst: /usr/lib/systemd/system/gwatch.service
+    file_info:
+      mode: 0644
+
+  - src: packaging/nfpm/gwatch/gwatch.sysusers
+    dst: /usr/lib/sysusers.d/gwatch.conf
+    file_info:
+      mode: 0644
+
+  # Root-only, like the file inside it.
+  - dst: /etc/gwatch
+    type: dir
+    file_info:
+      mode: 0700
+
+  # A conffile: an admin's edits survive upgrades, and it is 0600 because a
+  # database password may go in it.
+  - src: packaging/nfpm/gwatch/gwatch.env
+    dst: /etc/gwatch/gwatch.env
+    type: config|noreplace
+    file_info:
+      mode: 0600
+
+  - src: LICENSE
+    dst: /usr/share/doc/gwatch/copyright
+    file_info:
+      mode: 0644
+
+# /var/lib/gwatch is not in the package: it belongs to the gwatch user, which
+# does not exist until postinstall.sh creates it, and the unit's
+# StateDirectory= keeps its ownership right from then on.
+scripts:
+  postinstall: packaging/nfpm/gwatch/postinstall.sh
+  preremove: packaging/nfpm/gwatch/preremove.sh
+  postremove: packaging/nfpm/gwatch/postremove.sh
+
+rpm:
+  group: Applications/System

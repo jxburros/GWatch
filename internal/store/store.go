@@ -46,6 +46,13 @@ type Store struct {
 	secretsErr error
 
 	lastMigration *MigrationReport
+
+	// tx and root are set only on a store handed out by InTx (db.go): tx is
+	// the transaction every statement then runs in, and root the store it
+	// was opened on, which keeps the state that has to outlive the
+	// transaction (the secrets health below).
+	tx   *wtx
+	root *Store
 }
 
 // Open opens (creating if needed) the SQLite database at path and applies
@@ -73,12 +80,19 @@ func loadSecrets(keyFile string) (*secrets.Box, error) {
 // (for example a key file that cannot decrypt the stored values). It returns
 // nil while everything decrypts cleanly.
 func (s *Store) SecretsHealthy() error {
+	if s.root != nil {
+		return s.root.SecretsHealthy()
+	}
 	s.secmu.RLock()
 	defer s.secmu.RUnlock()
 	return s.secretsErr
 }
 
 func (s *Store) setSecretsErr(err error) {
+	if s.root != nil {
+		s.root.setSecretsErr(err)
+		return
+	}
 	s.secmu.Lock()
 	s.secretsErr = err
 	s.secmu.Unlock()
@@ -149,6 +163,7 @@ CREATE TABLE IF NOT EXISTS nodes (
   depends_on_node_id INTEGER REFERENCES nodes(id) ON DELETE SET NULL,
   link_style TEXT NOT NULL DEFAULT '',
   template TEXT NOT NULL DEFAULT '',
+  collector_id INTEGER,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -372,6 +387,20 @@ var addedColumns = []struct{ table, column, ddl string }{
 	// The readings chosen while a machine was being added, kept with the pairing
 	// code until the machine redeems it and becomes an agent.
 	{"agent_pairings", "collect", "ALTER TABLE agent_pairings ADD COLUMN collect TEXT NOT NULL DEFAULT ''"},
+	// #123, remote collectors. A node's collector_id is the agent its network
+	// checks run from (NULL for this server). It is a plain integer rather
+	// than a foreign key, because a foreign key cannot be added to an existing
+	// SQLite table, and because a node whose collector has been revoked
+	// should say so (its checks go unknown, with one event) rather than
+	// quietly start checking from here, which may be exactly the network the
+	// collector was there to reach. On the agent: collector is the
+	// administrator's half of the agreement, collector_allowed what the
+	// machine last said about its own, and collector_seen_at when it last
+	// sent results.
+	{"nodes", "collector_id", "ALTER TABLE nodes ADD COLUMN collector_id INTEGER"},
+	{"agents", "collector", "ALTER TABLE agents ADD COLUMN collector INTEGER NOT NULL DEFAULT 0"},
+	{"agents", "collector_allowed", "ALTER TABLE agents ADD COLUMN collector_allowed INTEGER NOT NULL DEFAULT 0"},
+	{"agents", "collector_seen_at", "ALTER TABLE agents ADD COLUMN collector_seen_at TEXT"},
 }
 
 // currentSchemaVersion is the schema_version this build expects. Every

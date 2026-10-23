@@ -20,6 +20,7 @@ export default [
       "dependsOnNodeId": null,
       "linkStyle": null,
       "template": "website",
+      "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
       "updatedAt": "0001-01-01T00:00:00Z",
       "checks": null
@@ -100,6 +101,7 @@ export default [
       "dependsOnNodeId": null,
       "linkStyle": null,
       "template": "home-server",
+      "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
       "updatedAt": "0001-01-01T00:00:00Z",
       "checks": null
@@ -179,6 +181,7 @@ export default [
       "dependsOnNodeId": null,
       "linkStyle": null,
       "template": "router",
+      "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
       "updatedAt": "0001-01-01T00:00:00Z",
       "checks": null
@@ -258,6 +261,7 @@ export default [
       "dependsOnNodeId": null,
       "linkStyle": null,
       "template": "snmp-device",
+      "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
       "updatedAt": "0001-01-01T00:00:00Z",
       "checks": null
@@ -317,6 +321,66 @@ export default [
     ]
   },
   {
+    "id": "matter-device",
+    "name": "Matter device",
+    "description": "A Matter sensor, plug or bridge, read through a python-matter-server sidecar: temperature, humidity, on/off, door contacts, motion, light level and battery. Set the host to the machine running the Matter server, then load its devices.",
+    "icon": "home",
+    "node": {
+      "id": 0,
+      "name": "Matter device",
+      "host": "",
+      "groups": [
+        "Smart home"
+      ],
+      "group": "Smart home",
+      "tags": [],
+      "notes": "",
+      "importance": "normal",
+      "enabled": true,
+      "dependsOnNodeId": null,
+      "linkStyle": null,
+      "template": "matter-device",
+      "collectorId": null,
+      "createdAt": "0001-01-01T00:00:00Z",
+      "updatedAt": "0001-01-01T00:00:00Z",
+      "checks": null
+    },
+    "checks": [
+      {
+        "id": 0,
+        "nodeId": 0,
+        "type": "tcp",
+        "name": "Matter server port 5580",
+        "enabled": true,
+        "intervalSeconds": 60,
+        "timeoutSeconds": 10,
+        "retries": 1,
+        "failureThreshold": 2,
+        "config": {
+          "port": 5580
+        },
+        "sortOrder": 0,
+        "createdAt": "0001-01-01T00:00:00Z",
+        "updatedAt": "0001-01-01T00:00:00Z"
+      },
+      {
+        "id": 0,
+        "nodeId": 0,
+        "type": "matter",
+        "name": "Matter readings",
+        "enabled": true,
+        "intervalSeconds": 60,
+        "timeoutSeconds": 10,
+        "retries": 1,
+        "failureThreshold": 2,
+        "config": {},
+        "sortOrder": 0,
+        "createdAt": "0001-01-01T00:00:00Z",
+        "updatedAt": "0001-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
     "id": "ping",
     "name": "Ping only",
     "description": "Just a reachability check: is the device answering on the network? The quickest way to add a printer, a camera or anything else that only needs to be there.",
@@ -336,6 +400,7 @@ export default [
       "dependsOnNodeId": null,
       "linkStyle": null,
       "template": "ping",
+      "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
       "updatedAt": "0001-01-01T00:00:00Z",
       "checks": null
@@ -380,6 +445,7 @@ export default [
       "dependsOnNodeId": null,
       "linkStyle": null,
       "template": "api",
+      "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
       "updatedAt": "0001-01-01T00:00:00Z",
       "checks": null
@@ -444,6 +510,7 @@ export default [
       "dependsOnNodeId": null,
       "linkStyle": null,
       "template": "tcp-service",
+      "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
       "updatedAt": "0001-01-01T00:00:00Z",
       "checks": null
@@ -488,6 +555,7 @@ export default [
       "dependsOnNodeId": null,
       "linkStyle": null,
       "template": "this-computer",
+      "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
       "updatedAt": "0001-01-01T00:00:00Z",
       "checks": null
@@ -532,6 +600,21 @@ export default [
             {
               "metric": "load",
               "warn": 2
+            },
+            {
+              "metric": "pool",
+              "warn": 1,
+              "crit": 2
+            },
+            {
+              "metric": "service",
+              "crit": 0,
+              "below": true
+            },
+            {
+              "metric": "process",
+              "crit": 0,
+              "below": true
             }
           ]
         },
@@ -561,6 +644,7 @@ export default [
       "dependsOnNodeId": null,
       "linkStyle": null,
       "template": "agent-machine",
+      "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
       "updatedAt": "0001-01-01T00:00:00Z",
       "checks": null
@@ -605,6 +689,21 @@ export default [
             {
               "metric": "load",
               "warn": 2
+            },
+            {
+              "metric": "pool",
+              "warn": 1,
+              "crit": 2
+            },
+            {
+              "metric": "service",
+              "crit": 0,
+              "below": true
+            },
+            {
+              "metric": "process",
+              "crit": 0,
+              "below": true
             }
           ]
         },
@@ -634,6 +733,7 @@ export default [
       "dependsOnNodeId": null,
       "linkStyle": null,
       "template": "dns",
+      "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
       "updatedAt": "0001-01-01T00:00:00Z",
       "checks": null

@@ -102,6 +102,25 @@ func Templates() []model.NodeTemplate {
 			},
 		},
 		{
+			// A Matter device read through python-matter-server. The node's
+			// host is the machine the sidecar runs on, which is what a blank
+			// server address falls back to, so the TCP check beside the
+			// readings watches the sidecar itself: when it is down, that
+			// check says so plainly instead of every reading failing at once
+			// with nothing to tell them apart. The node to read is chosen in
+			// the editor with "Load devices", so the template ships without
+			// one and without readings.
+			ID:          "matter-device",
+			Name:        "Matter device",
+			Description: "A Matter sensor, plug or bridge, read through a python-matter-server sidecar: temperature, humidity, on/off, door contacts, motion, light level and battery. Set the host to the machine running the Matter server, then load its devices.",
+			Icon:        "home",
+			Node:        node("Matter device", "Smart home", "matter-device"),
+			Checks: []model.Check{
+				mk(model.CheckTCP, "Matter server port 5580", model.CheckConfig{Port: 5580}),
+				mk(model.CheckMatter, "Matter readings", model.CheckConfig{}),
+			},
+		},
+		{
 			ID:          "ping",
 			Name:        "Ping only",
 			Description: "Just a reachability check: is the device answering on the network? The quickest way to add a printer, a camera or anything else that only needs to be there.",

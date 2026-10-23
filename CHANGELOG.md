@@ -9,6 +9,132 @@ The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
 disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## 0.8.0 (not yet released)
+
+### Changed
+
+- **GWatch and the agent host their services with their own code** (#46) instead of
+  kardianos/service: the Windows Service Control Manager, launchd and systemd (with
+  OpenRC and SysV fallbacks), which now also read the env file on non-systemd Linux.
+- **Web UI maintenance** (#118): shared helpers keep focus through live refreshes, the
+  shared modules are type-checked with `tsc`, a contract test keeps the mock API in step
+  with the real one, and the Settings, node editor and mock files are split into modules.
+
+### Fixed
+
+- **A backup taken while a machine was being paired restores again.** The node a
+  pairing code creates waits with a switched-off hardware check and no machine;
+  restore refused it ("choose which registered machine this check reads"), so the
+  server's own backup could not be restored. A switched-off agent check may now wait
+  for its machine; one that is switched on must still name it.
+- Restoring a backup with its history no longer loses the "Pre-restore backup
+  created" event: it is recorded again, at the time the safety backup was taken.
+- On Windows, a Python script action prefers the `py` launcher and a real
+  `python.exe` over the Microsoft Store's "Python was not found" alias.
+- `gwatch install` on Linux says how to fix a `/usr/local/bin` that someone other
+  than root can write to.
+- **The agent comes back after a power cut** (#170). A power cut while `agent.json` was
+  being written could leave it empty, zeroed or cut off, and the agent then refused to
+  start (exit 78, which the packaged service never restarts). Every save now also keeps
+  `agent.json.bak`, both written atomically, and a damaged file falls back to the copy
+  with a warning. Serve mode keeps trying to listen when its address is not there yet,
+  as on a machine that boots before DHCP answers, instead of serving nothing.
+- **Garbled text in CSV exports and ntfy titles** (#178). CSV exports start with a
+  byte-order mark so Excel reads them as UTF-8, and ntfy titles and tags that are not
+  plain ASCII are sent as RFC 2047 encoded words.
+- **Engine and hardware correctness** (#161): Windows network counters are 64-bit
+  (GetIfTable2Ex), so fast links no longer wrap every interval; deleting a node or check
+  takes it out of the rules that named it (an emptied rule is switched off); a system
+  ping stopped before its summary no longer reports phantom loss; sleep detection uses
+  the wall clock; a hung network mount no longer blocks the hardware sampler.
+- **Filters stay in the address** (#113). The Nodes list and the incident event feed
+  write their filters into the URL, the event feed's Export CSV follows the filters
+  (type included), and a slow answer for an earlier filter can no longer land last.
+- **Dashboards stop re-downloading history on every live update, and share one event
+  stream** (#114).
+- **Bounded shutdown** (#105). Stopping gives in-flight work 15 s, cancels it, and
+  returns within 20 s, inside the Windows SCM and systemd stop timeouts.
+  `gwatch migrate-db` refuses to copy while GWatch is running, and a failed copy says
+  to re-run with `--replace`.
+- **Safer restores** (#148). A restore first takes a full backup of what it replaces,
+  runs to the end even if the browser goes away, leaves out accounts and agents deleted
+  since the backup unless asked to re-create them, and keeps agents linked to their nodes.
+- **Startup no longer stalls result writes** (#107). The rollup backfill runs in
+  day-sized chunks and, after the first, only catches up from where the last one got to.
+- **Alert e-mails** (#99): at most three are sent at once, and a failed one is retried
+  once after 15 s before the alert is re-armed.
+- **The network map's clusters layout** no longer puts nodes on perfect rings: each
+  node's dependents branch off it in whatever direction has room, with longer lines to
+  bigger branches, and nothing overlaps.
+- **Documentation accuracy** (#165): API routes, the config export, Settings tabs,
+  retention, privacy (what is encrypted, what GWatch contacts), ROADMAP and the brief.
+
+### Added
+
+- **Linux: `gwatch install` creates a proper systemd service** (#125). The program goes
+  to `/usr/local/bin/gwatch`, runs as a `gwatch` system user with data in
+  `/var/lib/gwatch` and settings in `/etc/gwatch/gwatch.env`, under a hardened
+  `gwatch.service` with `CAP_NET_RAW` (and `CAP_NET_BIND_SERVICE` only for a port below
+  1024). Re-running it updates and reconfigures; an existing `GWatch.service` install is
+  migrated; `gwatch uninstall --purge` removes everything after a confirmation. Checks
+  and script actions no longer run as root — see `docs/INSTALL-LINUX.md` for granting
+  more. Updating from Settings › Updates is not available on these installs yet: re-run
+  the installer.
+- **Ping says how it works and why it fell back** (#131): the startup log, Settings ›
+  Monitor health and discovery name the ICMP method in use and the reason (for example
+  `ping_group_range`); the Linux docs cover all three ways to allow ping.
+- **Server `.deb` and `.rpm` packages** for amd64, arm64 and armhf (#126), with a
+  hardened unit, a `gwatch` user and an update path that steps aside for apt/dnf; a CI
+  job installs, upgrades and purges them, and another exercises `gwatch install` under
+  systemd end to end (#135).
+- **Linux readings** (#132): temperatures (hwmon and thermal zones), pressure stall
+  (PSI), memory and CPU against cgroup v2 limits inside a container, ZFS pools with
+  health, and `/` on overlay.
+- **Discovery reads the neighbour table and names makers** (#133): devices that ignore
+  ping are found through ARP, and results show the MAC address and its vendor (IEEE
+  registry, embedded); Windows reads `GetIpNetTable`.
+- **The agent keeps held readings through a restart** (#74), in a bounded spool beside
+  its configuration, and marks late readings so GWatch files them at the time they were
+  taken. Token rotation (#75) is now covered end to end by tests.
+- **More alert channels** (#122): Telegram, Discord, Gotify, Matrix, Twilio SMS,
+  PagerDuty and Opsgenie actions, and an "Also notify" list in Settings › Alerts that
+  goes out with the alert e-mails under the same suppression, with per-channel minimum
+  severity and groups. Secrets are sealed and masked.
+- **Opt-in PBKDF2 password hashing** (#49) from the standard library, for accounts and
+  backup encryption; Argon2id stays the default and accounts move over as they sign in.
+- **Matter devices** (#45): a `matter` check reads on/off, temperature, humidity,
+  contact, occupancy, illuminance and battery from a python-matter-server sidecar, with
+  a device picker and commissioning by pairing code. See `docs/MATTER.md`.
+- **The agent's control panel** (#64) shows the recent log, can update now, re-pair and
+  copy diagnostics, asks the OS for elevation when it needs to, and has Start menu and
+  desktop entries. The Windows setup program tests the connection before installing and
+  ends on a real result page (#63). An optional Windows notification-area icon (#53).
+- **Remote collectors** (#123): a paired agent can run the network checks (ping, TCP,
+  DNS, SNMP, HTTP) of nodes at another site and send the results back, when an admin
+  turns it on in GWatch and the machine allows it in its own `agent.json`. A collector
+  that goes quiet raises one alert, not one per check. See `docs/COLLECTORS.md`.
+- **Watch services and programs** (#62): `service:<name>` and `process:<name>` readings
+  on Linux, Windows and macOS, critical when stopped by default, picked from the
+  machine's own list.
+- **Grouped alerts and a warning digest** (#99): optionally, a node's alerts within a
+  short window go out as one e-mail ("Web — 3 checks down"), and warnings can be sent as
+  an hourly or daily digest.
+- **Restores are atomic, validated and previewed** (#148): the configuration is restored
+  in one transaction with monitoring paused, the archive goes through the API's own
+  validation, and Settings › Backups shows what a restore will add and change first.
+- **Authenticode signing for the Windows programs and setup programs** (#120), switched
+  on once an Azure Artifact Signing account is configured; releases stay unsigned, with
+  a warning, until then.
+- **Check groups across nodes** (#36), as a prototype: put checks from different nodes
+  in groups of their own and filter, chart and bulk-edit them as a set.
+- **Charts treat a node as one item** (#184): the picker lists checks under their node,
+  and a chart can be split one per node.
+- **Disk activity on macOS** (#185). The agent and the local hardware check read disk
+  throughput, operations and busy % on macOS from the I/O Registry, as on Linux and
+  Windows.
+- **Discovery describes responders 16 at a time** (#110), so a busy /24 is described in
+  seconds rather than over a minute.
+
 ## 0.7.2 — 2026-10-22
 
 The first published release since 0.6.2: 0.7.0 and 0.7.1 were never published, so

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -74,6 +75,10 @@ func setup(t *testing.T) (*Engine, *store.Store, *fakeNet, *mailbox) {
 // on the same database, as after a restart.
 func setupOn(t *testing.T, st *store.Store) (*Engine, *store.Store, *fakeNet, *mailbox) {
 	t.Helper()
+	// Tests that fail delivery on purpose should not wait out the retry.
+	old := mailRetryAfter
+	mailRetryAfter = 0
+	t.Cleanup(func() { mailRetryAfter = old })
 	log, _ := logging.New("", nil)
 	settings := model.DefaultSettings()
 	settings.Alerts.Enabled = true
@@ -413,5 +418,103 @@ func TestMaintenanceMatchesAnyOfANodesGroups(t *testing.T) {
 	}
 	if ov.Summary.Total != 2 {
 		t.Fatalf("the node tally itself should not be inflated: %d", ov.Summary.Total)
+	}
+}
+
+// #105: Stop has an upper bound. Work that outlives the grace period is
+// cancelled, and work that ignores even that is left behind rather than
+// holding the service past its service manager's stop timeout.
+func TestStopIsBounded(t *testing.T) {
+	oldGrace, oldAfter := stopGrace, stopAfterCancel
+	t.Cleanup(func() { stopGrace, stopAfterCancel = oldGrace, oldAfter })
+	stopGrace, stopAfterCancel = 50*time.Millisecond, 50*time.Millisecond
+
+	e, _, _, _ := setup(t)
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	cancelled := make(chan struct{})
+	e.wg.Add(1)
+	go func() { // an action that only stops when it is cancelled
+		defer e.wg.Done()
+		<-e.workContext().Done()
+		close(cancelled)
+	}()
+	stuck := make(chan struct{})
+	e.wg.Add(1)
+	go func() { defer e.wg.Done(); <-stuck }() // and one that never stops
+	t.Cleanup(func() { close(stuck) })
+
+	start := time.Now()
+	e.Stop()
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("Stop took %s", took)
+	}
+	select {
+	case <-cancelled:
+	default:
+		t.Fatal("in-flight work was not cancelled after the grace period")
+	}
+}
+
+// #99: a failed alert e-mail is tried once more, and no more than mailSlots
+// are ever being sent at once.
+func TestAlertMailRetriesAndIsBounded(t *testing.T) {
+	e, _, _, _ := setup(t)
+	mailRetryAfter = 10 * time.Millisecond
+	var mu sync.Mutex
+	calls, inFlight, peak := 0, 0, 0
+	e.opts.Send = func(context.Context, model.SMTPSettings, mailer.Message) error {
+		mu.Lock()
+		calls++
+		first := calls == 1
+		inFlight++
+		peak = max(peak, inFlight)
+		mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+		if first {
+			return errors.New("451 greylisted")
+		}
+		return nil
+	}
+	if err := e.deliverMail(model.SMTPSettings{}, mailer.Message{}); err != nil {
+		t.Fatalf("the retry did not go through: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 12; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = e.deliverMail(model.SMTPSettings{}, mailer.Message{}) }()
+	}
+	wg.Wait()
+	if peak > mailSlots {
+		t.Fatalf("%d e-mails were sent at once, want at most %d", peak, mailSlots)
+	}
+}
+
+// #107: the backfill is done in day-sized pieces whose boundaries line up
+// with every bucket, and covers the whole range once.
+func TestChunkedCoversTheRangeOnAlignedBoundaries(t *testing.T) {
+	from := time.Date(2026, 10, 1, 13, 7, 0, 0, time.UTC)
+	to := time.Date(2026, 10, 4, 2, 0, 0, 0, time.UTC)
+	var got [][2]time.Time
+	if err := chunked(context.Background(), from, to, 24*time.Hour, func(a, b time.Time) error {
+		got = append(got, [2]time.Time{a, b})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 4 || !got[0][0].Equal(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)) || !got[3][1].Equal(to) {
+		t.Fatalf("chunks = %v", got)
+	}
+	for i := 1; i < len(got); i++ {
+		if !got[i][0].Equal(got[i-1][1]) || got[i][0].Unix()%300 != 0 {
+			t.Fatalf("chunk %d does not follow on from the last on a bucket boundary: %v", i, got)
+		}
 	}
 }

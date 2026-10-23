@@ -1,5 +1,7 @@
-import templatesFixture from './mock-templates.js';
 import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './netmap.js';
+import templatesFixture from './mock-templates.js';
+import { install as installResults } from './mock/results.js';
+import { install as installHistory } from './mock/history.js';
 // In-browser mock of the GWatch API. Loaded ONLY when the page is opened with
 // ?mock=1 — it intercepts fetch() for /api/* and fakes the event stream so the
 // interface can be developed and screenshot-tested without the Go service.
@@ -42,7 +44,7 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     // group is the deprecated alias for the first group, exactly as the
     // server sends it.
     const groups = (o.groups || (o.group ? [o.group] : [])).slice(0, 16);
-    return { id, name: o.name, host: o.host, groups, group: groups[0] || '', tags: o.tags || [], notes: o.notes || '', importance: o.importance || 'normal', enabled: o.enabled !== false, dependsOnNodeId: o.dependsOnNodeId ?? null, linkStyle: styleOut(o.linkStyle), template: o.template || '', createdAt: ago(40 * DAY), updatedAt: ago(2 * DAY), checks: [] };
+    return { id, name: o.name, host: o.host, groups, group: groups[0] || '', tags: o.tags || [], notes: o.notes || '', importance: o.importance || 'normal', enabled: o.enabled !== false, dependsOnNodeId: o.dependsOnNodeId ?? null, collectorId: o.collectorId ?? null, linkStyle: styleOut(o.linkStyle), template: o.template || '', createdAt: ago(40 * DAY), updatedAt: ago(2 * DAY), checks: [] };
   }
 
   const nodes = [];
@@ -84,13 +86,31 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     mkCheck(ha.id, 'ping', 'Ping', { config: { pingCount: 4 }, base: 1.4, noise: 0.5 }),
     mkCheck(ha.id, 'http', 'Frontend', { config: { target: 'http://homeassistant.local:8123/', expectedStatus: '200', certCheck: false, latencyWarnMs: 800 }, base: 140, noise: 0.5, interval: 120 }),
     mkCheck(ha.id, 'json', 'API alive', { config: { target: 'http://homeassistant.local:8123/api/', jsonPath: 'message', jsonExpected: 'API running.', headers: { Authorization: 'Bearer ••••••' } }, base: 95, noise: 0.4, interval: 300 }),
+    // Matter sensors behind a bridge, read through the python-matter-server
+    // add-on on the same box (#45): the node host stands in for the server
+    // address, so the check names none of its own.
+    mkCheck(ha.id, 'matter', 'Matter sensors', {
+      interval: 120,
+      config: {
+        matterNodeId: 4,
+        matterReadings: [
+          { endpoint: 2, kind: 'temperature', name: 'Living room temperature', unit: '°C', warnAbove: 26, critAbove: 30 },
+          { endpoint: 2, kind: 'humidity', name: 'Living room humidity', unit: '%', warnAbove: 65 },
+          { endpoint: 3, kind: 'contact', name: 'Front door open', critAbove: 0 },
+          { endpoint: 4, kind: 'onoff', name: 'Heater plug' },
+          { endpoint: 2, kind: 'battery', name: 'Living room battery', unit: '%', warnBelow: 20, critBelow: 10 },
+        ],
+      },
+      base: 38, noise: 0.4,
+      message: '5 readings read from node 4 in 38 ms · Living room temperature 21.4 °C, Living room humidity 47.2 %, Front door open shut and 2 more',
+    }),
   ];
   const site = mkNode({ name: 'Family website', host: 'https://www.example.org', group: 'Internet', tags: ['public', 'wordpress'], importance: 'high', template: 'website', notes: 'Hosted at a shared host. Certificate renews automatically via Let\u2019s Encrypt — check why it is late.' });
   site.checks = [
-    mkCheck(site.id, 'http', 'HTTPS', { config: { expectedStatus: '200-399', followRedirects: true, certCheck: true, certWarnDays: 14, latencyWarnMs: 1500, contentWatch: 'redirect' }, base: 420, noise: 0.35, status: 'degraded', message: 'OK 200 in 438 ms · certificate expires in 9 days', warn: 'Certificate expires in 9 days', cert: { days: 9 }, interval: 300 }),
+    mkCheck(site.id, 'http', 'HTTPS', { config: { expectedStatus: '200-399', followRedirects: true, certCheck: true, certWarnDays: 14, latencyWarnMs: 1500, contentWatch: 'redirect', groups: ['HTTPS certificates'] }, base: 420, noise: 0.35, status: 'degraded', message: 'OK 200 in 438 ms · certificate expires in 9 days', warn: 'Certificate expires in 9 days', cert: { days: 9 }, interval: 300 }),
     mkCheck(site.id, 'keyword', 'Homepage text', { config: { keyword: 'Welcome to the family site', followRedirects: true }, base: 445, noise: 0.35, interval: 600 }),
     mkCheck(site.id, 'dns', 'DNS', { config: { expectedIps: ['93.184.215.14'], recordType: 'A' }, base: 24, noise: 0.5, interval: 900 }),
-    mkCheck(site.id, 'cert', 'Certificate', { config: { port: 443, certWarnDays: 14 }, base: 210, noise: 0.2, status: 'degraded', message: 'Certificate valid, expires in 9 days', warn: 'Certificate expires in 9 days', cert: { days: 9 }, interval: 3600 }),
+    mkCheck(site.id, 'cert', 'Certificate', { config: { port: 443, certWarnDays: 14, groups: ['HTTPS certificates'] }, base: 210, noise: 0.2, status: 'degraded', message: 'Certificate valid, expires in 9 days', warn: 'Certificate expires in 9 days', cert: { days: 9 }, interval: 3600 }),
   ];
   const weather = mkNode({ name: 'Weather API', host: 'https://api.example.com', group: 'Internet', tags: ['api', 'public'], template: 'api-endpoint' });
   weather.checks = [
@@ -166,278 +186,26 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   }
   function nodeInMaintenance(n) { return maintenance.some((w) => windowActive(w) && (w.nodeId ? w.nodeId === n.id : w.group ? inGroup(n, w.group) : true)); }
 
-  /* ---------- Live state & results ---------- */
-  const states = {}; // checkId -> CheckState
-  const lastResults = {}; // checkId -> Result
-  const silences = {};
-  const resultLog = {}; // checkId -> Result[] newest first
-
-  function certInfo(days, host) {
-    const subject = host.replace(/^https?:\/\//, '').replace(/[:/].*$/, '');
-    return { subject: `CN=${subject}`, issuer: "CN=R11, O=Let's Encrypt, C=US", notBefore: ago((90 - days) * DAY), notAfter: ahead(days * DAY), daysRemaining: days, dnsNames: [subject, subject.replace(/^www\./, '')], serial: '04:AB:19:F2:7C:33:9E:1D', valid: true };
-  }
-
-  // snmpReading invents one plausible reading for an OID row: a gauge gets a
-  // value, a counter gets a rate, and an OID whose name says it is text gets
-  // text and no number at all — which is what the inspector has to cope with.
-  function snmpReading(o, t, r) {
-    const v = { oid: o.oid, name: o.name, unit: o.unit || '' };
-    const wave = (period, amp) => 1 + amp * Math.sin((t / period) * Math.PI * 2);
-    if (o.oid === '1.3.6.1.2.1.1.1.0') { v.raw = 'MikroTik CRS310, RouterOS 7.14'; return v; }
-    if (o.kind === 'counter') {
-      const base = o.name.includes('errors') ? 0.4 : (o.name.includes('out') ? 3.1e6 : 8.4e6);
-      v.rate = +(base * wave(6 * HOUR, 0.35) * (0.9 + r() * 0.2)).toFixed(2);
-      v.raw = String(Math.round(1.4e11 + t / 100));
-      return v;
-    }
-    if (o.oid === '1.3.6.1.2.1.1.3.0') { v.value = +((NOW - 41 * DAY - t % MIN) / 1000).toFixed(0); v.raw = String(Math.round(v.value * 100)); return v; }
-    v.value = 1;
-    v.raw = '1';
-    return v;
-  }
-
-  // jsonReading is the number a recording json check reads at time t: a slow
-  // daily wave around a third, which is what a Pi-hole's blocked percentage
-  // tends to look like. Deterministic in t so a chart's points and the last
-  // result agree.
-  function jsonReading(check, t) {
-    return +(33 + 9 * Math.sin((t / DAY) * Math.PI * 2 + check.id)).toFixed(1);
-  }
-
-  // checkMetricUnits mirrors model.Check.MetricUnits: every named metric a
-  // check measures, with its unit — its OIDs for SNMP, its recorded value
-  // for a json check that records one.
-  function checkMetricUnits(c) {
-    const units = {};
-    if (c.type === 'snmp') for (const o of c.config?.snmpOids || []) if (o.name) units[o.name] = o.unit || '';
-    if (c.type === 'json' && c.config?.jsonRecord) units[(c.config.jsonMetric || '').trim() || 'value'] = c.config.jsonUnit || '';
-    // A hardware check measures whatever its newest reading carried, the way
-    // the service's checkHasMetric accepts a key from the latest result.
-    if (c.type === 'system') for (const m of systemMetricResults(c, mockReading('agent:1', 'nas.lan', 29))) units[m.key] = m.unit;
-    return units;
-  }
-
-  // systemMetricUnit and systemMetricResults mirror the service's
-  // model.SystemMetricUnit and checks.hostMetricResults: one entry per
-  // reading, each judged against the threshold that governs its key — the
-  // instance's own entry first, then its family's.
-  function systemMetricUnit(key) {
-    const [family, instance = ''] = key.includes(':') ? [key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1)] : [key];
-    if (['cpu', 'memory', 'swap', 'disk', 'inodes'].includes(family)) return '%';
-    if (family === 'net') return 'B/s';
-    if (family === 'diskio') return instance.endsWith('.busy') ? '%' : 'B/s';
-    return '';
-  }
-  function systemMetricResults(check, m) {
-    const list = check.config?.metricThresholds || [];
-    const find = (k) => list.find((t) => t.metric === k);
-    const governing = (key) => {
-      const direct = find(key); if (direct) return direct;
-      const colon = key.indexOf(':');
-      if (colon < 0) return null;
-      const family = key.slice(0, colon), instance = key.slice(colon + 1);
-      const dot = instance.lastIndexOf('.');
-      if (dot > 0 && (family === 'net' || family === 'diskio')) { const whole = find(`${family}:${instance.slice(0, dot)}`); if (whole) return whole; }
-      return find(family) || null;
-    };
-    const fmt = (v, unit) => (unit === '%' ? `${Math.round(v)}%` : unit === 'B/s' ? `${Math.round(v / 1000)} kB/s` : v.toFixed(2));
-    const out = [];
-    const add = (key, label, value) => {
-      if (value == null) return;
-      const unit = systemMetricUnit(key);
-      const r = { key, label, value, unit, status: 'up' };
-      const t = governing(key);
-      if (t) {
-        const past = (lvl) => lvl != null && lvl !== '' && (t.below ? value <= lvl : lvl > 0 && value >= lvl);
-        if (past(t.crit)) { r.status = 'down'; r.reason = `${label} is ${fmt(value, unit)}, at or above the ${fmt(t.crit, unit)} critical threshold`; }
-        else if (past(t.warn)) { r.status = 'degraded'; r.reason = `${label} is ${fmt(value, unit)}, at or above the ${fmt(t.warn, unit)} warning threshold`; }
-      }
-      out.push(r);
-    };
-    add('cpu', 'Processor use', m.cpu?.usagePct);
-    add('load', 'Load per core', m.cpu?.loadPerCore);
-    if (m.memory?.totalBytes) add('memory', 'Memory use', m.memory.usedPct);
-    add('swap', 'Swap use', m.memory?.swapUsedPct);
-    for (const fs of m.filesystems || []) { add(`disk:${fs.mount}`, `Disk ${fs.mount}`, fs.usedPct); add(`inodes:${fs.mount}`, `Inodes on ${fs.mount}`, fs.inodesUsedPct); }
-    for (const n of m.interfaces || []) { add(`net:${n.name}.rx`, `Network ${n.name} received`, n.rxBytesPerSec); add(`net:${n.name}.tx`, `Network ${n.name} sent`, n.txBytesPerSec); }
-    for (const d of m.disks || []) { add(`diskio:${d.name}.read`, `Disk ${d.name} read`, d.readBytesPerSec); add(`diskio:${d.name}.write`, `Disk ${d.name} write`, d.writeBytesPerSec); add(`diskio:${d.name}.busy`, `Disk ${d.name} busy`, d.busyPct); }
-    return out;
-  }
-
-  function makeResult(check, node, t, r, { failed, latency, statusOverride } = {}) {
-    const p = CHECK_PROFILES[check.id];
-    const success = !failed;
-    const status = statusOverride || (failed ? 'down' : (p.warn ? 'degraded' : 'up'));
-    const res = { id: ++seq.result, checkId: check.id, ts: iso(t), success, status, message: failed ? (p.message || 'Failed') : (p.message && !failed && status !== 'down' ? p.message : ''), latencyMs: failed ? null : latency, details: {}, attempts: failed ? 2 : 1 };
-    const target = check.config.target || node.host;
-    switch (check.type) {
-      case 'ping': {
-        const count = check.config.pingCount || 4;
-        const rtts = failed ? [] : Array.from({ length: count }, () => +(latency * (0.8 + r() * 0.4)).toFixed(2));
-        res.details = { packetsSent: count, packetsReceived: rtts.length, rtts };
-        if (!failed) {
-          res.minMs = Math.min(...rtts); res.maxMs = Math.max(...rtts);
-          res.jitterMs = +(res.maxMs - res.minMs).toFixed(2);
-          // Population standard deviation of the packets, the same figure the
-          // service computes, so the detail card shows something plausible.
-          const mean = rtts.reduce((a2, b2) => a2 + b2, 0) / rtts.length;
-          res.stddevMs = +Math.sqrt(rtts.reduce((a2, v) => a2 + (v - mean) ** 2, 0) / rtts.length).toFixed(2);
-          res.lossPct = 0;
-          res.message = res.message || `${count}/${count} replies, avg ${latency.toFixed(1)} ms`;
-        } else { res.lossPct = 100; res.minMs = null; }
-        break;
-      }
-      case 'http': case 'keyword': case 'json': {
-        if (!failed) {
-          const dns = +(latency * 0.08).toFixed(1), connect = +(latency * 0.12).toFixed(1), tls = target.startsWith('https') ? +(latency * 0.25).toFixed(1) : 0, ttfb = +(latency * 0.85).toFixed(1);
-          res.details = { statusCode: 200, finalUrl: target.startsWith('http') ? target : `https://${target}/`, redirects: check.id === site.checks[0].id ? 1 : 0, dnsMs: dns, connectMs: connect, tlsMs: tls, firstByteMs: ttfb, totalMs: +latency.toFixed(1), contentLength: 18422 + Math.floor(r() * 2000) };
-          if (check.type === 'keyword') { res.details.keywordFound = true; res.message = res.message || `Keyword found · 200 in ${latency.toFixed(0)} ms`; }
-          else if (check.type === 'json' && check.config.jsonRecord) {
-            // A recording check keeps the number under its metric name, the
-            // way the service writes Result.metrics.
-            const name = (check.config.jsonMetric || '').trim() || 'value';
-            const v = jsonReading(check, t);
-            res.details.jsonValue = String(v); res.details.jsonMatched = true;
-            res.metrics = { [name]: v };
-            res.message = res.message || `json "${check.config.jsonPath}" = ${v}; recorded ${name} = ${v}${check.config.jsonUnit ? ' ' + check.config.jsonUnit : ''}`;
-          }
-          else if (check.type === 'json') { res.details.jsonValue = check.config.jsonExpected || 'ok'; res.details.jsonMatched = true; res.message = res.message || `${check.config.jsonPath} = ${check.config.jsonExpected || 'present'} · ${latency.toFixed(0)} ms`; }
-          else res.message = res.message || `OK 200 in ${latency.toFixed(0)} ms`;
-          if (check.config.contentWatch === 'redirect') { res.details.contentValue = res.details.finalUrl; res.details.contentChanged = false; }
-          if (p.cert && (check.config.certCheck !== false) && target.startsWith('https')) { res.details.cert = certInfo(p.cert.days, target); if (p.warn) res.warnings = [p.warn]; }
-        } else {
-          res.error = p.message || 'connection failed';
-          res.details = { finalUrl: target.startsWith('http') ? target : `https://${target}/`, dnsMs: 2.1, connectMs: null };
-        }
-        break;
-      }
-      case 'cert': {
-        if (!failed) { res.details = { cert: certInfo(p.cert?.days ?? 60, target) }; res.message = res.message || `Valid, expires in ${p.cert?.days ?? 60} days`; if (p.warn) res.warnings = [p.warn]; }
-        else res.error = p.message;
-        break;
-      }
-      case 'tcp': {
-        if (!failed) { res.details = { remoteAddr: `${node.host.replace(/^https?:\/\//, '')}:${check.config.port}` }; res.message = res.message || `Connected in ${latency.toFixed(1)} ms`; }
-        else res.error = p.message;
-        break;
-      }
-      case 'dns': {
-        if (!failed) { const vals = check.config.expectedIps?.length ? check.config.expectedIps : ['93.184.215.14', '2606:2800:21f:cb07:6820:80da:af6b:8b2c']; res.details = { resolvedValues: vals, expectedMatch: check.config.expectedIps?.length ? true : null, resolver: check.config.dnsServer || 'system' }; res.message = res.message || `Resolved to ${vals[0]} in ${latency.toFixed(1)} ms`; }
-        else { res.error = p.message; res.details = { resolver: check.config.dnsServer || 'system', resolvedValues: [] }; }
-        break;
-      }
-      case 'system': {
-        if (failed) { res.error = p.message || 'no hardware reading'; break; }
-        // The reading the check evaluated, the metrics it recorded and each
-        // one's own verdict — the shape the service's evaluateHost writes.
-        const reading = mockReading('agent:1', 'nas.lan', 29, t);
-        const rows = systemMetricResults(check, reading);
-        res.latencyMs = null;
-        res.details = { host: reading, hostAgeSeconds: 12, metricResults: rows };
-        res.metrics = Object.fromEntries(rows.map((m) => [m.key, m.value]));
-        res.warnings = rows.filter((m) => m.status === 'degraded').map((m) => m.reason);
-        const worst = rows.some((m) => m.status === 'down') ? 'down' : rows.some((m) => m.status === 'degraded') ? 'degraded' : 'up';
-        res.status = worst === 'down' ? 'down' : worst;
-        res.success = worst !== 'down';
-        res.message = res.message || `CPU ${Math.round(reading.cpu.usagePct)}%, memory ${Math.round(reading.memory.usedPct)}%`;
-        break;
-      }
-      case 'snmp': {
-        if (failed) { res.error = p.message || 'no response'; break; }
-        res.details = { snmp: (check.config.snmpOids || []).map((o) => snmpReading(o, t, r)) };
-        res.metrics = {};
-        for (const v of res.details.snmp) {
-          const measured = v.value != null ? v.value : v.rate;
-          if (measured != null) res.metrics[v.name] = measured;
-        }
-        res.message = res.message || `${res.details.snmp.length} readings read in ${latency.toFixed(0)} ms`;
-        if (p.warn) res.warnings = [p.warn];
-        break;
-      }
-    }
-    if (res.message === '') res.message = success ? 'OK' : 'Failed';
-    return res;
-  }
-
-  function initState() {
-    for (const n of nodes) {
-      n.checks.forEach((c, i) => {
-        const p = CHECK_PROFILES[c.id];
-        const r = rng(c.id * 7919);
-        const interval = c.intervalSeconds * 1000;
-        const lastRun = NOW - Math.floor(r() * interval);
-        const failed = p.status === 'down';
-        const latency = p.base * (1 + (r() - 0.5) * p.noise);
-        const st = {
-          checkId: c.id, status: !n.enabled || !c.enabled ? 'paused' : p.status, consecutiveFailures: failed ? Math.max(2, Math.floor((p.downSince || 0) / interval)) : 0,
-          lastRunAt: iso(lastRun), lastSuccessAt: failed ? ago(p.downSince + interval) : iso(lastRun), lastChangeAt: p.downSince ? ago(p.downSince) : (p.warn ? ago(5 * DAY + 3 * HOUR) : ago(9 * DAY)), nextRunAt: iso(lastRun + interval),
-          lastMessage: '', lastLatencyMs: failed ? null : +latency.toFixed(2), alertActive: failed && !p.affectedBy, alertSuppressed: !!p.affectedBy, suppressReason: p.affectedBy ? 'dependency' : '', lastAlertAt: failed && !p.affectedBy ? ago(p.downSince - 90e3) : null, silencedUntil: null,
-          affectedByCheckId: p.affectedBy ? gateway.checks[0].id : null, affectedByNodeName: p.affectedBy || '', warningActive: !!p.warn, certWarningActive: !!(p.warn && p.cert), running: false,
-        };
-        if (p.status === 'unknown') { st.lastRunAt = null; st.lastSuccessAt = null; st.lastChangeAt = null; st.nextRunAt = ahead(20e3); st.lastLatencyMs = null; st.lastMessage = ''; states[c.id] = st; resultLog[c.id] = []; return; }
-        if (nodeInMaintenance(n) && n.enabled && c.enabled) st.status = 'maintenance';
-        const res = makeResult(c, n, lastRun, r, { failed, latency });
-        st.lastMessage = res.message;
-        states[c.id] = st; lastResults[c.id] = res;
-        // recent results log
-        const log = [res];
-        for (let k = 1; k < 25; k++) {
-          const t = lastRun - k * interval;
-          const wasDown = p.downSince != null && (NOW - t) < p.downSince;
-          const lat = p.base * (1 + (r() - 0.5) * p.noise);
-          log.push(makeResult(c, n, t, r, { failed: wasDown, latency: lat }));
-        }
-        resultLog[c.id] = log;
-      });
-    }
-  }
-  initState();
-
-  function checkStatus(n, c) {
-    if (!n.enabled || !c.enabled) return 'paused';
-    const st = states[c.id];
-    if (!st) return 'unknown';
-    if (nodeInMaintenance(n)) return 'maintenance';
-    return st.status === 'maintenance' ? 'up' : st.status;
-  }
-  const SEV = { down: 5, degraded: 4, unknown: 3, maintenance: 2, up: 1, paused: 0 };
-  function nodeStatus(n) {
-    if (!n.enabled) return 'paused';
-    if (nodeInMaintenance(n)) return 'maintenance';
-    let worst = 'paused';
-    for (const c of n.checks) { const s = checkStatus(n, c); if (SEV[s] > SEV[worst]) worst = s; }
-    return n.checks.length ? (worst === 'paused' ? 'paused' : worst) : 'unknown';
-  }
-  function stateFor(n, c) { const st = states[c.id] ? clone(states[c.id]) : { checkId: c.id, status: 'unknown', consecutiveFailures: 0, lastRunAt: null, lastSuccessAt: null, lastChangeAt: null, nextRunAt: null, lastMessage: '', lastLatencyMs: null, alertActive: false, alertSuppressed: false, lastAlertAt: null, silencedUntil: null, affectedByCheckId: null, warningActive: false, certWarningActive: false, running: false }; st.status = checkStatus(n, c); if (silences[c.id] && silences[c.id] > Date.now()) { st.silencedUntil = iso(silences[c.id]); st.alertSuppressed = true; st.suppressReason = 'silenced'; } return st; }
-  function nodeOut(n, { withResults = false } = {}) {
-    const out = clone(n);
-    out.status = nodeStatus(n);
-    out.inMaintenance = nodeInMaintenance(n);
-    out.stateByCheck = {};
-    for (const c of n.checks) out.stateByCheck[c.id] = stateFor(n, c);
-    if (withResults) { out.lastResults = {}; for (const c of n.checks) if (lastResults[c.id]) out.lastResults[c.id] = clone(lastResults[c.id]); }
-    return out;
-  }
-  function findNode(id) { return nodes.find((n) => n.id === Number(id)); }
-  function findCheck(id) { for (const n of nodes) for (const c of n.checks) if (c.id === Number(id)) return { n, c }; return null; }
+  /* ---------- Live state & results: web/mock/results.js ---------- */
+  const { SEV, checkMetricUnits, findCheck, findNode, jsonReading, lastResults, makeResult, matterReading, nodeOut, nodeStatus, resultLog, silences, snmpReading, stateFor, states, systemMetricResults } = installResults({ CHECK_PROFILES, DAY, HOUR, MIN, NOW, ago, ahead, clone, gateway, iso, mockReading, nodeInMaintenance, nodes, rng, seq, site });
 
   /* ---------- Events ---------- */
   const events = [];
   function ev(msAgo, type, o = {}) {
     const n = o.node; const c = o.check;
-    events.push({ id: 0, ts: ago(msAgo), type, nodeId: n ? n.id : null, checkId: c ? c.id : null, nodeName: n ? n.name : undefined, checkName: c ? c.name : undefined, title: o.title || '', detail: o.detail || '', meta: o.meta ? JSON.stringify(o.meta) : undefined });
+    events.push({ id: 0, ts: ago(msAgo), type, nodeId: n ? n.id : null, checkId: c ? c.id : null, nodeName: n ? n.name : undefined, checkName: c ? c.name : undefined, title: o.title || '', detail: o.detail || '', actor: o.actor, meta: o.meta ? JSON.stringify(o.meta) : undefined });
   }
   ev(3 * DAY + 2 * HOUR, 'service_started', { title: 'GWatch service started', detail: 'Version 0.5.0 · windows/amd64 · listening on 127.0.0.1:7230' });
   ev(3 * DAY + 2 * HOUR + 40 * MIN, 'service_stopped', { title: 'GWatch service stopped', detail: 'Stopped for upgrade to 0.5.0' });
   ev(3 * DAY + 2 * HOUR + 41 * MIN, 'backup', { title: 'Backup created', detail: 'gwatch-2026-09-15-0713.gwbackup · 12.4 MB · configuration + history' });
   ev(2 * DAY + 6 * HOUR, 'monitor_gap', { title: 'Monitoring gap of 45 minutes', detail: 'The computer was asleep or offline from 01:10 to 01:55. No checks ran during this time.' });
-  ev(2 * DAY + 3 * HOUR, 'config_changed', { node: ha, title: 'Node updated', detail: 'Added JSON check "API alive"; interval of "Frontend" changed from 60 s to 120 s' });
+  ev(2 * DAY + 3 * HOUR, 'config_changed', { node: ha, actor: 'local', title: 'Node updated', detail: 'Added JSON check "API alive"; interval of "Frontend" changed from 60 s to 120 s' });
   ev(2 * DAY + 1 * HOUR, 'internal_error', { title: 'Failed to send email', detail: 'smtp.example.com: 535 authentication failed — check the SMTP password' });
   ev(2 * DAY + 1 * HOUR, 'alert_failed', { node: site, check: site.checks[0], title: 'Alert email could not be sent', detail: 'SMTP authentication failed (retrying next cycle)' });
-  ev(2 * DAY, 'config_changed', { title: 'Alert settings changed', detail: 'SMTP password updated; test email sent successfully' });
+  ev(2 * DAY, 'config_changed', { actor: 'local', title: 'Alert settings changed', detail: 'SMTP password updated; test email sent successfully' });
   ev(1 * DAY + 20 * HOUR, 'warning', { node: ha, check: ha.checks[1], title: 'High response time', detail: 'Frontend answered in 1,240 ms (warning threshold 800 ms)' });
   ev(1 * DAY + 19 * HOUR + 40 * MIN, 'warning_cleared', { node: ha, check: ha.checks[1], title: 'Response time back to normal', detail: '190 ms' });
-  ev(1 * DAY + 9 * HOUR, 'note', { node: nas, title: 'Note: replaced failing drive in bay 3', detail: 'RAID rebuild expected to take ~6 hours' });
+  ev(1 * DAY + 9 * HOUR, 'note', { node: nas, actor: 'local', title: 'Note: replaced failing drive in bay 3', detail: 'RAID rebuild expected to take ~6 hours' });
   ev(1 * DAY + 2 * HOUR, 'retention', { title: 'Retention run finished', detail: 'Rolled up 41,280 raw results into 5-minute buckets · deleted 12,904 rows older than 30 days · 2.1 s' });
   ev(1 * DAY + 1 * HOUR, 'down', { node: weather, check: weather.checks[0], title: 'Health endpoint is down', detail: 'HTTP 503 Service Unavailable (expected 200)' });
   ev(1 * DAY + 1 * HOUR - 2 * MIN, 'alert_sent', { node: weather, check: weather.checks[0], title: 'Alert email sent', detail: 'To jeff@example.com, sam@example.com' });
@@ -510,9 +278,17 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     { id: 'nodes-maintenance', name: 'In maintenance', enabled: true, colour: 'yellow', condition: { kind: 'nodesInStatus', status: 'maintenance', minCount: 1 } },
   ];
   let settings = {
-    general: { instanceName: 'Home monitor', defaultIntervalSeconds: 60, defaultTimeoutSeconds: 10, maxConcurrentChecks: 8, minIntervalSeconds: 10, wallboardRefreshSeconds: 15, latencyWarnMs: 0, packetLossWarnPct: 0, pingMethod: 'auto', theme: localStorage.getItem('gw.theme') || 'dark', accentColor: '#43c9c0', remoteAccess: false, accessPassword: '', requireLoginLocally: false, updateRepo: 'jxburros/GWatch' },
-    alerts: { enabled: true, recipients: ['jeff@example.com', 'sam@example.com'], failureThreshold: 2, cooldownMinutes: 60, notifyRecovery: true, notifyWarnings: true, certWarnDays: 14, smtp: { host: 'smtp.example.com', port: 587, username: 'gwatch@example.com', password: '********', from: 'GWatch <gwatch@example.com>', security: 'starttls' } },
-    retention: { rawDays: 30, fiveMinDays: 180, hourlyDays: 730, dailyDays: 0, eventDays: 730 },
+    general: { instanceName: 'Home monitor', defaultIntervalSeconds: 60, defaultTimeoutSeconds: 10, maxConcurrentChecks: 8, minIntervalSeconds: 10, wallboardRefreshSeconds: 15, latencyWarnMs: 0, packetLossWarnPct: 0, pingMethod: 'auto', theme: localStorage.getItem('gw.theme') || 'dark', accentColor: '#43c9c0', remoteAccess: false, accessPassword: '', requireLoginLocally: false, behindHTTPSProxy: false, passwordHashing: 'argon2id', updateRepo: 'jxburros/GWatch' },
+    alerts: { enabled: true, recipients: ['jeff@example.com', 'sam@example.com'], failureThreshold: 2, cooldownMinutes: 60, notifyRecovery: true, notifyWarnings: true, certWarnDays: 14, groupWindowSeconds: 30, warningDigest: 'off', smtp: { host: 'smtp.example.com', port: 587, username: 'gwatch@example.com', password: '********', from: 'GWatch <gwatch@example.com>', security: 'starttls' },
+      // Settings › Alerts › Also notify. Secrets come back masked, as the
+      // real server sends them.
+      channels: [
+        { id: 'ch-1a2b3c', name: 'Family Telegram', enabled: true, minSeverity: 'warning', groups: [], action: { type: 'telegram', token: '********', chatId: '-1001234567890', title: '', message: '', timeoutSeconds: 30 } },
+        { id: 'ch-4d5e6f', name: 'On-call SMS', enabled: true, minSeverity: 'down', groups: ['Servers'], action: { type: 'twilio', accountSid: 'ACXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX', token: '********', from: '+15550001111', to: '+15550002222', message: '', timeoutSeconds: 30 } },
+      ] },
+    retention: { rawDays: 30, fiveMinDays: 180, hourlyDays: 730, dailyDays: 0, eventDays: 730, hostDays: 90 },
+    backups: { enabled: false, intervalHours: 24, keep: 7, includeHistory: true, password: '' },
+    updates: { checkAutomatically: true, checkIntervalHours: 24, includePrerelease: false, promptOnOpen: true },
     indicators: clone(DEFAULT_INDICATORS),
   };
   let retention = { lastRunAt: ago(1 * DAY + 2 * HOUR), lastDurationMs: 2140, lastError: '', rawRows: 412_880, rollupRows5m: 96_412, rollupRows1h: 18_207, rollupRows1d: 1_128, eventRows: 1_940, oldestRaw: ago(30 * DAY), deletedLastRun: 12_904, plan: ['Raw results older than 30 days are rolled up into 5-minute buckets and deleted.', '5-minute buckets older than 180 days are rolled up into hourly buckets and deleted.', 'Hourly buckets older than 730 days are rolled up into daily buckets and deleted.', 'Daily buckets are kept forever.', 'Events older than 730 days are deleted.'] };
@@ -530,10 +306,11 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     return {
       version: '0.5.0', serviceMode: 'service', serviceRunning: true, startedAt: ago(3 * DAY + 2 * HOUR), uptimeSeconds: Math.floor((Date.now() - (NOW - 3 * DAY - 2 * HOUR)) / 1000), now: iso(Date.now()), schedulerRunning: true,
       lastCheckAt: runs[runs.length - 1] || null, lastSuccessAt: runs[runs.length - 1] || null, nextCheckAt: nexts[0] || null,
-      checksTotal: all.length, checksEnabled: all.filter((c) => c.enabled && findNode(c.nodeId).enabled).length, checksRunning: 0,
+      checksTotal: all.length, checksEnabled: all.filter((c) => c.enabled && findNode(c.nodeId).enabled).length, checksRunning: 0, overdueChecks: 0, oldestOverdueSeconds: 0,
       lastGap: { from: ago(2 * DAY + 6 * HOUR + 45 * MIN), to: ago(2 * DAY + 6 * HOUR), seconds: 2700 },
       databasePath: 'C:\\ProgramData\\GWatch\\gwatch.db', databaseBytes: 48_300_000, databaseDriver: 'modernc.org/sqlite', dataDir: 'C:\\ProgramData\\GWatch', keyPath: 'C:\\ProgramData\\GWatch\\gwatch.key', backupDir: 'C:\\ProgramData\\GWatch\\backups', retention, backup: backupStatus,
       recentErrors: events.filter((e) => e.type === 'internal_error').slice(0, 5), alertsEnabled: settings.alerts.enabled, smtpConfigured: !!settings.alerts.smtp.host, lastAlertAt: ago(21 * MIN + 30e3), lastAlertError: '', listenAddress: '127.0.0.1:7230', platform: 'windows/amd64',
+      ping: { configured: settings.general.pingMethod || 'auto', auto: 'raw', unprivileged: false, unprivilegedReason: 'unprivileged ICMP socket: windows has no unprivileged ICMP socket', raw: true, rawReason: '', systemPing: 'C:\\Windows\\System32\\PING.EXE', summary: 'the built-in ping uses a raw ICMP socket', checkedAt: ago(30e3) },
     };
   }
 
@@ -559,81 +336,8 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     return out;
   })();
 
-  /* ---------- History ---------- */
-  // metricHistory serves one of a check's named metrics — an SNMP check's
-  // OID, a json check's recorded value — the way the server does: raw points
-  // only, with the metric's value repeated in avgMs so the chart helpers can
-  // plot it without knowing it is not a latency.
-  function metricHistory(checkId, range, metric, end) {
-    const base = history(checkId, range, end);
-    const { c } = findCheck(checkId);
-    const units = checkMetricUnits(c);
-    if (!(metric in units)) throw Object.assign(new Error(`check ${checkId} does not measure "${metric}"`), { status: 400 });
-    const o = (c.config?.snmpOids || []).find((x) => x.name === metric);
-    const r = rng(c.id * 977 + metric.length);
-    const points = base.points.map((p) => {
-      if (p.avgMs == null && c.type !== 'system') return { ...p, avgMs: null, minMs: null, maxMs: null, value: null };
-      let v;
-      if (c.type === 'system') v = systemMetricResults(c, mockReading('agent:1', 'nas.lan', 29, +new Date(p.ts))).find((m) => m.key === metric)?.value;
-      else if (o) { const reading = snmpReading(o, +new Date(p.ts), r); v = reading.value != null ? reading.value : reading.rate; }
-      else v = jsonReading(c, +new Date(p.ts));
-      return { ...p, value: v ?? null, avgMs: v ?? null, minMs: v ?? null, maxMs: v ?? null, jitterMs: null, lossPct: null };
-    });
-    return { ...base, source: 'raw', bucketSeconds: 0, metric, metricUnit: units[metric], points };
-  }
-
-  // `end` (ms) moves the window back, as the service's `end` does for a
-  // timestacked chart; absent or in the future, the window ends now.
-  function history(checkId, range, end) {
-    const found = findCheck(checkId);
-    if (!found) throw Object.assign(new Error('check not found'), { status: 404 });
-    const { n, c } = found;
-    const p = CHECK_PROFILES[c.id];
-    const spans = { '1h': HOUR, '24h': DAY, '3d': 3 * DAY, '7d': 7 * DAY, '30d': 30 * DAY, '1y': 365 * DAY };
-    const buckets = { '1h': [Math.min(60, c.intervalSeconds), 'raw'], '24h': [Math.max(60, c.intervalSeconds), 'raw'], '3d': [300, '5m'], '7d': [300, '5m'], '30d': [3600, '1h'], '1y': [86400, '1d'] };
-    const span = spans[range] || DAY;
-    const [bucketSec, source] = buckets[range] || buckets['24h'];
-    const real = Date.now();
-    const to = end != null && Number.isFinite(end) && end < real ? end : real;
-    const from = to - span;
-    const r = rng(c.id * 131 + span / 1000 + Math.round((real - to) / HOUR));
-    const points = [];
-    const step = bucketSec * 1000;
-    let sum = 0, cnt = 0, fails = 0, min = Infinity, max = -Infinity;
-    const isPaused = !n.enabled || !c.enabled;
-    const start = Math.floor(from / step) * step;
-    for (let t = start; t <= to; t += step) {
-      if (t < from) continue;
-      const f = (t - from) / span;
-      // Gaps: a sleep gap around 35% and a short gap at 72%
-      if ((f > 0.35 && f < 0.365) || (f > 0.72 && f < 0.727)) continue;
-      if (isPaused && t > real - 3 * DAY && p.status === 'paused') continue;
-      if (p.status === 'unknown') continue;
-      // Failures: currently down since downSince; a brief outage at ~20%
-      let failedFrac = 0;
-      if (p.downSince != null && t >= real - p.downSince) failedFrac = 1;
-      else if (f > 0.20 && f < 0.208 && (c.type === 'ping' || c.type === 'http')) failedFrac = source === 'raw' ? 1 : 0.6;
-      const count = source === 'raw' ? 1 : Math.max(1, Math.round(step / (c.intervalSeconds * 1000)));
-      const failures = Math.round(count * failedFrac);
-      const avail = 100 * (1 - failures / count);
-      // Latency: base with noise, a dip (spike) at 60–63%, slow daily wave
-      let lat = p.base * (1 + (r() - 0.5) * p.noise + 0.08 * Math.sin((t / DAY) * Math.PI * 2));
-      if (f > 0.60 && f < 0.63) lat *= 3.2 + r();
-      if (f > 0.61 && f < 0.615) lat *= 1.5;
-      const ok = failedFrac < 1;
-      // A hardware check measures a machine rather than a round trip, so it
-      // has no latency to chart.
-      const avg = ok && c.type !== 'system' ? +lat.toFixed(2) : null;
-      const loss = c.type === 'ping' ? (failedFrac >= 1 ? 100 : (f > 0.60 && f < 0.63 ? +(25 * r()).toFixed(1) : (r() < 0.02 ? 25 : 0))) : null;
-      const pt = { ts: iso(t), avgMs: avg, minMs: ok ? +(lat * 0.85).toFixed(2) : null, maxMs: ok ? +(lat * (1.2 + (source === 'raw' ? 0 : r() * 0.5))).toFixed(2) : null, jitterMs: ok ? +(lat * 0.1).toFixed(2) : null, lossPct: loss, availability: +avail.toFixed(2), count, failures };
-      points.push(pt);
-      if (avg != null) { sum += avg; cnt++; if (avg < min) min = avg; if (avg > max) max = avg; }
-      fails += failures;
-    }
-    const total = points.reduce((a, q) => a + q.count, 0);
-    return { checkId: c.id, checkName: c.name, nodeName: n.name, checkType: c.type, range, source, bucketSeconds: source === 'raw' ? 0 : bucketSec, from: iso(from), to: iso(to), points,
-      summary: { availability: total ? +((1 - fails / total) * 100).toFixed(3) : 0, avgMs: cnt ? +(sum / cnt).toFixed(2) : null, minMs: cnt ? min : null, maxMs: cnt ? max : null, count: total, failures: fails } };
-  }
+  /* ---------- History: web/mock/history.js ---------- */
+  const { history, metricHistory } = installHistory({ CHECK_PROFILES, DAY, HOUR, checkMetricUnits, findCheck, iso, jsonReading, matterReading, mockReading, rng, snmpReading, systemMetricResults });
 
   /* ---------- Overview ---------- */
   function overview() {
@@ -744,7 +448,7 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   let signedIn = null;
   const me = () => ({ kind: signedIn ? 'session' : 'local', name: signedIn?.username || 'this computer', role: signedIn?.role || 'admin', isAdmin: !signedIn || signedIn.role === 'admin', canWrite: !signedIn || signedIn.role === 'admin', signedIn: !!signedIn, theme: settings.general.theme, accentColor: settings.general.accentColor, indicators: clone(settings.indicators || []) });
   on('GET', /^\/api\/me$/, me);
-  on('GET', /^\/api\/auth\/setup$/, () => ({ usersConfigured: users.length > 0, loginRequired: false, accessPasswordSet: false, apiVersion: 1 }));
+  on('GET', /^\/api\/auth\/setup$/, () => ({ usersConfigured: users.length > 0, loginRequired: false, accessPasswordSet: false, localLoginForced: !!settings.general.requireLoginLocally, apiVersion: 1 }));
   on('GET', /^\/api\/users$/, () => clone(users));
   on('POST', /^\/api\/users$/, (m, body) => { if (!body.username || body.password?.length < 8) throw err(400, 'User name and password of at least 8 characters required'); const u = { id: Date.now(), username: body.username, role: users.length ? body.role : 'admin', createdAt: iso(Date.now()) }; users.push(u); passwords.set(u.id, body.password); return clone(u); });
   on('PUT', /^\/api\/users\/(\d+)$/, (m, body) => { const u = users.find((x) => x.id === Number(m[1])); if (!u) throw err(404, 'User not found'); if (body.role) u.role = body.role; if (body.password) passwords.set(u.id, body.password); return clone(u); });
@@ -797,8 +501,10 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   on('GET', /^\/api\/templates$/, () => templates);
   on('GET', /^\/api\/groups$/, () => {
     const g = new Map(); const t = new Map();
-    for (const n of nodes) { for (const name of groupsOf(n)) g.set(name, (g.get(name) || 0) + 1); for (const tag of n.tags || []) t.set(tag, (t.get(tag) || 0) + 1); }
-    return { groups: [...g].map(([name, count]) => ({ name, count })).sort((a, b) => a.name.localeCompare(b.name)), tags: [...t].map(([name, count]) => ({ name, count })).sort((a, b) => a.name.localeCompare(b.name)) };
+    const cg = new Map();
+    for (const n of nodes) { for (const name of groupsOf(n)) g.set(name, (g.get(name) || 0) + 1); for (const tag of n.tags || []) t.set(tag, (t.get(tag) || 0) + 1); for (const c of n.checks || []) for (const name of c.config?.groups || []) cg.set(name, (cg.get(name) || 0) + 1); }
+    const list = (m) => [...m].map(([name, count]) => ({ name, count })).sort((a, b) => a.name.localeCompare(b.name));
+    return { groups: list(g), tags: list(t), checkGroups: list(cg) };
   });
   on('GET', /^\/api\/nodes$/, () => nodes.map((n) => nodeOut(n)));
   on('GET', /^\/api\/nodes\/(\d+)$/, (m) => { const n = findNode(m[1]); if (!n) throw err(404, 'node not found'); return nodeOut(n, { withResults: true }); });
@@ -813,7 +519,7 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   on('PUT', /^\/api\/nodes\/(\d+)$/, (m, body) => {
     const n = findNode(m[1]); if (!n) throw err(404, 'node not found');
     const groups = (body.groups && body.groups.length ? body.groups : (body.group ? [body.group] : [])).slice(0, 16);
-    Object.assign(n, { name: body.name, host: body.host, groups, group: groups[0] || '', tags: body.tags || [], notes: body.notes || '', importance: body.importance || 'normal', enabled: body.enabled !== false, dependsOnNodeId: body.dependsOnNodeId ?? null, linkStyle: cleanLinkStyle(body.linkStyle, body.dependsOnNodeId), updatedAt: iso(Date.now()) });
+    Object.assign(n, { name: body.name, host: body.host, groups, group: groups[0] || '', tags: body.tags || [], notes: body.notes || '', importance: body.importance || 'normal', enabled: body.enabled !== false, dependsOnNodeId: body.dependsOnNodeId ?? null, collectorId: body.collectorId ?? null, linkStyle: cleanLinkStyle(body.linkStyle, body.dependsOnNodeId), updatedAt: iso(Date.now()) });
     const keep = new Set();
     const next = (body.checks || []).map((c, i) => {
       const existing = c.id ? n.checks.find((x) => x.id === c.id) : null;
@@ -981,6 +687,54 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     const max = Math.min(500, Number(body.max) || 500);
     return { rows: picked.slice(0, max), truncated: picked.length > max, max: 500 };
   });
+  // "Load devices": a python-matter-server holding a sensor bridge and a
+  // plug, summarised the way internal/matter.Summarize describes them. An
+  // address containing "down" is not running, so the failure path can be
+  // seen too.
+  const matterNodes = [
+    { nodeId: 4, available: true, isBridge: true, vendor: 'Aqara', product: 'Hub M2', label: 'Hall bridge', endpoints: [
+      { id: 0, deviceTypes: [], clusters: [29, 40, 47], readings: [] },
+      { id: 1, deviceTypes: ['Aggregator (bridge)'], clusters: [29], readings: [] },
+      { id: 2, label: 'Living room sensor', deviceTypes: ['Temperature sensor', 'Bridged node'], clusters: [29, 47, 57, 1026, 1029], readings: [
+        { kind: 'temperature', name: 'Temperature', unit: '°C', cluster: 1026, attribute: 0, current: '21.4' },
+        { kind: 'humidity', name: 'Humidity', unit: '%', cluster: 1029, attribute: 0, current: '47.2' },
+        { kind: 'battery', name: 'Battery', unit: '%', cluster: 47, attribute: 12, current: '81' }] },
+      { id: 3, label: 'Front door', deviceTypes: ['Contact sensor', 'Bridged node'], clusters: [29, 57, 69], readings: [
+        { kind: 'contact', name: 'Open', unit: '', cluster: 69, attribute: 0, current: 'shut' }] },
+      { id: 5, label: 'Hall motion', deviceTypes: ['Occupancy sensor', 'Light sensor', 'Bridged node'], clusters: [29, 57, 1024, 1030], readings: [
+        { kind: 'occupancy', name: 'Occupied', unit: '', cluster: 1030, attribute: 0, current: 'clear' },
+        { kind: 'illuminance', name: 'Illuminance', unit: 'lx', cluster: 1024, attribute: 0, current: '112.2' }] },
+    ] },
+    { nodeId: 7, available: true, isBridge: false, vendor: 'Eve Systems', product: 'Eve Energy', label: '', endpoints: [
+      { id: 0, deviceTypes: [], clusters: [29, 40], readings: [] },
+      { id: 1, deviceTypes: ['On/off plug-in unit'], clusters: [6, 29], readings: [{ kind: 'onoff', name: 'On', unit: '', cluster: 6, attribute: 0, current: 'on' }] },
+    ] },
+  ];
+  const matterServerOf = (body) => {
+    const own = String(body?.server || '').trim();
+    const host = String(body?.host || '').trim().replace(/^[a-z]+:\/\//i, '').replace(/[/:].*$/, '');
+    const url = own || (host ? `ws://${host}:5580/ws` : '');
+    if (!url) throw err(400, 'a Matter server address (or a host) is required');
+    if (!/^wss?:\/\//i.test(url)) throw err(400, 'the Matter server URL must start with ws:// or wss:// (for example ws://192.168.1.20:5580/ws)');
+    if (/down/.test(url)) throw err(502, `could not reach the Matter server at ${url}: dial tcp: connect: connection refused`);
+    return url;
+  };
+  on('POST', /^\/api\/matter\/nodes$/, (m, body) => {
+    const server = matterServerOf(body);
+    return { server, serverInfo: { schema_version: 11, sdk_version: '2024.11.4', bluetooth_enabled: false }, nodes: matterNodes, standards: [] };
+  });
+  on('POST', /^\/api\/matter\/commission$/, (m, body) => {
+    const server = matterServerOf(body);
+    const code = String(body?.code || '').trim().replace(/[-\s]/g, '');
+    if (!/^(MT:.{10,}|\d{11}|\d{21})$/i.test(code)) throw err(400, 'that is not a Matter pairing code: use the 11-digit manual code (dashes are fine) or the QR code text (it starts with MT:) as it is');
+    if (body.networkOnly === false) throw err(400, 'this Matter server has no Bluetooth, so it can only add devices that are already on the network');
+    const node = { nodeId: 8 + matterNodes.length, available: true, isBridge: false, vendor: 'Nanoleaf', product: 'Essentials Bulb', label: '', endpoints: [
+      { id: 0, deviceTypes: [], clusters: [29, 40], readings: [] },
+      { id: 1, deviceTypes: ['Dimmable light'], clusters: [6, 8, 29], readings: [{ kind: 'onoff', name: 'On', unit: '', cluster: 6, attribute: 0, current: 'off' }] },
+    ] };
+    matterNodes.push(node);
+    return { server, node };
+  });
   on('GET', /^\/api\/events$/, (m, body, u) => {
     const q = (u.searchParams.get('q') || '').toLowerCase();
     const until = u.searchParams.get('until');
@@ -1010,7 +764,16 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   on('PUT', /^\/api\/dashboards\/(\d+)$/, (m, body) => { const d = dashboards.find((x) => x.id === Number(m[1])); if (!d) throw err(404, 'dashboard not found'); d.name = body.name ?? d.name; d.widgets = body.widgets ?? d.widgets; d.updatedAt = iso(Date.now()); return clone(d); });
   on('DELETE', /^\/api\/dashboards\/(\d+)$/, (m) => { const i = dashboards.findIndex((x) => x.id === Number(m[1])); if (i < 0) throw err(404, 'dashboard not found'); dashboards.splice(i, 1); return { ok: true }; });
   on('GET', /^\/api\/settings$/, () => clone(settings));
-  on('PUT', /^\/api\/settings$/, (m, body) => { settings = clone(body); if (settings.alerts?.smtp?.password) settings.alerts.smtp.password = '********'; if (settings.general?.accessPassword) settings.general.accessPassword = '********'; if (!settings.indicators?.length) settings.indicators = clone(DEFAULT_INDICATORS); addEvent('config_changed', { title: 'Settings changed' }); return clone(settings); });
+  // Mirrors the server: a new channel gets an ID, the channel's secrets are
+  // masked on the way back, and only notification types are channels.
+  const maskChannel = (c, i) => {
+    const a = { ...c.action };
+    for (const k of ['token', 'userKey', 'webhookUrl', 'url', 'body', 'routingKey']) if (a[k]) a[k] = '********';
+    return { ...c, id: c.id || `ch-mock${Date.now().toString(36)}${i}`, name: (c.name || '').trim() || a.type, minSeverity: c.minSeverity || 'warning', action: a };
+  };
+  const NOTIFY = ['slack', 'teams', 'discord', 'telegram', 'matrix', 'ntfy', 'gotify', 'pushover', 'twilio', 'pagerduty', 'opsgenie'];
+  on('PUT', /^\/api\/settings$/, (m, body) => { if ((body.alerts?.channels || []).some((c) => !NOTIFY.includes(c.action?.type))) throw err(400, 'alert channels must be notification channels'); const gw = body.alerts?.groupWindowSeconds ?? 0; if (gw < 0 || gw > 300) throw err(400, 'the alert grouping window must be between 0 (off) and 300 seconds'); if (!['', 'off', 'hourly', 'daily', undefined].includes(body.alerts?.warningDigest)) throw err(400, 'the warning digest must be off, hourly or daily'); settings = clone(body); settings.alerts.channels = (settings.alerts.channels || []).map(maskChannel); if (settings.alerts?.smtp?.password) settings.alerts.smtp.password = '********'; if (settings.general?.accessPassword) settings.general.accessPassword = '********'; if (!settings.indicators?.length) settings.indicators = clone(DEFAULT_INDICATORS); addEvent('config_changed', { title: 'Settings changed' }); return clone(settings); });
+  on('POST', /^\/api\/settings\/test-channel$/, (m, body) => { const t = body?.channel?.action?.type; if (!NOTIFY.includes(t)) throw err(400, `"${t}" is not a notification channel`); return { ok: true, output: `${t} → 200 OK (mock)`, startedAt: iso(Date.now()), durationMs: 120, statusCode: 200 }; });
   on('POST', /^\/api\/settings\/test-email$/, (m, body) => { if (!settings.alerts.smtp.host) throw err(400, 'SMTP host is not configured'); return { ok: true, message: `Test email sent to ${body?.to || settings.alerts.recipients.join(', ')} via ${settings.alerts.smtp.host}` }; });
   on('GET', /^\/api\/retention\/status$/, () => retention);
   // Settings › Database: the connection GWatch opens at the next start
@@ -1032,8 +795,30 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   on('GET', /^\/api\/backups$/, () => ({ backups: clone(backups), dir: 'C:\\ProgramData\\GWatch\\backups', status: backupStatus }));
   on('POST', /^\/api\/backups$/, (m, body) => { if (!body?.password) throw err(400, 'password is required'); const d = new Date(); const b = { fileName: `gwatch-${d.toISOString().slice(0, 10)}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}${body.includeHistory ? '' : '-config'}.gwbackup`, createdAt: iso(Date.now()), sizeBytes: body.includeHistory ? 13_400_000 : 41_000, includeHistory: !!body.includeHistory, encrypted: true }; backups.unshift(b); backupStatus = { lastBackupAt: b.createdAt, lastBackupOk: true, lastBackupFile: b.fileName, lastError: '', lastRestoreAt: backupStatus.lastRestoreAt }; addEvent('backup', { title: 'Backup created', detail: b.fileName }); return b; });
   on('DELETE', /^\/api\/backups\/([^/]+)$/, (m) => { const name = decodeURIComponent(m[1]); const i = backups.findIndex((b) => b.fileName === name); if (i < 0) throw err(404, 'backup not found'); backups.splice(i, 1); return { ok: true }; });
-  on('POST', /^\/api\/backups\/restore$/, (m, body) => { if (body instanceof FormData && body.get('password') === 'wrong') throw err(400, 'wrong password or corrupt archive'); backupStatus.lastRestoreAt = iso(Date.now()); addEvent('restore', { title: 'Restored from uploaded backup' }); return { ok: true, nodes: nodes.length, checks: nodes.flatMap((n) => n.checks).length, results: 38110 }; });
-  on('POST', /^\/api\/backups\/restore-existing$/, (m, body) => { if (!backups.some((b) => b.fileName === body.fileName)) throw err(404, 'backup not found'); if (body.password === 'wrong') throw err(400, 'wrong password or corrupt archive'); backupStatus.lastRestoreAt = iso(Date.now()); addEvent('restore', { title: 'Restored from backup', detail: body.fileName }); return { ok: true, nodes: nodes.length, checks: nodes.flatMap((n) => n.checks).length, results: body.includeHistory ? 38110 : 0 }; });
+  // The preview a restore dialog shows before anything is applied (#148).
+  // The demo archive is the demo's own configuration, with a few of the
+  // things the preview exists to point out, so the dialog has something to
+  // show. A password of "invalid" stands for an archive that fails
+  // validation.
+  const backupPreview = (password, fileName) => {
+    if (password === 'wrong') throw err(400, 'wrong password or corrupt archive');
+    const b = backups.find((x) => x.fileName === fileName) || backups[0];
+    const checks = nodes.flatMap((n) => n.checks).length;
+    return {
+      manifest: { format: 2, appVersion: '0.9.0', createdAt: b?.createdAt || iso(Date.now() - DAY), includeHistory: !!b?.includeHistory, nodes: nodes.length, checks, results: 38110, rollups: 4120, events: 212 },
+      counts: { nodes: nodes.length, checks, dashboards: 2, maintenance: 1, triggers: 2, endpoints: 1, rules: 1, charts: 3, wallboards: 1, reports: 0, users: 3, apiKeys: 2, agents: 1, incidents: 4, history: !!b?.includeHistory, results: 38110, rollups: 4120, events: 212 },
+      accounts: [{ username: 'sam', role: 'admin', admin: true }], accountsRecreatedAnyway: false,
+      agents: [], apiKeys: [{ name: 'Home Assistant', prefix: 'gw_9f2a', scope: 'read', revoked: false }],
+      commands: [{ kind: 'trigger', name: 'Plex server › Restart Plex', detail: 'script (bash)' }],
+      tokenlessEndpoints: [], accessChanges: ['LAN access is turned on: other devices on the network will be able to open GWatch.'], problems: password === 'invalid' ? invalidBackupProblems : [],
+    };
+  };
+  const invalidBackupProblems = ['trigger "Restart on failure": with a custom interpreter GWatch cannot quote placeholder values safely', 'endpoint "Deploy": a token is required; generate one or explicitly allow calls without a token'];
+  const refuseInvalidBackup = (password) => { if (password === 'invalid') throw Object.assign(err(400, `the backup’s configuration is not valid, so nothing was restored (${invalidBackupProblems.length} problems)`), { body: { problems: invalidBackupProblems } }); };
+  on('POST', /^\/api\/backups\/inspect$/, (m, body) => backupPreview(body instanceof FormData ? body.get('password') : '', ''));
+  on('POST', /^\/api\/backups\/inspect-existing$/, (m, body) => { if (!backups.some((b) => b.fileName === body.fileName)) throw err(404, 'backup not found'); return backupPreview(body.password, body.fileName); });
+  on('POST', /^\/api\/backups\/restore$/, (m, body) => { if (body instanceof FormData && body.get('password') === 'wrong') throw err(400, 'wrong password or corrupt archive'); if (body instanceof FormData) refuseInvalidBackup(body.get('password')); backupStatus.lastRestoreAt = iso(Date.now()); addEvent('restore', { title: 'Restored from uploaded backup' }); return { ok: true, nodes: nodes.length, checks: nodes.flatMap((n) => n.checks).length, results: 38110 }; });
+  on('POST', /^\/api\/backups\/restore-existing$/, (m, body) => { if (!backups.some((b) => b.fileName === body.fileName)) throw err(404, 'backup not found'); if (body.password === 'wrong') throw err(400, 'wrong password or corrupt archive'); refuseInvalidBackup(body.password); backupStatus.lastRestoreAt = iso(Date.now()); addEvent('restore', { title: 'Restored from backup', detail: body.fileName }); return { ok: true, nodes: nodes.length, checks: nodes.flatMap((n) => n.checks).length, results: body.includeHistory ? 38110 : 0 }; });
   on('GET', /^\/api\/logs$/, (m, body, u) => ({ lines: logLines.slice(-(Number(u.searchParams.get('limit')) || 200)), file: 'C:\\ProgramData\\GWatch\\logs\\gwatch.log' }));
   on('GET', /^\/api\/export\/history\.csv$/, (m, body, u) => { const metric = u.searchParams.get('metric'); const hs = metric ? metricHistory(u.searchParams.get('checkId'), u.searchParams.get('range') || '30d', metric) : history(u.searchParams.get('checkId'), u.searchParams.get('range') || '30d'); if (metric) return { __csv: ['timestamp,value,unit,availability_pct', ...hs.points.map((p) => [p.ts, p.value ?? '', hs.metricUnit || '', p.availability].join(','))].join('\n') }; return { __csv: ['timestamp,avg_ms,min_ms,max_ms,jitter_ms,loss_pct,availability_pct,count,failures', ...hs.points.map((p) => [p.ts, p.avgMs ?? '', p.minMs ?? '', p.maxMs ?? '', p.jitterMs ?? '', p.lossPct ?? '', p.availability, p.count, p.failures].join(','))].join('\n') }; });
   on('GET', /^\/api\/export\/results\.csv$/, (m, body, u) => ({ __csv: ['timestamp,success,status,message,latency_ms', ...(resultLog[u.searchParams.get('checkId')] || []).map((r) => [r.ts, r.success, r.status, JSON.stringify(r.message), r.latencyMs ?? ''].join(','))].join('\n') }));
@@ -1062,9 +847,11 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   // drives it can simply wait.
   const DISCOVERY_MS = 2000;
   const DISCOVERY_FOUND = [
-    { ip: '192.168.1.1', hostname: 'gateway.lan', rttMs: 1.8, openPorts: [80, 443], template: 'router', note: 'Only a web interface answered — looks like a router, switch or access point.' },
-    { ip: '192.168.1.23', hostname: 'pi.lan', rttMs: 0.9, openPorts: [22, 80], template: 'home-server', note: 'SSH and a web interface — looks like a server or NAS.' },
-    { ip: '192.168.1.64', hostname: '', rttMs: 5.4, openPorts: [9100], template: 'tcp-service', note: 'Port 9100 is open — this looks like a network printer.' },
+    { ip: '192.168.1.1', hostname: 'gateway.lan', rttMs: 1.8, openPorts: [80, 443], template: 'router', note: 'Only a web interface answered, and the maker is Ubiquiti — a router, switch or access point.', mac: '24:a4:3c:01:02:03', vendor: 'Ubiquiti' },
+    { ip: '192.168.1.23', hostname: 'pi.lan', rttMs: 0.9, openPorts: [22, 80], template: 'home-server', note: 'SSH and a web interface — looks like a server or NAS — a Raspberry Pi.', mac: 'dc:a6:32:01:02:03', vendor: 'Raspberry Pi Trading' },
+    { ip: '192.168.1.64', hostname: '', rttMs: 5.4, openPorts: [9100], template: 'tcp-service', note: 'Port 9100 is open — this looks like a network printer.', mac: '3c:2a:f4:00:00:01', vendor: 'Brother Industries' },
+    // Found through the neighbour table only: it answered ARP, not the ping.
+    { ip: '192.168.1.80', hostname: 'desktop.lan', rttMs: 0, openPorts: [3389], template: 'ping', note: 'Remote desktop is open — this looks like a Windows machine. Install the agent on it for hardware health. It did not answer a ping (it was found in this machine\'s neighbour table), so a ping check would show it as down; watch one of its ports instead.', mac: 'a8:5e:45:00:00:01', vendor: 'ASUSTek COMPUTER', noPing: true },
   ];
   let discoveryJob = null;
   // The last add, so a test can prove the request was made.
@@ -1145,7 +932,7 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
 
   on('GET', /^\/api\/charts$/, () => clone(savedCharts));
   on('PUT', /^\/api\/charts$/, (m, body) => { savedCharts = (body || []).map((c, i) => ({ ...c, id: c.id || `chart-${Date.now()}${i}`, name: c.name || `Chart ${i + 1}`, updatedAt: iso(Date.now()) })); return clone(savedCharts); });
-  on('GET', /^\/api\/automation\/meta$/, () => ({ conditions: ['down', 'recovered', 'degraded', 'warning_cleared', 'cert_warning', 'content_changed', 'affected_by_parent', 'status_change', 'any_failure', 'any_success', 'latency_over'], interpreters: ['sh', 'bash', 'powershell', 'cmd', 'python', 'node', 'custom'], defaultInterpreter: 'powershell', placeholders: [] }));
+  on('GET', /^\/api\/automation\/meta$/, () => ({ conditions: ['down', 'recovered', 'degraded', 'warning_cleared', 'cert_warning', 'content_changed', 'affected_by_parent', 'status_change', 'any_failure', 'any_success', 'latency_over'], interpreters: ['sh', 'bash', 'powershell', 'cmd', 'python', 'node', 'custom'], defaultInterpreter: 'powershell', placeholders: [], minTokenLength: 8, tokenlessEndpoints: endpoints.filter((e) => !String(e.token || '').trim()).map(({ id, name, slug }) => ({ id, name, slug })) }));
   on('GET', /^\/api\/triggers$/, (m, body, u) => { const nid = u.searchParams.get('nodeId'); return clone(nid ? triggers.filter((t) => t.nodeId === Number(nid)) : triggers); });
   on('POST', /^\/api\/triggers$/, (m, body) => { const t = { ...body, id: triggers.length ? Math.max(...triggers.map((x) => x.id)) + 1 : 1, lastRunAt: null, lastStatus: '', lastOutput: '', runCount: 0, createdAt: iso(Date.now()), updatedAt: iso(Date.now()) }; triggers.push(t); addEvent('config_changed', { title: `Trigger saved: ${t.name}` }); return clone(t); });
   on('PUT', /^\/api\/triggers\/(\d+)$/, (m, body) => { const t = triggers.find((x) => x.id === Number(m[1])); if (!t) throw err(404, 'not found'); Object.assign(t, body, { id: t.id, updatedAt: iso(Date.now()) }); return clone(t); });
@@ -1177,7 +964,7 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   on('POST', /^\/api\/rules\/(\d+)\/test$/, (m) => { const r = rules.find((x) => x.id === Number(m[1])); if (!r) throw err(404, 'not found'); return r.actions.map((a) => ({ ok: true, output: `${a.type}: sent (mock)`, startedAt: iso(Date.now()), durationMs: 42 })); });
   on('POST', /^\/api\/triggers\/(\d+)\/run$/, (m) => { const t = triggers.find((x) => x.id === Number(m[1])); if (!t) throw err(404, 'not found'); t.lastRunAt = iso(Date.now()); t.lastStatus = 'ok'; t.runCount++; t.lastOutput = 'mock run'; addEvent('trigger_fired', { nodeId: t.nodeId, nodeName: findNode(t.nodeId)?.name, title: `Trigger ran: ${t.name}`, detail: `${t.action.type} action on manual — mock run` }); return { ok: true, output: 'mock run', startedAt: t.lastRunAt, durationMs: 42 }; });
   on('POST', /^\/api\/actions\/test$/, (m, body) => ({ ok: true, output: `mock: would run a ${body?.action?.type} action`, startedAt: iso(Date.now()), durationMs: 12, statusCode: body?.action?.type === 'http' ? 200 : 0 }));
-  on('GET', /^\/api\/endpoints$/, () => clone(endpoints));
+  on('GET', /^\/api\/endpoints$/, () => clone(endpoints).map((e) => ({ allowNoToken: false, ...e, hasToken: !!e.token })));
   on('POST', /^\/api\/endpoints$/, (m, body) => { const e = { ...body, id: endpoints.length ? Math.max(...endpoints.map((x) => x.id)) + 1 : 1, slug: (body.slug || body.name || 'hook').toLowerCase().replace(/[^a-z0-9_-]+/g, '-'), lastCalledAt: null, lastStatus: '', lastOutput: '', callCount: 0, createdAt: iso(Date.now()), updatedAt: iso(Date.now()) }; if (endpoints.some((x) => x.slug === e.slug)) throw err(400, `an endpoint with the slug "${e.slug}" already exists`); endpoints.push(e); return clone(e); });
   on('PUT', /^\/api\/endpoints\/(\d+)$/, (m, body) => { const e = endpoints.find((x) => x.id === Number(m[1])); if (!e) throw err(404, 'not found'); Object.assign(e, body, { id: e.id, updatedAt: iso(Date.now()) }); return clone(e); });
   on('DELETE', /^\/api\/endpoints\/(\d+)$/, (m) => { const i = endpoints.findIndex((x) => x.id === Number(m[1])); if (i < 0) throw err(404, 'not found'); endpoints.splice(i, 1); return { ok: true }; });
@@ -1196,10 +983,40 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     ],
     disks: [{ name: 'sda', auto: true }, { name: 'nvme0n1', auto: true }],
     mounts: [{ name: '/', detail: '/dev/sda2 · ext4', auto: true }, { name: '/srv/media', detail: '/dev/sdb1 · xfs', auto: true }],
+    // What the machine could watch (#62), sent with its check-in.
+    services: [
+      { name: 'cron', detail: 'running · Regular background program processing daemon' },
+      { name: 'docker', detail: 'running · Docker Application Container Engine' },
+      { name: 'nginx', detail: 'stopped · A high performance web server and a reverse proxy server' },
+      { name: 'smbd', detail: 'running · Samba SMB Daemon' },
+      { name: 'ssh', detail: 'running · OpenBSD Secure Shell server' },
+    ],
+    processes: [
+      { name: 'containerd', detail: '1 running' }, { name: 'Plex Media Server', detail: '1 running' },
+      { name: 'smbd', detail: '3 running' }, { name: 'sshd', detail: '2 running' },
+    ],
   });
+  // The services and programs the computer GWatch "runs on" watches, set
+  // from its hardware panel, and the NAS agent's own record. Both are `var`
+  // because the seeded history is generated (initState) before this part of
+  // the mock has run, and a reading taken then must still find them.
+  var localWatch; // eslint-disable-line no-var
+  var nasAgent; // eslint-disable-line no-var
+  function nasWatchDefault() { return { services: ['docker', 'smbd'], processes: ['Plex Media Server'] }; }
   const agents = [
-    { id: 1, name: 'Living room NAS', nodeId: null, prefix: 'gwa_k3m9vq2x', enabled: true, createdBy: 'local', createdAt: ago(21 * DAY), revokedAt: null, lastSeenAt: ago(40e3), lastAddr: '192.168.1.24:52104', lastVersion: '0.5.0', hostname: 'nas.lan', os: 'linux', arch: 'arm64', tokenViewable: true, collect: {}, inventory: mockInventory(), checkedInAt: ago(4 * MIN) },
+    { id: 1, name: 'Living room NAS', nodeId: null, prefix: 'gwa_k3m9vq2x', enabled: true, createdBy: 'local', createdAt: ago(21 * DAY), revokedAt: null, lastSeenAt: ago(40e3), lastAddr: '192.168.1.24:52104', lastVersion: '0.5.0', hostname: 'nas.lan', os: 'linux', arch: 'arm64', tokenViewable: true, collect: nasWatchDefault(), inventory: mockInventory(), checkedInAt: ago(4 * MIN), collector: false, collectorAllowed: true, collectorChecks: 0, collectorStatus: '' },
   ];
+  nasAgent = agents[0];
+  // What the server works out about a collector (internal/engine/collectors.go),
+  // done the simple way: how many network checks point at it, and from the two
+  // switches whether it is off, waiting, idle or running.
+  const COLLECTABLE = ['ping', 'tcp', 'http', 'keyword', 'json', 'cert', 'dns', 'snmp'];
+  function withCollector(a) {
+    const n = nodes.filter((x) => x.enabled !== false && String(x.collectorId) === String(a.id))
+      .reduce((sum, x) => sum + x.checks.filter((c) => c.enabled !== false && COLLECTABLE.includes(c.type)).length, 0);
+    const status = !a.collector ? '' : (!a.collectorAllowed || a.revokedAt || !a.enabled) ? 'waiting' : n ? 'running' : 'idle';
+    return { ...clone(a), collectorChecks: n, collectorStatus: status, collectorSeenAt: status === 'running' ? ago(20e3) : null };
+  }
   // The tokens themselves, kept apart from the agent objects the way the server
   // keeps them apart from the list: only the reveal route hands one out.
   const agentTokens = { 1: { current: 'gwa_k3m9vq2xabcdefghij234567abcdefghij234567', pending: '' } };
@@ -1246,6 +1063,7 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
         : [
           { mount: '/', device: '/dev/mmcblk0p2', fsType: 'ext4', totalBytes: 62914560000, usedBytes: 24159191040, freeBytes: 38755368960, usedPct: 38.4 },
           { mount: '/srv/media', device: '/dev/sda1', fsType: 'ext4', totalBytes: rootTotal, usedBytes: rootUsed, freeBytes: rootTotal - rootUsed, usedPct: Math.round((rootUsed / rootTotal) * 1000) / 10 },
+          { mount: '/tank', device: 'tank', fsType: 'zfs', totalBytes: 2611340115968, usedBytes: 1288490188800, freeBytes: 1322849927168, usedPct: 49.3, datasets: 4 },
         ],
       interfaces: [{
         name: key === 'local' ? 'Ethernet' : 'eth0', up: true, speedMbit: 1000,
@@ -1264,16 +1082,55 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
         writeOpsPerSec: Math.round(2 + 40 * wave(31 * MIN, 0.7)),
         busyPct: Math.round(60 * wave(11 * MIN, 2.4) * 10) / 10,
       }],
+      // The Linux machine also has what only Linux reports: its sensors, the
+      // kernel's pressure figures and a ZFS pool (#132).
+      ...(key === 'local' ? {} : {
+        temperatures: [
+          { name: 'cpu_thermal/temp1', celsius: Math.round((48 + 14 * wave(23 * MIN, 0.4)) * 10) / 10, critCelsius: 90 },
+          { name: 'drivetemp/temp1', celsius: 36, highCelsius: 55, critCelsius: 65 },
+        ],
+        pressure: [
+          { resource: 'cpu', avg10: Math.round(8 * wave(23 * MIN, 0.4) * 100) / 100, avg60: 3.1 },
+          { resource: 'memory', avg10: 0, avg60: 0, fullAvg10: 0, fullAvg60: 0 },
+          { resource: 'io', avg10: Math.round(12 * wave(11 * MIN, 2.4) * 100) / 100, avg60: 4.2, fullAvg10: 1.1, fullAvg60: 0.6 },
+        ],
+        pools: [{ name: 'tank', health: 'ONLINE', sizeBytes: 3985729650688, allocBytes: 1979120929996, freeBytes: 2006608720692 }],
+      }),
+      // Watched services and programs (#62): the NAS watches what its agent
+      // was told to; this computer whatever its panel names, all running.
+      ...(key === 'local'
+        ? { services: (localWatch?.services || []).map((name) => ({ name, running: true, state: 'running' })), processes: (localWatch?.processes || []).map((name) => ({ name, count: 1 })) }
+        : {
+          services: ((nasAgent ? nasAgent.collect : nasWatchDefault())?.services || []).map((name) => {
+            const known = { docker: 'Docker Application Container Engine', smbd: 'Samba SMB Daemon', nginx: 'A high performance web server and a reverse proxy server' }[name];
+            return name === 'nginx' ? { name, running: false, state: 'failed', description: known } : known ? { name, running: true, state: 'active (running)', description: known } : { name, running: false, state: 'not found' };
+          }),
+          processes: ((nasAgent ? nasAgent.collect : nasWatchDefault())?.processes || []).map((name) => ({ name, count: name === 'Plex Media Server' ? 1 : name === 'smbd' ? 3 : 0 })),
+        }),
       warnings: key === 'local' ? [] : [],
     };
   }
 
   const hostSummaries = () => ([
-    { key: 'local', name: settings.general.instanceName || 'This computer', source: 'local', status: 'up', stale: false, metrics: mockReading('local', 'studio-pc', 11) },
+    { key: 'local', name: settings.general.instanceName || 'This computer', source: 'local', status: 'up', stale: false, metrics: mockReading('local', 'studio-pc', 11), ...((localWatch?.services?.length || localWatch?.processes?.length) ? { watch: clone(localWatch) } : {}) },
     { key: 'agent:1', name: agents[0].name, source: 'agent', agent: clone(agents[0]), nodeId: nas.id, nodeName: nas.name, status: 'up', stale: false, metrics: mockReading('agent:1', 'nas.lan', 29) },
   ]);
 
   on('GET', /^\/api\/hosts$/, () => hostSummaries());
+  on('GET', /^\/api\/hosts\/local\/watchable$/, () => ({
+    services: [
+      { name: 'Spooler', detail: 'running · Print Spooler' }, { name: 'W32Time', detail: 'running · Windows Time' },
+      { name: 'wuauserv', detail: 'stopped · Windows Update' }, { name: 'Plex Update Service', detail: 'running · Plex Update Service' },
+    ],
+    processes: [{ name: 'explorer.exe', detail: '1 running' }, { name: 'Plex Media Server.exe', detail: '1 running' }, { name: 'svchost.exe', detail: '84 running' }],
+    problems: [],
+  }));
+  on('PUT', /^\/api\/hosts\/local\/watch$/, (m, body) => {
+    const tidy = (l) => [...new Set((l || []).map((s) => String(s).trim()).filter(Boolean))].sort();
+    for (const n of [...(body?.services || []), ...(body?.processes || [])]) if (String(n).trim().startsWith('-')) throw err(400, `"${n}" is not a service name`);
+    localWatch = { services: tidy(body?.services), processes: tidy(body?.processes) };
+    return clone(localWatch);
+  });
   on('GET', /^\/api\/hosts\/([^/]+)$/, (m) => {
     const key = decodeURIComponent(m[1]);
     const found = hostSummaries().find((x) => x.key === key);
@@ -1304,7 +1161,7 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     }
     return { key, range: u.searchParams.get('range') || '24h', from: iso(NOW - span), to: iso(NOW), samples };
   });
-  on('GET', /^\/api\/agents$/, () => clone(agents));
+  on('GET', /^\/api\/agents$/, () => agents.map(withCollector));
   // Newer than the 0.5.0 the demo machine reports, so the "an older agent is
   // running" marks are visible in mock mode.
   on('GET', /^\/api\/agents\/latest$/, () => ({ version: '0.6.0', url: 'https://github.com/jxburros/GWatch/releases', checkedAt: iso(NOW - 3600e3) }));
@@ -1334,11 +1191,18 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
     if (agentTokens[a.id]) agentTokens[a.id].pending = '';
     return null;
   });
+  on('PUT', /^\/api\/agents\/(\d+)\/collector$/, (m, body) => {
+    const a = agentById(m[1]);
+    if (body?.enabled && a.revokedAt) throw err(409, 'this machine has been revoked; it cannot collect');
+    a.collector = !!body?.enabled;
+    addEvent('auth', { title: `Remote collecting turned ${a.collector ? 'on' : 'off'} for ${a.name}` });
+    return withCollector(a);
+  });
   on('PUT', /^\/api\/agents\/(\d+)\/collect$/, (m, body) => {
     const a = agentById(m[1]);
-    const bad = (body?.metrics || []).find((x) => !['cpu', 'memory', 'swap', 'load', 'disk', 'inodes', 'net', 'diskio'].includes(x));
+    const bad = (body?.metrics || []).find((x) => !['cpu', 'memory', 'swap', 'load', 'disk', 'inodes', 'net', 'diskio', 'temp', 'psi', 'pool'].includes(x));
     if (bad) throw err(400, `"${bad}" is not a metric family`);
-    a.collect = { metrics: body?.metrics || [], interfaces: body?.interfaces || [], disks: body?.disks || [], mounts: body?.mounts || [] };
+    a.collect = { metrics: body?.metrics || [], interfaces: body?.interfaces || [], disks: body?.disks || [], mounts: body?.mounts || [], services: body?.services || [], processes: body?.processes || [] };
     return clone(a);
   });
   on('PUT', /^\/api\/agents\/(\d+)$/, (m, body) => { const a = agents.find((x) => x.id === Number(m[1])); if (!a) throw err(404, 'not found'); Object.assign(a, { name: body.name ?? a.name, nodeId: body.nodeId ?? a.nodeId, enabled: body.enabled ?? a.enabled }); return clone(a); });
@@ -1399,7 +1263,9 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
         if (out && out.__csv != null) return new Response(out.__csv, { status: 200, headers: { 'Content-Type': 'text/csv' } });
         return new Response(JSON.stringify(out ?? {}), { status: 200, headers: { 'Content-Type': 'application/json' } });
       } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), { status: e.status || 500, headers: { 'Content-Type': 'application/json' } });
+        // An error may carry more of the body the real API answers with (a
+        // refused restore's list of problems, say).
+        return new Response(JSON.stringify({ ...(e.body || {}), error: e.message }), { status: e.status || 500, headers: { 'Content-Type': 'application/json' } });
       }
     }
     return new Response(JSON.stringify({ error: `mock: no route for ${method} ${u.pathname}` }), { status: 404, headers: { 'Content-Type': 'application/json' } });

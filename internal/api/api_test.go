@@ -184,7 +184,7 @@ func TestNodeLifecycleAndHistory(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != 200 || !strings.HasPrefix(string(body), "timestamp,avg_ms") || !strings.Contains(resp.Header.Get("Content-Type"), "text/csv") {
+	if resp.StatusCode != 200 || !strings.HasPrefix(string(body), "\uFEFFtimestamp,avg_ms") || !strings.Contains(resp.Header.Get("Content-Type"), "text/csv") {
 		t.Fatalf("csv: %d %q", resp.StatusCode, body)
 	}
 	// static app shell + fallback
@@ -356,7 +356,16 @@ func TestSettingsDashboardsMaintenanceBackups(t *testing.T) {
 	}
 	var health model.Health
 	call(t, ts, "GET", "/api/health", nil, &health)
-	if health.Backup.LastRestoreAt == nil || health.Backup.LastBackupFile != info.FileName || !health.SMTPConfigured {
+	// A restore first takes a backup of what it replaces (#148), so that is
+	// now the latest backup.
+	var restored struct {
+		SafetyBackup string `json:"safetyBackup"`
+	}
+	_ = json.Unmarshal(rb, &restored)
+	if restored.SafetyBackup == "" || restored.SafetyBackup == info.FileName {
+		t.Fatalf("no pre-restore backup was named: %s", rb)
+	}
+	if health.Backup.LastRestoreAt == nil || health.Backup.LastBackupFile != restored.SafetyBackup || !health.SMTPConfigured {
 		t.Fatalf("health: %+v", health.Backup)
 	}
 	if code := call(t, ts, "DELETE", "/api/backups/"+info.FileName, nil, nil); code != 200 {

@@ -180,6 +180,18 @@ func (s *Store) SetUserPassword(ctx context.Context, id int64, passwordHash stri
 	return s.DeleteUserSessions(ctx, id)
 }
 
+// ReplacePasswordHash swaps an account's password hash for an equivalent one —
+// the same password hashed again with another algorithm or stronger
+// parameters (#49) — but only while the stored hash is still oldHash, so a
+// password change that happened in the meantime is never undone. Unlike
+// SetUserPassword it leaves the account's sessions alone, because the password
+// itself has not changed. It returns ErrNotFound when the hash no longer
+// matches (or the account is gone), which callers may ignore.
+func (s *Store) ReplacePasswordHash(ctx context.Context, id int64, oldHash, newHash string) error {
+	res, err := s.exec(ctx, "UPDATE users SET password_hash = ? WHERE id = ? AND password_hash = ?", newHash, id, oldHash)
+	return affected(res, err)
+}
+
 // TouchUserLogin records a successful sign-in.
 func (s *Store) TouchUserLogin(ctx context.Context, id int64) error {
 	_, err := s.exec(ctx, "UPDATE users SET last_login_at = ? WHERE id = ?", fmtTime(time.Now()), id)

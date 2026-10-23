@@ -67,6 +67,14 @@ UninstallDisplayName={#AppName} {#AppVersion}
 ; the executable.
 UninstallDisplayIcon={app}\gwatch-agent.exe
 SetupLogging=yes
+; Authenticode (#120). The release passes /DCodeSign plus the matching
+; /S<name>=<command> (scripts/authenticode.ps1 -Action IsccArgs prints both),
+; and Inno Setup then signs the uninstaller it embeds and the finished setup
+; program. Without them the setup program is built unsigned, as it always was.
+#ifdef CodeSign
+SignTool={#CodeSign}
+SignedUninstaller=yes
+#endif
 
 LicenseFile=license.txt
 ; The agent's own mark -- the G in a deerstalker -- rather than GWatch's, so
@@ -81,9 +89,10 @@ WizardImageFile=assets\agent-wizard-large.bmp,assets\agent-wizard-large-2x.bmp
 ; light only -- so the badge that sits on it is the mark drawn on white.
 WizardSmallImageFile=assets\agent-wizard-small.bmp,assets\agent-wizard-small-2x.bmp
 WizardImageStretch=yes
-; The connect page asks four questions and explains the code underneath them,
-; which is more than the default wizard size is comfortable with.
-WizardSizePercent=110
+; The connect page asks four questions, has a Test connection button with room
+; for its answer, and explains the code underneath them, which is more than the
+; default wizard size is comfortable with.
+WizardSizePercent=120
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -103,14 +112,34 @@ Source: "{#ExePath}"; DestDir: "{app}"; DestName: "gwatch-agent.exe"; Flags: ign
 Source: "license.txt"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
 [Icons]
+; The control panel is the agent's front door for someone who does not use a
+; terminal (#64). It asks for an administrator's rights itself (UAC) when the
+; settings are the administrators' alone, which after this setup they are.
+Name: "{group}\GWatch Agent control panel"; Filename: "{app}\gwatch-agent.exe"; Parameters: "ui"; IconFilename: "{app}\gwatch-agent.exe"; Comment: "Status, settings, the log, updates and pairing for this machine's agent"
 Name: "{group}\Agent status"; Filename: "{cmd}"; Parameters: "/k """"{app}\gwatch-agent.exe"" status"""; IconFilename: "{app}\gwatch-agent.exe"; Comment: "Show whether the agent service is running"
 Name: "{group}\Hardware monitoring guide"; Filename: "{#DocsURL}/HARDWARE.md"; Comment: "What the agent reports and how to read it"
 Name: "{group}\Licence and terms"; Filename: "{app}\LICENSE.txt"
 Name: "{group}\Uninstall GWatch Agent"; Filename: "{uninstallexe}"
 
+[Run]
+; Both are offered on the last page (the first ticked, the second not), and run as
+; the person who started setup rather than as the administrator it elevated
+; to: a browser should not run elevated, and the notification-area icon
+; belongs in that person's sign-in, not the administrator's.
+Filename: "{code:GetMachineURL}"; Description: "Open this machine in GWatch"; Flags: postinstall shellexec nowait skipifsilent runasoriginaluser; Check: HasMachineURL
+; Optional and off by default (#53). `tray start-at-login` adds a value under
+; that person's HKCU Run key and then shows the icon; the uninstaller removes
+; the value again (below).
+Filename: "{app}\gwatch-agent.exe"; Parameters: "tray start-at-login"; Description: "Show the agent in the notification area (starts when you sign in)"; Flags: postinstall nowait skipifsilent runasoriginaluser runhidden unchecked
+
 [UninstallRun]
 Filename: "{app}\gwatch-agent.exe"; Parameters: "uninstall"; RunOnceId: "GWatchAgentServiceUninstall"; Flags: runhidden waituntilterminated
 Filename: "{sys}\sc.exe"; Parameters: "delete GWatchAgent"; RunOnceId: "GWatchAgentServiceFallback"; Flags: runhidden waituntilterminated
+; The notification-area icon: stop it starting at sign-in, then end any copy
+; still running (the service is gone by now, so every gwatch-agent.exe left is
+; an icon or a control panel), so that its executable can be removed.
+Filename: "{app}\gwatch-agent.exe"; Parameters: "tray stop-at-login"; RunOnceId: "GWatchAgentTrayLogin"; Flags: runhidden waituntilterminated
+Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM gwatch-agent.exe"; RunOnceId: "GWatchAgentTrayStop"; Flags: runhidden waituntilterminated
 
 [Code]
 var
@@ -119,9 +148,17 @@ var
   CodeEdit: TNewEdit;
   NameEdit: TNewEdit;
   InsecureCheck: TNewCheckBox;
+  TestButton: TNewButton;
+  TestResult: TNewStaticText;
   { How the pairing went, for the last page to report (#69): 0 an upgrade
     (already paired), 1 paired just now, 2 the pairing failed. }
   PairOutcome: Integer;
+  { The last connection test (#63): what was tested, and whether it worked,
+    so that pressing Next after a successful test does not test again. }
+  TestedServer: String;
+  TestedInsecure: Boolean;
+  TestedOK: Boolean;
+  TestMessage: String;
 
 // The wizard skin. It is included here, after this script's own
 // declarations, so that its procedures are defined before
@@ -145,6 +182,66 @@ begin
   L.Top := ATop;
   L.Width := Page.SurfaceWidth;
   L.Caption := ACaption;
+end;
+
+{ Where `gwatch-agent probe` and `gwatch-agent install` leave their outcome
+  (--result-file): a small INI file, because GetIniString reads one in a
+  single call. The agent writes it as UTF-16 with a byte-order mark, which is
+  what lets a machine name that is not plain ASCII come through intact. }
+function ProbeResultFile: String;
+begin
+  Result := ExpandConstant('{tmp}\probe-result.ini');
+end;
+
+function InstallResultFile: String;
+begin
+  Result := ExpandConstant('{tmp}\install-result.ini');
+end;
+
+{ Runs `gwatch-agent probe` on the address, from a copy of the agent taken
+  out of this setup program, since nothing is installed yet. It reaches the
+  server, checks its certificate under the setting chosen, and checks that
+  what answers is a GWatch -- and presents no pairing code, so a test spends
+  nothing. Returns whether it worked; TestMessage says how, in one line. }
+function RunProbe(Server: String; Insecure: Boolean): Boolean;
+var
+  Exe, Args: String;
+  ResultCode: Integer;
+begin
+  Exe := ExpandConstant('{tmp}\gwatch-agent.exe');
+  { ExtractTemporaryFile finds the file by the name it is installed under
+    (DestName in [Files]), which is gwatch-agent.exe. }
+  if not FileExists(Exe) then
+    ExtractTemporaryFile('gwatch-agent.exe');
+  DeleteFile(ProbeResultFile);
+  Args := 'probe --server "' + Server + '" --result-file "' + ProbeResultFile + '"';
+  if Insecure then
+    Args := Args + ' --insecure';
+  if not Exec(Exe, Args, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    ResultCode := -1;
+  Result := (ResultCode = 0);
+  TestMessage := GetIniString('result', 'message', '', ProbeResultFile);
+  if TestMessage = '' then
+    TestMessage := 'The connection could not be tested (the agent did not run).';
+  TestedServer := Server;
+  TestedInsecure := Insecure;
+  TestedOK := Result;
+end;
+
+procedure TestButtonClick(Sender: TObject);
+begin
+  if Trim(ServerEdit.Text) = '' then
+  begin
+    TestResult.Caption := 'Enter the server address first.';
+    Exit;
+  end;
+  TestButton.Enabled := False;
+  TestResult.Caption := 'Testing...';
+  if RunProbe(Trim(ServerEdit.Text), InsecureCheck.Checked) then
+    TestResult.Caption := 'Connected. ' + TestMessage
+  else
+    TestResult.Caption := 'Not connected: ' + TestMessage;
+  TestButton.Enabled := True;
 end;
 
 procedure InitializeWizard;
@@ -188,10 +285,31 @@ begin
   InsecureCheck.Caption := 'The server uses a self-signed certificate';
   InsecureCheck.Checked := (ExpandConstant('{param:INSECURE|0}') = '1');
 
+  { Test connection (#63): proves the address before the service is
+    installed, without presenting the pairing code, which is good once. }
+  TestButton := TNewButton.Create(ConnectPage);
+  TestButton.Parent := ConnectPage.Surface;
+  TestButton.Left := 0;
+  TestButton.Top := 168;
+  TestButton.Width := 120;
+  TestButton.Height := 23;
+  TestButton.Caption := 'Test connection';
+  TestButton.OnClick := @TestButtonClick;
+
+  TestResult := TNewStaticText.Create(ConnectPage);
+  TestResult.Parent := ConnectPage.Surface;
+  TestResult.Left := 128;
+  TestResult.Top := 168;
+  TestResult.Width := ConnectPage.SurfaceWidth - 128;
+  TestResult.AutoSize := False;
+  TestResult.WordWrap := True;
+  TestResult.Height := 34;
+  TestResult.Caption := 'Checks the address answers as a GWatch. The code is not used.';
+
   Note := TNewStaticText.Create(ConnectPage);
   Note.Parent := ConnectPage.Surface;
   Note.Left := 0;
-  Note.Top := 172;
+  Note.Top := 206;
   Note.Width := ConnectPage.SurfaceWidth;
   Note.Caption :=
     'A pairing code is good for one machine and expires after about fifteen ' +
@@ -200,13 +318,14 @@ begin
     'and GWatch is given no way back into this computer.';
   Note.AutoSize := False;
   Note.WordWrap := True;
-  Note.Height := 60;
+  Note.Height := 56;
 
   { The server address and the pairing code are machine text, so they are typed
     in the face the application shows machine text in. }
   SkinMono(ServerEdit);
   SkinMono(CodeEdit);
   SkinNote(Note);
+  SkinNote(TestResult);
   ApplyGWatchSkin;
 end;
 
@@ -282,8 +401,40 @@ begin
              'It looks like ABCD-2345. The letters I, L, O and U and the ' +
              'digits 0 and 1 never appear in one.', mbError, MB_OK);
       Result := False;
+    end
+    else if not (TestedOK and (TestedServer = GetServer) and (TestedInsecure = WantInsecure)) then
+    begin
+      { Not tested yet, or tested with something else: test now, since the
+        code is spent the moment the service is installed. A failure is the
+        person's call -- the server may simply be down for a minute -- and a
+        silent install goes ahead, as it always has, and reports the outcome
+        in its exit status. }
+      if not RunProbe(GetServer, WantInsecure) then
+      begin
+        if not WizardSilent then
+          TestResult.Caption := 'Not connected: ' + TestMessage;
+        if SuppressibleMsgBox('This computer could not confirm that ' + GetServer +
+             ' is a GWatch server it can reach:' + #13#10 + #13#10 + TestMessage + #13#10 + #13#10 +
+             'Installing now would very likely spend the pairing code for nothing. ' +
+             'Install anyway?', mbConfirmation, MB_YESNO, IDYES) = IDNO then
+          Result := False;
+      end
+      else if not WizardSilent then
+        TestResult.Caption := 'Connected. ' + TestMessage;
     end;
   end;
+end;
+
+{ For the "Open this machine in GWatch" box on the last page: the link the
+  install step's result names, when pairing worked. }
+function GetMachineURL(Param: String): String;
+begin
+  Result := GetIniString('result', 'url', '', InstallResultFile);
+end;
+
+function HasMachineURL: Boolean;
+begin
+  Result := (PairOutcome = 1) and (GetMachineURL('') <> '');
 end;
 
 function ServiceExists: Boolean;
@@ -308,6 +459,14 @@ begin
     if FileExists(ExistingExe) then
       Exec(ExistingExe, 'stop', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   end;
+  // With the service stopped, any gwatch-agent.exe still running from the
+  // install folder is the notification-area icon or a control panel, and
+  // either would keep the executable from being replaced. The icon comes back
+  // at the next sign-in; the temporary copy that tested the connection has
+  // already finished. (A brace comment cannot hold the folder's constant: its
+  // closing brace would end the comment.)
+  if FileExists(ExpandConstant('{app}\gwatch-agent.exe')) then
+    Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM gwatch-agent.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
 { The last page says what actually happened (#69). Pairing is the step the
@@ -315,26 +474,56 @@ end;
   worked -- and which server this machine now reports to -- rather than being
   shown the same words whether it worked or not. }
 procedure ShowPairOutcome;
+var
+  PairedName, Service, Why: String;
 begin
+  { What the install step itself said (#63): the name GWatch gave this
+    machine, the state of the service, or the reason it failed, rather than
+    the wizard's guess at them. }
+  PairedName := GetIniString('result', 'name', '', InstallResultFile);
+  Service := GetIniString('result', 'service', '', InstallResultFile);
+  Why := GetIniString('result', 'message', '', InstallResultFile);
+  { The agent names the machine only once GWatch has paired it, so a failure
+    that still carries a name failed after pairing: most often the service
+    would not start, or the first reading did not go through. }
+  if (PairOutcome = 2) and (PairedName <> '') then
+  begin
+    WizardForm.FinishedHeadingLabel.Caption := 'Paired, but not reporting yet';
+    WizardForm.FinishedLabel.Caption :=
+      'Paired with ' + GetServer + ' as ' + PairedName + ', but then:' + #13#10 + #13#10 +
+      Why + #13#10 + #13#10 +
+      'The GWatch Agent control panel in the Start menu shows the service and its ' +
+      'log, and can start it or pair the machine again.';
+    Exit;
+  end;
+  if PairedName = '' then
+    PairedName := GetMachineName;
+  if Service = '' then
+    Service := 'running';
   case PairOutcome of
     1:
       begin
         WizardForm.FinishedHeadingLabel.Caption := 'Paired with GWatch';
-        WizardForm.FinishedLabel.Caption :=
-          'This computer is paired with ' + GetServer + ' and the agent has sent its ' +
-          'first reading.' + #13#10 + #13#10 +
-          'It runs as a Windows service and starts with this computer. In GWatch, ' +
-          'it appears on its own node straight away -- the pairing dialog there ' +
-          'says so too.';
+        if PairedName <> '' then
+          WizardForm.FinishedLabel.Caption := 'Paired as ' + PairedName + ', service ' + Service + '.'
+        else
+          WizardForm.FinishedLabel.Caption := 'Paired, service ' + Service + '.';
+        WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10 + #13#10 +
+          'This computer reports to ' + GetServer + ', and GWatch has accepted its ' +
+          'first reading. The agent runs as a Windows service and starts with this ' +
+          'computer; the GWatch Agent control panel in the Start menu shows what it ' +
+          'is doing.';
       end;
     2:
       begin
         WizardForm.FinishedHeadingLabel.Caption := 'Installed, but not paired';
+        if Why = '' then
+          Why := 'the agent did not say why';
         WizardForm.FinishedLabel.Caption :=
           'The agent is installed but could not pair with ' + GetServer + ', so ' +
-          'this computer is not reporting yet.' + #13#10 + #13#10 +
-          'Get a fresh pairing code in GWatch and run, from an Administrator ' +
-          'command prompt:' + #13#10 + #13#10 +
+          'this computer is not reporting yet:' + #13#10 + #13#10 + Why + #13#10 + #13#10 +
+          'Get a fresh pairing code in GWatch and pair it from the GWatch Agent ' +
+          'control panel in the Start menu, or from an Administrator command prompt:' + #13#10 + #13#10 +
           '  gwatch-agent install --server <address> --code <code>';
       end;
   end;
@@ -374,7 +563,9 @@ begin
   if ServiceExists then
     Exec(Exe, 'uninstall', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
-  Args := 'install --server "' + GetServer + '" --code ' + GetCode;
+  DeleteFile(InstallResultFile);
+  Args := 'install --server "' + GetServer + '" --code ' + GetCode +
+    ' --result-file "' + InstallResultFile + '"';
   if GetMachineName <> '' then
     Args := Args + ' --name "' + GetMachineName + '"';
   if WantInsecure then
@@ -388,7 +579,8 @@ begin
     PairOutcome := 2;
   if ResultCode <> 0 then
     Answer := SuppressibleMsgBox(
-      'The agent could not pair with ' + GetServer + '.' + #13#10 + #13#10 +
+      'The agent could not pair with ' + GetServer + ':' + #13#10 + #13#10 +
+      GetIniString('result', 'message', '(no reason was given)', InstallResultFile) + #13#10 + #13#10 +
       'The usual causes are a pairing code that has expired or already been ' +
       'used, a server address this computer cannot reach, or GWatch not ' +
       'running. The files have been installed, so you can finish the pairing ' +

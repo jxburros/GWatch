@@ -73,6 +73,18 @@ jobs:
         \ fi\n# The tests themselves live outside web/ (tests/web/), not because\n# they belong to a different feature\
         \ but so //go:embed web never\n# picks them up and ships them inside gwatch.exe \u2014 see tests/web/.\n\
         npm ci\nnpm test\n"
+    - name: Web type check
+      # tsc over the web/ files marked // @ts-check (JSDoc types; nothing is
+      # compiled). tsconfig.json says how to bring another file under it.
+      run: npm run typecheck
+    - name: The mock API matches the real one
+      # internal/api/mock_contract_test.go records the shape of the real
+      # handlers' answers in tests/contract/api-shapes.json (and fails if they
+      # moved without it); tests/web/mock-contract.test.mjs holds web/mock.js
+      # to that file. Both also run in the suites above; this step names them.
+      run: |
+        go test -count=1 -run TestMockContractShapes ./internal/api
+        node --test tests/web/mock-contract.test.mjs
     - name: PowerShell scripts parse
       shell: pwsh
       run: |
@@ -114,7 +126,10 @@ jobs:
             @{ Script = "scripts\installer\gwatch.iss";       Exe = "dist\gwatch-windows-amd64.exe" },
             @{ Script = "scripts\installer\gwatch-agent.iss"; Exe = "dist\gwatch-agent-windows-amd64.exe" })) {
           $exe = Join-Path $PWD $pair.Exe
-          & $iscc "/DAppVersion=$version" "/DExePath=$exe" $pair.Script
+          # The release's unsigned path: with no signer set up this adds nothing.
+          $signArgs = @(pwsh -NoProfile -File scripts/authenticode.ps1 -Action IsccArgs)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $iscc @signArgs "/DAppVersion=$version" "/DExePath=$exe" $pair.Script
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         }
         Get-ChildItem scripts\installer\Output
@@ -136,6 +151,17 @@ jobs:
         & $iscc "/DAppVersion=$version" "/DExePath=$exe" "/Fgwatch-agent-winget-setup-$version" "scripts\installer\gwatch-agent.iss"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         if (-not (Test-Path "scripts\installer\Output\gwatch-agent-winget-setup-$version.exe")) { Write-Host "::error::ISCC did not write gwatch-agent-winget-setup-$version.exe"; exit 1 }
+    - name: Authenticode dry run (no secrets)
+      # The release's signing logic without its Azure account: the unsigned,
+      # half-configured and configured paths of the configuration step, then the
+      # signed path end to end with a throwaway certificate -- executables,
+      # setup programs, the uninstallers Inno Setup signs, and verification.
+      shell: pwsh
+      run: |
+        pwsh -NoProfile -File scripts/ci/authenticode-dry-run.ps1 `
+          -Iscc "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
+          -Monitor dist\gwatch-windows-amd64.exe -Agent dist\gwatch-agent-windows-amd64.exe
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   linux:
     name: Test (Linux)
     runs-on: ubuntu-latest
@@ -215,27 +241,40 @@ jobs:
         go build ./...
         go test -count=1 ./...
     - name: Linux service installation and journal
+      # gwatch install writes its own hardened gwatch.service (#125): the
+      # program in /usr/local/bin, a gwatch user, data in /var/lib/gwatch.
+      # The full lifecycle is the linux-service job; this is the quick check.
       run: |
         go build -o "$RUNNER_TEMP/gwatch-install-test" .
-        sudo "$RUNNER_TEMP/gwatch-install-test" install --data-dir "$RUNNER_TEMP/gwatch-service-data" --listen 127.0.0.1:7239 --no-start
-        # The root service executable is inside a protected root-only directory.
-        sudo systemd-analyze verify /etc/systemd/system/GWatch.service
-        systemctl cat GWatch | grep -q 'RestartSec=5s'
-        systemctl cat GWatch | grep -q '/usr/local/libexec/gwatch/gwatch'
-        if systemctl is-active --quiet GWatch; then echo 'no-start was ignored'; exit 1; fi
-        sudo systemctl start GWatch
+        # The runner leaves /usr/local/bin writable by its own user; gwatch
+        # install refuses a directory anyone but root can write to.
+        sudo chown root:root /usr/local /usr/local/bin
+        sudo chmod go-w /usr/local /usr/local/bin
+        sudo "$RUNNER_TEMP/gwatch-install-test" install --listen 127.0.0.1:7239 --no-start
+        sudo systemd-analyze verify /etc/systemd/system/gwatch.service
+        systemctl cat gwatch | grep -q 'RestartSec=5s'
+        systemctl cat gwatch | grep -q 'User=gwatch'
+        systemctl cat gwatch | grep -q '/usr/local/bin/gwatch'
+        if systemctl is-active --quiet gwatch; then echo 'no-start was ignored'; exit 1; fi
+        sudo systemctl start gwatch
         for i in $(seq 1 60); do
           if curl -fsS http://127.0.0.1:7239/api/health; then break; fi
           sleep 1
         done
         curl -fsS http://127.0.0.1:7239/api/health
-        sudo journalctl -u GWatch --no-pager | grep -q 'starting'
-        sudo /usr/local/libexec/gwatch/gwatch uninstall
-        if systemctl cat GWatch >/dev/null 2>&1; then echo 'unit remained after uninstall'; exit 1; fi
+        sudo journalctl -u gwatch --no-pager | grep -q 'starting'
+        sudo /usr/local/bin/gwatch uninstall --purge --yes
+        if systemctl cat gwatch >/dev/null 2>&1; then echo 'unit remained after uninstall'; exit 1; fi
     - name: Shell installer lint
       run: |
         shellcheck scripts/install.sh scripts/install-agent.sh scripts/test-installers.sh
         sh scripts/test-installers.sh
+    - name: Release workflow signs before it hashes
+      # Authenticode before the setup programs, the checksums, the winget hash
+      # and the ed25519 signatures; signing steps only when configured (#120).
+      run: |
+        python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+        python3 scripts/ci/check-authenticode-order.py .github/workflows/release.yml
     - name: Staticcheck
       run: |
         go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
@@ -330,6 +369,70 @@ jobs:
         curl -s http://127.0.0.1:7230/api/health; echo
         docker stop gwatch-smoke
         docker rm gwatch-smoke
+  server-packaging:
+    name: Server packages
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+      with:
+        go-version: 1.26.x
+        check-latest: true
+        cache: true
+    - name: Lint the package scripts
+      run: shellcheck packaging/build-server.sh packaging/nfpm/gwatch/*.sh scripts/ci/linux-service-test.sh
+    - name: Build the .deb and .rpm
+      run: |
+        version="$(tr -d ' \t\r\n' < VERSION)"
+        echo "GWATCH_VERSION=$version" >> "$GITHUB_ENV"
+        sh packaging/nfpm/gwatch/package.sh "$version" dist/server-packages amd64 arm64 arm
+        # A newer .deb of the same tree, to upgrade over the first one.
+        FORMATS=deb sh packaging/nfpm/gwatch/package.sh "${version}+ci" dist/server-upgrade amd64
+    - name: Inspect the .deb
+      run: |
+        deb="dist/server-packages/gwatch_${GWATCH_VERSION}-1_amd64.deb"
+        dpkg-deb -I "$deb"
+        dpkg-deb -c "$deb" | tee contents.txt
+        for want in ./usr/bin/gwatch ./usr/lib/systemd/system/gwatch.service ./usr/lib/sysusers.d/gwatch.conf ./etc/gwatch/gwatch.env; do
+          grep -q " $want\$" contents.txt || { echo "::error::$deb does not contain $want"; exit 1; }
+        done
+        grep -q '^-rw------- .* ./etc/gwatch/gwatch.env$' contents.txt || { echo "::error::gwatch.env must be 0600: it may hold a database password"; exit 1; }
+        dpkg-deb -I "$deb" conffiles | grep -qx /etc/gwatch/gwatch.env
+        for arch in amd64 arm64 armhf; do test -s "dist/server-packages/gwatch_${GWATCH_VERSION}-1_${arch}.deb"; done
+        for arch in x86_64 aarch64 armv7hl; do test -s "dist/server-packages/gwatch-${GWATCH_VERSION}-1.${arch}.rpm"; done
+    - name: Install, upgrade, remove and purge the .deb
+      env:
+        # The packaged unit scores 1.7 on systemd 255; anything above 2.0
+        # means some of its hardening went missing.
+        GWATCH_MAX_EXPOSURE: '2.0'
+      run: |
+        sh scripts/ci/linux-service-test.sh package \
+          "./dist/server-packages/gwatch_${GWATCH_VERSION}-1_amd64.deb" \
+          "./dist/server-upgrade/gwatch_${GWATCH_VERSION}+ci-1_amd64.deb"
+    - name: No package can pass for a self-update asset
+      run: |
+        if find dist/server-packages dist/server-upgrade -type f | xargs -n1 basename \
+             | grep -E '^gwatch[-_](linux|darwin|windows)[-_](amd64|arm64|arm)(\.exe)?$'; then
+          echo "::error::a package output is named like a self-update asset"; exit 1
+        fi
+  linux-service:
+    name: Service lifecycle (Linux)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+      with:
+        go-version: 1.26.x
+        check-latest: true
+        cache: true
+    - name: Install, check, use and purge the service
+      run: |
+        go build -o "$RUNNER_TEMP/gwatch" .
+        sh scripts/ci/linux-service-test.sh binary "$RUNNER_TEMP/gwatch"
   agent-packaging:
     name: Agent packages
     runs-on: ubuntu-latest
@@ -352,7 +455,7 @@ jobs:
         deb="dist/packages/gwatch-agent_${AGENT_VERSION}-1_amd64.deb"
         dpkg-deb -I "$deb"
         dpkg-deb -c "$deb" | tee contents.txt
-        for want in ./usr/bin/gwatch-agent ./usr/lib/systemd/system/gwatch-agent.service ./etc/gwatch-agent/agent.env ./var/lib/gwatch-agent/; do
+        for want in ./usr/bin/gwatch-agent ./usr/lib/systemd/system/gwatch-agent.service ./etc/gwatch-agent/agent.env ./var/lib/gwatch-agent/ ./usr/share/applications/gwatch-agent.desktop ./usr/share/pixmaps/gwatch-agent.png; do
           grep -q " $want\$" contents.txt || { echo "::error::$deb does not contain $want"; exit 1; }
         done
         grep -q '^-rw------- .* ./etc/gwatch-agent/agent.env$' contents.txt || { echo "::error::agent.env must be 0600: it may hold a token"; exit 1; }

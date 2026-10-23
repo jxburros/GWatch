@@ -5,7 +5,7 @@ and several of them close off options that look obvious from the outside — so
 they are written down, with the reasoning, rather than left to be rediscovered
 or quietly reversed.
 
-Dated 2026-09-21; entries 10 and 11 added 2026-09-27; entries 12 to 15 and the update to 6 added 2026-10-14. Each entry says what was
+Dated 2026-09-21; entries 10 and 11 added 2026-09-27; entries 12 to 15 and the update to 6 added 2026-10-14; further updates to 6 (the log, elevation, the Windows tray) 2026-10-23; entry 16 (remote collectors) and its row in 12 added 2026-10-23. Each entry says what was
 decided, what was rejected, and what would have to change for the decision to
 be worth revisiting.
 
@@ -131,7 +131,22 @@ prove annoying.
 file (last report, last check-in, readings held, what the machine could
 collect) after each report; the panel reads it. It holds no token and no
 readings, and it is the only thing the two processes share besides the
-configuration file.
+configuration file. (Since 2026-10-23 the service also keeps its own log there,
+`agent.log`, so the panel can show the end of it: owner-only, capped at 1 MiB
+plus one older file, tokens removed as it is written. It is the one thing the
+agent now writes besides its configuration and the status file, and it is
+there because a Windows service's log otherwise goes nowhere at all.)
+
+**Asking for rights (2026-10-23).** Opened from a Start menu, an application
+menu or the tray, `sudo` is no answer, so the panel uses the desktop's own
+elevation prompt (UAC, polkit's `pkexec`, the macOS administrator dialog) in two
+places only: a service button the service manager refused, and opening the
+panel over settings this account cannot read. In the second case the elevated
+copy serves the panel and the unelevated one opens the browser: the elevated
+copy writes the one-time page into a private folder the unelevated copy made
+and passed by path, so the code is still never on a command line and no
+browser runs as root. Declining the prompt leaves things as they were, with the
+same "use sudo" advice.
 
 **What guards it:** loopback only; a Host check against DNS rebinding; a random
 one-time code in the address, traded for a separate cookie and dropped from the
@@ -158,6 +173,16 @@ reporting makes its machine unhealthy on the dashboard and raises the alert.
 **Revisit if:** the panel ships and people want it glanceable. By then the tray
 is a thin shim over an interface that exists, buildable on the platforms where
 it is easy.
+
+**Revisited for Windows (2026-10-23, #53).** `gwatch-agent tray` is that shim,
+on the one platform where it is easy: pure Go over user32 and shell32, no cgo,
+no second binary, off by default, started at sign-in only if the setup
+program's box is ticked (a per-user Run value the uninstaller removes). It
+shows the service's state and the status file and opens the panel; it can do
+nothing the panel cannot. To let it read the status file unelevated, the
+service gives that one file an access list readable by signed-in users; the
+folder, the configuration and the token stay the administrators'. macOS and
+Linux stay deferred for the reasons above, which have not changed.
 
 ## 7. Network throughput will be shown in bits, with bytes alongside.
 
@@ -329,6 +354,7 @@ it:
 | `collect` | Narrows which readings it sends, *inside* the limit in its own file. Nothing here can widen what the machine's owner allows. |
 | `latestAgent` | Says in its log that a newer agent exists. It changes nothing: the agent still looks for releases on its own schedule, from the release feed, and verifies what it downloads. |
 | `token` | Present only while an administrator is rotating this machine's token, and only to a caller that authenticated with the token being replaced. Taken up only if the agent's own file is where its token lives. |
+| `collector` | Added by entry 16. Present only when an administrator has made this agent a remote collector *and* the check-in said the machine's own `agent.json` allows it: definitions of built-in network checks to run. Validated by the agent and ignored altogether by one whose file does not allow collecting. |
 
 There is no field for a URL, a command, a script, a file to write or a version to
 install, and a reply that carries anything else is read as the fields above and
@@ -408,12 +434,23 @@ says where the new token has to go.
 **Rejected: live reload.** An edit applies on restart, which is what was asked
 for and needs no watcher, signal or Windows equivalent of either.
 
-**Held readings are memory only.** Up to `buffer` (six hours by default) of
-readings are held while GWatch is unreachable and sent oldest first, so an
-outage leaves a gap no longer than itself. Not written to disk: the agent stores
-nothing on a machine beyond its configuration, and hours-old readings lost to a
-restart mid-outage are not worth a spool file. GWatch already accepts readings up
-to 48 hours old, which is also the ceiling on `buffer`.
+**Held readings are kept in a small bounded file.** Up to `buffer` (six hours by
+default) of readings are held while GWatch is unreachable and sent oldest first,
+so an outage leaves a gap no longer than itself. *Revised* (issue #74): they were
+memory only at first, on the grounds that the agent should store nothing beyond
+its configuration; but the outages worth surviving are exactly the ones that
+come with a power cut or a reboot, and a buffer that forgets everything then is
+not much of one. So they are now kept in `agent-queue.jsonl` beside `agent.json`,
+under three limits — the `buffer` age, 4,000 readings, about 8 MB — with the
+oldest dropped first, because the watched machine must never be filled up by its
+own agent. Nothing is written while GWatch answers; a held reading is appended
+(one small write per interval through an outage) and the file is rewritten
+atomically only when readings leave its front. GWatch accepts readings up to 48
+hours old, which is also the ceiling on `buffer`. A late reading is marked
+(`X-GWatch-Held`) and GWatch refuses one whose time is implausible rather than
+filing it at arrival, which is what it still does for a live reading from a
+machine with a wrong clock: yesterday's reading stamped "now" would be judged as
+the machine's current state.
 
 ## 14. Automatic collection leaves out what looks like scaffolding.
 
@@ -504,6 +541,104 @@ minute for the same reading, or a rule for choosing between them.
 **Rejected: judging only on the schedule** (the smallest change). A reading the
 agent held back would never reach the history, which would make the held-back
 readings of entry 13 a feature that keeps them in memory for nothing.
+
+## 16. An agent may run GWatch's network checks from where it is, if both sides agree.
+
+**Decided** (2026-10-23, issue #123). A paired agent can be a **remote
+collector**: it runs the ping, TCP, HTTP (and keyword, JSON and certificate),
+DNS and SNMP checks of the nodes an administrator points at it, on their
+intervals, and posts the results to `/ingest/results`, where they go through
+the engine's ordinary processing. It is how one GWatch watches a second site
+it cannot reach. `docs/COLLECTORS.md` is the user's account; this is why it is
+shaped the way it is.
+
+This is the "second kind of answer" entry 12 said to argue for here first,
+and it is the closest anything has come to entry 1's push channel, so the
+argument is the whole point:
+
+**Both sides must agree, and either can stop it.** An administrator switches
+it on for the agent in GWatch; the machine's owner sets `"collector": true` in
+its `agent.json`. The agent says at each check-in whether its file allows it,
+and GWatch hands out checks only when both are true. An agent whose file does
+not allow it has no runner at all and ignores anything a reply says about
+checks. Entry 12's rule that the machine's owner has the last word on what
+leaves the machine extends to what the machine is asked to do.
+
+**What can be asked is data from a closed list, never code.** A definition is
+an id, one of eight built-in check types, a target and the settings that type
+reads (`model.CheckConfig.ForCollector`, an allow-list, with a test that fails
+for any new field until someone decides which side it is on). The agent
+checks each one again (`model.CollectorCheck.Validate`: a collectable type,
+a target that is an address and nothing a shell or a file system would read,
+sane numbers) and the runner it calls (`checks.RunCollected`) refuses any
+other type a third time. A **custom script** check is not on the list and
+never will be: running GWatch's commands on another machine is the remote
+execution entry 1 rejects, and it would make every collector a way onto its
+network for anything that got into GWatch.
+
+**The worst a compromised GWatch can do with it** is make a machine that has
+opted in open network connections it describes — ping an address, connect to
+a port, make an HTTP request with headers it chooses, ask a DNS server, read
+SNMP — on intervals of ten seconds or more, at most 500 checks, eight at a
+time, and receive the results. That is a real capability: from inside the
+site's network it is a scanner of that network, and an HTTP check can reach
+an internal web interface. It is the same capability as the feature, which is
+why it is opt-in on the machine and not merely in GWatch, and why the docs tell
+an owner to choose the collector machine with that in mind. It still cannot
+run anything on the collector, read its files, change its configuration or
+reach it between check-ins.
+
+**The agent still opens every connection.** The checks arrive as part of the
+answer to the agent's own check-in (more often for a collector — every two
+minutes — so a moved node starts soon); results leave on a route of their
+own, authenticated by the same token, that can do one thing: file results for
+the checks this agent is assigned *now*. A result for any other check is
+refused one by one, so a stolen collector token cannot write into the history
+of a node it was not given.
+
+**Credentials go to the one collector that needs them, and stay in memory.**
+An SNMP community and HTTP headers are part of a definition, because the check
+cannot run without them. They are sent only to the collector a node is
+assigned to, only once both switches are on, only over the agent's TLS
+connection, and the agent never writes them to disk (after a restart it runs
+nothing until its first check-in). Results are spooled through an outage like
+readings (entry 13, the same bounded file discipline, generic over what it
+holds) because they carry nothing secret.
+
+**A quiet collector is one incident, not N.** If a collector sends nothing —
+results or a once-a-minute heartbeat — for three of its shortest interval
+(at least three minutes), its checks become `unknown` with the reason, and one
+`collector_unreachable` event and one alert are raised for it, the reasoning of
+a parent dependency applied to whatever does the checking. A check that was
+down before the silence is down again afterwards without a second alert.
+
+**Rejected: a separate collector binary.** Another thing to sign, release,
+package and pair; the agent already has pairing, a submit-only token, signed
+self-update, packages, a spool and a service. The cost of reusing it is that
+the agent now links the check runners, including the script runner's code,
+which it can never call (the runner refuses the type before dispatch).
+
+**Rejected: GWatch connecting to the collector** (a pull model, a tunnel, a
+websocket held open from GWatch's side). Each needs the collector to accept
+something inbound, which is the line entry 1 draws.
+
+**Rejected: letting a collector run custom scripts "for administrators who
+trust their sites".** The opt-in on the machine would make it defensible on
+paper, and in practice it turns a compromised GWatch into code execution on
+every opted-in machine. If it is ever wanted, it should be a script the
+machine's owner puts on the machine and names in its own file — something
+GWatch triggers, never something GWatch supplies — and argued here first.
+
+**Rejected: storing the definitions on the collector** so it could run through
+a restart while GWatch is unreachable. It would put credentials on disk at
+every site; a restart during an outage costs that outage's results for the
+moments until the next successful check-in, which is cheap by comparison.
+
+**Revisit if:** collectors need to run while cut off from GWatch across
+restarts (then the definitions want sealing with a key that never leaves the
+machine), or someone needs a collector for a check type not on the list — add
+the type to `CollectorCheckTypes` with its reasoning, never a generic escape
+hatch.
 
 ---
 

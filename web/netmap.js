@@ -1,3 +1,4 @@
+// @ts-check
 // Network map: every node drawn under the node it depends on.
 //
 // A node's "Depends on" is what dependency-aware alerting reads — while a
@@ -11,9 +12,9 @@
 // The layouts are worked out here with no library. The tree ones are a plain
 // tidy tree: leaves take consecutive slots, each parent sits centred over its
 // children, and the depth is the distance from the root. The clusters one
-// (stored as "radial", which older saved maps already say) draws a node with
-// things plugged into it at the centre of a ring of them, and a ring that
-// holds a node with a ring of its own as one more circle around a circle.
+// (stored as "radial", which older saved maps already say) spreads the
+// things plugged into a node round it, branching off in whatever direction
+// has room, with longer lines to the bigger branches.
 // Nodes with no dependency either way are set apart in a block of their own,
 // so a long row of unrelated devices does not stretch the trees out of shape.
 // The arithmetic is pure and exported (buildForest, layoutMap) so it can be
@@ -142,6 +143,7 @@ export function edgeStyle(look) {
 }
 
 /** A complete map configuration with its defaults filled in. */
+/** @param {any} [cfg] */
 export function normalizeMapConfig(cfg = {}) {
   const c = cfg && typeof cfg === 'object' ? cfg : {};
   const pick = (list, v, fb) => (list.some((o) => o.value === v) ? v : fb);
@@ -218,15 +220,16 @@ function subtreeSize(forest, id) {
  * after them, or left out with `onlyLinked`.
  *
  * The clusters layout (orientation "radial") needs to know how big a node is
- * to keep its rings clear of one another, so it works in pixels: pass
+ * to keep boxes and lines clear of one another, so it works in pixels: pass
  * `node: { w, h }` (the box a node is drawn in), `spacing` (the least space
- * between two neighbouring boxes) and `reach` (the shortest a line from a node
- * to the ring around it may be). It returns
- * { pos: Map id → { x, y, level, ring }, rings: [{ id, x, y, r }], bounds,
- *   levels, linked, isolated, radial: true }
- * with `x`, `y` the centre of the node's box (a single tree's root is at 0,0),
- * `ring` the radius of the ring of its children (0 for a leaf) and `bounds`
- * the box that holds every node's box.
+ * between two neighbouring boxes) and `reach` (the shortest a line between
+ * two boxes may be). It returns
+ * { pos: Map id → { x, y, level, ring }, rings: [], bounds, levels, linked,
+ *   isolated, radial: true }
+ * with `x`, `y` the centre of the node's box (the biggest tree's root is at
+ * 0,0), `ring` always 0 and `rings` always empty (kept for callers that read
+ * them; nothing is drawn on a ring any more), and `bounds` the box that holds
+ * every node's box.
  */
 export function layoutMap(forest, { orientation = 'down', onlyLinked = false, isolatedPerRow = 0, node = null, spacing = 24, reach = 58 } = {}) {
   const pos = new Map();
@@ -266,110 +269,274 @@ export function layoutMap(forest, { orientation = 'down', onlyLinked = false, is
 }
 
 /**
- * The clusters layout. A node with children is the centre of a ring and its
- * children are spaced evenly around it; a child with children of its own is
- * the centre of a ring of its own, and the whole of that sits on the ring of
- * its parent — circles around circles.
+ * The clusters layout: each node with the things that depend on it spread
+ * round it, branching off in whatever direction has room, the way someone
+ * would sketch a network on a whiteboard. Nothing is forced onto a circle.
  *
- * Every cluster is measured first, from the leaves up, as a circle that holds
- * the node's box and everything below it. A ring is then given the radius
- * that keeps three things true: its children's circles clear the box of the
- * node in the middle (by `reach`, so there is always a line to see), clear
- * one another all the way round, and are all inside the circle the cluster
- * itself will be measured as. Two circles that do not overlap cannot hold two
- * boxes that do, so no box overlaps another.
+ * It is worked out in three passes, all deterministic (the same nodes give
+ * the same picture every time, whatever order they arrive in):
  *
- * Children keep the order of their names. Round a node that has a parent they
- * start half a step away from the line to it, so the line runs through a gap
- * and never through a child; a node with one child puts it straight out
- * beyond itself, so a chain of switches reads as a chain and its circle is
- * not a ring around nothing (which would double in size with every link).
+ *  1. A first sketch. Round the root every subtree is given a slice of the
+ *     full turn; round any other node, a fan pointing away from its parent.
+ *     A slice is as wide as the square root of how much hangs off it, so a
+ *     switch with twelve machines gets more room than a lone printer. The
+ *     line to a child is as long as it needs to be: short to a leaf, longer
+ *     to a child with a subtree of its own, so a big branch stands clear of
+ *     its neighbours. A long run of leaves round one node is staggered on
+ *     two distances rather than strung round one huge circle.
+ *  2. A few hundred rounds of gentle forces: every line pulls towards its
+ *     own length, every pair of boxes that is too close pushes apart, and
+ *     nearby boxes repel a little, so siblings spread out evenly and the
+ *     whole thing settles into the space it needs rather than a ring's.
+ *  3. Rules that are then made to hold exactly: no two boxes closer than
+ *     `spacing`, no line shorter than `reach` between the boxes it joins,
+ *     and no line running through a box it does not join. If a few rounds
+ *     of nudging cannot settle it, the picture is spread out a little and
+ *     tried again, which always ends.
  *
- * Several trees: the biggest is laid out as above, the others sit on a ring
- * around it the same way. Nodes with no link at all are a block of rows under
- * everything, as in the tree layouts — a ring would suggest they hang off
- * something.
+ * Several trees are laid out one by one; the biggest keeps its root at 0,0
+ * and the others are set down round it in the nearest free space. Nodes with
+ * no link at all are a block of rows under everything, as in the tree
+ * layouts.
  */
 function layoutClusters(forest, trees, isolated, linked, { onlyLinked, isolatedPerRow, node, spacing, reach: wantReach }) {
   // A line shorter than the space kept round a box would be all box.
   const reach = Math.max(wantReach, spacing / 2);
   const half = Math.hypot(node.w / 2, node.h / 2); // a box fits in a circle this big
   const own = half + spacing / 2; // ... with half the space to its neighbours all round
-  const info = new Map();
   const pos = new Map();
-  const rings = [];
   let deepest = trees.length ? 0 : -1;
+  const size = new Map();
+  const sizeOf = (id) => {
+    if (size.has(id)) return size.get(id);
+    let n = 1;
+    for (const k of forest.children.get(id) || []) n += sizeOf(k);
+    size.set(id, n);
+    return n;
+  };
+  // How far a box's border is from its centre, along a direction.
+  const edge = (cos, sin) => Math.min(node.w / 2 / Math.max(Math.abs(cos), 1e-9), node.h / 2 / Math.max(Math.abs(sin), 1e-9));
+  // How long a line to `id` would like to be, border to border: the reach for
+  // a leaf, more for a child with things of its own hanging off it.
+  const restLine = (id) => reach + 0.55 * own * (Math.sqrt(sizeOf(id)) - 1);
 
-  // Where the first child goes round a node with nothing above it: one child
-  // to the right, two left and right, more starting at the top.
-  const startAngle = (n) => (n === 1 ? 0 : n === 2 ? Math.PI : -Math.PI / 2);
-  // The distance at which `n` circles, the two biggest of radii a and b, sit
-  // evenly round a point without touching: neighbours are the closest pair, and
-  // the two biggest are the worst neighbours there could be.
-  const ringFor = (n, a, b, gap) => (n < 2 ? 0 : (a + b + gap) / (2 * Math.sin(Math.PI / n)));
+  const layoutTree = (root) => {
+    const at = new Map();
+    const level = new Map();
+    const parent = new Map();
+    // ---- 1. the sketch ----
+    const sketch = (id, x, y, dir, arc, lvl) => {
+      at.set(id, { x, y });
+      level.set(id, lvl);
+      deepest = Math.max(deepest, lvl);
+      const kids = forest.children.get(id) || [];
+      if (!kids.length) return;
+      const weights = kids.map((k) => Math.sqrt(sizeOf(k)));
+      const total = weights.reduce((a, b) => a + b, 0);
+      const isRoot = dir == null;
+      const span = isRoot ? 2 * Math.PI : arc;
+      // Round the root the first child is at the top (one alone goes to the
+      // right); round anything else the fan is centred on the way out.
+      let a0 = isRoot ? (kids.length === 1 ? -weights[0] / total * Math.PI : -Math.PI / 2 - (span * weights[0]) / total / 2) : dir - span / 2;
+      const leaves = kids.filter((k) => !(forest.children.get(k) || []).length).length;
+      const stagger = leaves > 6;
+      let leafIndex = 0;
+      kids.forEach((k, j) => {
+        const share = (span * weights[j]) / total;
+        const a = a0 + share / 2;
+        a0 += share;
+        const c = Math.cos(a), sn = Math.sin(a);
+        let r = 2 * edge(c, sn) + restLine(k);
+        const leaf = !(forest.children.get(k) || []).length;
+        if (kids.length > 1) {
+          // Neighbours on the same distance must not touch; staggered ones
+          // only have to clear the one two along.
+          const gapAngle = stagger && leaf ? share : share / 2;
+          r = Math.max(r, own / Math.sin(Math.min(gapAngle, Math.PI / 2)));
+        }
+        // Leaves are set at varied distances, so their labels do not line up
+        // round an arc: a long run of them on two clear distances, a few of
+        // them a little in and out.
+        if (leaf) {
+          const i = leafIndex++;
+          if (stagger) { if (i % 2) r += node.h + spacing + reach / 2; } else if (leaves >= 3) r += [0, 0.7, 0.35][i % 3] * (node.h + spacing);
+        }
+        parent.set(k, id);
+        // The fan for this child's own children: everything but the way back
+        // to here for a node with many of them, a wide fan otherwise.
+        const grand = forest.children.get(k) || [];
+        const fan = grand.length >= 6 ? 1.5 * Math.PI : Math.min(1.4 * Math.PI, Math.max(share * 1.5, 0.75 * Math.PI));
+        sketch(k, x + r * c, y + r * sn, a, fan, lvl + 1);
+      });
+    };
+    sketch(root, 0, 0, null, 0, 0);
 
-  const measure = (id) => {
-    const kids = forest.children.get(id) || [];
-    const ms = kids.map(measure);
-    let m;
-    if (!ms.length) {
-      m = { R: own, off: 0, rho: 0 };
-    } else {
-      // R is the radius of the circle that holds the cluster, centred `off`
-      // beyond the node along the way out. A ring is centred on its node
-      // (off 0); a node with one child is held by the smaller circle round
-      // the two of them. A child's circle reaches R - off back towards the
-      // ring's centre and R + off away from it.
-      let back = 0, ext = 0, big1 = 0, big2 = 0;
-      for (const c of ms) {
-        back = Math.max(back, c.R - c.off); ext = Math.max(ext, c.R + c.off);
-        if (c.R > big1) { big2 = big1; big1 = c.R; } else if (c.R > big2) big2 = c.R;
+    const ids = [...at.keys()];
+    const edges = [...parent].map(([k, p]) => [k, p]);
+    const subtree = (id) => { const out = [id]; for (let i = 0; i < out.length; i++) out.push(...(forest.children.get(out[i]) || [])); return out; };
+
+    // The sketch is kept: if the forces leave something the rules below
+    // cannot settle without spreading everything out, the sketch is used.
+    const sketched = new Map([...at].map(([id, p]) => [id, { ...p }]));
+
+    // ---- 2. forces ----
+    // A big tree is mostly one or two great fans, which the sketch already
+    // lays out well and the forces only scramble; it skips them.
+    const rounds = ids.length > 120 ? 0 : 220;
+    for (let t = 0; t < rounds; t++) {
+      const cool = 1 - t / rounds;
+      const move = new Map(ids.map((id) => [id, { x: 0, y: 0 }]));
+      for (let i = 0; i < ids.length; i++) {
+        const a = at.get(ids[i]);
+        for (let j = i + 1; j < ids.length; j++) {
+          const b = at.get(ids[j]);
+          let dx = b.x - a.x, dy = b.y - a.y;
+          if (!dx && !dy) { dx = 0.01 * (j - i); dy = 0.01; }
+          const gx = Math.abs(dx) - node.w - spacing, gy = Math.abs(dy) - node.h - spacing;
+          let fx = 0, fy = 0;
+          if (gx < 0 && gy < 0) {
+            // Too close: apart along the way that needs the least moving.
+            if (-gx * node.h < -gy * node.w) fx = Math.sign(dx) * -gx * 0.5; else fy = Math.sign(dy) * -gy * 0.5;
+          } else {
+            const d = Math.hypot(dx, dy);
+            if (d < own * 5) { const f = (0.06 * own * own) / d; fx = (dx / d) * f; fy = (dy / d) * f; }
+          }
+          const ma = move.get(ids[i]), mb = move.get(ids[j]);
+          ma.x -= fx; ma.y -= fy; mb.x += fx; mb.y += fy;
+        }
       }
-      const rho = Math.max(half + back + reach, ringFor(ms.length, big1, big2, 0));
-      if (ms.length === 1) {
-        const far = rho + ms[0].off;
-        m = { R: (own + far + ms[0].R) / 2, off: (far + ms[0].R - own) / 2, rho };
-      } else {
-        m = { R: Math.max(own, rho + ext), off: 0, rho };
+      for (const [k, p] of edges) {
+        const a = at.get(p), b = at.get(k);
+        const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1;
+        const target = 2 * edge(dx / d, dy / d) + restLine(k);
+        const f = (d - target) * 0.12;
+        const mk = move.get(k), mp = move.get(p);
+        mk.x -= (dx / d) * f; mk.y -= (dy / d) * f;
+        mp.x += (dx / d) * f * 0.5; mp.y += (dy / d) * f * 0.5;
+      }
+      const cap = own * cool + 2;
+      for (const id of ids) {
+        const m = move.get(id), p = at.get(id);
+        const len = Math.hypot(m.x, m.y);
+        const k = len > cap ? cap / len : 1;
+        p.x += m.x * k; p.y += m.y * k;
       }
     }
-    info.set(id, m);
-    return m;
+
+    // ---- 3. the rules, exactly ----
+    // Both are made to keep the rules; the more compact of the two is used.
+    const forcedOK = rounds > 0 && settle(at, ids, edges, subtree, 3);
+    settle(sketched, ids, edges, subtree, 40);
+    const area = (m) => {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const p of m.values()) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); }
+      return (maxX - minX + node.w) * (maxY - minY + node.h);
+    };
+    if (!forcedOK || area(sketched) < area(at)) for (const [id, p] of sketched) at.set(id, p);
+
+    // The root back at the origin.
+    const r0 = at.get(root);
+    const ox = r0.x, oy = r0.y;
+    for (const p of at.values()) { p.x -= ox; p.y -= oy; }
+    return { at, level };
   };
 
-  const put = (id, x, y, level, outward) => {
-    deepest = Math.max(deepest, level);
-    const m = info.get(id);
-    const kids = forest.children.get(id) || [];
-    pos.set(id, { x, y, level, ring: m.rho });
-    if (!kids.length) return;
-    rings.push({ id, x, y, r: m.rho });
-    kids.forEach((k, j) => {
-      // Round the root they start where startAngle says; round anything else
-      // half a step on from the way back to the parent.
-      const a = outward == null
-        ? startAngle(kids.length) + (2 * Math.PI * j) / kids.length
-        : outward + Math.PI + ((2 * j + 1) * Math.PI) / kids.length;
-      put(k, x + m.rho * Math.cos(a), y + m.rho * Math.sin(a), level + 1, a);
-    });
+  // Nudges until no two boxes are too close, no line is too short and no line
+  // crosses a box it does not join; if that will not settle, spreads the
+  // whole picture out from its middle a little and tries again.
+  const settle = (at, ids, edges, subtree, attempts) => {
+    const margin = Math.max(2, spacing / 4);
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      let clean = false;
+      for (let round = 0; round < 40 && !clean; round++) {
+        clean = true;
+        for (let i = 0; i < ids.length; i++) {
+          for (let j = i + 1; j < ids.length; j++) {
+            const a = at.get(ids[i]), b = at.get(ids[j]);
+            let dx = b.x - a.x, dy = b.y - a.y;
+            if (!dx && !dy) dx = 1;
+            const gx = Math.abs(dx) - node.w, gy = Math.abs(dy) - node.h;
+            const far = gx >= 0 && gy >= 0 ? Math.hypot(gx, gy) : Math.max(gx, gy);
+            if (far >= spacing - 1e-9) continue;
+            clean = false;
+            // The least move that clears it: across, or up and down.
+            const needX = node.w + spacing - Math.abs(dx), needY = node.h + spacing - Math.abs(dy);
+            if (gx >= 0 && gy >= 0) {
+              const d = Math.hypot(gx, gy) || 1, push = (spacing - d) / 2 + 0.5;
+              a.x -= (gx / d) * push * Math.sign(dx); a.y -= (gy / d) * push * Math.sign(dy);
+              b.x += (gx / d) * push * Math.sign(dx); b.y += (gy / d) * push * Math.sign(dy);
+            } else if (needX * node.h < needY * node.w) {
+              const push = needX / 2 + 0.5; a.x -= Math.sign(dx) * push; b.x += Math.sign(dx) * push;
+            } else {
+              const push = needY / 2 + 0.5; a.y -= Math.sign(dy || 1) * push; b.y += Math.sign(dy || 1) * push;
+            }
+          }
+        }
+        for (const [k, p] of edges) {
+          const a = at.get(p), b = at.get(k);
+          const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1;
+          const line = d - 2 * edge(dx / d, dy / d);
+          if (line >= reach - 1e-9) continue;
+          clean = false;
+          const out = reach - line + 0.5;
+          for (const id of subtree(k)) { const q = at.get(id); q.x += (dx / d) * out; q.y += (dy / d) * out; }
+        }
+        for (const [k, p] of edges) {
+          const a = at.get(p), b = at.get(k);
+          for (const id of ids) {
+            if (id === k || id === p) continue;
+            const o = at.get(id);
+            if (!segmentHitsBox(a, b, o, node.w / 2 + margin, node.h / 2 + margin)) continue;
+            clean = false;
+            // Off the line, the short way.
+            const vx = b.x - a.x, vy = b.y - a.y, len2 = vx * vx + vy * vy || 1;
+            const t = Math.max(0, Math.min(1, ((o.x - a.x) * vx + (o.y - a.y) * vy) / len2));
+            let nx = o.x - (a.x + vx * t), ny = o.y - (a.y + vy * t);
+            let nl = Math.hypot(nx, ny);
+            if (nl < 1e-6) { nx = -vy; ny = vx; nl = Math.hypot(nx, ny) || 1; }
+            const step = node.h / 2 + margin + 1;
+            o.x += (nx / nl) * step; o.y += (ny / nl) * step;
+          }
+        }
+      }
+      if (clean) return true;
+      if (attempt === attempts - 1) return false;
+      // Spread out from the middle and try again.
+      let cx = 0, cy = 0;
+      for (const id of ids) { cx += at.get(id).x; cy += at.get(id).y; }
+      cx /= ids.length; cy /= ids.length;
+      for (const id of ids) { const q = at.get(id); q.x = cx + (q.x - cx) * 1.15; q.y = cy + (q.y - cy) * 1.15; }
+    }
+    return false;
   };
 
-  if (trees.length) {
-    const ms = trees.map(measure);
-    // Trees are separated by more than the nodes in one: they are separate things.
-    const gap = spacing * 2;
-    put(trees[0], 0, 0, 0, null);
-    if (trees.length > 1) {
-      // A root with one child puts its cluster's centre out to its right.
-      const centre = { x: ms[0].off, y: 0 };
-      const radii = ms.slice(1).map((m) => m.R).sort((a, b) => b - a);
-      const n = radii.length;
-      const dist = Math.max(ms[0].R + radii[0] + gap, ringFor(n, radii[0], radii[1] || 0, gap));
-      for (let i = 1; i < trees.length; i++) {
-        const a = startAngle(n) + (2 * Math.PI * (i - 1)) / n;
-        put(trees[i], centre.x + dist * Math.cos(a) - ms[i].off, centre.y + dist * Math.sin(a), 0, null);
+  // Lay out every tree, the biggest first, and set each later one down in the
+  // nearest free space round what is already there.
+  const placedBoxes = [];
+  const clear = (b) => placedBoxes.every((o) => b.maxX + spacing * 2 <= o.minX || o.maxX + spacing * 2 <= b.minX || b.maxY + spacing * 2 <= o.minY || o.maxY + spacing * 2 <= b.minY);
+  for (const [ti, root] of trees.entries()) {
+    const { at, level } = layoutTree(root);
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of at.values()) {
+      minX = Math.min(minX, p.x - node.w / 2); maxX = Math.max(maxX, p.x + node.w / 2);
+      minY = Math.min(minY, p.y - node.h / 2); maxY = Math.max(maxY, p.y + node.h / 2);
+    }
+    let ox = 0, oy = 0;
+    if (ti > 0) {
+      // A spiral out from the middle of the first tree; the first spot where
+      // this tree's box is clear of every other is where it goes.
+      const b0 = placedBoxes[0];
+      const cx = (b0.minX + b0.maxX) / 2, cy = (b0.minY + b0.maxY) / 2;
+      const w = maxX - minX, hgt = maxY - minY;
+      const step = Math.max(own, 20);
+      for (let i = 0; i < 20000; i++) {
+        const ang = i * 0.5, rad = step * Math.sqrt(i) * 1.2;
+        const x = cx + rad * Math.cos(ang) - (minX + w / 2), y = cy + rad * Math.sin(ang) - (minY + hgt / 2);
+        if (clear({ minX: minX + x, maxX: maxX + x, minY: minY + y, maxY: maxY + y })) { ox = x; oy = y; break; }
       }
     }
+    placedBoxes.push({ minX: minX + ox, maxX: maxX + ox, minY: minY + oy, maxY: maxY + oy });
+    for (const [id, p] of at) pos.set(id, { x: p.x + ox, y: p.y + oy, level: level.get(id), ring: 0 });
   }
 
   const extent = () => {
@@ -398,7 +565,21 @@ function layoutClusters(forest, trees, isolated, linked, { onlyLinked, isolatedP
       pos.set(id, { x: cx + ((i % cols) - (inRow - 1) / 2) * cellW, y: top + node.h / 2 + row * cellH, level: 0, ring: 0 });
     });
   }
-  return { pos, rings, bounds: extent(), levels: Math.max(pos.size ? 1 : 0, deepest + 1), linked, isolated: onlyLinked ? [] : isolated, radial: true };
+  return { pos, rings: [], bounds: extent(), levels: Math.max(pos.size ? 1 : 0, deepest + 1), linked, isolated: onlyLinked ? [] : isolated, radial: true };
+}
+
+/** Whether the segment a→b passes through the box of half-size hw×hh centred on o. */
+function segmentHitsBox(a, b, o, hw, hh) {
+  // Liang–Barsky clipping against the box.
+  let t0 = 0, t1 = 1;
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const clip = (p, q) => {
+    if (Math.abs(p) < 1e-12) return q >= 0;
+    const r = q / p;
+    if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; } else { if (r < t0) return false; if (r < t1) t1 = r; }
+    return true;
+  };
+  return clip(-dx, a.x - (o.x - hw)) && clip(dx, (o.x + hw) - a.x) && clip(-dy, a.y - (o.y - hh)) && clip(dy, (o.y + hh) - a.y) && t0 < t1;
 }
 
 /**
@@ -623,7 +804,7 @@ export function renderNetworkMap(host, entries, cfg, { interactive = false, onSe
         if (!counts[s]) continue;
         legend.append(h('span', { class: 'netmap-key' }, h('span', { class: `orb orb-sm orb-${s}`, 'aria-hidden': 'true' }), `${statusMeta(s).label} ${counts[s]}`));
       }
-      legend.append(h('span', { class: 'netmap-key muted' }, c.orientation === 'right' ? 'Each node sits to the right of the node it depends on' : layout.radial ? 'Each node sits in a ring round the node it depends on' : 'Each node sits under the node it depends on'));
+      legend.append(h('span', { class: 'netmap-key muted' }, c.orientation === 'right' ? 'Each node sits to the right of the node it depends on' : layout.radial ? 'Each node branches off the node it depends on' : 'Each node sits under the node it depends on'));
       // Lines can be any colour and dash by now, so what a red one means is
       // said in words — colour and dashes alone must not be the whole cue.
       if (cutCount) legend.append(h('span', { class: 'netmap-key' }, h('span', { class: 'netmap-linekey', 'aria-hidden': 'true' }), `Red lines lead out of a node that is down (${plural(cutCount, 'link')})`));
@@ -735,6 +916,9 @@ export function mapFilterOptions(groups) {
  * means "follow the map", and `defaults` ({ color, width, dash }) says what
  * the map has, so the empty thickness can show it. Without, thickness and
  * style always have a value.
+ *
+ * @typedef {{ color?: string, width?: number, dash?: string }} LineStyle
+ * @param {{ value?: LineStyle, inherit?: boolean, defaults?: LineStyle, disabled?: boolean, label?: string, onChange?: (value: LineStyle) => void }} [opts]
  */
 export function lineStyleControls({ value = {}, inherit = false, defaults = {}, disabled = false, label = 'Line', onChange } = {}) {
   let color = normalizeLineColor(value.color);
@@ -782,6 +966,8 @@ export function lineStyleControls({ value = {}, inherit = false, defaults = {}, 
  * `defaults` what the map draws a line as, and `onChange(style)` gets the
  * style as it should be kept — null when it sets nothing. The Reset button
  * clears the lot, so the link follows the map again.
+ *
+ * @param {{ parentName?: string, value?: LineStyle | null, defaults?: LineStyle, disabled?: boolean, onChange?: (style: LineStyle | null) => void }} [opts]
  */
 export function linkStyleEditor({ parentName = '', value = null, defaults = {}, disabled = false, onChange } = {}) {
   const controls = lineStyleControls({ value: value || {}, inherit: true, defaults, disabled, label: 'Link', onChange: (v) => onChange && onChange(normalizeLinkStyle(v)) });
@@ -797,6 +983,9 @@ export function linkStyleEditor({ parentName = '', value = null, defaults = {}, 
  * The map's options as a form — shared by the Network map page and the
  * dashboard widget editor. `.value` is the configuration the controls hold;
  * `onChange(cfg)` fires on every change.
+ *
+ * @param {any} cfg
+ * @param {{ groups?: any, onChange?: (cfg: any) => void }} [opts]
  */
 export function mapConfigEditor(cfg, { groups = null, onChange } = {}) {
   const c = normalizeMapConfig(cfg);
@@ -816,7 +1005,7 @@ export function mapConfigEditor(cfg, { groups = null, onChange } = {}) {
   const resetLines = h('button', { type: 'button', class: 'btn btn-sm', onclick: () => lines.reset() }, icon('refresh'), 'Reset the lines');
   const wrap = h('div', { class: 'stack-sm netmap-options' },
     h('div', { class: 'form-grid' },
-      field({ label: 'Layout', input: orientation, help: 'Clusters put each node in the middle of a ring of the nodes that depend on it.' }),
+      field({ label: 'Layout', input: orientation, help: 'Clusters branch each node off the one it depends on, in whatever direction has room.' }),
       field({ label: 'Labels', input: labels }),
       field({ label: 'Node size', input: size }),
       field({ label: 'Line shape', input: edges, help: 'Clusters draw straight or gently curved lines.' }),
@@ -826,7 +1015,7 @@ export function mapConfigEditor(cfg, { groups = null, onChange } = {}) {
       h('legend', null, 'Line style'),
       lines.el,
       h('div', { class: 'row-between' }, h('span', { class: 'help' }, 'A link can have its own colour, thickness and style: choose a node on the map.'), resetLines)),
-    h('div', { class: 'stack-sm', style: { gap: '6px' } }, onlyLinked, colorEdges, showLegend));
+    h('div', { class: 'stack-sm u-gap-6' }, onlyLinked, colorEdges, showLegend));
   Object.defineProperty(wrap, 'value', { get: () => normalizeMapConfig({
     orientation: orientation.value, labels: labels.value, size: size.value, edges: edges.value, group: group.value, tag: tag.value,
     onlyLinked: onlyLinked.input.checked, colorEdges: colorEdges.input.checked, showLegend: showLegend.input.checked,

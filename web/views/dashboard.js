@@ -3,9 +3,9 @@
 // layout (x, y, width, height per widget) is saved with the dashboard.
 
 import { api } from '../api.js';
-import { preserveFocus, h, icon, clear, replace, statusPill, statusSpine, statusWord, statusGlyph, checkChip, statusOrb, toast, confirmDialog, promptDialog, openModal, menuButton, field, textInput, numberInput, selectInput, checkbox, emptyState, skeleton, eventRow, rangeChips, statusMeta, uid } from '../components.js';
+import { refreshRegion, h, icon, clear, replace, statusPill, statusSpine, statusWord, statusGlyph, checkChip, statusOrb, toast, confirmDialog, promptDialog, openModal, menuButton, field, textInput, numberInput, selectInput, checkbox, emptyState, skeleton, eventRow, rangeChips, statusMeta, uid } from '../components.js';
 import { relTime, bytes, plural, dateShort, duration, pct, nodeGroups, inGroup, NODE_SORTS, sortNodes } from '../fmt.js';
-import { chartConfigEditor, renderConfiguredChart, normalizeChartConfig, cachedHistoryFetch, chartCsvItems, TIMESTACK_PERIODS } from '../chart-config.js';
+import { chartConfigEditor, renderConfiguredChart, normalizeChartConfig, cachedHistoryFetch, expireHistory, chartCsvItems, TIMESTACK_PERIODS } from '../chart-config.js';
 // charts.js is already in the graph by way of chart-config.js, so naming these
 // here costs nothing and spares the availability widget an await it does not
 // need — the widget must be able to fill itself in one synchronous step.
@@ -143,7 +143,7 @@ export async function mount(root, ctx) {
     const [overview, health] = await Promise.all([api.get('/api/overview'), api.get('/api/health').catch(() => state.health)]);
     if (state.destroyed || state.interacting || token !== refreshToken) return;
     state.overview = overview; state.health = health;
-    state.historyCache.clear();
+    expireHistory(state.historyCache);
     refreshWidgets();
   }
 
@@ -293,11 +293,10 @@ export async function mount(root, ctx) {
       const view = state.chartViews.get(w.id);
       if (view) { view.refresh(); continue; }
       if (w.type === 'uptime_chart') { fillUptime(state.uptimeLists.get(w.id), w); continue; }
-      const restore = preserveFocus(card._body);
-      clear(card._body);
       replace(card._actions, card._actionKids);
-      try { renderWidgetBody(w, widgetConfig(w), card._body, card._actions); } catch (e) { console.error(e); card._body.append(h('div', { class: 'note' }, 'Could not render this widget.')); }
-      restore();
+      refreshRegion(card._body, (body) => {
+        try { renderWidgetBody(w, widgetConfig(w), body, card._actions); } catch (e) { console.error(e); body.append(h('div', { class: 'note' }, 'Could not render this widget.')); }
+      });
     }
   }
 
@@ -634,7 +633,7 @@ export async function mount(root, ctx) {
     const foot = [];
     if (s.maintenance) foot.push(h('span', null, statusGlyph('maintenance', { text: false }), ` ${plural(s.maintenance, 'node')} in maintenance`));
     if (s.paused) foot.push(h('span', null, statusGlyph('paused', { text: false }), ` ${s.paused} paused`));
-    foot.push(h('span', { class: 'dim', style: { marginLeft: 'auto' } }, `${s.total || 0} total · updated ${relTime(ov.generatedAt, now())}`));
+    foot.push(h('span', { class: 'dim u-ml-auto' }, `${s.total || 0} total · updated ${relTime(ov.generatedAt, now())}`));
     body.append(h('div', { class: 'summary-foot' }, foot));
   }
 
@@ -683,7 +682,7 @@ export async function mount(root, ctx) {
     if (!items.length) { body.append(h('div', { class: 'all-good' }, icon('check'), h('strong', null, 'No open incidents'), h('span', null, 'Everything has been quiet.'))); return; }
     const list = h('div', { class: 'event-rows' });
     for (const ev of items) list.append(eventRow(ev, { now: now() }));
-    body.append(list, h('div', { style: { marginTop: '8px' } }, h('a', { class: 'small', href: '#/incidents' }, 'Open the incident timeline →')));
+    body.append(list, h('div', { class: 'u-mt-8' }, h('a', { class: 'small', href: '#/incidents' }, 'Open the incident timeline →')));
   }
 
   function renderCerts(body, ov) {
@@ -694,7 +693,7 @@ export async function mount(root, ctx) {
       const cls = c.daysRemaining <= 7 ? 'text-down' : 'text-degraded';
       list.append(h('div', { class: 'cert-row' },
         h('div', { class: `days ${cls}` }, c.daysRemaining <= 0 ? 'now' : String(c.daysRemaining), h('small', null, c.daysRemaining <= 0 ? 'expired' : 'days left')),
-        h('div', { class: 'grow', style: { minWidth: 0, flex: 1 } }, h('div', { class: 'strong' }, h('a', { href: `#/nodes/${c.nodeId}`, style: { color: 'inherit' } }, c.nodeName), ` › ${c.checkName}`), h('div', { class: 'small muted truncate' }, `${c.subject || ''}${c.notAfter ? ' · expires ' + dateShort(c.notAfter) : ''}`)),
+        h('div', { class: 'grow u-min-w-0 u-flex-1' }, h('div', { class: 'strong' }, h('a', { class: 'u-color-inherit', href: `#/nodes/${c.nodeId}` }, c.nodeName), ` › ${c.checkName}`), h('div', { class: 'small muted truncate' }, `${c.subject || ''}${c.notAfter ? ' · expires ' + dateShort(c.notAfter) : ''}`)),
       ));
     }
     body.append(list);
@@ -709,7 +708,7 @@ export async function mount(root, ctx) {
         statusSpine(a.status, { key: `att:${a.nodeId}:${a.checkName}` }),
         statusWord(a.status),
         h('div', { class: 'a-body' },
-          h('div', { class: 'a-title' }, h('a', { href: `#/nodes/${a.nodeId}`, style: { color: 'inherit' } }, a.nodeName), ` › ${a.checkName}`),
+          h('div', { class: 'a-title' }, h('a', { class: 'u-color-inherit', href: `#/nodes/${a.nodeId}` }, a.nodeName), ` › ${a.checkName}`),
           h('div', { class: 'a-msg' }, a.message || ''),
           a.affectedBy ? h('div', { class: 'affected-note' }, icon('link'), `${a.nodeName} unavailable because ${a.affectedBy} is down`) : null),
         h('div', { class: 'a-since', title: a.since ? new Date(a.since).toLocaleString() : '' }, a.since ? relTime(a.since, now()) : ''),
@@ -760,7 +759,7 @@ export async function mount(root, ctx) {
       const chips = h('div', { class: 'check-chips' });
       for (const c of r.checks || []) chips.append(checkChip(c.check, c.state));
       tb.append(h('tr', null,
-        h('td', null, h('a', { href: `#/nodes/${n.id}`, class: 'strong', style: { color: 'inherit' } }, n.name), r.affectedBy ? h('div', { class: 'affected-note' }, icon('link'), `affected by ${r.affectedBy}`) : null),
+        h('td', null, h('a', { href: `#/nodes/${n.id}`, class: 'strong u-color-inherit' }, n.name), r.affectedBy ? h('div', { class: 'affected-note' }, icon('link'), `affected by ${r.affectedBy}`) : null),
         h('td', null, statusPill(r.status)),
         h('td', { class: 'mono' }, n.host || ''),
         h('td', null, nodeGroups(n).join(', ') || h('span', { class: 'dim' }, '—')),
@@ -787,7 +786,8 @@ export async function mount(root, ctx) {
     if (v) { v.destroy(); state.chartViews.delete(id); }
   }
   // A chart widget may also ask for one of a check's named metrics (#68);
-  // everything is cached by what was asked for, until the next refresh.
+  // everything is cached by what was asked for, for as long as that range
+  // can go without changing (expireHistory).
   const fetchHistory = cachedHistoryFetch(state.historyCache);
   function renderChart(w, body) {
     disposeChart(w.id);
@@ -825,7 +825,7 @@ export async function mount(root, ctx) {
         const avail = hs.summary?.availability;
         const cls = avail == null ? '' : avail >= 99.9 ? 'text-up' : avail >= 95 ? 'text-degraded' : 'text-down';
         rows.push(h('div', { class: 'uptime-row' },
-          h('div', { class: 'uptime-name truncate' }, h('a', { href: `#/nodes/${findCheck(hs.checkId)?.node.id ?? ''}`, style: { color: 'inherit' } }, hs.nodeName || ''), h('div', { class: 'sub' }, hs.checkName)),
+          h('div', { class: 'uptime-name truncate' }, h('a', { class: 'u-color-inherit', href: `#/nodes/${findCheck(hs.checkId)?.node.id ?? ''}` }, hs.nodeName || ''), h('div', { class: 'sub' }, hs.checkName)),
           uptimeBar(hs.points, { bucketSeconds: hs.bucketSeconds, from: hs.from, to: hs.to, label: `${hs.nodeName || ''} › ${hs.checkName}` }),
           h('div', { class: `uptime-pct ${cls}` }, pct(avail, 2))));
       }

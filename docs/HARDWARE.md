@@ -109,7 +109,8 @@ to change:
   "buffer": "6h",
   "autoUpdate": true,
   "insecure": false,
-  "collect": {}
+  "collect": {},
+  "collector": false
 }
 ```
 
@@ -120,14 +121,21 @@ to change:
 | `name` | What the machine calls itself in GWatch. Empty uses the computer's own name. |
 | `interval` | How often a reading is sent (at least `10s`). |
 | `checkIn` | How often the agent asks GWatch for its settings (see below). `1m` to `24h`. |
-| `buffer` | How long readings are held in memory while GWatch cannot be reached, then sent oldest first. `0s` keeps nothing; at most `48h`. |
+| `buffer` | How long readings are held while GWatch cannot be reached, then sent oldest first and filed at the time they were taken. They are kept in `agent-queue.jsonl` beside this file so a restart does not lose them, bounded by this, 4,000 readings and about 8 MB (oldest dropped first). `0s` keeps nothing; at most `48h`. See [When GWatch is unreachable](#when-gwatch-is-unreachable). |
 | `autoUpdate` | Whether the agent installs new signed releases by itself. |
 | `insecure`, `certPin` | Accept a self-signed certificate, or pin the server's public key. These are about the server named above, and are dropped if the agent is pointed at a different one for a run. |
 | `collect` | The machine's own limit on what it will report (below). |
+| `collector` | Whether this machine may run network checks for GWatch as a [remote collector](COLLECTORS.md) — ping, TCP, HTTP, DNS and SNMP checks of the nodes pointed at it. `false` unless you change it; it takes effect only if GWatch has also turned collecting on for this agent. `GWATCH_AGENT_COLLECTOR` overrides it. |
 | `listen`, `repo`, `hostRoot` | Not written unless needed: serve mode's address, the repository updates are taken from, and the container host mount. Rarely needed. |
 
 Change a value, then restart the agent (`gwatch-agent restart`, or restart the
 machine) and it applies. Durations are written like `"90s"`, `"15m"`, `"6h"`.
+
+The agent keeps a copy of the file beside it, `agent.json.bak`, and brings it
+up to date each time it starts. If the machine loses power while the file is
+being written and it comes back empty or cut off, the agent runs from the copy,
+says so in its log, and writes the file whole again the next time it saves it.
+A mistake made editing the file by hand is still reported, not covered over.
 
 **Precedence**, lowest to highest: built-in defaults, this file, environment
 variables (`GWATCH_SERVER`, `GWATCH_AGENT_TOKEN`, …), command-line flags. Run
@@ -175,7 +183,14 @@ different worries:
   readings. It only works for an agent whose token lives in `agent.json`: one
   whose token comes from an environment variable or a flag would be given the old
   token back at its next restart, so it leaves the file alone and logs that you
-  need to update it where the token comes from.
+  need to update it where the token comes from. The new token is written to
+  `agent.json` before it is first used, so a restart or power cut in between
+  leaves the agent holding the token GWatch is waiting for; and if the answer
+  carrying it is lost, the next check-in carries it again. The old token stops
+  working at one defined moment — the first request made with the new one — and
+  not before, so an agent that is offline during the rotation simply picks the
+  new token up when it is back. While the rotation waits, the node shows it, and
+  **Cancel rotation** drops the new token.
 - **Replace now** — for a token that may have leaked. The old token stops
   working at once and nothing is sent to the machine; you put the new token in
   `agent.json` yourself and restart the agent. (The ordinary rotation hands the
@@ -190,9 +205,15 @@ What leaves a machine is chosen in two places, and the machine's owner always ha
 the last word:
 
 - **On the machine**, `collect` in `agent.json` (or the control panel) is a
-  *limit*: `{ "metrics": ["cpu", "memory", "disk", "net"], "interfaces": ["eth0"], "disks": [], "mounts": ["/", "/data"] }`.
+  *limit*: `{ "metrics": ["cpu", "memory", "disk", "net"], "interfaces": ["eth0"], "disks": [], "mounts": ["/", "/data"] }`,
+  plus, optionally, the `services` and `processes` to watch (see
+  [Services and programs](#services-and-programs); unlike the other lists, an
+  empty one there means none).
   A list that is empty means "no limit". `metrics` are the kinds of reading
-  (`cpu`, `load`, `memory`, `swap`, `disk`, `inodes`, `net`, `diskio`).
+  (`cpu`, `load`, `memory`, `swap`, `disk`, `inodes`, `net`, `diskio`, and on
+  Linux `temp`, `psi` and `pool`). A limit written before the Linux kinds
+  existed does not name them, so a machine with one keeps not sending them
+  until they are added.
 - **In GWatch**, the **What it collects** section of the node's agent card
   chooses *within* that limit, from checkboxes for the interfaces, disks and
   filesystems the machine says it has. It can narrow what a machine reports and
@@ -220,15 +241,37 @@ checkboxes are drawn from. GWatch's answer has no field for a URL, a command, a
 file or a version to install, so it cannot make the machine do anything it did
 not choose to; the full list is in [`API.md`](API.md#asking-for-settings) and the
 reasoning in [`AGENT-DECISIONS.md`](AGENT-DECISIONS.md#12-an-agent-asks-gwatch-for-a-small-fixed-set-of-things).
+The one addition is for a machine you have made a [remote collector](COLLECTORS.md)
+on both sides: its answer also lists the network checks to run.
 
 ### When GWatch is unreachable
 
-The agent keeps nothing on the machine beyond its configuration — but it does not
-throw away the last few hours because the network was down for them. A reading
-that cannot be delivered is held in memory (up to `buffer`, six hours by
-default) and sent, oldest first, as soon as GWatch answers. History therefore
-has a gap no longer than the outage, and often none. Held readings are not
-written to disk: a restart during an outage loses them.
+The agent does not throw away the last few hours because the network was down for
+them. A reading that cannot be delivered is held (up to `buffer`, six hours by
+default) and sent, oldest first, as soon as GWatch answers; GWatch files each one
+at the time it was taken, adds it to the history without judging it as current
+(so catching up never raises an alert for something already over), and ignores
+one it already has. History therefore has a gap no longer than the outage, and
+often none.
+
+Held readings are kept in `agent-queue.jsonl` beside `agent.json`, so a restart,
+an update or a power cut in the middle of an outage does not lose them. The file
+is small and bounded, because the machine being watched must never be filled up
+by its own agent: nothing older than `buffer` is kept, at most 4,000 readings and
+about 8 MB, and the oldest reading goes first whichever limit is reached. Nothing
+is written while GWatch is answering — a reading that goes straight out never
+touches the disk — and the file is removed once everything has been delivered.
+It is private like `agent.json` (0600, or SYSTEM and administrators on Windows).
+With `buffer` set to `0s` nothing is held and no file is kept. When the agent
+starts it sends what an earlier run left, after dropping anything that has since
+become older than `buffer`.
+
+A reading delivered late is marked as such (`X-GWatch-Held`, see
+[`API.md`](API.md#submitting-a-reading)). GWatch refuses a held reading whose
+time it cannot believe — more than five minutes ahead of its own clock, or more
+than 48 hours old — rather than filing it as current, and the agent drops a
+refused reading instead of retrying it. A live reading from a machine whose clock
+is wrong is still accepted and filed at the time it arrived.
 
 ### The control panel
 
@@ -238,7 +281,31 @@ it last spoke to GWatch, every setting above in a form, the collection limit as
 checkboxes for the interfaces and drives this machine actually has, the token
 (**Show**, to compare it with the node), a test reading, an update check, and
 start / stop / restart for the service. The file itself is there too, as an
-editor that refuses a file the agent could not run with.
+editor that refuses a file the agent could not run with. It also has:
+
+- **the last error** the agent hit, what it is collecting, the version, whether
+  it updates itself (or which package manager does), and where its settings
+  and token file is;
+- **the recent log** — the last 50 lines. A running agent copies its log to
+  `agent.log` beside its settings (owner-only, at most 1 MiB with one older
+  file, `agent.log.1`, kept); a service started by an older agent has only the
+  journal, which the panel reads instead on Linux. Anything shaped like a token
+  is removed, both as the log is written and as it is shown;
+- **Update now**, which installs the newest signed release by the same path
+  the automatic updater takes (download, verify, test-run, swap) and restarts
+  the service onto it. A packaged agent says which command updates it instead,
+  and downloads nothing;
+- **Pair this machine again** — a server address and a fresh pairing code,
+  exchanged for a new token exactly as `gwatch-agent pair` does, with the
+  service restarted onto it and a link to the machine in GWatch;
+- **Copy diagnostics** — version, platform, service state, the status file's
+  figures and last errors, the settings file with the token taken out, and the
+  end of the log, as text to paste wherever you are asking for help.
+
+Where to find it: `gwatch-agent ui`; **GWatch Agent control panel** in the
+Start menu after the Windows setup program; **GWatch Agent** in the
+application menu of a Linux desktop with the `.deb` or `.rpm` installed; and
+**Open control panel** on the [notification-area icon](#the-notification-area-icon-windows).
 
 It is not part of the service. The service runs as root or SYSTEM, and a page it
 hosted would let any user on the machine change what a root process does. The
@@ -246,8 +313,15 @@ panel is a short-lived process that runs as *you*, only on this machine's
 loopback address, and closes itself after half an hour of not being used: it can
 edit the configuration only if you could edit it yourself, and control the
 service only if the operating system lets you. Where the files belong to root
-(the Linux packages, the Windows service), run it as `sudo gwatch-agent ui` or
-from an Administrator terminal; otherwise it opens read-only and says so.
+(the Linux packages, the Windows service), it asks for an administrator's
+rights the desktop's own way — UAC on Windows, polkit's password dialog
+(`pkexec`) on a Linux desktop, the administrator dialog on macOS — and opens
+with them; over SSH, or wherever there is no such prompt, run it as `sudo
+gwatch-agent ui` or from an Administrator terminal. A service button refused
+for want of rights asks the same way, for that one command. The copy that asks
+never hands the elevated one the panel's address on a command line: it makes
+a private folder, the elevated copy leaves the page that leads to the panel
+there, and the browser is opened as you, never as root.
 
 What protects it: it listens on a loopback address and refuses any other host
 name in the request, so a web page cannot reach it by rebinding a DNS name; it is
@@ -261,6 +335,34 @@ the panel prints instead; anything that changes something needs a header a
 page on another origin cannot set and a matching `Origin`; the token is never in
 the page until you press **Show**. The service writes a small status file for it
 to read, which holds no token and no readings.
+
+### The notification-area icon (Windows)
+
+`gwatch-agent tray` puts the agent's mark by the clock. Its tooltip says whether
+the agent is reporting and when it last sent a reading, and the icon turns to a
+warning or an error sign when the service is stopped, has gone quiet or cannot
+reach GWatch; it looks again every 30 seconds. Click it, or choose **Open
+control panel** from its menu, for the panel; **Agent status** shows the detail;
+**Quit** removes it.
+
+It is optional and off by default. The setup program's last page has an
+unticked **Show the agent in the notification area** box, which runs
+`gwatch-agent tray start-at-login`: a value under your own
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` key, so it starts when you
+sign in (`gwatch-agent tray stop-at-login` removes it, and so does
+uninstalling). It runs as you, unelevated, holds no settings and listens on
+nothing; it reads the service's state from the service manager and the status
+file, which the service gives an access list that lets signed-in users read it
+(the configuration and the token beside it stay the administrators'). When you
+sign in, its console window may flash for a moment before it hides.
+
+**macOS and Linux remain deferred.** Every Go tray library for them needs cgo,
+which the agent's one pure-Go, `CGO_ENABLED=0` cross-compile cannot have; Linux
+desktops disagree about what a tray is (GNOME needs an extension for one at
+all); and each would need its own per-user login autostart. On those platforms
+`gwatch-agent tray` says so and points at `gwatch-agent ui`, which does
+everything the icon would. GWatch itself already notices an agent that stops
+reporting and alerts on it.
 
 ### Installing from a package manager
 
@@ -391,6 +493,10 @@ The agent connects outwards and hangs up. Specifically:
   machine's readings, and every other route in GWatch refuses it.
 - **A reading is filed under the machine that sent it**, whatever the payload
   claims. A token cannot write another machine's history.
+- **A remote collector is opt-in on the machine.** Unless `agent.json` says
+  `"collector": true`, nothing GWatch says makes the agent run a check; with it,
+  the agent runs only built-in network checks (never a script), and is handed
+  the credentials those checks carry. See [`COLLECTORS.md`](COLLECTORS.md).
 - **Losing a token is small.** Someone holding it could send made-up readings
   for that one machine. Revoke it on the machine's node, or **Replace now** to
   give it a new one, and the old one stops working on the next request; past
@@ -443,16 +549,137 @@ shape works here too — `gwatch-agent print` shows the format.
 | Memory and swap | yes | yes | yes |
 | Filesystem space and inodes | yes | space only | yes |
 | Network throughput and errors | yes | yes | yes |
-| Disk read/write throughput | yes | yes (needs administrator) | **no** |
+| Disk read/write throughput | yes | yes (needs administrator) | yes (from `ioreg`) |
+| Disk busy (utilisation) | yes | yes (needs administrator) | yes (from `ioreg`) |
+| Temperatures, per sensor | yes | no | no |
+| Pressure stall (PSI) | yes (kernel 4.20+) | n/a | n/a |
+| ZFS pool health | yes (needs `zpool`) | n/a | n/a |
+| Container limits | yes (cgroup v2) | n/a | n/a |
 
 macOS has no way to read processor utilisation without a native extension, so
 the agent reports **load average per core** instead and says so in the
 reading's warnings. The hardware check falls back to it, so a macOS machine is
 still watched — set a load threshold rather than a processor one.
 
+Disk busy is the share of each second a disk spent servicing requests;
+sustained readings near 100% mean the disk, not the processor, is what the
+machine is waiting on. On Windows and macOS it is worked out from the time
+the disk spent on reads and writes, which counts overlapping requests twice, so
+a fast SSD with many requests in flight can read high before it is the limit.
+
 Windows disk throughput needs the process to be able to open
 `\\.\PhysicalDriveN`, which the service account can and an ordinary user
 usually cannot. Everything else works either way.
+
+### Linux: temperatures, pressure, containers and ZFS
+
+**Temperatures** come from every hardware-monitoring chip the kernel knows
+(`/sys/class/hwmon/*/temp*_input`, named by the chip's `name` and the input's
+`label`) and from every thermal zone (`/sys/class/thermal/thermal_zone*/temp`)
+that hwmon does not already cover. Each sensor is its own reading, keyed
+`temp:<chip>/<label>` — `temp:coretemp/Package id 0`, `temp:nvme/Composite`,
+`temp:thermal/cpu-thermal` — so a threshold can be set on the family (every
+sensor) or on one. Two chips with the same name (two NVMe drives) are told
+apart by their device: `temp:nvme-nvme0/Composite`. The limits a chip declares
+(`temp*_max`, `temp*_crit`, a zone's critical trip point) are shown beside the
+reading but never alert by themselves: what alerts is the check's thresholds,
+and a new hardware check has none for temperature, because what is hot depends
+on the part and some chips report nonsense. Readings outside −40…150 °C are
+treated as a disconnected input and dropped. SATA drive temperatures appear
+when the `drivetemp` module is loaded; S.M.A.R.T. itself is not read (it needs
+root and `smartctl`, and polling it every reading can wake sleeping disks).
+
+**Pressure stall** (`/proc/pressure/{cpu,memory,io}`) is the share of recent
+time in which work was held up waiting for that resource. Each resource gives
+two readings, `psi:<resource>.avg10` and `psi:<resource>.avg60` (the "some"
+line: at least one task waiting); a threshold on `psi:memory` covers both.
+The "full" figures for memory and io are shown on the machine's page.
+
+**Inside a container** (Docker, Podman, LXC, Kubernetes — recognised by
+`/.dockerenv`, `/run/.containerenv`, `/run/systemd/container` or pid 1's
+cgroup), memory and processor use are measured against the container's own
+cgroup v2 limits, `memory.max` and `cpu.max`, rather than the host's totals: a
+container capped at 2 GiB is full at 2 GiB. Memory used is the cgroup's charge
+less its inactive file cache, as `docker stats` counts it; processor use is the
+share of the CPU quota used, so 100% means the container is being throttled.
+Each limit applies on its own, only when it is tighter than the machine, and
+the machine's page says which limits were applied. A process on the host is
+never measured this way, even under a systemd memory cap, and neither is the
+agent image reading a host through `/host`. cgroup v1 is not read. Pressure
+stall and temperatures inside a container are the host's.
+
+**Filesystems.** An overlay mounted at `/` — the root of a Docker container —
+is reported (its free space is the host filesystem the image layers live on);
+other overlays are container layers and are skipped. btrfs subvolumes of one
+filesystem are the same device and are reported once. ZFS datasets are folded
+into one entry per pool, named after the pool (`Device` is `tank`) and listed
+under the mount point of the pool's top-level dataset, or the dataset mounted
+closest to `/` when that one is not mounted: used is the sum of what the
+mounted datasets refer to, free is the pool's free space, and the machine page
+says how many datasets were folded in. Snapshots and unmounted datasets are not
+in that sum, and ZFS reports no inode figures. When ZFS is mounted and the
+`zpool` command is on the path, `zpool list` (given three seconds) supplies
+each pool's health as the reading `pool:<name>` — 0 healthy, 1 degraded, 2
+faulted or unavailable — and a new hardware check warns at 1 and is critical
+at 2. Its raw sizes, parity included, are shown beside the usable figures.
+An agent in a container with no `zpool` simply reports no pool health.
+
+Every one of these can be turned off for a machine like any other kind of
+reading (`temp`, `psi`, `pool` in `collect`, or the checkboxes on the node).
+
+### Services and programs
+
+A machine can also be told to watch named **services** — "is nginx running?",
+"has smbd stopped?" — and named **programs** — "is Plex running, and how many
+copies?". Each is a reading of its own on the machine's hardware check:
+
+- `service:<name>` is **1 while the service is running and 0 when it is not**:
+  stopped, failed, or not installed at all (the machine page says which, in the
+  system's own words: `active (running)`, `failed`, `inactive (dead)`, `not
+  found`). A service someone named is one they expect to be up, so a new
+  hardware check is **critical at or below 0** — critical when it stops.
+- `process:<name>` is **how many processes are running with that executable
+  name**, and a new hardware check is **critical at or below 0** — critical
+  when none is.
+
+Both are "less is worse" thresholds (`below` in the check's configuration), and
+both can be changed like any other: a warning level, an instance entry for one
+service that should only warn, or an instance entry with both boxes blank for
+one that is never alerted on.
+
+**Nothing is watched until you name it, and nothing is looked for until then.**
+A machine nobody asked about runs no `systemctl`, walks no process table and
+reports no such readings, so this costs nothing by default. The names are
+chosen:
+
+- for a machine with an agent, under **What it collects** on its agent card,
+  or in `collect` in `agent.json` (or the control panel's *What this machine
+  reports*): `{ "services": ["nginx", "docker", "smbd"], "processes": ["plex"] }`.
+  The usual rule holds — names in the machine's own file are both what it
+  watches when GWatch has not chosen and all GWatch may choose from;
+- for the computer GWatch runs on, under **Services and programs to watch** on
+  its hardware panel.
+
+To pick rather than guess, each place offers the machine's own list: an agent
+sends every service it has, and every program running at the time, with its
+check-in (so the list is at most a quarter of an hour old), and the panels for
+this computer and in the agent's control panel make the list when you press
+*List what this computer has*. The list is never part of a reading.
+
+How each platform answers:
+
+| | Services | Programs |
+| --- | --- | --- |
+| Linux | systemd, through `systemctl show` for the watched units (one call, five seconds at most) and `systemctl list-units --type=service --all` for the list. No D-Bus library. `nginx` means `nginx.service`; any other unit type can be named in full (`docker.socket`). The list shows the services systemd has loaded; a disabled one that has never run can still be typed. | `/proc`: the executable name, recovered from the command line when the kernel's 15-character name was cut short. Kernel threads are left out. |
+| Windows | The Service Control Manager, asked only to list (no administrator rights needed). A name matches the service name or its display name, without regard to case (`Spooler`, `Print Spooler`). | A Toolhelp snapshot. Case is ignored and `.exe` is optional (`plex media server` matches `Plex Media Server.exe`). |
+| macOS | `launchctl list`: a job with a PID is running. A name matches the label or its last part (`com.openssh.sshd` or `sshd`). An agent running as root (as installed) sees the system's daemons. | `ps -axco comm`. |
+
+A machine without systemd (Alpine with OpenRC, most containers) cannot report
+services and says so as a warning on the reading rather than calling every
+watched service stopped; programs still work. An agent reading its host through
+`/host` from a container reports the host's programs (from the host's `/proc`)
+but not its services, since `systemctl` in the container would answer for the
+container.
 
 Anything a platform cannot report is recorded as a warning on the reading and
 shown on the machine's page. It never fails the check on its own: knowing the
@@ -494,8 +721,10 @@ go, but from there on **each metric is its own thing**:
 
 - **Its own key.** `cpu`, `memory`, `swap` and `load` for the readings a
   machine has one of; `disk:/srv`, `inodes:/srv`, `net:eth0.rx`,
-  `net:eth0.tx`, `diskio:sda.read`, `diskio:sda.write`, `diskio:sda.busy` for
-  the ones it may have several of. The key is how the metric is named
+  `net:eth0.tx`, `diskio:sda.read`, `diskio:sda.write`, `diskio:sda.busy`,
+  and on Linux `temp:coretemp/Package id 0`, `psi:memory.avg10` and
+  `pool:tank`, and for watched services and programs `service:nginx` and
+  `process:plex`, for the ones it may have several of. The key is how the metric is named
   everywhere: in the last result, in charts, in triggers, in the API.
 - **Its own verdict.** Every run judges every metric against the threshold
   that governs it and records the verdict (`up`, `degraded` or `down`) with
@@ -505,7 +734,8 @@ go, but from there on **each metric is its own thing**:
   memory that is fine is not hidden behind the disk that is not.
 - **Its own thresholds.** The check carries a list of warning/critical pairs,
   one per metric family (Processor, Memory, Swap, Load per core, Disk space,
-  Inodes, Network throughput, Disk I/O), edited as boxed groups in the check
+  Inodes, Network throughput, Disk I/O, Temperature, Pressure stall, ZFS pool
+  health, Services, Processes), edited as boxed groups in the check
   editor. Below them, *One disk, interface or device* adds an entry for a
   single instance — `disk:/srv`, `net:eth0` — which replaces the family's
   pair for that instance alone. A media disk that lives at 90% can have its
@@ -648,6 +878,17 @@ verifier — no database, no web interface, no GWatch credentials.
 **The machine never appears.** Run `gwatch-agent once --server … --token …` on
 it by hand. A rejected token says so plainly; a connection failure names what
 went wrong reaching the server.
+
+**Is that address even a GWatch?** `gwatch-agent probe --server URL
+[--insecure]` answers in one line, before any code is spent: whether the
+address is reachable, whether its certificate is acceptable, and whether what
+answers is a GWatch (its public `GET /api/health` carries `schedulerRunning`).
+It exits non-zero when it is not. The Windows setup program's **Test
+connection** button runs exactly this.
+
+**Asking for help.** **Copy diagnostics** in the control panel puts everything
+someone helping will ask for on the clipboard, with the token taken out; its
+**Recent log** card shows the end of `agent.log`.
 
 **"the server rejected this token".** The token was revoked, the machine was
 deleted, or it was mistyped. Register the machine again and use the new token.

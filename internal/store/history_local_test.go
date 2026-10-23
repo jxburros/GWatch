@@ -69,10 +69,13 @@ func TestRetentionFragmentsDoNotOverwriteArchivedRollups(t *testing.T) {
 	// five minutes of the old fine tier. Rebuilding must preserve both counts
 	// and failure/latency information in the archived tiers.
 	latency := 12.0
+	// Hourly buckets sit on whole UTC hours, which is not a whole local hour
+	// in a half-hour zone such as Adelaide's.
+	lastHour := day.Add(23 * time.Hour).Truncate(time.Hour)
 	rows := []model.Rollup{
 		{CheckID: id, BucketSecs: Bucket1d, BucketStart: day, Count: 288, SuccessCount: 280, FailCount: 8, AvgMS: &latency, Availability: 100.0 * 280 / 288},
-		{CheckID: id, BucketSecs: Bucket1h, BucketStart: day.Add(23 * time.Hour), Count: 12, SuccessCount: 10, FailCount: 2, AvgMS: &latency, Availability: 100.0 * 10 / 12},
-		{CheckID: id, BucketSecs: Bucket5m, BucketStart: day.Add(23*time.Hour + 55*time.Minute), Count: 1, SuccessCount: 1, Availability: 100},
+		{CheckID: id, BucketSecs: Bucket1h, BucketStart: lastHour, Count: 12, SuccessCount: 10, FailCount: 2, AvgMS: &latency, Availability: 100.0 * 10 / 12},
+		{CheckID: id, BucketSecs: Bucket5m, BucketStart: lastHour.Add(55 * time.Minute), Count: 1, SuccessCount: 1, Availability: 100},
 	}
 	if err := s.InsertRollupsBatch(ctx, rows); err != nil {
 		t.Fatal(err)

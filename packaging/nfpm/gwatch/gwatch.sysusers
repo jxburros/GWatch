@@ -1,0 +1,4 @@
+# The system user the GWatch service runs as (gwatch.service, User=gwatch).
+# It owns /var/lib/gwatch and nothing else, and cannot log in. postinstall.sh
+# applies this with systemd-sysusers, or with useradd where there is none.
+u gwatch - "GWatch network monitor" /var/lib/gwatch /usr/sbin/nologin

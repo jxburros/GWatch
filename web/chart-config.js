@@ -1,3 +1,4 @@
+// @ts-check
 // Shared "custom chart" configuration: the editor form and the renderer are
 // used by the Charts tab and by the dashboard's chart widgets, so a chart
 // configured on one can be pinned to the other unchanged.
@@ -107,8 +108,45 @@ export function normalizeSeries(list) {
   return out;
 }
 
-/** A complete config with defaults filled in. */
+/**
+ * One plotted line: a check and what of it is plotted. `named` marks a metric
+ * the check names itself (an SNMP OID, a hardware reading) rather than one of
+ * the built-in latency/loss metrics.
+ * @typedef {{ checkId: number, metric: string, named?: boolean }} SeriesSpec
+ */
+
+/**
+ * A chart's configuration as normalizeChartConfig leaves it. Configs are
+ * stored as JSON, so anything else a caller put on one is kept too.
+ * @typedef {{
+ *   metric: string,
+ *   colors: Record<string, string>,
+ *   series: SeriesSpec[],
+ *   checkIds: number[],
+ *   range: string,
+ *   style: string,
+ *   smooth: boolean,
+ *   points: boolean,
+ *   lineWidth: number,
+ *   shadeFailures: boolean,
+ *   legend: boolean,
+ *   grid: boolean,
+ *   yMin: number | null,
+ *   yMax: number | null,
+ *   threshold: number | null,
+ *   height: number,
+ *   splitBy: '' | 'node' | 'check',
+ *   split: boolean,
+ *   uptime: boolean,
+ *   timestack: any,
+ *   [extra: string]: any,
+ * }} ChartConfig
+ */
+
+/** A complete config with defaults filled in.
+ *  @param {any} [cfg] @returns {ChartConfig} */
 export function normalizeChartConfig(cfg = {}) {
+  /** @type {ChartConfig} */
   const c = { ...(cfg || {}) };
   // `metric` is now only what an automatic chart (no series picked) plots.
   c.metric = BUILTIN.has(c.metric) ? c.metric : 'avg';
@@ -131,15 +169,29 @@ export function normalizeChartConfig(cfg = {}) {
   c.shadeFailures = c.shadeFailures !== false;
   c.legend = c.legend !== false;
   c.grid = c.grid !== false;
-  c.yMin = c.yMin === '' || c.yMin == null || isNaN(Number(c.yMin)) ? null : Number(c.yMin);
-  c.yMax = c.yMax === '' || c.yMax == null || isNaN(Number(c.yMax)) ? null : Number(c.yMax);
-  c.threshold = c.threshold === '' || c.threshold == null || isNaN(Number(c.threshold)) ? null : Number(c.threshold);
+  // A form leaves an empty bound as '', which is no bound at all.
+  /** @param {any} v @returns {number | null} */
+  const optNum = (v) => (v === '' || v == null || isNaN(Number(v)) ? null : Number(v));
+  c.yMin = optNum(c.yMin);
+  c.yMax = optNum(c.yMax);
+  c.threshold = optNum(c.threshold);
   c.height = Math.min(800, Math.max(120, Number(c.height) || 260));
-  c.split = !!c.split;
+  // How the series are split into charts: all on one ('' — two units a chart
+  // still apply), one chart per node (a node's ping, SNMP and hardware
+  // readings together), or one per check. `split: true` is the older spelling
+  // of "per check" and is still read.
+  c.splitBy = SPLITS.some((o) => o.value === c.splitBy) ? c.splitBy : (c.split ? 'check' : '');
+  c.split = c.splitBy === 'check';
   c.uptime = !!c.uptime;
   c.timestack = normalizeTimestack(c.timestack);
   return c;
 }
+
+export const SPLITS = [
+  { value: '', label: 'Everything on one chart' },
+  { value: 'node', label: 'One chart per node' },
+  { value: 'check', label: 'One chart per check' },
+];
 
 /* ---------- What a check can be charted by ---------- */
 
@@ -156,6 +208,7 @@ export function normalizeChartConfig(cfg = {}) {
 export function namedMetrics(c, last) {
   const cfg = c?.config || {};
   if (c?.type === 'snmp') return (cfg.snmpOids || []).filter((o) => o.name).map((o) => ({ name: o.name, unit: o.unit || '', label: o.name }));
+  if (c?.type === 'matter') return (cfg.matterReadings || []).filter((r) => r.name).map((r) => ({ name: r.name, unit: r.unit || '', label: r.name }));
   if (c?.type === 'json' && cfg.jsonRecord) { const name = (cfg.jsonMetric || '').trim() || 'value'; return [{ name, unit: (cfg.jsonUnit || '').trim(), label: name }]; }
   if (c?.type === 'system') {
     const rows = last?.details?.metricResults || [];
@@ -227,6 +280,10 @@ export function describeChartConfig(cfg) {
  * check's readings come from its latest result, which /api/nodes does not
  * carry, so the first time one is opened its node is fetched (`loadNode`).
  * `.value` is the list of series.
+ *
+ * @param {any[]} nodes
+ * @param {any[]} [selected]
+ * @param {{ onChange?: (series: SeriesSpec[]) => void, loadNode?: (id: number) => Promise<any> }} [opts]
  */
 export function metricPicker(nodes, selected = [], { onChange, loadNode = (id) => api.get(`/api/nodes/${id}`) } = {}) {
   const sel = new Map(normalizeSeries(selected).map((s) => [seriesKey(s), s]));
@@ -245,16 +302,27 @@ export function metricPicker(nodes, selected = [], { onChange, loadNode = (id) =
   const badges = [];
   let total = 0;
 
+  // Checks are listed under their node, so a node watched several ways (ping
+  // and SNMP, say) reads as one item with its checks inside it, as it does in
+  // the Nodes list. Each check is still ticked on its own.
   for (const n of nodes || []) {
+    if (!(n.checks || []).length) continue;
+    const nodeChecks = h('div', { class: 'metric-node-checks' });
+    const nodeEl = h('section', { class: 'metric-node', 'data-node': n.id, 'aria-label': n.name },
+      h('div', { class: 'metric-node-name' }, n.name, h('span', { class: 'sub' }, ` · ${plural(n.checks.length, 'check')}`)), nodeChecks);
+    nodeEl.dataset.search = n.name.toLowerCase();
+    list.append(nodeEl);
     for (const c of n.checks || []) {
       total++;
       const name = `${n.name} › ${c.name}`;
       const opts = h('div', { class: 'metric-options', role: 'group', 'aria-label': `Metrics for ${name}` });
       const badge = h('span', { class: 'metric-count' });
       const det = h('details', { class: 'metric-check', 'data-check': c.id },
-        h('summary', null, icon('chevronRight'), h('span', { class: 'truncate', style: { flex: '1', minWidth: '0' } }, name), badge, h('span', { class: 'tag' }, c.type)),
+        h('summary', null, icon('chevronRight'), h('span', { class: 'truncate', style: { flex: '1', minWidth: '0' }, title: name }, c.name), badge, h('span', { class: 'tag' }, c.type)),
         opts);
-      det.dataset.search = name.toLowerCase();
+      // A check's own groups (#36) are searchable too: "certificates" finds
+      // every check in an "HTTPS certificates" group.
+      det.dataset.search = [name, ...(c.config?.groups || [])].join(' ').toLowerCase();
       const picked = () => [...sel.values()].filter((s) => s.checkId === Number(c.id)).length;
       const setBadge = () => { const k = picked(); badge.textContent = k ? `${k} ticked` : ''; };
       badges.push(setBadge);
@@ -288,14 +356,23 @@ export function metricPicker(nodes, selected = [], { onChange, loadNode = (id) =
       };
       det.addEventListener('toggle', () => { if (det.open && !filled) fill(); });
       if (picked()) { det.open = true; fill(); }
-      list.append(det);
+      nodeChecks.append(det);
     }
   }
   if (!total) list.append(h('div', { class: 'note' }, 'No checks yet.'));
 
   function applyFilter() {
     const q = filter.value.trim().toLowerCase();
-    for (const det of list.querySelectorAll('.metric-check')) det.hidden = !!q && !det.dataset.search.includes(q);
+    for (const nodeEl of list.querySelectorAll('.metric-node')) {
+      // A node that matches shows all its checks; otherwise only those that do.
+      const nodeHit = !q || nodeEl.dataset.search.includes(q);
+      let any = false;
+      for (const det of nodeEl.querySelectorAll('.metric-check')) {
+        det.hidden = !nodeHit && !det.dataset.search.includes(q);
+        any = any || !det.hidden;
+      }
+      nodeEl.hidden = !any;
+    }
   }
   function updateCount() {
     const k = sel.size;
@@ -315,6 +392,9 @@ export function metricPicker(nodes, selected = [], { onChange, loadNode = (id) =
 /**
  * Editor form for a chart config. Returns an element with `.value` (the config
  * read from the controls) and `onChange` callbacks fired live.
+ *
+ * @param {any} cfg
+ * @param {{ nodes?: any[], onChange?: (cfg: ChartConfig) => void, compact?: boolean, loadNode?: (id: number) => Promise<any> }} [opts]
  */
 export function chartConfigEditor(cfg, { nodes = [], onChange, compact = false, loadNode } = {}) {
   const c = normalizeChartConfig(cfg);
@@ -332,7 +412,7 @@ export function chartConfigEditor(cfg, { nodes = [], onChange, compact = false, 
   const shade = checkbox({ label: 'Shade failures', checked: c.shadeFailures, onChange: emit });
   const legend = checkbox({ label: 'Show legend', checked: c.legend, onChange: emit });
   const grid = checkbox({ label: 'Show grid lines', checked: c.grid, onChange: emit });
-  const split = checkbox({ label: 'One chart per check', checked: c.split, onChange: emit });
+  const split = selectInput({ 'aria-label': 'Split into charts', value: c.splitBy, options: SPLITS, onchange: emit });
   const uptime = checkbox({ label: 'Show availability bars underneath', checked: c.uptime, onChange: emit });
   // Timestack: lay the metric over itself, one layer per earlier period.
   const stackOn = checkbox({ label: 'Timestack: overlay this metric against itself over time', checked: !!c.timestack, onChange: () => { syncStack(); emit(); } });
@@ -391,12 +471,12 @@ export function chartConfigEditor(cfg, { nodes = [], onChange, compact = false, 
       field({ label: 'Y axis maximum', input: yMax }),
       field({ label: 'Threshold line', input: threshold, help: 'Draws a dashed warning line at this value on the left axis.' }),
     ),
-    h('div', { class: 'stack-sm', style: { gap: '6px' } }, smooth, points, shade, legend, grid, split, uptime),
+    h('div', { class: 'stack-sm u-gap-6' }, smooth, points, shade, legend, grid, field({ label: 'Charts', input: split }), uptime),
   );
   Object.defineProperty(wrap, 'value', { get: () => normalizeChartConfig({
     series: picker.value, metric: autoMetric.value, range: range.value, style: style.value, lineWidth: width.value, height: height.value,
     yMin: yMin.value, yMax: yMax.value, threshold: threshold.value, smooth: smooth.input.checked, points: points.input.checked, shadeFailures: shade.input.checked,
-    legend: legend.input.checked, grid: grid.input.checked, split: split.input.checked, uptime: uptime.input.checked, colors,
+    legend: legend.input.checked, grid: grid.input.checked, splitBy: split.value, uptime: uptime.input.checked, colors,
     timestack: stackOn.input.checked ? { period: stackPeriod.value, layers: stackLayers.value } : null,
   }) });
   return wrap;
@@ -416,7 +496,9 @@ export function historyFetch(ids, range, metric, end) {
   return ids.length ? getHistoryMulti(ids, range, end) : getHistoryAuto(range);
 }
 
-/** historyFetch behind a cache (a Map the caller owns and clears on refresh). */
+/** historyFetch behind a cache (a Map the caller owns). A live update calls
+ *  expireHistory on it rather than clearing it, so only the series old enough
+ *  to have changed are asked for again. */
 export function cachedHistoryFetch(cache) {
   return (ids, range, metric, end) => {
     const key = `${ids.join(',')}|${range}|${metric || ''}|${end ?? ''}`;
@@ -424,10 +506,25 @@ export function cachedHistoryFetch(cache) {
       const p = historyFetch(ids, range, metric, end);
       // A failed request is not kept, so the next refresh asks again.
       p.catch(() => { if (cache.get(key) === p) cache.delete(key); });
-      cache.set(key, p);
+      cache.set(key, Object.assign(p, { fetchedAt: Date.now(), range, fixed: end != null && end !== '' }));
     }
     return cache.get(key);
   };
+}
+
+// How long a cached series is good for, by range. Live updates arrive every
+// second or so on a busy install, and re-downloading a month of history for
+// each one was steady, pointless load: a 30-day chart's newest bucket is
+// hours wide, so it cannot have moved in a few seconds.
+const HISTORY_MAX_AGE = { '1h': 10e3, '24h': 30e3, '3d': 60e3, '7d': 60e3, '30d': 5 * 60e3, '1y': 15 * 60e3 };
+
+/** Drops the cached series that are old enough to be worth asking for again
+ *  (a window that ends at a fixed time never changes, so it is kept). */
+export function expireHistory(cache, now = Date.now()) {
+  for (const [key, p] of cache) {
+    if (p.fixed) continue;
+    if (now - (p.fetchedAt || 0) >= (HISTORY_MAX_AGE[p.range] ?? 30e3)) cache.delete(key);
+  }
 }
 
 const asList = (x) => (Array.isArray(x) ? x : x ? [x] : []);
@@ -437,12 +534,17 @@ const asList = (x) => (Array.isArray(x) ? x : x ? [x] : []);
  * each named metric in its own. Resolves to [{ spec, hs }] in the config's
  * order, with `.missing` counting series that had nothing to fetch (a check
  * since deleted, a metric it no longer measures).
+ *
+ * @typedef {Array<{ spec: SeriesSpec, hs: any }> & { missing?: number }} SeriesList
+ * @typedef {Array<{ spec: SeriesSpec, hs: any, layer: number, shift: number }> & { spec?: SeriesSpec | null }} StackList
+ * @returns {Promise<SeriesList>}
  */
 export async function loadChartSeries(cfg, fetchFn = historyFetch) {
   const c = normalizeChartConfig(cfg);
   if (!c.series.length) {
     let list = asList(await fetchFn([], c.range));
     if (c.metric === 'loss') list = list.filter((hs) => hs.checkType === 'ping');
+    /** @type {SeriesList} */
     const out = list.map((hs) => ({ spec: { checkId: Number(hs.checkId), metric: c.metric }, hs }));
     out.missing = 0;
     return out;
@@ -455,6 +557,7 @@ export async function loadChartSeries(cfg, fetchFn = historyFetch) {
   ]);
   const byId = new Map(latency.map((hs) => [Number(hs.checkId), hs]));
   const byKey = new Map(named.map((s, i) => [seriesKey(s), namedLists[i][0]]));
+  /** @type {SeriesList} */
   const out = [];
   let missing = 0;
   for (const s of c.series) {
@@ -474,6 +577,7 @@ export async function loadChartSeries(cfg, fetchFn = historyFetch) {
  * points move forward to sit on the current window — with `.spec` the one
  * series stacked. `now` is rounded down to the minute, so the earlier layers
  * are asked for the same window on every redraw within it and stay cached.
+ * @returns {Promise<StackList>}
  */
 export async function loadTimestackSeries(cfg, fetchFn = historyFetch, now = Date.now()) {
   const c = normalizeChartConfig(cfg);
@@ -483,7 +587,7 @@ export async function loadTimestackSeries(cfg, fetchFn = historyFetch, now = Dat
   if (!spec) {
     // Nothing ticked: stack the first check GWatch would have picked.
     const auto = asList(await fetchFn([], ts.period));
-    if (!auto.length) { const none = []; none.spec = null; return none; }
+    if (!auto.length) { const none = /** @type {StackList} */ ([]); none.spec = null; return none; }
     spec = { checkId: Number(auto[0].checkId), metric: c.metric };
   }
   const named = !isBuiltinMetric(spec);
@@ -491,6 +595,7 @@ export async function loadTimestackSeries(cfg, fetchFn = historyFetch, now = Dat
   const lists = await Promise.all(Array.from({ length: ts.layers }, (_, i) => Promise.resolve()
     .then(() => fetchFn([spec.checkId], ts.period, named ? spec.metric : undefined, i === 0 ? undefined : end - i * period.ms))
     .then(asList).catch(() => [])));
+  /** @type {StackList} */
   const out = [];
   lists.forEach((list, i) => {
     const hs = list[0];
@@ -561,6 +666,10 @@ export function chartCsvItems(cfg, { nodes = [], series = null } = {}) {
  * third axis or rescaled into percentages nobody asked for, and a note above
  * the charts says so. yMin, yMax and the threshold line are in the unit of
  * the first series, so they apply to every chart whose left axis is in it.
+ *
+ * @param {HTMLElement} host
+ * @param {any} cfg
+ * @param {{ title?: string, fetch?: typeof historyFetch, fill?: boolean, onData?: (series: any[], entries: any[]) => void }} [opts]
  */
 export function renderConfiguredChart(host, cfg, { title = 'Chart', fetch: fetchFn, fill = false, onData } = {}) {
   const c = normalizeChartConfig(cfg);
@@ -616,12 +725,15 @@ export function renderConfiguredChart(host, cfg, { title = 'Chart', fetch: fetch
       };
     };
     // One chart per check when asked, then no more than two units a chart.
+    // One chart per check or per node when asked, then no more than two
+    // units a chart. A node is known by its id where the series carries one.
+    const groupKey = c.splitBy === 'check' ? (s) => `c${s.entry.hs.checkId}`
+      : c.splitBy === 'node' ? (s) => (s.entry.hs.nodeId ? `n${s.entry.hs.nodeId}` : `n:${s.entry.hs.nodeName || ''}`)
+        : () => '';
     const byCheck = [];
-    if (c.split) {
-      const ids = [...new Set(all.map((s) => Number(s.entry.hs.checkId)))];
-      for (const id of ids) byCheck.push(all.filter((s) => Number(s.entry.hs.checkId) === id));
-    } else byCheck.push(all);
-    const plan = byCheck.flatMap((list) => groupByUnits(list, primaryUnit).map((g) => ({ ...g, check: c.split ? list[0].entry.hs : null })));
+    for (const k of [...new Set(all.map(groupKey))]) byCheck.push(all.filter((s) => groupKey(s) === k));
+    const heading = (hs) => (c.splitBy === 'node' ? hs.nodeName || '' : `${hs.nodeName || ''} › ${hs.checkName}`);
+    const plan = byCheck.flatMap((list) => groupByUnits(list, primaryUnit).map((g) => ({ ...g, check: c.splitBy ? list[0].entry.hs : null, heading: c.splitBy ? heading(list[0].entry.hs) : '' })));
     const key = JSON.stringify(plan.map((g) => [g.units, g.series.map((s) => [seriesKey(s.entry.spec), s.name])]));
     const reuse = key === renderKey && charts.length === plan.length && body.querySelectorAll('.chart-host').length === plan.length;
     if (!reuse) resetCharts();
@@ -629,27 +741,27 @@ export function renderConfiguredChart(host, cfg, { title = 'Chart', fetch: fetch
     renderKey = key;
     const unitCount = new Set(all.map((s) => s.unit)).size;
     if (plan.length > byCheck.length) {
-      body.append(h('p', { class: 'note chart-split-note' }, c.split
-        ? `A chart has two axes, so a check measured here in more than two units is drawn as more than one chart (${plan.length} in all).`
+      body.append(h('p', { class: 'note chart-split-note' }, c.splitBy
+        ? `A chart has two axes, so a ${c.splitBy} measured here in more than two units is drawn as more than one chart (${plan.length} in all).`
         : `These metrics are in ${unitCount} different units and a chart has two axes, so they are drawn as ${plan.length} charts.`));
     }
     plan.forEach((group, gi) => {
       let chart = reuse ? charts[gi] : null;
       if (!chart) {
         const hostEl = h('div', { class: 'chart-host', style: fill ? { flex: '1', minHeight: '0', display: 'flex', flexDirection: 'column' } : { marginBottom: plan.length > 1 ? '12px' : '0' } });
-        if (group.check && (gi === 0 || plan[gi - 1].check !== group.check)) hostEl.append(h('div', { class: 'section-title', style: { marginBottom: '4px' } }, `${group.check.nodeName || ''} › ${group.check.checkName}`));
+        if (group.check && (gi === 0 || plan[gi - 1].heading !== group.heading)) hostEl.append(h('div', { class: 'section-title u-mb-4' }, group.heading));
         body.append(hostEl);
         // A legend whenever a line needs naming: more than one on the chart, or
         // one of several charts that the units split apart. A chart of its own
         // per check is named by its heading instead, unless it mixes metrics.
-        const named = group.series.length > 1 || (!c.split && plan.length > 1) || (c.split && mixedMetrics);
+        const named = group.series.length > 1 || (!c.splitBy && plan.length > 1) || (c.splitBy === 'check' && mixedMetrics);
         chart = new LineChart(hostEl, opts(group, named));
         charts.push(chart);
       }
       chart.setData({ series: group.series.map(({ entry, ...s }) => s), from, to, bucketSeconds: bucket });
     });
     if (c.uptime) {
-      const up = h('div', { style: { marginTop: '8px' } });
+      const up = h('div', { class: 'u-mt-8' });
       const seen = new Set();
       for (const { hs } of entries) {
         if (seen.has(Number(hs.checkId))) continue;

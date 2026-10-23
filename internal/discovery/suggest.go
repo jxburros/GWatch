@@ -1,6 +1,10 @@
 package discovery
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
 
 // The ports a sweep probes by default. They are the ones that say something
 // about what a device *is*, rather than the ones most likely to be open:
@@ -113,6 +117,122 @@ func Suggest(openPorts []int) Suggestion {
 		}
 	}
 	return Suggestion{Template: "ping"}
+}
+
+// The kinds of device a network card's maker points to. A maker is weaker
+// evidence than a port — Brother makes printers, but "Intel" says only that
+// the machine has an Intel network card — so only makers that make one kind
+// of device worth naming are listed, and the vendor only ever refines what the
+// ports said; it never overrides a port that answered.
+const (
+	kindNetwork = "network"
+	kindPrinter = "printer"
+	kindNAS     = "nas"
+	kindPi      = "pi"
+	kindIoT     = "iot"
+	kindMedia   = "media"
+	kindCamera  = "camera"
+)
+
+// vendorKinds maps a fragment of a registry name (lower-case) to the kind of
+// device that maker sells. The fragments match the names ouigen writes.
+var vendorKinds = []struct{ fragment, kind string }{
+	{"ubiquiti", kindNetwork}, {"mikrotik", kindNetwork}, {"routerboard", kindNetwork},
+	{"netgear", kindNetwork}, {"tp-link", kindNetwork}, {"zyxel", kindNetwork},
+	{"avm audiovisuelles", kindNetwork}, {"juniper", kindNetwork}, {"aruba", kindNetwork},
+	{"ruckus", kindNetwork}, {"eero", kindNetwork}, {"linksys", kindNetwork},
+	{"cisco", kindNetwork}, {"draytek", kindNetwork}, {"fortinet", kindNetwork},
+	{"brother", kindPrinter}, {"seiko epson", kindPrinter}, {"canon", kindPrinter},
+	{"lexmark", kindPrinter}, {"kyocera", kindPrinter}, {"xerox", kindPrinter}, {"ricoh", kindPrinter},
+	{"synology", kindNAS}, {"qnap", kindNAS}, {"asustor", kindNAS},
+	{"raspberry pi", kindPi},
+	{"espressif", kindIoT}, {"tuya", kindIoT}, {"shelly", kindIoT}, {"allterco", kindIoT},
+	{"itead", kindIoT}, {"signify", kindIoT}, {"philips lighting", kindIoT}, {"ecobee", kindIoT},
+	{"nest labs", kindIoT}, {"ring", kindIoT},
+	{"sonos", kindMedia}, {"roku", kindMedia},
+	{"hikvision", kindCamera}, {"dahua", kindCamera}, {"reolink", kindCamera}, {"axis communications", kindCamera},
+}
+
+// vendorKind returns the kind of device a maker's name suggests, or "".
+func vendorKind(vendor string) string {
+	v := strings.ToLower(vendor)
+	if v == "" {
+		return ""
+	}
+	for _, e := range vendorKinds {
+		if hasWords(v, e.fragment) {
+			return e.kind
+		}
+	}
+	return ""
+}
+
+// hasWords reports whether phrase appears in s as whole words, so "ring" is
+// the doorbell maker and not the end of "Engineering", and "sonos" is not
+// "SonoSite".
+func hasWords(s, phrase string) bool {
+	for from := 0; ; {
+		i := strings.Index(s[from:], phrase)
+		if i < 0 {
+			return false
+		}
+		i += from
+		end := i + len(phrase)
+		startOK := i == 0 || !isWordByte(s[i-1])
+		endOK := end == len(s) || !isWordByte(s[end])
+		if startOK && endOK {
+			return true
+		}
+		from = i + 1
+	}
+}
+
+func isWordByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= '0' && c <= '9'
+}
+
+// kindWords is how each kind reads in a note.
+var kindWords = map[string]string{
+	kindNetwork: "a router, switch or access point",
+	kindPrinter: "a printer",
+	kindNAS:     "a NAS",
+	kindPi:      "a Raspberry Pi",
+	kindIoT:     "a smart-home device (plug, bulb, sensor)",
+	kindMedia:   "a speaker or media player",
+	kindCamera:  "an IP camera",
+}
+
+// SuggestFor is Suggest with the maker of the device's network card to go
+// on as well. The ports decide the template; the maker only sharpens it
+// where the ports were vague:
+//
+//   - Nothing but a ping answered: the template stays "ping", the one that is
+//     sure to work, and the note says what the maker suggests it is.
+//   - Only a web interface answered, which on its own reads as a router: if
+//     the maker is a printer, camera, NAS or smart-home company, it is not a
+//     router, and the router template's internet-lookup check would be
+//     nonsense on it, so it gets a plain reachability check and a note
+//     saying what it probably is.
+//   - A Raspberry Pi with SSH is the home-server it was already taken for,
+//     and the note says which board it is.
+func SuggestFor(openPorts []int, vendor string) Suggestion {
+	s := Suggest(openPorts)
+	kind := vendorKind(vendor)
+	if kind == "" {
+		return s
+	}
+	maker := vendor
+	switch {
+	case s.Template == "ping" && s.Note == "":
+		s.Note = fmt.Sprintf("Made by %s — probably %s.", maker, kindWords[kind])
+	case s.Template == "router" && kind != kindNetwork:
+		s = Suggestion{"ping", fmt.Sprintf("Only a web interface answered, and the maker is %s — probably %s rather than a router.", maker, kindWords[kind])}
+	case s.Template == "router":
+		s.Note = fmt.Sprintf("Only a web interface answered, and the maker is %s — a router, switch or access point.", maker)
+	case kind == kindPi && s.Template == "home-server":
+		s.Note = strings.TrimSuffix(s.Note, ".") + " — a Raspberry Pi."
+	}
+	return s
 }
 
 // portSet is the set of ports that answered, with the handful of questions the

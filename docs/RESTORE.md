@@ -39,12 +39,29 @@ open the web interface.
 2. Under **Restore from a file**, choose the `.gwbackup` file you copied over,
    enter its password, and decide whether to also restore history and events
    (only available if the archive was created with history included).
-3. Click **Restore from a file** and confirm. GWatch clears its current
-   configuration, imports the archive's nodes, checks, dashboards, saved
-   charts, maintenance windows, triggers, custom endpoints and settings, then
-   reloads the scheduler.
+3. Click **Restore from a file**. GWatch reads the archive and shows what it
+   holds, and lists everything in it that matters for security (see
+   [Before it is applied: the preview](#before-it-is-applied-the-preview)).
+   Nothing has changed yet.
+4. Read the list, and click **Restore** to go ahead. GWatch replaces its
+   configuration with the archive's nodes, checks, dashboards, saved charts,
+   maintenance windows, triggers, custom endpoints and settings, then reloads
+   the scheduler.
+
+An archive already in **Backups on this computer** is restored the same way from
+its **Restore** button: the password first, then the preview, then the restore.
 
 ### Via the API
+
+Preview first (optional, and changes nothing):
+
+```sh
+curl -sS -X POST http://127.0.0.1:7230/api/backups/inspect \
+  -F "file=@gwatch-backup-20260101-020000-full.gwbackup" \
+  -F "password=your-backup-password"
+```
+
+Then restore:
 
 ```sh
 curl -sS -X POST http://127.0.0.1:7230/api/backups/restore \
@@ -58,8 +75,81 @@ new machine's remote-access password is set and you are not calling from
 `127.0.0.1`. A successful response looks like:
 
 ```json
-{ "ok": true, "nodes": 12, "checks": 31, "results": 481203, "rollups": 9120, "events": 214, "history": true }
+{ "ok": true, "nodes": 12, "checks": 31, "results": 481203, "rollups": 9120, "events": 214, "history": true,
+  "skippedUsers": [], "skippedAgents": [], "safetyBackup": "gwatch-backup-20261023-101500-full.gwbackup" }
 ```
+
+Before it changes anything, a restore takes a full backup (history included) of what
+is there now, encrypted with the same password, and names it in `safetyBackup` and in
+the event timeline. If the restore was a mistake, restore that file to go back. If that
+backup cannot be written (a full disk, say), nothing is restored. A restore carries on
+to the end even if the browser that asked for it is closed.
+
+## Before it is applied: the preview
+
+A backup is only as trustworthy as whoever had the file and its password. Before a
+restore is applied, the restore dialog (or `POST /api/backups/inspect`, see
+[`API.md`](API.md#backups)) shows what the archive holds (nodes, checks, triggers,
+endpoints, rules, dashboards, wallboards, accounts, API keys, agents, and how much
+history) and, under **Check these before you restore**, everything in it that matters
+for security:
+
+- **Accounts** in the archive that are not on this machine, with administrators
+  marked, and whether they will be added (when you tick **Re-create accounts and
+  agents…**, or on a machine with no accounts yet) or left out. The same for
+  **agents**.
+- **API keys** this machine does not have. These are always added; a key revoked
+  here is still known here, so it does not come back.
+- Everything that **runs a command on this computer**: script and git actions of
+  triggers, custom endpoints and notification rules, and checks that run code
+  (custom checks, hardware checks that read a URL).
+- **Endpoints anybody can call without a token.**
+- Changes to **who can reach GWatch and how they sign in**: LAN access turned on or
+  off, the access password for other devices set, replaced or removed, signing in on
+  this computer, "behind an HTTPS proxy", the listening port, password hashing. (The
+  trusted reverse proxies are a command-line setting, `--trusted-proxies`, and are
+  never in a backup.)
+
+## What a restore checks
+
+The archive's configuration goes through the same checks GWatch applies when each part
+of it is saved by hand: the settings as **Settings** saves them, every node and check as
+the node editor does (with one relaxation: a check faster than the archive's own minimum
+interval is accepted down to the 5-second floor, since raising the minimum leaves older
+checks as they were), triggers, custom endpoints and notification rules with their
+actions (a script with an unknown interpreter, or placeholders spliced into a custom
+interpreter's code without the acknowledgement, is refused), scheduled reports,
+network-map widgets, and the accounts, API keys and agents (a known role and scope, a
+password hash or token digest, links only to nodes in the archive).
+
+If anything fails, the restore is refused before anything is written, or a safety
+backup taken, with every problem listed (`400`, `{"error": "...", "problems": [...]}`),
+and the preview lists the same problems so you see them before you try.
+
+## If a restore fails
+
+The **configuration** is restored as one database transaction, on SQLite, PostgreSQL and
+MySQL alike: every table it touches (nodes, checks, settings, dashboards, maintenance
+windows, triggers, endpoints, rules, charts, wallboards, accounts, keys, agents, and,
+with history, the emptying of the old history) is written together or not at all. A
+failure anywhere in it leaves the database exactly as it was, and the error says
+**Nothing was changed**.
+
+The **history** (results, rollups, events) cannot sensibly go in that transaction: it
+can be hundreds of millions of rows, and holding one transaction open for all of them
+would block every other write for as long as the import takes and grow the database's
+journal to the size of the history. It is imported afterwards, in batches. If that
+import fails part-way, the configuration is restored and in force, the history holds
+what was imported before the failure, and the response is a `500` with
+`"configRestored": true` and the counts imported; the event timeline records "Backup
+restored without all of its history". Restoring the archive again, or the safety backup,
+puts it right.
+
+While a restore runs, **monitoring is paused**: no check runs, and no results, rollups,
+retention passes, scheduled backups or reports are written, so nothing is recorded
+against configuration that is half replaced. Monitoring resumes, with the restored
+configuration loaded, as soon as the restore ends, whether it succeeded or not. A second
+restore started while one is running is refused (`409`).
 
 ## What a restore brings over
 
@@ -73,8 +163,15 @@ new machine's remote-access password is set and you are not calling from
   from supported backup format 2 archives. These are *merged*:
   an account, key or agent already on the new machine is left exactly as it is, so a
   restore never overwrites the password of the administrator doing the restoring, and
-  never resurrects a key that was deliberately revoked here. An archive from an older
-  version has none of these and leaves them untouched.
+  never resurrects a key that was deliberately revoked here. An account or agent in the
+  archive that is **not** on this machine — one deleted since the backup was made — is
+  left out and listed (`skippedUsers`, `skippedAgents`) unless you tick **Re-create
+  accounts and agents that have been deleted since this backup** (`restoreAccounts:
+  true`), so an older backup cannot bring back a removed administrator's password or a
+  purged machine's token. On a machine with no accounts at all, as when moving to a new
+  computer, they are re-created without asking. An agent that is still here keeps its
+  link to its node. An archive from an older version has none of these and leaves them
+  untouched.
 - Optionally, the **history**, which includes what each hardware check recorded: a machine's readings are its check's results, kept like any other check's. (An archive from before that carries a separate list of hardware readings; it is not read, because every reading in it was also a result of a hardware check.)
 - **Settings**: general, alerts (including SMTP configuration), retention
   policy, network access, appearance, and the automatic-backup schedule.

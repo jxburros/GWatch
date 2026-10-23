@@ -12,7 +12,7 @@ import {
   openModal, confirmDialog, field, textInput, selectInput, toast, agentLogo,
 } from '../components.js';
 import { LineChart, SERIES_COLORS } from '../charts.js';
-import { collectionPicker } from './agent-collect.js';
+import { collectionPicker, watchPicker } from './agent-collect.js';
 import { bytes, pct, duration, dateTime, num, agentIsBehind, rate as fmtRate } from '../fmt.js';
 
 // Shading for a usage bar. These are display thresholds only — what actually
@@ -50,7 +50,7 @@ export async function addAgentNode(reload) {
       field({ label: 'Name', input: name, help: 'How this machine appears in the node list.' }),
       h('details', { class: 'collect-details' },
         h('summary', null, 'What to monitor'),
-        h('div', { class: 'stack-sm', style: { marginTop: '10px' } },
+        h('div', { class: 'stack-sm u-mt-10' },
           h('p', { class: 'note' }, 'Everything is on to begin with. Untick what you do not want; which network interfaces, disks and filesystems to report can be chosen on the node once the machine has reported. This can be changed at any time.'),
           picker.el)),
       field({ label: 'Node', input: nodeSel, help: 'Normally a node is made for the machine. Choose an existing node to add the machine’s hardware check to it instead.' })),
@@ -331,15 +331,18 @@ function agentVersionRow(running, latest, releaseURL) {
     }, icon('download'), `${latest} available`));
 }
 
-export function hardwarePanel(key, { title = 'Hardware', metricStatus = null } = {}) {
+export function hardwarePanel(key, { title = 'Hardware', metricStatus = null, isAdmin = false } = {}) {
   const state = { host: null, range: '24h', charts: [], destroyed: false, latestAgent: null, agentReleaseURL: null };
 
   const headEl = h('div', null, skeleton({ lines: 3 }));
   const snapEl = h('div', { class: 'stack' });
+  // Built once rather than with every reading, so a live update never throws
+  // away a name someone is typing.
+  const watchEl = h('div');
   const chartsEl = h('div');
   const el = h('section', { class: 'card', 'aria-label': `${title}: ${key}` },
     h('div', { class: 'card-head' }, h('h2', { class: 'card-title' }, icon('cpu'), title), h('span', { class: 'mono dim small' }, key)),
-    h('div', { class: 'stack' }, headEl, snapEl, chartsEl));
+    h('div', { class: 'stack' }, headEl, snapEl, watchEl, chartsEl));
 
   async function load() {
     try {
@@ -355,9 +358,42 @@ export function hardwarePanel(key, { title = 'Hardware', metricStatus = null } =
         renderHead();
       });
       renderSnapshot();
+      if (!state.watchBuilt && state.host.source === 'local' && isAdmin) { state.watchBuilt = true; renderLocalWatch(); }
     } catch (e) {
       replace(headEl, emptyState({ icon: 'alert', title: 'Could not load this machine', text: e.message, compact: true }));
     }
+  }
+
+  // The computer GWatch runs on has no agent to tell what to watch, so its
+  // services and programs are chosen here (an agent's are chosen on its card,
+  // with the rest of what it collects). The list to pick from is the whole
+  // machine, so it is only made when asked for.
+  function renderLocalWatch() {
+    const picker = watchPicker({
+      value: state.host.watch || {},
+      note: 'Name the services and programs on this computer that should be running. Each becomes a reading of the hardware check, and stopping is critical by default. Nothing is watched until you name something.',
+    });
+    const listBtn = h('button', { class: 'btn', type: 'button', onclick: async () => {
+      listBtn.disabled = true;
+      try {
+        const inv = await api.get('/api/hosts/local/watchable');
+        picker.setInventory(inv);
+        if (inv.problems?.length) toast(inv.problems.join('; '), { kind: 'info' });
+      } catch (e) { toast(e.message, { kind: 'error' }); }
+      listBtn.disabled = false;
+    } }, icon('search'), 'List what this computer has');
+    const save = h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
+      save.disabled = true;
+      try {
+        state.host.watch = await api.put('/api/hosts/local/watch', picker.value());
+        toast('Saved. The next reading of this computer reports them.', { kind: 'success' });
+      } catch (e) { toast(e.message, { kind: 'error' }); }
+      save.disabled = false;
+    } }, icon('save'), 'Save what to watch');
+    replace(watchEl, h('div', { class: 'stack-sm', 'data-section': 'watch' },
+      h('div', { class: 'section-title' }, 'Services and programs to watch'),
+      picker.el,
+      h('div', { class: 'btn-group' }, listBtn, save)));
   }
 
   function renderHead() {
@@ -370,6 +406,7 @@ export function hardwarePanel(key, { title = 'Hardware', metricStatus = null } =
       m ? ['System', [m.platform, m.arch, m.hostname].filter(Boolean).join(' · ') || '—'] : null,
       m?.bootTime ? ['Started', `${dateTime(m.bootTime)} (up ${duration(m.uptimeSeconds)})`] : null,
       m?.cpu?.model ? ['Processor', `${m.cpu.model} — ${num(m.cpu.cores)} cores`] : null,
+      m?.container ? ['Container', containerWording(m.container)] : null,
       host.agent?.lastVersion ? ['Agent version', agentVersionRow(host.agent.lastVersion, state.latestAgent, state.agentReleaseURL)] : null,
       host.agent?.lastAddr ? ['Reported from', host.agent.lastAddr] : null,
     ].filter(Boolean);
@@ -381,7 +418,7 @@ export function hardwarePanel(key, { title = 'Hardware', metricStatus = null } =
     if (host.warnings?.length) {
       // The collector could not read something. Say so rather than showing a
       // gap the reader has to guess at.
-      headEl.append(h('div', { class: 'banner banner-info', style: { marginTop: '12px' } },
+      headEl.append(h('div', { class: 'banner banner-info u-mt-12' },
         icon('info'),
         h('div', null,
           h('strong', null, 'Some readings are not available on this machine'),
@@ -435,13 +472,92 @@ export function hardwarePanel(key, { title = 'Hardware', metricStatus = null } =
           m.filesystems.map((fs) => [
             fs.mount,
             h('span', { class: 'mono' }, fs.device || '—'),
-            fs.fsType || '—',
+            fs.datasets ? `${fs.fsType || 'zfs'} · ${plural(fs.datasets, 'dataset')}` : fs.fsType || '—',
             pct(fs.usedPct, 0),
             bytes(fs.freeBytes),
             bytes(fs.totalBytes),
             h('div', { class: 'meter meter-inline' + levelFor(`disk:${fs.mount}`, fs.usedPct) },
               h('div', { class: 'meter-track' }, h('div', { class: 'meter-fill', style: { width: `${fs.usedPct}%` } }))),
           ])),
+      ));
+    }
+
+    if (m.pools?.length) {
+      // A pool's health is a state, not a quantity, so it is a word with the
+      // check's verdict behind its colour rather than a bar.
+      snapEl.append(h('div', null,
+        h('div', { class: 'section-title' }, 'ZFS pools'),
+        table(['Pool', 'Health', 'Allocated', 'Free', 'Size (raw)'],
+          m.pools.map((p) => {
+            const lvl = levelFor(`pool:${p.name}`, null) || (p.health === 'ONLINE' ? '' : p.health === 'DEGRADED' ? ' warn' : ' crit');
+            return [
+              p.name,
+              statusPill(lvl === ' crit' ? 'down' : lvl === ' warn' ? 'degraded' : 'up', { label: p.health || '—' }),
+              bytes(p.allocBytes),
+              bytes(p.freeBytes),
+              bytes(p.sizeBytes),
+            ];
+          })),
+      ));
+    }
+
+    if (m.temperatures?.length) {
+      snapEl.append(h('div', null,
+        h('div', { class: 'section-title' }, 'Temperatures'),
+        table(['Sensor', 'Now', 'High', 'Critical'],
+          m.temperatures.map((t) => {
+            const lvl = levelFor(`temp:${t.name}`, null) || tempLevel(t);
+            return [
+              t.name,
+              lvl ? statusPill(lvl === ' crit' ? 'down' : 'degraded', { label: celsius(t.celsius) }) : celsius(t.celsius),
+              t.highCelsius != null ? celsius(t.highCelsius) : '—',
+              t.critCelsius != null ? celsius(t.critCelsius) : '—',
+            ];
+          })),
+      ));
+    }
+
+    if (m.pressure?.length) {
+      snapEl.append(h('div', null,
+        h('div', { class: 'section-title' }, 'Pressure stall'),
+        h('p', { class: 'note' }, 'The share of time work was held up waiting for each resource. Near zero is normal; sustained figures mean the machine is short of it.'),
+        table(['Resource', 'Some, 10 s', 'Some, 60 s', 'Full, 10 s', 'Full, 60 s'],
+          m.pressure.map((p) => [
+            { cpu: 'Processor', memory: 'Memory', io: 'Disk I/O' }[p.resource] || p.resource,
+            pct(p.avg10, 1),
+            pct(p.avg60, 1),
+            p.fullAvg10 == null ? '—' : pct(p.fullAvg10, 1),
+            p.fullAvg60 == null ? '—' : pct(p.fullAvg60, 1),
+          ])),
+      ));
+    }
+
+    if (m.services?.length) {
+      // Each watched service is a state, shown as a word with the check's
+      // verdict behind its colour, and the system's own description of it.
+      snapEl.append(h('div', null,
+        h('div', { class: 'section-title' }, 'Watched services'),
+        table(['Service', 'State', 'Description'],
+          m.services.map((s) => {
+            const lvl = levelFor(`service:${s.name}`, null) || (s.running ? '' : ' crit');
+            return [
+              s.name,
+              statusPill(lvl === ' crit' ? 'down' : lvl === ' warn' ? 'degraded' : 'up', { label: s.state || (s.running ? 'running' : 'stopped') }),
+              s.description ? h('span', null, s.description) : h('span', { class: 'muted' }, '—'),
+            ];
+          })),
+      ));
+    }
+
+    if (m.processes?.length) {
+      snapEl.append(h('div', null,
+        h('div', { class: 'section-title' }, 'Watched programs'),
+        table(['Program', 'Running'],
+          m.processes.map((p) => {
+            const lvl = levelFor(`process:${p.name}`, null) || (p.count > 0 ? '' : ' crit');
+            const label = p.count > 0 ? `${num(p.count)} running` : 'not running';
+            return [p.name, statusPill(lvl === ' crit' ? 'down' : lvl === ' warn' ? 'degraded' : 'up', { label })];
+          })),
       ));
     }
 
@@ -573,6 +689,33 @@ export function hardwarePanel(key, { title = 'Hardware', metricStatus = null } =
     themeChanged() { for (const c of state.charts) c.scheduleDraw?.(); },
     destroy() { state.destroyed = true; unsub(); clearCharts(); },
   };
+}
+
+// containerWording says which limits the memory and processor figures were
+// measured against, since inside a container they are the container's, not
+// the machine's.
+function containerWording(c) {
+  const parts = [];
+  if (c.memoryLimitBytes) parts.push(`memory limited to ${bytes(c.memoryLimitBytes)}${c.hostMemoryBytes ? ` of ${bytes(c.hostMemoryBytes)}` : ''}`);
+  if (c.cpuLimitCores != null) parts.push(`processor limited to ${num(Math.round(c.cpuLimitCores * 100) / 100)} cores${c.hostCores ? ` of ${num(c.hostCores)}` : ''}`);
+  const kind = c.kind ? c.kind.charAt(0).toUpperCase() + c.kind.slice(1) : 'A container';
+  return `${kind} — ${parts.join(', ') || 'no limits'}. Memory and processor use are measured against these limits.`;
+}
+
+function celsius(v) {
+  return v == null ? '—' : `${Math.round(v * 10) / 10} °C`;
+}
+
+// tempLevel shades a reading by the limits the chip itself declares, when no
+// hardware check has a threshold for it.
+function tempLevel(t) {
+  if (t.critCelsius != null && t.celsius >= t.critCelsius) return ' crit';
+  if (t.highCelsius != null && t.celsius >= t.highCelsius) return ' warn';
+  return '';
+}
+
+function plural(n, word) {
+  return `${num(n)} ${word}${n === 1 ? '' : 's'}`;
 }
 
 function sourceWording(host) {

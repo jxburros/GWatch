@@ -15,7 +15,7 @@ export async function mount(root, ctx) {
   const state = { node: null, events: [], triggers: [], nodes: [], range: '24h', charts: [], expanded: new Set(), results: new Map(), destroyed: false, history: null, hardware: new Map(), latChart: null, lossChart: null, uptimeEl: null, historyShape: '', metricCharts: new Map() };
 
   const headEl = h('div');
-  const bannersEl = h('div', { class: 'stack-sm', style: { marginBottom: '14px' } });
+  const bannersEl = h('div', { class: 'stack-sm u-mb-14' });
   const checksEl = h('div', { class: 'stack-joined' });
   // A machine is a node, so its readings belong on the node rather than on a
   // page of their own. One panel per hardware check.
@@ -192,7 +192,7 @@ export async function mount(root, ctx) {
     card.append(stats);
     if (expanded) {
       card.append(resultInspector(last, c));
-      const recent = h('div', { style: { marginTop: '16px' } }, h('div', { class: 'section-title' }, 'Recent results'), skeleton({ lines: 3 }));
+      const recent = h('div', { class: 'u-mt-16' }, h('div', { class: 'section-title' }, 'Recent results'), skeleton({ lines: 3 }));
       card.append(recent);
       loadResults(c).then((rows) => { if (!state.destroyed) replace(recent, h('div', { class: 'section-title' }, 'Recent results'), resultsTable(rows, c)); }).catch((e) => replace(recent, h('div', { class: 'note' }, e.message)));
     }
@@ -285,7 +285,7 @@ export async function mount(root, ctx) {
       // The panel colours its meters by the check's own verdicts, read from
       // the newest result each time it draws, so the bars agree with the
       // check's thresholds rather than with a fixed display cut-off.
-      const panel = hardwarePanel(key, { title: name || 'Hardware', metricStatus: () => metricStatusFor(key) });
+      const panel = hardwarePanel(key, { title: name || 'Hardware', metricStatus: () => metricStatusFor(key), isAdmin: !!ctx.me?.isAdmin });
       state.hardware.set(key, panel);
       hardwareEl.append(panel.el);
     }
@@ -442,7 +442,7 @@ export async function mount(root, ctx) {
   function chartGroups(c) {
     const metrics = checkMetrics(c);
     if (c.type !== 'system') return metrics.map((m) => ({ id: m.name, title: m.name, unit: m.unit, metrics: [m], csv: m.name }));
-    const order = ['cpu', 'memory', 'swap', 'load', 'disk', 'inodes', 'net', 'diskio'];
+    const order = ['cpu', 'memory', 'swap', 'load', 'disk', 'inodes', 'net', 'diskio', 'temp', 'psi', 'pool', 'service', 'process'];
     const groups = new Map();
     for (const m of metrics) {
       const key = m.family === 'cpu' || m.family === 'memory' || m.family === 'swap' ? 'usage' : m.family;
@@ -470,7 +470,7 @@ export async function mount(root, ctx) {
     const groups = chartGroups(c);
     if (!groups.length) return null;
     const n = state.node;
-    const heading = c.type === 'snmp' ? 'SNMP readings' : c.type === 'system' ? 'hardware metrics' : 'recorded value';
+    const heading = c.type === 'snmp' ? 'SNMP readings' : c.type === 'matter' ? 'Matter readings' : c.type === 'system' ? 'hardware metrics' : 'recorded value';
     const section = h('div', { class: 'stack-sm', 'data-check': c.id }, h('div', { class: 'section-title' }, `${c.name} — ${heading}`));
     let drew = false;
     for (const g of groups) {
@@ -485,7 +485,7 @@ export async function mount(root, ctx) {
       const csv = g.metrics.length === 1
         ? h('a', { class: 'btn btn-sm', href: `/api/export/history.csv${qs({ checkId: c.id, range: state.range, metric: g.metrics[0].name })}`, download: `${slug(g.metrics[0].name)}-${state.range}.csv` }, icon('download'), 'CSV')
         : (() => { const btn = h('button', { class: 'btn btn-sm', type: 'button', onclick: () => showMenu(btn, g.metrics.map((m) => ({ label: `CSV — ${m.label || m.name}`, icon: 'download', href: `/api/export/history.csv${qs({ checkId: c.id, range: state.range, metric: m.name })}`, download: `${slug(m.name)}-${state.range}.csv` }))) }, icon('download'), 'CSV'); return btn; })();
-      section.append(h('div', { 'data-group': g.id }, h('div', { class: 'row-between', style: { marginBottom: '4px' } },
+      section.append(h('div', { 'data-group': g.id }, h('div', { class: 'row-between u-mb-4' },
         h('div', { class: 'small muted' }, g.title, g.unit ? ` (${g.unit})` : ''),
         csv), host));
       drew = true;
@@ -493,6 +493,7 @@ export async function mount(root, ctx) {
     if (!drew) {
       section.append(h('p', { class: 'note' }, c.type === 'snmp'
         ? 'No readings recorded in this period yet. A counter also needs two runs before it has a rate to chart.'
+        : c.type === 'matter' ? 'No readings recorded in this period yet. A reading the device reports no value for is not charted.'
         : c.type === 'system' ? 'No hardware readings recorded in this period yet.'
           : 'No value recorded in this period yet. Only a number is charted; text is kept in the last result.'));
     }
@@ -530,7 +531,7 @@ export async function mount(root, ctx) {
   function chartSection(title, host, onExportPng, ids) {
     const csvBtn = h('button', { class: 'btn btn-sm', type: 'button', onclick: () => showMenu(csvBtn, ids.map((cid) => { const c = state.node.checks.find((x) => x.id === cid); return { label: `CSV — ${c ? c.name : cid}`, icon: 'download', href: `/api/export/history.csv${qs({ checkId: cid, range: state.range })}`, download: `history-${cid}-${state.range}.csv` }; })) }, icon('download'), 'Export CSV');
     return h('div', null,
-      h('div', { class: 'row-between', style: { marginBottom: '8px' } }, h('div', { class: 'section-title', style: { marginBottom: 0 } }, title), h('div', { class: 'btn-group' }, h('button', { class: 'btn btn-sm', type: 'button', onclick: onExportPng }, icon('image'), 'Export PNG'), csvBtn)),
+      h('div', { class: 'row-between u-mb-8' }, h('div', { class: 'section-title u-mb-0' }, title), h('div', { class: 'btn-group' }, h('button', { class: 'btn btn-sm', type: 'button', onclick: onExportPng }, icon('image'), 'Export PNG'), csvBtn)),
       host);
   }
   function clearCharts() {

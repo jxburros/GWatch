@@ -67,7 +67,7 @@ const agentCols = `id, name, node_id, prefix, enabled, created_by, created_at, r
 // never selected here; only RevealAgentToken reads them.
 const agentSelectCols = agentCols + `,
 	CASE WHEN token_sealed = '' THEN 0 ELSE 1 END, CASE WHEN pending_token_hash = '' THEN 0 ELSE 1 END,
-	pending_since, collect, inventory, checked_in_at`
+	pending_since, collect, inventory, checked_in_at, collector, collector_allowed, collector_seen_at`
 
 func scanAgent(sc interface{ Scan(...any) error }) (model.Agent, error) {
 	return scanAgentWith(sc)
@@ -79,12 +79,13 @@ func scanAgentWith(sc interface{ Scan(...any) error }, extra ...any) (model.Agen
 	var a model.Agent
 	var nodeID sql.NullInt64
 	var createdAt string
-	var revokedAt, lastSeenAt, pendingSince, checkedInAt sql.NullString
-	var viewable, pending int
+	var revokedAt, lastSeenAt, pendingSince, checkedInAt, collectorSeen sql.NullString
+	var viewable, pending, collector, collectorAllowed int
 	var collect, inventory string
 	dest := append([]any{&a.ID, &a.Name, &nodeID, &a.Prefix, &a.Enabled, &a.CreatedBy, &createdAt,
 		&revokedAt, &lastSeenAt, &a.LastAddr, &a.LastVersion, &a.Hostname, &a.OS, &a.Arch,
-		&viewable, &pending, &pendingSince, &collect, &inventory, &checkedInAt}, extra...)
+		&viewable, &pending, &pendingSince, &collect, &inventory, &checkedInAt,
+		&collector, &collectorAllowed, &collectorSeen}, extra...)
 	err := sc.Scan(dest...)
 	if err != nil {
 		return model.Agent{}, err
@@ -102,6 +103,9 @@ func scanAgentWith(sc interface{ Scan(...any) error }, extra ...any) (model.Agen
 	a.RotationPending = pending == 1
 	a.RotationSince = parseTime(pendingSince)
 	a.CheckedInAt = parseTime(checkedInAt)
+	a.Collector = collector == 1
+	a.CollectorAllowed = collectorAllowed == 1
+	a.CollectorSeenAt = parseTime(collectorSeen)
 	if collect != "" {
 		_ = json.Unmarshal([]byte(collect), &a.Collect)
 	}
@@ -369,15 +373,39 @@ func (s *Store) SetAgentCollect(ctx context.Context, id int64, sel model.Collect
 }
 
 // RecordAgentCheckIn notes that a machine asked for its settings, and keeps
-// what it said it could collect. A check-in that carries no inventory leaves
-// the last one in place.
-func (s *Store) RecordAgentCheckIn(ctx context.Context, id int64, inv *model.Inventory) error {
+// what it said it could collect and whether its own configuration allows it to
+// act as a remote collector. A check-in that carries no inventory leaves the
+// last one in place.
+func (s *Store) RecordAgentCheckIn(ctx context.Context, id int64, inv *model.Inventory, collectorAllowed bool) error {
 	if inv == nil {
-		_, err := s.exec(ctx, `UPDATE agents SET checked_in_at = ? WHERE id = ?`, fmtTime(time.Now()), id)
+		_, err := s.exec(ctx, `UPDATE agents SET checked_in_at = ?, collector_allowed = ? WHERE id = ?`, fmtTime(time.Now()), boolInt(collectorAllowed), id)
 		return err
 	}
-	_, err := s.exec(ctx, `UPDATE agents SET checked_in_at = ?, inventory = ? WHERE id = ?`,
-		fmtTime(time.Now()), jsonString(inv.Normalize()), id)
+	_, err := s.exec(ctx, `UPDATE agents SET checked_in_at = ?, inventory = ?, collector_allowed = ? WHERE id = ?`,
+		fmtTime(time.Now()), jsonString(inv.Normalize()), boolInt(collectorAllowed), id)
+	return err
+}
+
+// SetAgentCollector stores an administrator's half of the agreement that
+// makes a machine a remote collector. The machine's half is in its own
+// agent.json and arrives with each check-in.
+func (s *Store) SetAgentCollector(ctx context.Context, id int64, on bool) error {
+	res, err := s.exec(ctx, `UPDATE agents SET collector = ? WHERE id = ?`, boolInt(on), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// TouchCollector records that a collector sent results (or a heartbeat). It
+// is kept apart from last_seen_at, which is the machine's hardware reading:
+// an agent can be reporting its own health and have stopped collecting, and
+// the agent card says which.
+func (s *Store) TouchCollector(ctx context.Context, id int64, at time.Time) error {
+	_, err := s.exec(ctx, `UPDATE agents SET collector_seen_at = ? WHERE id = ?`, fmtTime(at), id)
 	return err
 }
 

@@ -242,11 +242,11 @@ const (
 	ifOperStatusUp      = 5
 )
 
-// mibIfRow mirrors MIB_IFROW from ifmib.h. Its counters are 32-bit and so wrap
-// roughly every 4 GiB; a wrap shows up as a counter going backwards, which the
-// rate helper already reports as "no rate for this interval" rather than as a
-// spike. GetIfTable2 has 64-bit counters but a far more intricate struct, and
-// a skipped sample every few gigabytes is the better trade for an agent.
+// mibIfRow mirrors MIB_IFROW from ifmib.h, for GetIfTable. Its counters are
+// 32-bit and wrap every 4 GiB — at 570 Mbit/s and more, every one-minute
+// interval wrapped at least once and the rate was missing or understated — so
+// it is only the fallback for when GetIfTable2Ex (64-bit counters, below) is
+// not there.
 type mibIfRow struct {
 	Name            [maxInterfaceNameLen]uint16
 	Index           uint32
@@ -274,10 +274,64 @@ type mibIfRow struct {
 	Descr           [maxlenIfDescr]byte
 }
 
-// windowsInterfaces reads per-interface counters from GetIfTable and names
-// them the way the Go standard library does, so the name on a reading matches
-// the name everywhere else in GWatch.
+// windowsInterfaces reads per-interface counters and names them the way the Go
+// standard library does, so the name on a reading matches the name everywhere
+// else in GWatch. GetIfTable2Ex has 64-bit counters; GetIfTable is used only if
+// it fails.
 func windowsInterfaces() ([]ifaceCounters, error) {
+	var table *windows.MibIfTable2
+	if err := windows.GetIfTable2Ex(windows.MibIfTableNormal, &table); err == nil && table != nil {
+		defer windows.FreeMibTable(unsafe.Pointer(table))
+		rows := unsafe.Slice(&table.Table[0], table.NumEntries)
+		names, addrs := windowsInterfaceNames()
+		return windowsInterfaceRows2(rows, names, addrs), nil
+	}
+	return windowsInterfacesLegacy()
+}
+
+// ifFilterInterface is the FilterInterface bit of MIB_IF_ROW2's
+// InterfaceAndOperStatusFlags (HardwareInterface is bit 0).
+const ifFilterInterface = 1 << 1
+
+// windowsInterfaceRows2 turns GetIfTable2 rows into counters. The table also
+// lists the filter drivers stacked on each adapter (“…-WFP Native MAC Layer
+// LightWeight Filter-0000”); those carry the adapter's own traffic again, so
+// they are left out unless Go knows them by name.
+func windowsInterfaceRows2(rows []windows.MibIfRow2, names map[uint32]string, addrs map[string][]string) []ifaceCounters {
+	var out []ifaceCounters
+	for i := range rows {
+		row := &rows[i]
+		if row.Type == windows.IF_TYPE_SOFTWARE_LOOPBACK {
+			continue
+		}
+		name, ok := names[row.InterfaceIndex]
+		if !ok {
+			if row.InterfaceAndOperStatusFlags&ifFilterInterface != 0 {
+				continue
+			}
+			name = windows.UTF16ToString(row.Description[:])
+		}
+		if name == "" {
+			continue
+		}
+		out = append(out, ifaceCounters{
+			name:      name,
+			up:        row.OperStatus == ifOperStatusUp,
+			addresses: addrs[name],
+			speedMbit: max(row.ReceiveLinkSpeed, row.TransmitLinkSpeed) / 1_000_000,
+			rxBytes:   row.InOctets,
+			txBytes:   row.OutOctets,
+			rxErrors:  row.InErrors,
+			txErrors:  row.OutErrors,
+			rxDropped: row.InDiscards,
+			txDropped: row.OutDiscards,
+		})
+	}
+	return out
+}
+
+// windowsInterfacesLegacy reads the 32-bit counters from GetIfTable.
+func windowsInterfacesLegacy() ([]ifaceCounters, error) {
 	size := uint32(0)
 	rc, _, _ := procGetIfTable.Call(0, uintptr(unsafe.Pointer(&size)), 0)
 	if rc != uintptr(windows.ERROR_INSUFFICIENT_BUFFER) {

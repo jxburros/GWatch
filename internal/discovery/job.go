@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jxburros/GWatch/internal/model"
 )
 
 // The states a run passes through. A run is only ever in one of them, and
@@ -43,8 +45,41 @@ type Job struct {
 	Responders int         `json:"responders"`
 	Results    []Responder `json:"results"`
 	Error      string      `json:"error,omitempty"`
-	StartedAt  time.Time   `json:"startedAt"`
-	FinishedAt *time.Time  `json:"finishedAt,omitempty"`
+	// Notes are things worth knowing about how far to trust the results,
+	// shown above them — today, that GWatch is in a container whose network
+	// hides the LAN's hardware addresses.
+	Notes []string `json:"notes,omitempty"`
+	// PingNote says why this run is not using the built-in ping, when it is
+	// not: a sweep through the system ping command is far slower, and one
+	// that finds nothing because nothing can be pinged should say so rather
+	// than suggest an empty network.
+	PingNote   string     `json:"pingNote,omitempty"`
+	StartedAt  time.Time  `json:"startedAt"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+}
+
+// runNotes works out a finished run's Notes from its results. It is a
+// variable so a test can pretend to be in a container, or not.
+var runNotes = containerNotes
+
+// containerNotes explains an empty MAC column inside a container. With
+// Docker's default bridge network the container's neighbour table holds the
+// bridge and nothing else, so no device on the LAN gets a MAC address or a
+// maker, and a device that ignores pings cannot be found through it; the
+// sweep itself also only reaches the LAN through the host's NAT. Host or
+// macvlan networking fixes all of that (docs/DOCKER.md). A container whose
+// results do carry MAC addresses is already on the LAN and needs no note.
+func containerNotes(results []Responder) []string {
+	kind := containerKind()
+	if kind == "" {
+		return nil
+	}
+	for _, r := range results {
+		if r.MAC != "" {
+			return nil
+		}
+	}
+	return []string{fmt.Sprintf("GWatch is running in a container (%s). With bridge networking it cannot see the network's neighbour table, so MAC addresses and makers are missing and devices that ignore pings are not found. Use host or macvlan networking to see the LAN directly.", kind)}
 }
 
 // Done reports whether the run has stopped, however it stopped.
@@ -83,6 +118,11 @@ type Registry struct {
 	// routes above it — over an imaginary network. The monitoring engine takes
 	// its check runner the same way; see engine.Options.Run.
 	Sweep SweepFunc
+
+	// PingStatus says how this machine can ping (checks.PingStatusNow). Nil
+	// means ask the checks package — except when Sweep has been replaced, as
+	// a test's imaginary network needs no permission to be pinged.
+	PingStatus func() model.PingStatus
 
 	mu      sync.Mutex
 	job     Job
@@ -127,8 +167,30 @@ func (r *Registry) Start(req Request, notify func(Job)) (Job, error) {
 		Results:   []Responder{},
 		StartedAt: time.Now(),
 	}
+	scan, status := r.Sweep, r.PingStatus
+	if status == nil && scan == nil {
+		status = pingStatus
+	}
+	if status != nil {
+		switch ps := status(); ps.Auto {
+		case model.PingViaNone:
+			// Every address would fail the same way; a run that reports
+			// "nothing answered" after a minute would be a lie about the
+			// network. Fail now, with the reason.
+			now := time.Now()
+			job.State, job.Error, job.FinishedAt = StateFailed, "this machine cannot send a ping — "+ps.Summary, &now
+			r.job = job
+			r.mu.Unlock()
+			cancel()
+			if notify != nil {
+				go notify(job.clone())
+			}
+			return job.clone(), nil
+		case model.PingViaSystem:
+			job.PingNote = "Pinging with the system ping command, which is slower, because " + ps.Summary + "."
+		}
+	}
 	r.job, r.cancel, r.running = job, cancel, true
-	scan := r.Sweep
 	r.mu.Unlock()
 	if scan == nil {
 		scan = sweep
@@ -179,6 +241,7 @@ func (r *Registry) finish(id string, results []Responder, ctxErr error) Job {
 	}
 	r.job.Results = results
 	r.job.Responders = len(results)
+	r.job.Notes = runNotes(results)
 	if ctxErr == nil {
 		// A run that was not interrupted got through everything it was given,
 		// whatever the last progress tick happened to record.
@@ -264,6 +327,9 @@ func (r *Registry) Running() bool {
 func (j Job) clone() Job {
 	out := j
 	out.Ranges = copyOf(j.Ranges)
+	if j.Notes != nil {
+		out.Notes = copyOf(j.Notes)
+	}
 	out.Ports = copyOf(j.Ports)
 	out.Results = make([]Responder, len(j.Results))
 	for i, r := range j.Results {

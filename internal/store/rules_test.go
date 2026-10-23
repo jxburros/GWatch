@@ -116,3 +116,79 @@ func TestRulesCRUDAndState(t *testing.T) {
 		t.Fatalf("rules survived ClearAll: %+v", list)
 	}
 }
+
+// Deleting what a rule names takes those conditions out of it, so the rule can
+// still fire on what remains; a rule left with nothing is switched off.
+func TestPruneRuleReferences(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	mk := func(name string) model.Node {
+		n, err := s.CreateNode(ctx, model.Node{Name: name, Host: "10.0.0.1", Enabled: true,
+			Checks: []model.Check{{Type: model.CheckDNS, Name: "DNS", Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	a, b, c := mk("a"), mk("b"), mk("c")
+	cond := func(id int64) model.RuleCondition {
+		return model.RuleCondition{Kind: model.RuleConditionStatus, CheckID: &id, Status: model.StatusDown}
+	}
+	atLeast, err := s.SaveRule(ctx, model.Rule{Name: "Two of three", Enabled: true, Join: model.RuleJoinAtLeast, AtLeast: 3,
+		Conditions: []model.RuleCondition{cond(a.Checks[0].ID), cond(b.Checks[0].ID), cond(c.Checks[0].ID)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	only, err := s.SaveRule(ctx, model.Rule{Name: "Only a", Enabled: true, Join: model.RuleJoinAll,
+		Conditions: []model.RuleCondition{{Kind: model.RuleConditionStatus, NodeID: &a.ID, Status: model.StatusDown}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	untouched, err := s.SaveRule(ctx, model.Rule{Name: "Only b", Enabled: true, Join: model.RuleJoinAll,
+		Conditions: []model.RuleCondition{cond(b.Checks[0].ID)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	untouched, _ = s.GetRule(ctx, untouched.ID)
+	changed, err := s.PruneRuleReferences(ctx, []int64{a.ID}, []int64{a.Checks[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changed) != 2 {
+		t.Fatalf("changed = %v, want two rules", changed)
+	}
+	got, _ := s.GetRule(ctx, atLeast.ID)
+	if len(got.Conditions) != 2 || got.AtLeast != 2 || !got.Enabled {
+		t.Errorf("at-least rule = %+v, want 2 conditions needing 2", got)
+	}
+	got, _ = s.GetRule(ctx, only.ID)
+	if len(got.Conditions) != 0 || got.Enabled {
+		t.Errorf("emptied rule = %+v, want no conditions and switched off", got)
+	}
+	got, _ = s.GetRule(ctx, untouched.ID)
+	if len(got.Conditions) != 1 || !got.Enabled || !got.UpdatedAt.Equal(untouched.UpdatedAt) {
+		t.Errorf("a rule naming nothing deleted was changed: %+v", got)
+	}
+}
+
+// #36: check groups are counted across nodes, case-insensitively.
+func TestCheckGroupCounts(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	for _, name := range []string{"a", "b"} {
+		if _, err := s.CreateNode(ctx, model.Node{Name: name, Host: "10.0.0.1", Enabled: true, Checks: []model.Check{
+			{Type: model.CheckCert, Name: "Cert", Enabled: true, IntervalSeconds: 3600, TimeoutSeconds: 5, Config: model.CheckConfig{Groups: []string{map[string]string{"a": "HTTPS certificates", "b": "https certificates"}[name]}}},
+			{Type: model.CheckPing, Name: "Ping", Enabled: true, IntervalSeconds: 60, TimeoutSeconds: 5},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.CheckGroupCounts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got["HTTPS certificates"] != 2 {
+		t.Fatalf("counts = %v", got)
+	}
+}

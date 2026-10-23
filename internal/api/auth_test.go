@@ -525,6 +525,10 @@ var denyRoutes = []struct {
 	// Walking a device points GWatch at an address of the caller's choosing
 	// with a credential of the caller's choosing and reports what answered.
 	{"POST", "/api/snmp/walk", map[string]any{"host": "192.168.1.3"}},
+	// The Matter routes connect to a sidecar of the caller's choosing, and
+	// commissioning adds a device to its fabric.
+	{"POST", "/api/matter/nodes", map[string]any{"server": "ws://192.168.1.20:5580/ws"}},
+	{"POST", "/api/matter/commission", map[string]any{"server": "ws://192.168.1.20:5580/ws", "code": "34970112332"}},
 }
 
 func TestReadOnlyAPIKey(t *testing.T) {

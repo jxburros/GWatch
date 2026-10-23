@@ -1,7 +1,7 @@
 // Nodes list: searchable, filterable list of everything being monitored.
 
 import { api } from '../api.js';
-import { h, icon, clear, append, preserveFocus, replace, statusSpine, statusWord, checkChip, importanceBadge, tagList, toggle, menuButton, toast, confirmDialog, openModal, emptyState, skeleton } from '../components.js';
+import { h, icon, clear, syncQuery, chipRows, replace, statusSpine, statusWord, checkChip, importanceBadge, tagList, toggle, menuButton, toast, confirmDialog, openModal, emptyState, skeleton } from '../components.js';
 import { relTime, nodeGroups, inGroup, NODE_SORTS, sortNodes, compareNames } from '../fmt.js';
 import { addAgentNode } from './machines.js';
 
@@ -14,7 +14,7 @@ function remembered(key, fallback) { try { return localStorage.getItem(key) || f
 function remember(key, v) { try { localStorage.setItem(key, v); } catch { /* private window: forgotten on reload */ } }
 
 export async function mount(root, ctx) {
-  const state = { nodes: [], groups: { groups: [], tags: [] }, templates: null, q: ctx.query.get('q') || '', group: ctx.query.get('group') || '', status: ctx.query.get('status') || '', tag: ctx.query.get('tag') || '', destroyed: false };
+  const state = { nodes: [], groups: { groups: [], tags: [] }, templates: null, q: ctx.query.get('q') || '', group: ctx.query.get('group') || '', status: ctx.query.get('status') || '', tag: ctx.query.get('tag') || '', checkGroup: ctx.query.get('checkGroup') || '', destroyed: false };
   state.sort = NODE_SORTS.some((o) => o.value === ctx.query.get('sort')) ? ctx.query.get('sort') : remembered(SORT_KEY, 'status');
   if (!NODE_SORTS.some((o) => o.value === state.sort)) state.sort = 'status';
   state.sections = remembered(SECTIONS_KEY, 'group') === 'none' ? 'none' : 'group';
@@ -56,29 +56,25 @@ export async function mount(root, ctx) {
     renderFilters(); renderList();
   }
 
-  function chipRow(label, items, current, onPick) {
-    if (!items.length) return null;
-    const row = h('div', { class: 'chip-row', role: 'group', 'aria-label': label }, h('span', { class: 'chip-label' }, label));
-    row.append(h('button', { type: 'button', class: `chip ${!current ? 'active' : ''}`, 'data-focus-key': `${label}:all`, 'aria-pressed': !current ? 'true' : 'false', onclick: () => onPick('') }, 'All'));
-    for (const it of items) row.append(h('button', { type: 'button', class: `chip ${current === it.value ? 'active' : ''}`, 'data-focus-key': `${label}:${it.value}`, 'aria-pressed': current === it.value ? 'true' : 'false', onclick: () => onPick(current === it.value ? '' : it.value) }, it.label));
-    return row;
-  }
-
+  // The chip rows are kept between refreshes (#118): a live update rewrites
+  // their counts in place rather than building new buttons, so the chip the
+  // keyboard is on keeps the focus.
   function renderFilters() {
-    const restore = preserveFocus(filters);
-    clear(filters);
     const counts = {};
     for (const n of state.nodes) counts[n.status || 'unknown'] = (counts[n.status || 'unknown'] || 0) + 1;
-    append(filters, [
-      chipRow('Group', state.groups.groups.map((g) => ({ value: g.name, label: `${g.name} (${g.count})` })), state.group, (v) => { state.group = v; renderFilters(); renderList(); }),
-      chipRow('Status', STATUS_ORDER.filter((s) => counts[s]).map((s) => ({ value: s, label: `${s[0].toUpperCase()}${s.slice(1)} (${counts[s]})` })), state.status, (v) => { state.status = v; renderFilters(); renderList(); }),
-      chipRow('Tag', state.groups.tags.map((t) => ({ value: t.name, label: t.name })), state.tag, (v) => { state.tag = v; renderFilters(); renderList(); }),
+    const pick = (key) => (v) => { state[key] = v; renderFilters(); renderList(); };
+    chipRows(filters, [
+      { label: 'Group', items: state.groups.groups.map((g) => ({ value: g.name, label: `${g.name} (${g.count})` })), current: state.group, onPick: pick('group') },
+      { label: 'Status', items: STATUS_ORDER.filter((s) => counts[s]).map((s) => ({ value: s, label: `${s[0].toUpperCase()}${s.slice(1)} (${counts[s]})` })), current: state.status, onPick: pick('status') },
+      { label: 'Tag', items: state.groups.tags.map((t) => ({ value: t.name, label: t.name })), current: state.tag, onPick: pick('tag') },
+      { label: 'Check group', items: (state.groups.checkGroups || []).map((g) => ({ value: g.name, label: `${g.name} (${g.count})` })), current: state.checkGroup, onPick: pick('checkGroup') },
     ]);
-    restore();
   }
 
   function matches(n) {
     if (state.group && !inGroup(n, state.group)) return false;
+    // A check group (#36) shows the nodes with a check in it.
+    if (state.checkGroup && !(n.checks || []).some((c) => (c.config?.groups || []).some((g) => g.toLowerCase() === state.checkGroup.toLowerCase()))) return false;
     if (state.status && (n.status || 'unknown') !== state.status) return false;
     if (state.tag && !(n.tags || []).includes(state.tag)) return false;
     if (state.q) {
@@ -100,6 +96,9 @@ export async function mount(root, ctx) {
   const sectionEls = new Map();  // group name -> { el, head, rows }
 
   function renderList() {
+    // The filters live in the address too, so a reload, Back and a copied link
+    // keep them. (Sort is remembered per browser, so it is left out.)
+    if (!state.destroyed) syncQuery('/nodes', { q: state.q.trim(), group: state.group, status: state.status, tag: state.tag, checkGroup: state.checkGroup });
     if (!state.nodes.length) {
       countEl.textContent = '';
       clear(listEl);
@@ -112,7 +111,7 @@ export async function mount(root, ctx) {
       : `${rows.length} of ${state.nodes.length} nodes`;
     if (!rows.length) {
       clear(listEl);
-      listEl.append(h('div', { class: 'card' }, emptyState({ icon: 'search', title: 'No nodes match', text: 'Try a different search or clear the filters.', compact: true, actions: h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { state.q = ''; state.group = ''; state.status = ''; state.tag = ''; searchInput.value = ''; renderFilters(); renderList(); } }, 'Clear filters') })));
+      listEl.append(h('div', { class: 'card' }, emptyState({ icon: 'search', title: 'No nodes match', text: 'Try a different search or clear the filters.', compact: true, actions: h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { state.q = ''; state.group = ''; state.status = ''; state.tag = ''; state.checkGroup = ''; searchInput.value = ''; renderFilters(); renderList(); } }, 'Clear filters') })));
       return;
     }
     // Group sections. A node in several groups is listed once rather than
@@ -238,7 +237,7 @@ export async function mount(root, ctx) {
     const statusSig = `${status}|${n.inMaintenance ? 1 : 0}`;
     if (sig.status !== statusSig) {
       sig.status = statusSig;
-      replace(p.statusCell, statusWord(status), n.inMaintenance && status !== 'maintenance' ? h('div', { class: 'tiny text-maintenance', style: { marginTop: '4px' } }, 'in maintenance') : null);
+      replace(p.statusCell, statusWord(status), n.inMaintenance && status !== 'maintenance' ? h('div', { class: 'tiny text-maintenance u-mt-4' }, 'in maintenance') : null);
     }
 
     const href = `#/nodes/${n.id}`;

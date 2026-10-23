@@ -285,6 +285,38 @@ func hostMetricResults(cfg model.CheckConfig, m model.HostMetrics) []model.Metri
 		add(model.MetricKey(model.MetricDiskIO, d.Name+".write"), fmt.Sprintf("Disk %s write", d.Name), d.WriteBytesPerSec)
 		add(model.MetricKey(model.MetricDiskIO, d.Name+".busy"), fmt.Sprintf("Disk %s busy", d.Name), d.BusyPct)
 	}
+	// Each sensor is its own reading, so "the NVMe drive is hot" is a
+	// verdict of its own rather than a hottest-of-everything figure that hides
+	// which part it was.
+	for _, t := range m.Temperatures {
+		c := t.Celsius
+		add(model.MetricKey(model.MetricTemp, t.Name), fmt.Sprintf("Temperature %s", t.Name), &c)
+	}
+	// Pressure is the share of time work was stalled waiting for the
+	// resource: the 10-second figure catches a burst, the 60-second one a
+	// machine that is genuinely short. Both are the "some" line — at least one
+	// task waiting — which is the one that moves first.
+	for _, p := range m.Pressure {
+		a10, a60 := p.Avg10, p.Avg60
+		add(model.MetricKey(model.MetricPSI, p.Resource+".avg10"), fmt.Sprintf("Pressure on %s (10 s)", p.Resource), &a10)
+		add(model.MetricKey(model.MetricPSI, p.Resource+".avg60"), fmt.Sprintf("Pressure on %s (60 s)", p.Resource), &a60)
+	}
+	for _, p := range m.Pools {
+		v := model.PoolHealthValue(p.Health)
+		add(model.MetricKey(model.MetricPool, p.Name), fmt.Sprintf("Pool %s", p.Name), &v)
+	}
+	// Watched services and programs: one reading each, keyed by the name
+	// someone asked for. A stopped service and a program with no copy
+	// running are readings of 0, which the default thresholds make
+	// critical; a machine watching nothing has none of these at all.
+	for _, s := range m.Services {
+		v := model.ServiceValue(s)
+		add(model.MetricKey(model.MetricService, s.Name), fmt.Sprintf("Service %s", s.Name), &v)
+	}
+	for _, p := range m.Processes {
+		v := float64(p.Count)
+		add(model.MetricKey(model.MetricProcess, p.Name), fmt.Sprintf("Copies of %s running", p.Name), &v)
+	}
 	return out
 }
 
@@ -317,6 +349,27 @@ func metricString(v float64, unit string) string {
 		return pctString(v)
 	case "B/s":
 		return bytesPerSecond(v)
+	case "°C":
+		return fmt.Sprintf("%.0f °C", v)
+	case "state":
+		// A pool's health, which reads better as the word it stands for:
+		// "Pool tank is degraded, at or above the degraded warning threshold".
+		switch {
+		case v >= 2:
+			return "faulted"
+		case v >= 1:
+			return "degraded"
+		}
+		return "healthy"
+	case "running":
+		// A service: "Service nginx is stopped, at or below the stopped
+		// critical threshold".
+		if v >= 1 {
+			return "running"
+		}
+		return "stopped"
+	case "count":
+		return fmt.Sprintf("%.0f", v)
 	}
 	return fmt.Sprintf("%.2f", v)
 }
@@ -397,13 +450,16 @@ func plural(n int, unit string) string {
 }
 
 // validateSystemCheck reports a configuration the hardware check cannot run.
-func validateSystemCheck(cfg model.CheckConfig) error {
+// A switched-off check that reads an agent may have no machine yet: it is the
+// one a pairing code's node waits with until the code is redeemed (and keeps
+// if the code is cancelled or expires), and a backup of it must restore.
+func validateSystemCheck(cfg model.CheckConfig, enabled bool) error {
 	if cfg.HostSource != "" && !cfg.HostSource.Valid() {
 		return fmt.Errorf("unsupported hardware source %q (use local, agent or url)", cfg.HostSource)
 	}
 	switch cfg.HostSource {
 	case model.HostSourceAgent:
-		if cfg.AgentID <= 0 {
+		if cfg.AgentID < 0 || (cfg.AgentID == 0 && enabled) {
 			return errors.New("choose which registered machine this check reads")
 		}
 	case model.HostSourceURL:

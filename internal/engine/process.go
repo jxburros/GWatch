@@ -4,13 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/jxburros/GWatch/internal/actions"
 	"github.com/jxburros/GWatch/internal/mailer"
 	"github.com/jxburros/GWatch/internal/model"
 )
 
+// mailTask is one alert: the e-mail and, alongside it, the Settings › Alerts
+// "also notify" channels that want it (see sendMail). The result and state are
+// kept so the channels get the same {{placeholders}} a trigger would.
 type mailTask struct {
 	kind    string
 	check   model.Check
@@ -19,6 +24,20 @@ type mailTask struct {
 	message string
 	details map[string]string
 	to      []string
+	result  model.Result
+	state   model.CheckState
+	// channelsOnly marks a recovery that is sent only to the incident
+	// channels (PagerDuty, Opsgenie): recovery e-mails are switched off, but
+	// the page those channels opened would otherwise never be resolved.
+	channelsOnly bool
+	// skipEmail marks a warning whose e-mail went into the warning digest
+	// (see alertbatch.go): the channels still get it, the e-mail does not.
+	skipEmail bool
+	// group, when set, makes this task stand for a grouped alert about
+	// several checks on one node (see alertbatch.go): it carries the
+	// summary for the channels, and every member's timeline gets the
+	// channel's outcome.
+	group []mailTask
 }
 
 type downDecision struct {
@@ -88,6 +107,7 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 	if threshold <= 0 {
 		threshold = 1
 	}
+	resumeFromCollector(st, threshold)
 	prev := st.Status
 	evaluateDown := false
 	ev := func(t model.EventType, title, detail string, meta any) {
@@ -122,8 +142,14 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 				dur = " after " + humanDuration(now.Sub(*st.LastChangeAt))
 			}
 			ev(model.EventRecovered, "Recovered"+dur, r.Message, nil)
-			if st.AlertActive && e.notifyRecovery(c, settings) {
-				mails = append(mails, e.newMail("recovered", c, n, r, st, settings))
+			if st.AlertActive {
+				if e.notifyRecovery(c, settings) {
+					mails = append(mails, e.newMail("recovered", c, n, r, st, settings))
+				} else if settings.Alerts.Enabled && hasIncidentChannel(settings.Alerts.Channels, n) {
+					m := e.newMail("recovered", c, n, r, st, settings)
+					m.channelsOnly = true
+					mails = append(mails, m)
+				}
 			}
 			st.AlertActive = false
 			st.AlertSuppressed = false
@@ -320,9 +346,7 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 	if prev != snapshot.Status {
 		e.broadcast(Update{Kind: "state", CheckID: c.ID, NodeID: n.ID})
 	}
-	for _, m := range mails {
-		e.sendMail(m)
-	}
+	e.dispatchAlerts(c, prev, snapshot, mails)
 	e.fireTriggers(triggerContext{check: c, node: n, result: stored, state: snapshot, prev: prev, events: events})
 	// A status change may bring a notification rule's conditions together
 	// or apart; only the rules that look at this check need another look.
@@ -514,6 +538,11 @@ func (e *Engine) probeParent(ctx context.Context, n model.Node, depth int) {
 	if n.DependsOnNode != nil {
 		if p, ok := e.nodes[*n.DependsOnNode]; ok && p.Enabled {
 			for _, pc := range p.Checks {
+				// A parent checked by a remote collector cannot be probed
+				// from here; its state is whatever the collector last sent.
+				if _, collected := p.CollectorFor(pc); collected {
+					continue
+				}
 				if pc.Enabled && (pc.Type == model.CheckPing || pc.Type == model.CheckTCP) {
 					ids = append(ids, pc.ID)
 				}
@@ -606,21 +635,42 @@ func (e *Engine) newMail(kind string, c model.Check, n model.Node, r model.Resul
 	if r.Error != "" && msg == "" {
 		msg = r.Error
 	}
-	return mailTask{kind: kind, check: c, node: n, status: st.Status, message: msg, details: details, to: to}
+	return mailTask{kind: kind, check: c, node: n, status: st.Status, message: msg, details: details, to: to, result: r, state: *st}
 }
 
+// sendMail delivers one alert: the e-mail to its recipients and the same
+// alert to every Settings › Alerts "also notify" channel that wants it (by
+// severity and node group, see model.AlertChannel.Wants). Both go out from
+// this one place, which is reached only after process has decided that an
+// alert is due, so a channel is held back by exactly what holds back the
+// e-mail — a maintenance window, a silence, a parent that is down, an
+// acknowledged incident, the cooldown, alerts switched off for the check —
+// without repeating any of those rules.
+//
+// A down alert counts as delivered when the e-mail or at least one channel
+// got through. Only when nothing did is the alert re-armed (failedMail), so
+// the next failing result tries again; re-arming after a failed e-mail while
+// Slack or PagerDuty already had it would page those channels twice.
 func (e *Engine) sendMail(m mailTask) {
 	e.mu.Lock()
 	s := e.settings
 	e.mu.Unlock()
-	if len(m.to) == 0 {
+	channels := alertChannelsFor(s.Alerts.Channels, m)
+	email := !m.channelsOnly && !m.skipEmail && len(m.to) > 0
+	if !email && len(channels) == 0 {
+		if m.channelsOnly || m.skipEmail {
+			return
+		}
 		e.failedMail(m)
 		e.recordEvent(model.Event{Type: model.EventAlertFailed, NodeID: ptrInt64(m.node.ID), CheckID: ptrInt64(m.check.ID), NodeName: m.node.Name, CheckName: m.check.Name,
-			Title: "Alert not sent: no recipients configured", Detail: "Add recipient addresses under Settings › Alerts."})
+			Title: "Alert not sent: no recipients configured", Detail: "Add recipient addresses or a notification channel under Settings › Alerts."})
 		return
 	}
-	msg := mailer.BuildAlertEmail(m.kind, s.General.InstanceName, m.node.Name, m.check.Name, m.status, m.message, m.details, time.Now())
-	msg.To = m.to
+	var msg mailer.Message
+	if email {
+		msg = mailer.BuildAlertEmail(m.kind, s.General.InstanceName, m.node.Name, m.check.Name, m.status, m.message, m.details, time.Now())
+		msg.To = m.to
+	}
 	e.mu.Lock()
 	done := make(chan struct{})
 	e.mailDone[m.check.ID] = done
@@ -628,32 +678,230 @@ func (e *Engine) sendMail(m mailTask) {
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
-		defer func() { e.mu.Lock(); delete(e.mailDone, m.check.ID); close(done); e.mu.Unlock() }()
-		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-		defer cancel()
-		err := e.opts.Send(ctx, s.Alerts.SMTP, msg)
-		e.mu.Lock()
-		e.lastAlertAt = ptrTime(time.Now())
-		if err != nil {
-			e.lastAlertErr = err.Error()
-		} else {
-			e.lastAlertErr = ""
+		defer e.releaseMailDone(done, m)
+		label := alertLabel(m.kind)
+		delivered := false
+		if email {
+			err := e.deliverMail(s.Alerts.SMTP, msg)
+			e.mu.Lock()
+			e.lastAlertAt = ptrTime(time.Now())
+			if err != nil {
+				e.lastAlertErr = err.Error()
+			} else {
+				e.lastAlertErr = ""
+			}
+			e.mu.Unlock()
+			if err != nil {
+				e.log.Errorf("send %s email for %s/%s: %v", m.kind, m.node.Name, m.check.Name, err)
+				e.recordEvent(model.Event{Type: model.EventAlertFailed, NodeID: ptrInt64(m.node.ID), CheckID: ptrInt64(m.check.ID), NodeName: m.node.Name, CheckName: m.check.Name,
+					Title: label + " email failed", Detail: err.Error()})
+			} else {
+				delivered = true
+				e.recordEvent(model.Event{Type: model.EventAlertSent, NodeID: ptrInt64(m.node.ID), CheckID: ptrInt64(m.check.ID), NodeName: m.node.Name, CheckName: m.check.Name,
+					Title: label + " emailed", Detail: "Sent to " + strings.Join(m.to, ", ")})
+			}
 		}
-		e.mu.Unlock()
-		label := map[string]string{"down": "Down alert", "recovered": "Recovery notification", "warning": "Warning", "warning_cleared": "Warning cleared"}[m.kind]
-		if label == "" {
-			label = "Alert"
+		for _, ch := range channels {
+			if e.deliverChannel(ch, m, s.General.InstanceName, label) {
+				delivered = true
+			}
 		}
-		if err != nil {
+		if !delivered {
 			e.failedMail(m)
-			e.log.Errorf("send %s email for %s/%s: %v", m.kind, m.node.Name, m.check.Name, err)
-			e.recordEvent(model.Event{Type: model.EventAlertFailed, NodeID: ptrInt64(m.node.ID), CheckID: ptrInt64(m.check.ID), NodeName: m.node.Name, CheckName: m.check.Name,
-				Title: label + " email failed", Detail: err.Error()})
-			return
 		}
-		e.recordEvent(model.Event{Type: model.EventAlertSent, NodeID: ptrInt64(m.node.ID), CheckID: ptrInt64(m.check.ID), NodeName: m.node.Name, CheckName: m.check.Name,
-			Title: label + " emailed", Detail: "Sent to " + strings.Join(m.to, ", ")})
 	}()
+}
+
+// alertLabel is how an alert of a kind is named in the timeline.
+func alertLabel(kind string) string {
+	if l := map[string]string{"down": "Down alert", "recovered": "Recovery notification", "warning": "Warning", "warning_cleared": "Warning cleared"}[kind]; l != "" {
+		return l
+	}
+	return "Alert"
+}
+
+// alertChannelsFor picks the "also notify" channels an alert goes to. A
+// channels-only recovery (see mailTask.channelsOnly) goes to the incident
+// channels alone.
+func alertChannelsFor(all []model.AlertChannel, m mailTask) []model.AlertChannel {
+	var out []model.AlertChannel
+	for _, ch := range all {
+		if !ch.Wants(m.kind, m.node) {
+			continue
+		}
+		if m.channelsOnly && !ch.Action.Type.IsIncident() {
+			continue
+		}
+		out = append(out, ch)
+	}
+	return out
+}
+
+// hasIncidentChannel reports whether a PagerDuty or Opsgenie channel would
+// receive the recovery of an outage on node n.
+func hasIncidentChannel(all []model.AlertChannel, n model.Node) bool {
+	for _, ch := range all {
+		if ch.Action.Type.IsIncident() && ch.Wants("recovered", n) {
+			return true
+		}
+	}
+	return false
+}
+
+// alertVars are the placeholders an alert channel is run with: the same set
+// a trigger gets (TriggerVars), with {{event}} the alert kind (down,
+// recovered, warning) so the incident channels resolve on a recovery, and
+// {{status}} saying what the check is now rather than what it was when the
+// alert was decided.
+func alertVars(m mailTask, instance, channel string) actions.Vars {
+	vars := TriggerVars(m.node, m.check, m.result, m.state, m.kind)
+	vars["instance"] = instance
+	vars["message"] = m.message
+	vars["alert.kind"] = m.kind
+	vars["alert.channel"] = channel
+	// {{alert.count}} and {{alert.checks}} say how many checks, and which,
+	// the alert is about: one for an ordinary alert, several for a grouped
+	// one (Settings › Alerts › group alerts per node), whose {{check.*}}
+	// placeholders are left empty because no single check is the subject.
+	vars["alert.count"] = "1"
+	vars["alert.checks"] = m.check.Name
+	if len(m.group) > 0 {
+		names := make([]string, 0, len(m.group))
+		for _, t := range m.group {
+			names = append(names, t.check.Name)
+		}
+		vars["alert.count"] = strconv.Itoa(len(m.group))
+		vars["alert.checks"] = strings.Join(names, ", ")
+		for _, k := range []string{"check.id", "check.name", "check.type", "check.target", "target"} {
+			vars[k] = ""
+		}
+	}
+	switch m.kind {
+	case "down":
+		vars["status"] = string(model.StatusDown)
+	case "recovered", "warning_cleared":
+		vars["status"] = string(model.StatusUp)
+	case "warning":
+		if m.result.Status != "" {
+			vars["status"] = string(m.result.Status)
+		}
+	}
+	return vars
+}
+
+// deliverChannel runs one "also notify" channel for an alert, through the
+// same slots as alert e-mails and with the same single retry, and records the
+// outcome in the timeline. It reports whether the channel took the alert.
+func (e *Engine) deliverChannel(ch model.AlertChannel, m mailTask, instance, label string) bool {
+	name := ch.Name
+	if strings.TrimSpace(name) == "" {
+		name = string(ch.Action.Type)
+	}
+	vars := alertVars(m, instance, name)
+	work := e.workContext()
+	attempt := func() model.ActionResult {
+		select {
+		case e.mailSem <- struct{}{}:
+		case <-work.Done():
+			return model.ActionResult{Error: work.Err().Error()}
+		}
+		defer func() { <-e.mailSem }()
+		return e.Actions().Run(work, ch.Action, vars)
+	}
+	res := attempt()
+	if !res.OK && mailRetryAfter > 0 && work.Err() == nil {
+		select {
+		case <-time.After(mailRetryAfter):
+			res = attempt()
+			if !res.OK && res.Error != "" {
+				res.Error += " (tried twice)"
+			}
+		case <-work.Done():
+		}
+	}
+	// A grouped alert is one message, but each of its checks has its own
+	// timeline, so each gets the outcome.
+	about := m.group
+	if len(about) == 0 {
+		about = []mailTask{m}
+	}
+	if !res.OK {
+		e.log.Errorf("send %s to channel %q (%s) for %s/%s: %s", m.kind, name, ch.Action.Type, m.node.Name, vars["alert.checks"], res.Error)
+	}
+	for _, t := range about {
+		ev := model.Event{NodeID: ptrInt64(t.node.ID), CheckID: ptrInt64(t.check.ID), NodeName: t.node.Name, CheckName: t.check.Name}
+		if !res.OK {
+			ev.Type, ev.Title, ev.Detail = model.EventAlertFailed, fmt.Sprintf("%s to %s failed", label, name), firstLine(res.Error)
+		} else {
+			ev.Type, ev.Title, ev.Detail = model.EventAlertSent, fmt.Sprintf("%s sent to %s", label, name), fmt.Sprintf("%s — %s", ch.Action.Type, firstLine(res.Output))
+		}
+		e.recordEvent(ev)
+	}
+	return res.OK
+}
+
+// TestAlertChannel sends a sample alert through one "also notify" channel,
+// with the placeholders a real down alert would have, without recording
+// anything. It backs the channel's Test button in Settings › Alerts.
+func (e *Engine) TestAlertChannel(ctx context.Context, ch model.AlertChannel) model.ActionResult {
+	e.mu.Lock()
+	instance := e.settings.General.InstanceName
+	e.mu.Unlock()
+	now := time.Now()
+	m := mailTask{
+		kind:    "down",
+		node:    model.Node{Name: "Example node", Host: "192.168.1.1"},
+		check:   model.Check{Name: "Ping", Type: model.CheckPing},
+		message: "This is a test alert from GWatch",
+		result:  model.Result{Timestamp: now, Message: "This is a test alert from GWatch"},
+		state:   model.CheckState{Status: model.StatusDown},
+	}
+	vars := alertVars(m, instance, ch.Name)
+	vars["event"] = "test"
+	return e.Actions().Run(ctx, ch.Action, vars)
+}
+
+// mailSlots bounds how many alert e-mails are sent at once. A router going
+// down with a hundred checks behind it used to open a hundred SMTP
+// connections together, which is how Gmail and Microsoft 365 rate limits are
+// tripped and alerts lost.
+const mailSlots = 3
+
+// mailRetryAfter is how long a failed alert e-mail waits before its one
+// retry: long enough for a greylisting server or a brief outage to pass, short
+// enough that the check's next result (which waits for this e-mail) is not
+// held up for long. A message that still fails re-arms the alert, so the next
+// failing result sends it again.
+var mailRetryAfter = 15 * time.Second
+
+// deliverMail sends one alert e-mail through the shared slots, trying once
+// more after mailRetryAfter if the first attempt fails.
+func (e *Engine) deliverMail(smtp model.SMTPSettings, msg mailer.Message) error {
+	work := e.workContext()
+	attempt := func() error {
+		select {
+		case e.mailSem <- struct{}{}:
+		case <-work.Done():
+			return work.Err()
+		}
+		defer func() { <-e.mailSem }()
+		ctx, cancel := context.WithTimeout(work, 45*time.Second)
+		defer cancel()
+		return e.opts.Send(ctx, smtp, msg)
+	}
+	err := attempt()
+	if err == nil || mailRetryAfter <= 0 {
+		return err
+	}
+	select {
+	case <-time.After(mailRetryAfter):
+	case <-work.Done():
+		return err
+	}
+	if err2 := attempt(); err2 != nil {
+		return fmt.Errorf("%w (tried twice)", err2)
+	}
+	return nil
 }
 
 // SendTestEmail sends a test message using the current SMTP settings.

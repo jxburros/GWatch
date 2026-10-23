@@ -17,6 +17,7 @@ import (
 	"github.com/jxburros/GWatch/internal/hostmon"
 	"github.com/jxburros/GWatch/internal/model"
 	"github.com/jxburros/GWatch/internal/store"
+	"github.com/jxburros/GWatch/internal/sysmetrics"
 )
 
 // maxIngestBody caps a pushed reading. A hardware reading is a few kilobytes;
@@ -62,6 +63,63 @@ func (s *Server) handleGetHost(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeError(w, http.StatusNotFound, "no such machine")
+}
+
+// handleLocalWatchable lists every service on the computer GWatch runs on
+// and every program running on it now, for choosing which to watch. The list
+// is made when this is asked and never otherwise: it is the whole machine,
+// and nothing but the person choosing needs it. An agent's equivalent arrives
+// with its check-in (Agent.Inventory).
+func (s *Server) handleLocalWatchable(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	out := map[string]any{}
+	var problems []string
+	if svcs, err := sysmetrics.ListServices(ctx); err != nil {
+		problems = append(problems, "services: "+err.Error())
+	} else {
+		out["services"] = svcs
+	}
+	if procs, err := sysmetrics.ListProcesses(ctx); err != nil {
+		problems = append(problems, "programs: "+err.Error())
+	} else {
+		out["processes"] = procs
+	}
+	out["problems"] = problems
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleSetLocalWatch sets the services and programs the computer GWatch
+// runs on watches. Its hardware check judges them from the next sample on.
+func (s *Server) handleSetLocalWatch(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var sel model.CollectSelection
+	if err := decodeJSON(r, &sel); err != nil {
+		writeDecodeError(w, err)
+		return
+	}
+	if err := sel.Normalize().Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	saved, err := s.Engine.Hosts().SetLocalWatch(ctx, sel)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	detail := "Nothing is watched now."
+	if saved.Watching() {
+		var parts []string
+		if len(saved.Services) > 0 {
+			parts = append(parts, "services: "+strings.Join(saved.Services, ", "))
+		}
+		if len(saved.Processes) > 0 {
+			parts = append(parts, "programs: "+strings.Join(saved.Processes, ", "))
+		}
+		detail = strings.Join(parts, "; ") + ". The next reading reports them."
+	}
+	s.auditAuth(ctx, "Watched services and programs changed for this computer", detail)
+	writeJSON(w, http.StatusOK, saved)
 }
 
 // handleHostHistory returns the numeric series for one machine over a range.
@@ -132,11 +190,15 @@ func (s *Server) hostSummaries(r *http.Request) ([]model.HostSummary, error) {
 	latest := s.latestReadings(ctx, keys)
 
 	out := make([]model.HostSummary, 0, len(agents)+1)
-	out = append(out, hostSummary(model.HostSummary{
+	local := hostSummary(model.HostSummary{
 		Key:    model.HostKeyLocal,
 		Name:   s.localHostName(ctx, latest),
 		Source: model.HostSourceLocal,
-	}, latest[model.HostKeyLocal]))
+	}, latest[model.HostKeyLocal])
+	if w := s.Engine.Hosts().LocalWatch(); w.Watching() {
+		local.Watch = &w
+	}
+	out = append(out, local)
 
 	for _, a := range agents {
 		agent := a
@@ -228,6 +290,9 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.fail(w, err)
 		return
+	}
+	for i := range agents {
+		agents[i] = s.withCollectorState(agents[i])
 	}
 	writeJSON(w, http.StatusOK, agents)
 }
@@ -335,7 +400,8 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	if !enabled {
 		s.forgetHost(updated.HostKey())
 	}
-	writeJSON(w, http.StatusOK, updated)
+	s.reloadCollectors(ctx)
+	writeJSON(w, http.StatusOK, s.withCollectorState(updated))
 }
 
 // handleRevokeAgent stops accepting readings from a machine. The registration
@@ -359,6 +425,7 @@ func (s *Server) handleRevokeAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.forgetHost(agent.HostKey())
+		s.reloadCollectors(ctx)
 		s.auditAuth(ctx, "Hardware agent deleted: "+agent.Name, "Its stored readings were deleted with it.")
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -368,6 +435,7 @@ func (s *Server) handleRevokeAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.forgetHost(agent.HostKey())
+	s.reloadCollectors(ctx)
 	s.auditAuth(ctx, "Hardware agent revoked: "+agent.Name, "Its token no longer works; its past readings are kept.")
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -849,6 +917,16 @@ func (s *Server) handleIngestMetrics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "the body is not a GWatch hardware reading")
 		return
 	}
+	// A reading the agent held through an outage is worth having only at the
+	// time it was taken, so one whose time cannot be believed is refused (422,
+	// which the agent takes as "drop it", not "try again") rather than filed as
+	// current. See hostmon.CheckHeldTimestamp.
+	if heldReading(r) {
+		if err := hostmon.CheckHeldTimestamp(metrics.Timestamp, time.Now()); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+	}
 	stored, err := s.Engine.IngestHostReading(ctx, agent, metrics, s.remoteAddr(r))
 	if err != nil {
 		s.fail(w, err)
@@ -861,6 +939,18 @@ func (s *Server) handleIngestMetrics(w http.ResponseWriter, r *http.Request) {
 		"ts":              stored.Timestamp,
 		"intervalSeconds": int(hostmon.DefaultSampleInterval.Seconds()),
 	})
+}
+
+// heldReading is whether the agent marked a reading as delivered late, after
+// holding it through an outage (the X-GWatch-Held header). An agent that does
+// not send the mark — an older one, or a curl one-liner — is treated as
+// reporting live, and its timestamp is settled the way it always was.
+func heldReading(r *http.Request) bool {
+	switch strings.ToLower(strings.TrimSpace(r.Header.Get("X-GWatch-Held"))) {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
 }
 
 // bearerToken reads the credential from an Authorization header, accepting the

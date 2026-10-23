@@ -69,13 +69,18 @@ type Engine struct {
 	log   *logging.Logger
 	opts  Options
 
-	reloadMu     sync.Mutex
-	mu           sync.Mutex
-	settings     model.Settings
-	nodes        map[int64]model.Node
-	checks       map[int64]model.Check
-	states       map[int64]*model.CheckState
-	mailDone     map[int64]chan struct{}
+	reloadMu sync.Mutex
+	mu       sync.Mutex
+	settings model.Settings
+	nodes    map[int64]model.Node
+	checks   map[int64]model.Check
+	states   map[int64]*model.CheckState
+	mailDone map[int64]chan struct{}
+	mailSem  chan struct{} // see mailSlots
+	// alertGroups are the per-node alert groups whose window is open, and
+	// digestMu serialises the warning digest; see alertbatch.go.
+	alertGroups  map[groupKey]*alertGroup
+	digestMu     sync.Mutex
 	inflight     map[int64]*checkFlight
 	recordResult func(context.Context, model.Result, model.CheckState) (model.Result, error)
 	running      map[int64]bool
@@ -95,12 +100,22 @@ type Engine struct {
 	// from every machine that reports in.
 	hosts *hostmon.Monitor
 
-	sem      chan struct{}
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	started  bool
-	stopping bool
+	// Remote collectors (collectors.go): when each last sent anything, and
+	// the agents nodes check from, by id.
+	collectors      map[int64]*collectorWatch
+	collectorAgents map[int64]model.Agent
+
+	sem    chan struct{}
+	ctx    context.Context
+	cancel context.CancelFunc
+	// work is what alert e-mails, trigger actions and rule actions run
+	// under. It outlives ctx, so an alert being sent as the service stops
+	// still goes out, but Stop cancels it once the grace period is over.
+	work       context.Context
+	cancelWork context.CancelFunc
+	wg         sync.WaitGroup
+	started    bool
+	stopping   bool
 
 	startedAt    time.Time
 	lastTick     time.Time
@@ -112,6 +127,10 @@ type Engine struct {
 
 	retention model.RetentionStatus
 	backup    model.BackupStatus
+
+	// gate keeps the engine's own writes out of the way of a restore; see
+	// pause.go.
+	gate workGate
 
 	subMu sync.Mutex
 	subs  map[chan Update]struct{}
@@ -137,6 +156,7 @@ func New(st *store.Store, log *logging.Logger, opts Options) *Engine {
 		states:       map[int64]*model.CheckState{},
 		running:      map[int64]bool{},
 		mailDone:     map[int64]chan struct{}{},
+		mailSem:      make(chan struct{}, mailSlots),
 		inflight:     map[int64]*checkFlight{},
 		recordResult: st.RecordResult,
 		activeMW:     map[int64]bool{},
@@ -144,6 +164,9 @@ func New(st *store.Store, log *logging.Logger, opts Options) *Engine {
 
 		triggers:    map[int64][]model.Trigger{},
 		triggerLast: map[int64]time.Time{},
+
+		collectors:      map[int64]*collectorWatch{},
+		collectorAgents: map[int64]model.Agent{},
 	}
 	e.hosts = hostmon.New(st)
 	e.hosts.OnSample = func(key string) { e.broadcast(Update{Kind: "host"}) }
@@ -173,6 +196,7 @@ func (e *Engine) Start(parent context.Context) error {
 	e.startedAt = time.Now()
 	e.lastTick = e.startedAt
 	e.ctx, e.cancel = context.WithCancel(parent)
+	e.work, e.cancelWork = context.WithCancel(context.WithoutCancel(parent))
 	e.mu.Unlock()
 
 	if err := e.ReloadConfig(e.ctx); err != nil {
@@ -206,8 +230,51 @@ func (e *Engine) Stop() {
 	e.mu.Unlock()
 	e.recordEvent(model.Event{Type: model.EventServiceStopped, Title: "Monitoring service stopping"})
 	e.cancel()
-	e.wg.Wait()
+	// Alerts waiting in a grouping window go out now rather than when their
+	// window closes, which may be minutes away; their e-mails then get the
+	// same grace period as any other in-flight delivery.
+	e.flushAlertGroups()
+	// Stopping has an upper bound. A script action may run for ten minutes
+	// and a hung custom check for ever, and the service manager (the Windows
+	// SCM, systemd) kills a service that takes much longer than 20–90 s to
+	// stop — possibly in the middle of a database write. In-flight actions
+	// get a grace period to finish, are then cancelled, and are then left.
+	done := make(chan struct{})
+	go func() { e.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(stopGrace):
+		e.log.Printf("engine stop: work still running after %s; cancelling it", stopGrace)
+		e.cancelWork()
+		select {
+		case <-done:
+		case <-time.After(stopAfterCancel):
+			e.log.Printf("engine stop: giving up waiting for in-flight work after a further %s", stopAfterCancel)
+			return
+		}
+	}
+	e.cancelWork()
 	e.log.Printf("engine stopped")
+}
+
+// stopGrace is how long Stop lets in-flight work finish before cancelling it,
+// and stopAfterCancel how long it then waits for the cancellation to land.
+// Together they stay inside the stop timeouts of the Windows SCM and systemd.
+var (
+	stopGrace       = 15 * time.Second
+	stopAfterCancel = 5 * time.Second
+)
+
+// workContext is the context actions and alert e-mails run under: e.work once
+// the engine has started, and a plain background context for an engine used
+// without Start (as tests do).
+func (e *Engine) workContext() context.Context {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.work == nil {
+		return context.Background()
+	}
+	return e.work
 }
 
 // Running reports whether the scheduler is active.
@@ -249,10 +316,15 @@ func (e *Engine) ReloadConfig(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	agents, err := e.store.ListAgents(ctx)
+	if err != nil {
+		return err
+	}
 	now := time.Now()
 	e.mu.Lock()
 	e.settings = settings
 	e.windows = windows
+	e.setCollectorAgentsLocked(agents)
 	oldNodes := e.nodes
 	oldChecks := e.checks
 	e.nodes = map[int64]model.Node{}
@@ -369,8 +441,11 @@ func (e *Engine) schedulerLoop() {
 func (e *Engine) tick(now time.Time) {
 	e.mu.Lock()
 	// Detect the computer having been asleep / offline: the ticker should fire
-	// every second, so a large gap means we were not running.
-	if gap := now.Sub(e.lastTick); gap > 90*time.Second {
+	// every second, so a large gap means we were not running. The gap is
+	// measured on the wall clock (Round(0) drops the monotonic reading): on
+	// Linux and macOS the monotonic clock stops while the machine sleeps, so
+	// measured on it a night asleep looked like one second.
+	if gap := now.Round(0).Sub(e.lastTick.Round(0)); gap > 90*time.Second {
 		e.lastGap = &model.GapInfo{From: e.lastTick, To: now, Seconds: int64(gap.Seconds())}
 		e.mu.Unlock()
 		e.recordEvent(model.Event{Type: model.EventMonitorGap, Title: "Monitoring paused (computer asleep or offline)",
@@ -378,11 +453,24 @@ func (e *Engine) tick(now time.Time) {
 		e.mu.Lock()
 	}
 	e.lastTick = now
+	// While the engine is paused for a restore (pause.go) the clock above
+	// keeps moving, so the pause is not mistaken for sleep, but nothing is
+	// scheduled and no state is written.
+	if !e.enterWork() {
+		e.mu.Unlock()
+		return
+	}
+	defer e.leaveWork()
 	var due []model.Check
 	for id, c := range e.checks {
 		st := e.states[id]
 		n, ok := e.nodes[c.NodeID]
 		if !ok || !c.Enabled || !n.Enabled || st == nil || st.NextRunAt == nil || e.running[id] {
+			continue
+		}
+		// A check a remote collector runs is not this server's to run: its
+		// results arrive from the collector (collectors.go).
+		if _, collected := n.CollectorFor(c); collected {
 			continue
 		}
 		if !st.NextRunAt.After(now) {
@@ -415,15 +503,22 @@ func (e *Engine) tick(now time.Time) {
 			}
 		}
 	}
+	collectorEvents, collectorMails := e.watchCollectorsLocked(now)
 	sem := e.sem
 	for _, c := range due {
 		select {
 		case sem <- struct{}{}:
+			// Each run holds the gate itself, since it outlives this tick.
+			if !e.enterWork() {
+				<-sem
+				continue
+			}
 			e.running[c.ID] = true
 			e.states[c.ID].Running = true
 			e.wg.Add(1)
 			go func(c model.Check) {
 				defer e.wg.Done()
+				defer e.leaveWork()
 				defer func() { <-sem }()
 				e.runAndProcess(e.ctx, c.ID, 0)
 			}(c)
@@ -432,7 +527,13 @@ func (e *Engine) tick(now time.Time) {
 		}
 	}
 	e.mu.Unlock()
-	if expiredSilences {
+	for _, ev := range collectorEvents {
+		e.recordEvent(ev)
+	}
+	for _, m := range collectorMails {
+		e.sendMail(m)
+	}
+	if expiredSilences || len(collectorEvents) > 0 {
 		e.evaluateRules(e.ctx, nil)
 		e.broadcast(Update{Kind: "state"})
 	}
@@ -461,6 +562,10 @@ func (e *Engine) runAndProcess(ctx context.Context, checkID int64, depth int) (m
 	if !ok {
 		e.mu.Unlock()
 		return model.Result{}, fmt.Errorf("check %d not found", checkID)
+	}
+	if _, collected := e.collectedLocked(c); collected {
+		e.mu.Unlock()
+		return model.Result{}, ErrCollected
 	}
 	flight := &checkFlight{done: make(chan struct{})}
 	e.inflight[checkID] = flight
@@ -505,6 +610,10 @@ func (e *Engine) runAndProcess(ctx context.Context, checkID int64, depth int) (m
 
 // RunNow executes a check immediately, records the result and returns it.
 func (e *Engine) RunNow(ctx context.Context, checkID int64) (model.Result, error) {
+	if !e.enterWork() {
+		return model.Result{}, ErrPaused
+	}
+	defer e.leaveWork()
 	return e.runAndProcess(ctx, checkID, 0)
 }
 
@@ -521,6 +630,12 @@ func (e *Engine) RunNodeNow(ctx context.Context, nodeID int64) ([]model.Result, 
 // alongside — not on top of — whatever the schedule has in flight. A caller
 // that gives up while waiting for a slot gets the results finished so far.
 func (e *Engine) RunNodeChecks(ctx context.Context, nodeID int64, allow func(model.Check) bool) ([]model.Result, error) {
+	// The runs below finish before this returns (wg.Wait), so holding the
+	// gate here covers them all.
+	if !e.enterWork() {
+		return nil, ErrPaused
+	}
+	defer e.leaveWork()
 	e.mu.Lock()
 	n, ok := e.nodes[nodeID]
 	sem := e.sem
@@ -538,6 +653,11 @@ func (e *Engine) RunNodeChecks(ctx context.Context, nodeID int64, allow func(mod
 admit:
 	for _, c := range n.Checks {
 		if !c.Enabled || (allow != nil && !allow(c)) {
+			continue
+		}
+		// "Run now" on a node runs what this server runs; the checks a
+		// remote collector runs report on their own schedule.
+		if _, collected := n.CollectorFor(c); collected {
 			continue
 		}
 		select {

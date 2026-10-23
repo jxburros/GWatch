@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -95,8 +96,10 @@ func sameAuthorityOnly(c *http.Client) *http.Client {
 	return &cc
 }
 
-// ValidateNotify checks the fields of a slack/teams/ntfy/pushover action. It
-// is called from Validate for those action types.
+// ValidateNotify checks the fields of a notification action (every type for
+// which model.ActionType.IsNotify is true). It is called from Validate for
+// those action types; the channels added for issue #122 are checked by
+// validateChannel in channels.go.
 func ValidateNotify(a model.Action) error {
 	switch a.Type {
 	case model.ActionSlack:
@@ -131,6 +134,8 @@ func ValidateNotify(a model.Action) error {
 		if strings.TrimSpace(a.UserKey) == "" {
 			return fmt.Errorf("a Pushover user key is required")
 		}
+	default:
+		return validateChannel(a)
 	}
 	return nil
 }
@@ -209,9 +214,16 @@ type teamsCard struct {
 	Attachments []teamsAttach `json:"attachments"`
 }
 
+// teamsAttach is one attachment of the message envelope. The envelope is the
+// shape the Microsoft Teams Workflows (Power Automate) "Post to a channel when
+// a webhook request is received" template expects — the Office 365 connector
+// webhooks it replaces are retired — and contentUrl is sent as an explicit
+// null because that template's own example carries it and some flows built
+// from it fail to parse an attachment without it.
 type teamsAttach struct {
-	ContentType string `json:"contentType"`
-	Content     any    `json:"content"`
+	ContentType string  `json:"contentType"`
+	ContentURL  *string `json:"contentUrl"`
+	Content     any     `json:"content"`
 }
 
 func adaptiveCard(title, message string) map[string]any {
@@ -287,13 +299,13 @@ func (r *Runner) runNtfy(ctx context.Context, a model.Action, vars Vars, res mod
 	}
 	req.Header.Set("User-Agent", "GWatch-automation")
 	if title != "" {
-		req.Header.Set("Title", headerSafe(title))
+		req.Header.Set("Title", ntfyHeader(title))
 	}
 	if p := strings.TrimSpace(Expand(a.Priority, vars)); p != "" {
 		req.Header.Set("Priority", headerSafe(p))
 	}
 	if tags := strings.TrimSpace(Expand(a.Tags, vars)); tags != "" {
-		req.Header.Set("Tags", headerSafe(tags))
+		req.Header.Set("Tags", ntfyHeader(tags))
 	}
 	if tok := strings.TrimSpace(Expand(a.Token, vars)); tok != "" {
 		req.Header.Set("Authorization", "Bearer "+headerSafe(tok))
@@ -313,6 +325,20 @@ func (r *Runner) runNtfy(ctx context.Context, a model.Action, vars Vars, res mod
 	}
 	res.OK = true
 	return res
+}
+
+// ntfyHeader makes a header value ntfy reads as the text it was. HTTP headers
+// are Latin-1 to ntfy, so a title with an accent, an em dash or an emoji in it
+// arrived garbled; ntfy decodes RFC 2047 encoded words, so any
+// value that is not plain ASCII is sent as one.
+func ntfyHeader(v string) string {
+	v = headerSafe(v)
+	for i := 0; i < len(v); i++ {
+		if v[i] >= 0x80 {
+			return mime.BEncoding.Encode("utf-8", v)
+		}
+	}
+	return v
 }
 
 // ---- pushover ----

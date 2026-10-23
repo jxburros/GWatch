@@ -136,8 +136,8 @@ func runUpdate(cfg config, checkOnly bool) error {
 		return err
 	}
 	fmt.Printf("Installed gwatch-agent %s. The previous version is kept alongside it; `gwatch-agent rollback` puts it back.\n", info.LatestVersion)
-	if svc, err := agentService(cfg, "run"); err == nil {
-		if _, serr := svc.Status(); serr == nil {
+	if service, err := agentService(cfg, "run"); err == nil {
+		if _, serr := service.Status(); serr == nil {
 			fmt.Println("Restart the service to run it: gwatch-agent restart")
 		}
 	}

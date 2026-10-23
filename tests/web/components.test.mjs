@@ -311,3 +311,16 @@ test('chipInput treats a null list as empty', () => {
   assert.deepEqual(chips.value, []);
   assert.ok(!/null/.test(chips.textContent));
 });
+
+// #113: syncQuery writes only into its own view's address.
+test('syncQuery sets and clears keys, and leaves another view alone', async () => {
+  const { syncQuery } = await import('../../web/components.js');
+  window.location.hash = '#/nodes?sort=name';
+  syncQuery('/nodes', { group: 'Lab', q: '' });
+  assert.equal(window.location.hash, '#/nodes?sort=name&group=Lab');
+  syncQuery('/nodes', { group: null });
+  assert.equal(window.location.hash, '#/nodes?sort=name');
+  window.location.hash = '#/dashboard';
+  syncQuery('/nodes', { group: 'Lab' });
+  assert.equal(window.location.hash, '#/dashboard');
+});

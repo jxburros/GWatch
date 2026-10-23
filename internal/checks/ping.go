@@ -185,6 +185,9 @@ func runPing(ctx context.Context, host string, count int, timeout time.Duration,
 	if errors.As(err, &dnsErr) {
 		return pr, err
 	}
+	// Remembered for Monitor Health, which otherwise could only say that the
+	// system command is in use, not what stopped the built-in one.
+	recordFallback(err)
 	pr2, err2 := systemPingFunc(ctx, host, count, timeout)
 	if err2 == nil {
 		return pr2, nil
@@ -244,10 +247,26 @@ func runSystemPing(ctx context.Context, host string, count int, timeout time.Dur
 		}
 		return pr, errors.New("could not parse ping output")
 	}
-	if pr.Sent == 0 {
-		pr.Sent = count
+	return settleSent(pr, count, ctx.Err() != nil), nil
+}
+
+// settleSent fills in how many requests were sent when ping printed no summary.
+// That happens when ping is stopped before it finishes — count requests one a
+// second take longer than the check's timeout allows — and then only the
+// replies already printed are known: counting the requests ping never got to
+// send as lost reported about half the packets lost on a healthy link. A ping
+// that ran to the end and still printed no summary is taken to have sent them
+// all.
+func settleSent(pr pingResult, count int, cutShort bool) pingResult {
+	if pr.Sent != 0 {
+		return pr
 	}
-	return pr, nil
+	if cutShort && pr.Received > 0 {
+		pr.Sent = pr.Received
+		return pr
+	}
+	pr.Sent = count
+	return pr
 }
 
 // parsePingOutput extracts per-packet RTTs and the sent/received summary

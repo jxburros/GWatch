@@ -154,54 +154,32 @@ const OFFICE = [node(1, 'Core')];
   }
 }
 
-test('clusters: a node with children is the centre of an evenly spaced ring of them', () => {
-  for (const nodes of [HOME, OFFICE, NODES.slice(0, 5)]) {
-    const { f, l } = clusters(nodes);
-    for (const [id, kids] of f.children) {
-      if (kids.length < 2) continue;
-      const centre = at(l, id);
-      assert.ok(centre.ring > 0, `${id} has a ring`);
-      const ring = kids.map((k) => at(l, k));
-      for (const k of ring) assert.ok(Math.abs(distance(centre, k) - centre.ring) < 1e-6, 'every child is one ring radius away');
-      // Neighbouring children are the same angle apart, all the way round.
-      const angles = ring.map((k) => Math.atan2(k.y - centre.y, k.x - centre.x)).sort((a, b) => a - b);
-      const step = (2 * Math.PI) / kids.length;
-      for (let i = 0; i < angles.length; i++) {
-        const gap = (angles[(i + 1) % angles.length] - angles[i] + 2 * Math.PI) % (2 * Math.PI) || 2 * Math.PI;
-        assert.ok(Math.abs(gap - step) < 1e-6, `children of ${id} are ${step} apart, not ${gap}`);
-      }
-      // ... so the parent is at the centre of them.
-      assert.ok(Math.abs(ring.reduce((s, k) => s + k.x, 0) / kids.length - centre.x) < 1e-6);
-      assert.ok(Math.abs(ring.reduce((s, k) => s + k.y, 0) / kids.length - centre.y) < 1e-6);
-    }
+test('clusters: nothing is put on a ring; things branch off their parent, with longer lines to bigger branches', () => {
+  const { f, l } = clusters(OFFICE);
+  assert.deepEqual([at(l, 1).x, at(l, 1).y], [0, 0], 'the root of the tree is at the origin');
+  // The children of a busy switch are not all one distance from it.
+  const sw3 = at(l, 15); // Switch 3, with twelve devices
+  const kids = f.children.get('15').map((k) => distance(sw3, at(l, k)));
+  assert.ok(Math.max(...kids) - Math.min(...kids) > BOX.h, 'its devices are at different distances, not on a circle');
+  // A line to a switch with a crowd behind it is longer than a line to a lone device.
+  const core = at(l, 1);
+  const toSwitch = distance(core, sw3);
+  const leafLines = [];
+  for (const [child, parent] of f.parentOf) if (!f.children.get(child)?.length) leafLines.push(distance(at(l, parent), at(l, child)));
+  const shortestLeaf = Math.min(...leafLines);
+  assert.ok(toSwitch > shortestLeaf, `the line to Switch 3 (${toSwitch}) is longer than the shortest line to a device (${shortestLeaf})`);
+  // Children branch away from the node above their parent: most of them are
+  // on the far side of their parent from it.
+  let away = 0, total = 0;
+  for (const [id, kidsOf] of f.children) {
+    const up = f.parentOf.get(id);
+    if (!up) continue;
+    const p = at(l, id), g = at(l, up);
+    for (const k of kidsOf) { const c = at(l, k); total++; if ((c.x - p.x) * (p.x - g.x) + (c.y - p.y) * (p.y - g.y) > 0) away++; }
   }
-});
-
-test('clusters: a single tree has its root in the middle, and rings sit on rings', () => {
-  const { f, l } = clusters(HOME);
-  assert.deepEqual([at(l, 1).x, at(l, 1).y, at(l, 1).level], [0, 0, 0]);
-  assert.equal(l.radial, true);
-  // The switch is on the router's ring and is the centre of a ring of its own,
-  // whose members are one level further out.
-  const router = at(l, 1), sw = at(l, 2);
-  assert.ok(Math.abs(distance(router, sw) - router.ring) < 1e-6);
-  assert.ok(sw.ring > 0 && sw.level === 1);
-  for (const k of f.children.get('2')) {
-    assert.equal(at(l, k).level, 2);
-    assert.ok(Math.abs(distance(sw, at(l, k)) - sw.ring) < 1e-6);
-    assert.ok(distance(router, at(l, k)) > 0);
-  }
-  // The leaves have no ring.
-  assert.equal(at(l, 5).ring, 0);
-  // The line to the parent runs through a gap in the node's own ring, not
-  // through one of its children.
-  const toParent = Math.atan2(router.y - sw.y, router.x - sw.x);
-  for (const k of f.children.get('2')) {
-    const c = at(l, k);
-    const away = Math.abs(((Math.atan2(c.y - sw.y, c.x - sw.x) - toParent + 3 * Math.PI) % (2 * Math.PI)) - Math.PI);
-    assert.ok(away > 0.1, 'no child sits on the line back to the parent');
-  }
+  assert.ok(away / total >= 0.7, `${away} of ${total} children branch away from their grandparent`);
   assert.equal(l.levels, 3);
+  assert.deepEqual(l.rings, [], 'no rings are drawn');
 });
 
 test('clusters: no two boxes overlap and no line runs through a box it does not join', () => {
@@ -243,27 +221,18 @@ test('clusters: the same nodes in any order give the same picture', () => {
   assert.deepEqual(clusters(shuffled).l.bounds, a.bounds);
 });
 
-test('clusters: children go round in the order of their names, from the top, clockwise', () => {
-  const four = [node(1, 'Hub'), node(2, 'Delta', 1), node(3, 'Alpha', 1), node(4, 'Charlie', 1), node(5, 'Bravo', 1)];
-  const l = clusters(four).l, hub = at(l, 1);
-  const at90 = (id) => { const p = at(l, id); return [Math.round(p.x - hub.x), Math.round(p.y - hub.y)]; };
-  assert.deepEqual(at90(3), [0, -Math.round(hub.ring)], 'Alpha is straight up');
-  assert.deepEqual(at90(5), [Math.round(hub.ring), 0], 'Bravo is to its right');
-  assert.deepEqual(at90(4), [0, Math.round(hub.ring)], 'Charlie is below');
-  assert.deepEqual(at90(2), [-Math.round(hub.ring), 0], 'Delta is on the left');
-  // One child goes to the right, two go left and right.
+test('clusters: one child goes to the right of a lone root, and the first of several at the top', () => {
   const one = clusters([node(1, 'A'), node(2, 'B', 1)]).l;
-  assert.ok(at(one, 2).x > 0 && Math.abs(at(one, 2).y) < 1e-9);
-  const two = clusters([node(1, 'A'), node(2, 'B', 1), node(3, 'C', 1)]).l;
-  assert.ok(at(two, 2).x < 0 && at(two, 3).x > 0 && Math.abs(at(two, 2).y) < 1e-6);
+  assert.ok(at(one, 2).x > 0 && Math.abs(at(one, 2).y) < BOX.h, 'B is to the right of A');
+  const four = clusters([node(1, 'Hub'), node(2, 'Delta', 1), node(3, 'Alpha', 1), node(4, 'Charlie', 1), node(5, 'Bravo', 1)]).l;
+  assert.ok(at(four, 3).y < 0 && Math.abs(at(four, 3).x) < BOX.w, 'Alpha, first by name, is above the hub');
 });
 
-test('clusters: several trees ring the biggest one, and the unlinked nodes sit in rows under all of them', () => {
+test('clusters: several trees sit round the biggest one, and the unlinked nodes sit in rows under all of them', () => {
   const nodes = [...HOME, node(20, 'Cloud'), node(21, 'S3', 20), node(22, 'API', 20), node(23, 'CDN', 20),
     node(30, 'Alone 1'), node(31, 'Alone 2'), node(32, 'Alone 3'), node(33, 'Alone 4')];
   const { f, l } = clusters(nodes);
   assert.deepEqual([at(l, 1).x, at(l, 1).y], [0, 0], 'the biggest tree has its root in the middle');
-  assert.ok(distance(at(l, 1), at(l, 20)) > at(l, 1).ring, 'the other tree is outside the first one\'s rings');
   assert.deepEqual(overlaps(l, SPACING - 1e-6), []);
   assert.deepEqual(linesThroughBoxes(f, l), []);
   assert.deepEqual(l.isolated, ['30', '31', '32', '33']);
@@ -279,7 +248,7 @@ test('clusters: several trees ring the biggest one, and the unlinked nodes sit i
   const three = [...HOME, node(20, 'Cloud'), node(21, 'S3', 20), node(40, 'Lab'), node(41, 'Bench', 40)];
   const t = clusters(three).l;
   assert.deepEqual(overlaps(t, SPACING - 1e-6), []);
-  assert.ok(at(t, 20).x < 0 && at(t, 40).x > 0, 'two more trees go left and right of the first');
+  assert.equal(t.pos.size, three.length);
 });
 
 test('clusters: onlyLinked leaves the unlinked nodes out, and unlinked nodes alone get a block of their own', () => {
@@ -304,17 +273,15 @@ test('clusters: a dependency loop is broken and every node is still drawn', () =
   assert.equal(self.pos.size, 1);
 });
 
-test('clusters: a big fan-out makes a big ring rather than overlapping boxes', () => {
+test('clusters: a big fan-out spreads out rather than overlapping boxes', () => {
   const kids = 150;
   const nodes = [node(1, 'Hub'), ...Array.from({ length: kids }, (_, i) => node(i + 2, `Leaf ${String(i).padStart(3, '0')}`, 1))];
   const started = Date.now();
   const { l } = clusters(nodes);
   assert.ok(Date.now() - started < 1500, 'laid out quickly');
   assert.deepEqual(overlaps(l, SPACING - 1e-6), []);
-  const hub = at(l, 1);
-  // The ring is big enough that neighbouring children (a box's width apart at the very least) fit round it.
-  assert.ok(hub.ring * 2 * Math.sin(Math.PI / kids) >= Math.hypot(BOX.w, BOX.h) + SPACING - 1e-6, 'the circumference holds the boxes');
-  for (let i = 2; i < kids + 2; i++) assert.ok(Math.abs(distance(hub, at(l, i)) - hub.ring) < 1e-6);
+  const b = l.bounds;
+  assert.ok(b.maxX - b.minX < 6000 && b.maxY - b.minY < 6000, `it stays a sensible size (${Math.round(b.maxX - b.minX)} × ${Math.round(b.maxY - b.minY)})`);
 });
 
 test('clusters: a chain of nodes does not double in size with every link', () => {
@@ -322,8 +289,6 @@ test('clusters: a chain of nodes does not double in size with every link', () =>
   const w = (n) => { const b = clusters(chain(n)).l.bounds; return b.maxX - b.minX; };
   assert.ok(w(12) < 12 * 300, `12 hops are ${w(12)} wide`);
   assert.ok(w(12) < w(6) * 2.5, 'twice the hops is about twice the width');
-  const b12 = clusters(chain(12)).l.bounds;
-  assert.ok(Math.abs(b12.maxY - b12.minY - BOX.h) < 1e-6, 'and it runs in a straight line');
 });
 
 test('clusters: nodes are kept apart by the spacing asked for, and a line is never shorter than the reach', () => {
@@ -522,7 +487,7 @@ test('renderNetworkMap in clusters: a node per node, a line per dependency, noth
   for (let i = 0; i < centres.length; i++) for (let j = i + 1; j < centres.length; j++) {
     assert.ok(Math.abs(centres[i][0] - centres[j][0]) >= 148 || Math.abs(centres[i][1] - centres[j][1]) >= 32, 'boxes do not overlap on the page');
   }
-  assert.match(root.querySelector('.netmap-legend').textContent, /ring round the node it depends on/);
+  assert.match(root.querySelector('.netmap-legend').textContent, /branches off the node it depends on/);
   // Lines end at the boxes rather than running under them; curved bows, straight does not.
   const d = edgeOf(root, 1, 3).getAttribute('d');
   assert.match(d, /^M[-\d.e]+,[-\d.e]+ Q/, 'curved: a gentle bend');

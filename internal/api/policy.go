@@ -166,6 +166,11 @@ var policies = []routePolicy{
 	// administrator in front of the machine rather than to any integration,
 	// however wide its key.
 	{"POST", "/api/snmp/walk", levelAdmin, keyDeny},
+	// Listing a Matter server's devices is the same kind of probe as an SNMP
+	// walk. Commissioning goes further — it adds a device to a controller's
+	// fabric — so it is the administrator's decision twice over.
+	{"POST", "/api/matter/nodes", levelAdmin, keyDeny},
+	{"POST", "/api/matter/commission", levelAdmin, keyDeny},
 	{"GET", "/api/network", levelAdmin, keyDeny},
 	// Discovery pings a few thousand addresses and then creates monitors from
 	// what answered. Both halves are an administrator's decision, and reading
@@ -179,6 +184,9 @@ var policies = []routePolicy{
 	{"GET", "/api/settings", levelAdmin, keyDeny},
 	{"PUT", "/api/settings", levelAdmin, keyDeny},
 	{"POST", "/api/settings/test-email", levelAdmin, keyDeny},
+	// Testing an alert channel sends a real message with the stored
+	// credentials, so it is held to the same standing as reading them.
+	{"POST", "/api/settings/test-channel", levelAdmin, keyDeny},
 	// Which database GWatch keeps its data in (database.json). Reading it
 	// names a server; writing it moves the data. An integration key has no
 	// business with either.
@@ -196,6 +204,10 @@ var policies = []routePolicy{
 	{"DELETE", "/api/backups/{name}", levelAdmin, keyDeny},
 	{"POST", "/api/backups/restore", levelAdmin, keyDeny},
 	{"POST", "/api/backups/restore-existing", levelAdmin, keyDeny},
+	// A preview reads the whole of an archive's configuration, accounts and
+	// all, so it is held to the same standing as the restore it precedes.
+	{"POST", "/api/backups/inspect", levelAdmin, keyDeny},
+	{"POST", "/api/backups/inspect-existing", levelAdmin, keyDeny},
 	{"GET", "/api/export/config.json", levelAdmin, keyDeny},
 	{"POST", "/api/triggers", levelAdmin, keyDeny},
 	{"PUT", "/api/triggers/{id}", levelAdmin, keyDeny},
@@ -230,10 +242,16 @@ var policies = []routePolicy{
 	{"POST", "/api/agents/{id}/rotate", levelAdmin, keyDeny},
 	{"POST", "/api/agents/{id}/rotate/cancel", levelAdmin, keyDeny},
 	{"PUT", "/api/agents/{id}/collect", levelAdmin, keyDeny},
+	{"PUT", "/api/agents/{id}/collector", levelAdmin, keyDeny},
 	// Which agent release is newest. It says nothing about this installation
 	// and changes nothing, but it sits with the other agent routes: it is only
 	// of interest to whoever installs agents.
 	{"GET", "/api/agents/latest", levelAdmin, keyDeny},
+	// What this computer could watch lists every service and program on it,
+	// and changing what it watches changes what GWatch alerts on: both are
+	// administration, like an agent's collection settings.
+	{"GET", "/api/hosts/local/watchable", levelAdmin, keyDeny},
+	{"PUT", "/api/hosts/local/watch", levelAdmin, keyDeny},
 	{"GET", "/api/agents/pairings", levelAdmin, keyDeny},
 	{"POST", "/api/agents/pairings", levelAdmin, keyDeny},
 	{"GET", "/api/agents/pairings/{id}", levelAdmin, keyDeny},

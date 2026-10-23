@@ -59,6 +59,33 @@ export const ALERT_OVERRIDE_FIELDS = [
   { key: 'recipients', label: 'Recipients', kind: 'chips', help: 'Replaces the global recipients for this check when set.' },
 ];
 
+// ---- Matter readings ----
+
+/** Where python-matter-server listens unless it was told otherwise. A Matter
+ *  check with no server address asks the node host on this port and path. */
+export const MATTER_DEFAULT_PORT = 5580;
+export const MATTER_DEFAULT_PATH = '/ws';
+
+/** The readings a Matter check can take, in the order the editor offers them.
+ *  The standard ones mirror internal/matter.Standards — the server decides the
+ *  cluster, attribute and conversion of each, so only what the editor shows is
+ *  repeated here: the label, the default metric name and unit, and the
+ *  thresholds a newly picked reading starts with. "attribute" is any other
+ *  attribute, read as a number and multiplied by its scale. */
+export const MATTER_READING_KINDS = [
+  { value: 'temperature', label: 'Temperature', name: 'Temperature', unit: '°C' },
+  { value: 'humidity', label: 'Relative humidity', name: 'Humidity', unit: '%' },
+  { value: 'onoff', label: 'On / off', name: 'On', unit: '', help: '1 when on, 0 when off.' },
+  { value: 'contact', label: 'Contact (open / shut)', name: 'Open', unit: '', help: '1 when open, 0 when shut. Crit > 0 alerts when it opens.' },
+  { value: 'occupancy', label: 'Occupancy', name: 'Occupied', unit: '', help: '1 when someone is there.' },
+  { value: 'illuminance', label: 'Illuminance', name: 'Illuminance', unit: 'lx' },
+  { value: 'battery', label: 'Battery', name: 'Battery', unit: '%', defaults: { warnBelow: 20, critBelow: 10 } },
+  { value: 'attribute', label: 'Other attribute…', name: 'Value', unit: '', help: 'Any attribute by cluster and attribute id, read as a number.' },
+];
+
+/** The kind description for a value, or undefined. */
+export const matterKind = (value) => MATTER_READING_KINDS.find((k) => k.value === value);
+
 // ---- the bulk-edit parameter table ----
 
 // `kind` says what control asks for the value:

@@ -557,6 +557,17 @@ Local browser interface
 
 ## Explicit non-goals and deferred scope
 
+> **Note (2026-10-23).** This brief is the original statement of intent and is kept
+> as written. Several items below have since shipped, each in a deliberately narrow
+> form: user roles (an administrator/viewer split, not a permission system), remote
+> access (read-only, through your own VPN or reverse proxy; GWatch is still never
+> internet-facing by itself), SNMP checks, a CPU/memory/disk/network agent
+> (`gwatch-agent`), and network discovery (a ping sweep with a short port list). An
+> optional MCP companion for AI assistants exists as a separate program; the
+> application itself still has no AI features. [`ROADMAP.md`](ROADMAP.md) records
+> why each was taken up and the constraints that keep it narrow; it, not this list, is
+> the current statement of scope.
+
 The following are deliberately not required for the initial product because they would make the app more complex without supporting the central personal-monitoring goal:
 
 - AI assistance.

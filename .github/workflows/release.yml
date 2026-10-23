@@ -242,23 +242,30 @@ jobs:
         go build ./...
         go test -count=1 ./...
     - name: Linux service installation and journal
+      # gwatch install writes its own hardened gwatch.service (#125): the
+      # program in /usr/local/bin, a gwatch user, data in /var/lib/gwatch.
+      # The full lifecycle is the linux-service job; this is the quick check.
       run: |
         go build -o "$RUNNER_TEMP/gwatch-install-test" .
-        sudo "$RUNNER_TEMP/gwatch-install-test" install --data-dir "$RUNNER_TEMP/gwatch-service-data" --listen 127.0.0.1:7239 --no-start
-        # The root service executable is inside a protected root-only directory.
-        sudo systemd-analyze verify /etc/systemd/system/GWatch.service
-        systemctl cat GWatch | grep -q 'RestartSec=5s'
-        systemctl cat GWatch | grep -q '/usr/local/libexec/gwatch/gwatch'
-        if systemctl is-active --quiet GWatch; then echo 'no-start was ignored'; exit 1; fi
-        sudo systemctl start GWatch
+        # The runner leaves /usr/local/bin writable by its own user; gwatch
+        # install refuses a directory anyone but root can write to.
+        sudo chown root:root /usr/local /usr/local/bin
+        sudo chmod go-w /usr/local /usr/local/bin
+        sudo "$RUNNER_TEMP/gwatch-install-test" install --listen 127.0.0.1:7239 --no-start
+        sudo systemd-analyze verify /etc/systemd/system/gwatch.service
+        systemctl cat gwatch | grep -q 'RestartSec=5s'
+        systemctl cat gwatch | grep -q 'User=gwatch'
+        systemctl cat gwatch | grep -q '/usr/local/bin/gwatch'
+        if systemctl is-active --quiet gwatch; then echo 'no-start was ignored'; exit 1; fi
+        sudo systemctl start gwatch
         for i in $(seq 1 60); do
           if curl -fsS http://127.0.0.1:7239/api/health; then break; fi
           sleep 1
         done
         curl -fsS http://127.0.0.1:7239/api/health
-        sudo journalctl -u GWatch --no-pager | grep -q 'starting'
-        sudo /usr/local/libexec/gwatch/gwatch uninstall
-        if systemctl cat GWatch >/dev/null 2>&1; then echo 'unit remained after uninstall'; exit 1; fi
+        sudo journalctl -u gwatch --no-pager | grep -q 'starting'
+        sudo /usr/local/bin/gwatch uninstall --purge --yes
+        if systemctl cat gwatch >/dev/null 2>&1; then echo 'unit remained after uninstall'; exit 1; fi
     - name: Shell installer lint
       run: |
         shellcheck scripts/install.sh scripts/install-agent.sh scripts/test-installers.sh
@@ -368,6 +375,58 @@ jobs:
     needs:
     - plan
     if: needs.plan.outputs.selected == 'true'
+  server-packaging:
+    name: Server packages
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ needs.plan.outputs.sha }}
+    - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+      with:
+        go-version: 1.26.x
+        check-latest: true
+        cache: true
+    - name: Lint the package scripts
+      run: shellcheck packaging/build-server.sh packaging/nfpm/gwatch/*.sh scripts/ci/linux-service-test.sh
+    - name: Build the .deb and .rpm
+      run: |
+        version="$(tr -d ' \t\r\n' < VERSION)"
+        echo "GWATCH_VERSION=$version" >> "$GITHUB_ENV"
+        sh packaging/nfpm/gwatch/package.sh "$version" dist/server-packages amd64 arm64 arm
+        # A newer .deb of the same tree, to upgrade over the first one.
+        FORMATS=deb sh packaging/nfpm/gwatch/package.sh "${version}+ci" dist/server-upgrade amd64
+    - name: Inspect the .deb
+      run: |
+        deb="dist/server-packages/gwatch_${GWATCH_VERSION}-1_amd64.deb"
+        dpkg-deb -I "$deb"
+        dpkg-deb -c "$deb" | tee contents.txt
+        for want in ./usr/bin/gwatch ./usr/lib/systemd/system/gwatch.service ./usr/lib/sysusers.d/gwatch.conf ./etc/gwatch/gwatch.env; do
+          grep -q " $want\$" contents.txt || { echo "::error::$deb does not contain $want"; exit 1; }
+        done
+        grep -q '^-rw------- .* ./etc/gwatch/gwatch.env$' contents.txt || { echo "::error::gwatch.env must be 0600: it may hold a database password"; exit 1; }
+        dpkg-deb -I "$deb" conffiles | grep -qx /etc/gwatch/gwatch.env
+        for arch in amd64 arm64 armhf; do test -s "dist/server-packages/gwatch_${GWATCH_VERSION}-1_${arch}.deb"; done
+        for arch in x86_64 aarch64 armv7hl; do test -s "dist/server-packages/gwatch-${GWATCH_VERSION}-1.${arch}.rpm"; done
+    - name: Install, upgrade, remove and purge the .deb
+      env:
+        # The packaged unit scores 1.7 on systemd 255; anything above 2.0
+        # means some of its hardening went missing.
+        GWATCH_MAX_EXPOSURE: '2.0'
+      run: |
+        sh scripts/ci/linux-service-test.sh package \
+          "./dist/server-packages/gwatch_${GWATCH_VERSION}-1_amd64.deb" \
+          "./dist/server-upgrade/gwatch_${GWATCH_VERSION}+ci-1_amd64.deb"
+    - name: No package can pass for a self-update asset
+      run: |
+        if find dist/server-packages dist/server-upgrade -type f | xargs -n1 basename \
+             | grep -E '^gwatch[-_](linux|darwin|windows)[-_](amd64|arm64|arm)(\.exe)?$'; then
+          echo "::error::a package output is named like a self-update asset"; exit 1
+        fi
+    needs:
+    - plan
+    if: needs.plan.outputs.selected == 'true'
   agent-packaging:
     name: Agent packages
     runs-on: ubuntu-latest
@@ -473,8 +532,12 @@ jobs:
     - linux
     - macos
     runs-on: windows-latest
+    # The Authenticode signer's OIDC federated credential trusts this
+    # environment only (docs/RELEASING.md); id-token lets azure/login use it.
+    environment: authenticode
     permissions:
       contents: read
+      id-token: write
     defaults:
       run:
         shell: bash
@@ -510,7 +573,6 @@ jobs:
           goos="${target%/*}"; goarch="${target#*/}"
           out="dist/gwatch-${goos}-${goarch}"; [ "$goos" = "windows" ] && out="$out.exe"
           CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOARM=7 go build -trimpath -ldflags "-s -w -X main.version=${version}" -o "$out" .
-          sha256sum "$out" | sed 's#dist/##' > "$out.sha256"
         done
         ls -lh dist
     - name: Cross-compile the MCP companion
@@ -521,22 +583,57 @@ jobs:
           goos="${target%/*}"; goarch="${target#*/}"
           out="../dist/gwatch-mcp-${goos}-${goarch}"; [ "$goos" = "windows" ] && out="$out.exe"
           CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOARM=7 go build -trimpath -ldflags "-s -w -X main.version=${version}" -o "$out" ./cmd/gwatch-mcp
-          sha256sum "$out" | sed 's#../dist/##' > "$out.sha256"
         done
         ls -lh ../dist
+    - name: Authenticode configuration
+      id: authenticode
+      # Signs only when the AZURE_SIGNING_* variables are set (docs/RELEASING.md);
+      # without them the release goes on unsigned, with a warning in the summary.
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Configure
+    - name: Sign in to Azure for Authenticode
+      if: steps.authenticode.outputs.enabled == 'true'
+      uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+      with:
+        client-id: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
+        tenant-id: ${{ vars.AZURE_SIGNING_TENANT_ID }}
+        subscription-id: ${{ vars.AZURE_SIGNING_SUBSCRIPTION_ID }}
+        allow-no-subscriptions: ${{ vars.AZURE_SIGNING_SUBSCRIPTION_ID == '' }}
+    - name: Install the Authenticode signing client
+      if: steps.authenticode.outputs.enabled == 'true'
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Install
+    - name: Authenticode-sign the Windows executables
+      if: steps.authenticode.outputs.enabled == 'true'
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Sign dist/gwatch-windows-amd64.exe dist/gwatch-windows-arm64.exe
     - name: Install Inno Setup
       run: choco install innosetup --version=6.7.1 --allow-downgrade --no-progress -y
       shell: pwsh
     - name: Build Windows installers
+      # Packages the already-signed gwatch.exe; with signing on, Inno Setup also
+      # signs the uninstaller it embeds and the setup program itself.
       shell: pwsh
       run: |
         $version = $env:RELEASE_TAG -replace '^v', ''
         $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
         $exe = Join-Path $PWD "dist\gwatch-windows-amd64.exe"
-        & $iscc "/DAppVersion=$version" "/DExePath=$exe" "scripts\installer\gwatch.iss"
+        $signArgs = @(pwsh -NoProfile -File scripts/authenticode.ps1 -Action IsccArgs)
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & $iscc @signArgs "/DAppVersion=$version" "/DExePath=$exe" "scripts\installer\gwatch.iss"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         Copy-Item scripts\installer\Output\gwatch-setup-*.exe dist\
         Get-ChildItem dist
+    - name: Verify the Authenticode signatures
+      if: steps.authenticode.outputs.enabled == 'true'
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Verify dist/gwatch-windows-amd64.exe dist/gwatch-windows-arm64.exe dist/gwatch-setup-*.exe
+    - name: Checksum the final bytes
+      # Only now: Authenticode rewrites the .exe files, and the .sha256 here and
+      # the .sig the signing job adds must describe the bytes that are published.
+      run: |
+        cd dist
+        for f in gwatch-*; do
+          case "$f" in *.sha256|*.sig|*-setup-*) continue ;; esac
+          sha256sum "$f" > "$f.sha256"
+        done
+        ls -lh
     - name: Include verified installer
       run: cp scripts/install.sh dist/install.sh
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -548,6 +645,11 @@ jobs:
       RELEASE_TAG: ${{ fromJSON(needs.plan.outputs.apps)['gwatch'].tag }}
       RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch'].version }}
       RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+      AUTHENTICODE_CLIENT_ID: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
+      AUTHENTICODE_TENANT_ID: ${{ vars.AZURE_SIGNING_TENANT_ID }}
+      AUTHENTICODE_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+      AUTHENTICODE_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+      AUTHENTICODE_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
   gwatch-sign:
     runs-on: ubuntu-latest
     needs:
@@ -595,6 +697,49 @@ jobs:
         name: signed-native-gwatch
         path: dist/*
         if-no-files-found: error
+  server-linux-packages:
+    name: Server .deb and .rpm
+    if: needs.plan.outputs.selected == 'true' && fromJSON(needs.plan.outputs.apps)['gwatch'].selected
+    needs:
+    - plan
+    - gwatch-build
+    - server-packaging
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ needs.plan.outputs.sha }}
+    - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+      with:
+        go-version: 1.26.x
+        check-latest: true
+        cache: true
+    - name: Tag matches VERSION
+      run: |
+        tag="${RELEASE_TAG#v}"
+        file="$(tr -d ' \t\r\n' < VERSION)"
+        if [ "$tag" != "$file" ]; then
+          echo "::error::tag ${RELEASE_TAG} does not match the VERSION file (${file})."
+          exit 1
+        fi
+        echo "GWATCH_VERSION=$file" >> "$GITHUB_ENV"
+    - name: Build the packages
+      run: |
+        sh packaging/nfpm/gwatch/package.sh "$GWATCH_VERSION" dist/server-packages amd64 arm64 arm
+        (cd dist/server-packages && sha256sum *.deb *.rpm > "gwatch-linux-packages-${GWATCH_VERSION}.sha256")
+        cat "dist/server-packages/gwatch-linux-packages-${GWATCH_VERSION}.sha256"
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: server-linux-packages
+        path: dist/server-packages/*
+        if-no-files-found: error
+    env:
+      RELEASE_TAG: ${{ fromJSON(needs.plan.outputs.apps)['gwatch'].tag }}
+      RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch'].version }}
+      RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
   gwatch-agent-build:
     name: Release the agent
     if: needs.plan.outputs.selected == 'true' && fromJSON(needs.plan.outputs.apps)['gwatch-agent'].selected
@@ -604,8 +749,12 @@ jobs:
     - linux
     - macos
     runs-on: windows-latest
+    # The Authenticode signer's OIDC federated credential trusts this
+    # environment only (docs/RELEASING.md); id-token lets azure/login use it.
+    environment: authenticode
     permissions:
       contents: read
+      id-token: write
     defaults:
       run:
         shell: bash
@@ -642,22 +791,57 @@ jobs:
           goos="${target%/*}"; goarch="${target#*/}"
           out="dist/gwatch-agent-${goos}-${goarch}"; [ "$goos" = "windows" ] && out="$out.exe"
           CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOARM=7 go build -trimpath -ldflags "-s -w -X main.version=${version}" -o "$out" ./cmd/gwatch-agent
-          sha256sum "$out" | sed 's#dist/##' > "$out.sha256"
         done
         ls -lh dist
+    - name: Authenticode configuration
+      id: authenticode
+      # Signs only when the AZURE_SIGNING_* variables are set (docs/RELEASING.md);
+      # without them the release goes on unsigned, with a warning in the summary.
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Configure
+    - name: Sign in to Azure for Authenticode
+      if: steps.authenticode.outputs.enabled == 'true'
+      uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+      with:
+        client-id: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
+        tenant-id: ${{ vars.AZURE_SIGNING_TENANT_ID }}
+        subscription-id: ${{ vars.AZURE_SIGNING_SUBSCRIPTION_ID }}
+        allow-no-subscriptions: ${{ vars.AZURE_SIGNING_SUBSCRIPTION_ID == '' }}
+    - name: Install the Authenticode signing client
+      if: steps.authenticode.outputs.enabled == 'true'
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Install
+    - name: Authenticode-sign the Windows executables
+      if: steps.authenticode.outputs.enabled == 'true'
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Sign dist/gwatch-agent-windows-amd64.exe dist/gwatch-agent-windows-arm64.exe
     - name: Install Inno Setup
       run: choco install innosetup --version=6.7.1 --allow-downgrade --no-progress -y
       shell: pwsh
     - name: Build the agent installer
+      # Packages the already-signed gwatch-agent.exe; with signing on, Inno Setup
+      # also signs the uninstaller it embeds and the setup program itself.
       shell: pwsh
       run: |
         $version = $env:RELEASE_TAG -replace '^agent-v', ''
         $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
         $exe = Join-Path $PWD "dist\gwatch-agent-windows-amd64.exe"
-        & $iscc "/DAppVersion=$version" "/DExePath=$exe" "scripts\installer\gwatch-agent.iss"
+        $signArgs = @(pwsh -NoProfile -File scripts/authenticode.ps1 -Action IsccArgs)
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & $iscc @signArgs "/DAppVersion=$version" "/DExePath=$exe" "scripts\installer\gwatch-agent.iss"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         Copy-Item scripts\installer\Output\gwatch-agent-setup-*.exe dist\
         Get-ChildItem dist
+    - name: Verify the Authenticode signatures
+      if: steps.authenticode.outputs.enabled == 'true'
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Verify dist/gwatch-agent-windows-amd64.exe dist/gwatch-agent-windows-arm64.exe dist/gwatch-agent-setup-*.exe
+    - name: Checksum the final bytes
+      # Only now: Authenticode rewrites the .exe files, and the .sha256 here and
+      # the .sig the signing job adds must describe the bytes that are published.
+      run: |
+        cd dist
+        for f in gwatch-agent-*; do
+          case "$f" in *.sha256|*.sig|*-setup-*) continue ;; esac
+          sha256sum "$f" > "$f.sha256"
+        done
+        ls -lh
     - name: Include verified installer
       run: cp scripts/install-agent.sh dist/install-agent.sh
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -669,6 +853,11 @@ jobs:
       RELEASE_TAG: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].tag }}
       RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].version }}
       RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+      AUTHENTICODE_CLIENT_ID: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
+      AUTHENTICODE_TENANT_ID: ${{ vars.AZURE_SIGNING_TENANT_ID }}
+      AUTHENTICODE_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+      AUTHENTICODE_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+      AUTHENTICODE_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
   gwatch-agent-sign:
     runs-on: ubuntu-latest
     needs:
@@ -818,8 +1007,12 @@ jobs:
     - gwatch-agent-build
     - agent-packaging
     runs-on: windows-latest
+    # The Authenticode signer's OIDC federated credential trusts this
+    # environment only (docs/RELEASING.md); id-token lets azure/login use it.
+    environment: authenticode
     permissions:
       contents: read
+      id-token: write
     defaults:
       run:
         shell: bash
@@ -846,6 +1039,25 @@ jobs:
         echo "AGENT_VERSION=$file" >> "$GITHUB_ENV"
     - name: Build the packaged agent
       run: sh packaging/build-agent.sh winget "$AGENT_VERSION" dist/packaged windows/amd64
+    - name: Authenticode configuration
+      id: authenticode
+      # Signs only when the AZURE_SIGNING_* variables are set (docs/RELEASING.md);
+      # without them the release goes on unsigned, with a warning in the summary.
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Configure
+    - name: Sign in to Azure for Authenticode
+      if: steps.authenticode.outputs.enabled == 'true'
+      uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+      with:
+        client-id: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
+        tenant-id: ${{ vars.AZURE_SIGNING_TENANT_ID }}
+        subscription-id: ${{ vars.AZURE_SIGNING_SUBSCRIPTION_ID }}
+        allow-no-subscriptions: ${{ vars.AZURE_SIGNING_SUBSCRIPTION_ID == '' }}
+    - name: Install the Authenticode signing client
+      if: steps.authenticode.outputs.enabled == 'true'
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Install
+    - name: Authenticode-sign the packaged agent
+      if: steps.authenticode.outputs.enabled == 'true'
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Sign dist/packaged/winget/windows-amd64/gwatch-agent.exe
     - name: Install Inno Setup
       run: choco install innosetup --version=6.7.1 --allow-downgrade --no-progress -y
       shell: pwsh
@@ -855,11 +1067,18 @@ jobs:
         $version = $env:AGENT_VERSION
         $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
         $exe = Join-Path $PWD "dist\packaged\winget\windows-amd64\gwatch-agent.exe"
-        & $iscc "/DAppVersion=$version" "/DExePath=$exe" "/Fgwatch-agent-winget-setup-$version" "scripts\installer\gwatch-agent.iss"
+        $signArgs = @(pwsh -NoProfile -File scripts/authenticode.ps1 -Action IsccArgs)
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & $iscc @signArgs "/DAppVersion=$version" "/DExePath=$exe" "/Fgwatch-agent-winget-setup-$version" "scripts\installer\gwatch-agent.iss"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         New-Item -ItemType Directory -Force dist\winget | Out-Null
         Copy-Item "scripts\installer\Output\gwatch-agent-winget-setup-$version.exe" dist\winget\
+    - name: Verify the Authenticode signatures
+      if: steps.authenticode.outputs.enabled == 'true'
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Verify dist/packaged/winget/windows-amd64/gwatch-agent.exe dist/winget/gwatch-agent-winget-setup-*.exe
     - name: Render the manifests
+      # After signing: the manifest pins the SHA-256 of the setup program as
+      # published, so it must hash the signed file.
       run: |
         sh packaging/winget/render.sh "$AGENT_VERSION" "dist/winget/gwatch-agent-winget-setup-${AGENT_VERSION}.exe" "dist/winget/manifests/GWatch.Agent/${AGENT_VERSION}"
     - name: Zip the manifests
@@ -881,11 +1100,17 @@ jobs:
       RELEASE_TAG: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].tag }}
       RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].version }}
       RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+      AUTHENTICODE_CLIENT_ID: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
+      AUTHENTICODE_TENANT_ID: ${{ vars.AZURE_SIGNING_TENANT_ID }}
+      AUTHENTICODE_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+      AUTHENTICODE_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+      AUTHENTICODE_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
   assemble-gwatch:
     runs-on: ubuntu-latest
     needs:
     - plan
     - gwatch-sign
+    - server-linux-packages
     if: needs.plan.outputs.selected == 'true' && fromJSON(needs.plan.outputs.apps)['gwatch'].selected
     env:
       RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
@@ -899,6 +1124,10 @@ jobs:
       with:
         name: signed-native-gwatch
         path: artifacts/core
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: server-linux-packages
+        path: artifacts/linux
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: JX-Holdings-LLC/release-infrastructure

@@ -235,6 +235,20 @@ func (s *Store) OldestResult(ctx context.Context) (*time.Time, error) {
 	return &t, nil
 }
 
+// OldestRollup returns the start of the oldest bucket of the given size, or nil
+// when there is none.
+func (s *Store) OldestRollup(ctx context.Context, bucket int) (*time.Time, error) {
+	var b sql.NullInt64
+	if err := s.queryRow(ctx, "SELECT MIN(bucket_start) FROM rollups WHERE bucket_seconds = ?", bucket).Scan(&b); err != nil {
+		return nil, err
+	}
+	if !b.Valid {
+		return nil, nil
+	}
+	t := time.Unix(b.Int64, 0)
+	return &t, nil
+}
+
 // Counts returns row counts used by Monitor Health.
 func (s *Store) Counts(ctx context.Context) (raw, r5m, r1h, r1d, events int64, err error) {
 	q := func(query string, args ...any) (int64, error) {
@@ -320,6 +334,7 @@ func (s *Store) HistoryMetric(ctx context.Context, check model.Check, nodeName s
 	series := model.HistorySeries{
 		CheckID:   check.ID,
 		CheckName: check.Name,
+		NodeID:    check.NodeID,
 		NodeName:  nodeName,
 		CheckType: check.Type,
 		Range:     rng.Name,
@@ -359,6 +374,7 @@ func (s *Store) History(ctx context.Context, check model.Check, nodeName string,
 	series := model.HistorySeries{
 		CheckID:   check.ID,
 		CheckName: check.Name,
+		NodeID:    check.NodeID,
 		NodeName:  nodeName,
 		CheckType: check.Type,
 		Range:     rng.Name,
@@ -618,7 +634,7 @@ func (s *Store) RestoreNodes(ctx context.Context, nodes []model.Node, includeHis
 				return err
 			}
 		}
-		nodeColumns := []string{"id", "name", "host", "group_name", "\"groups\"", "tags", "notes", "importance", "enabled", "depends_on_node_id", "link_style", "template", "created_at", "updated_at"}
+		nodeColumns := []string{"id", "name", "host", "group_name", "\"groups\"", "tags", "notes", "importance", "enabled", "depends_on_node_id", "link_style", "template", "collector_id", "created_at", "updated_at"}
 		checkColumns := []string{"id", "node_id", "type", "name", "enabled", "interval_seconds", "timeout_seconds", "retries", "failure_threshold", "config", "alerts", "sort_order", "created_at", "updated_at"}
 		keepNodes, keepChecks := map[int64]bool{}, map[int64]bool{}
 		for _, n := range nodes {
@@ -631,7 +647,7 @@ func (s *Store) RestoreNodes(ctx context.Context, nodes []model.Node, includeHis
 				n.Tags = []string{}
 			}
 			if _, err := tx.exec(ctx, insertValues("nodes", nodeColumns)+" "+s.d.upsertClause([]string{"id"}, nodeColumns),
-				n.ID, n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nil, linkStyleJSON(n.LinkStyle), n.Template, fmtTime(n.CreatedAt), fmtTime(n.UpdatedAt)); err != nil {
+				n.ID, n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nil, linkStyleJSON(n.LinkStyle), n.Template, nullInt64(collectorPtrOf(n.CollectorID)), fmtTime(n.CreatedAt), fmtTime(n.UpdatedAt)); err != nil {
 				return err
 			}
 		}

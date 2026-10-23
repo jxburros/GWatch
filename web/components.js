@@ -1,3 +1,4 @@
+// @ts-check
 // Small DOM toolkit: element builder, icons, status pills, toasts, modals,
 // dropdown menus, chip input, form fields, empty states and skeletons.
 
@@ -241,6 +242,7 @@ export function statusMeta(status) { return STATUS[status] || STATUS.unknown; }
 /** A status pill is a static label, not a live region: it is re-rendered with
  *  its row rather than updated in place, so it carries no role="status" —
  *  that would make a screen reader announce every pill on every redraw. */
+/** @param {string} status @param {{ label?: string, large?: boolean }} [opts] */
 export function statusPill(status, { label, large = false } = {}) {
   const m = statusMeta(status);
   return h('span', { class: `pill ${m.cls} ${large ? 'pill-lg' : ''}` }, icon(m.icon), label || m.label);
@@ -260,6 +262,7 @@ function spineChanged(key, status) {
  *  column, with the status word set beside it in mono. The spine is decorative
  *  — `statusWord` carries the status as text, so nothing is lost without it.
  *  Pass `key` (a stable row id) and the spine flashes when the status changes. */
+/** @param {string} status @param {{ size?: string, key?: string | number }} [opts] */
 export function statusSpine(status, { size = '', key } = {}) {
   const name = status in STATUS ? status : 'unknown';
   const flash = spineChanged(key, name) && !prefersReducedMotion();
@@ -272,12 +275,14 @@ function prefersReducedMotion() {
 
 /** The status word beside a spine, in the status colour. Static text, like
  *  the pill: no live-region role. */
+/** @param {string} status @param {{ label?: string }} [opts] */
 export function statusWord(status, { label } = {}) {
   const m = statusMeta(status);
   const key = status in STATUS ? status : 'unknown';
   return h('span', { class: `status-word text-${key}` }, label || m.label);
 }
 
+/** @param {string} status @param {{ text?: boolean }} [opts] */
 export function statusGlyph(status, { text = true } = {}) {
   const m = statusMeta(status);
   const el = h('span', { class: `status-glyph text-${status in STATUS ? status : 'unknown'}` }, icon(m.icon));
@@ -288,6 +293,7 @@ export function statusGlyph(status, { text = true } = {}) {
 
 /** A glowing status circle. The halo colour comes from the status class, so it
  *  stays right when the theme changes. `size` is 'sm' | '' | 'lg'. */
+/** @param {string} status @param {{ size?: string, label?: string }} [opts] */
 export function statusOrb(status, { size = '', label } = {}) {
   const m = statusMeta(status);
   const key = status in STATUS ? status : 'unknown';
@@ -297,6 +303,7 @@ export function statusOrb(status, { size = '', label } = {}) {
 }
 
 /** Compact "check chip": glyph + name + latency, for node rows. */
+/** @param {any} check @param {any} state @param {{ href?: string }} [opts] */
 export function checkChip(check, state, { href } = {}) {
   const status = state?.status || (check.enabled === false ? 'paused' : 'unknown');
   const m = statusMeta(status);
@@ -320,6 +327,10 @@ export function importanceBadge(importance) {
 
 /* ---------- Toasts ---------- */
 
+/**
+ * @param {string} message
+ * @param {{ kind?: 'info' | 'success' | 'error', timeout?: number, action?: { label: string, onClick: () => void } }} [opts]
+ */
 export function toast(message, { kind = 'info', timeout = 4500, action } = {}) {
   const root = document.getElementById('toasts');
   if (!root) return;
@@ -339,9 +350,10 @@ const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), selec
 
 /** The elements in `scope` a Tab press can land on. Judged by markup (hidden,
  *  disabled, inside a hidden ancestor) rather than by layout, so the answer is
- *  the same in a headless test as in a browser. */
+ *  the same in a headless test as in a browser.
+ *  @param {ParentNode} scope @returns {HTMLElement[]} */
 export function focusableIn(scope) {
-  return [...scope.querySelectorAll(FOCUSABLE)].filter((x) => !x.hidden && !x.disabled && !x.closest('[hidden]') && x.getAttribute('aria-hidden') !== 'true');
+  return [.../** @type {NodeListOf<HTMLElement & { disabled?: boolean }>} */ (scope.querySelectorAll(FOCUSABLE))].filter((x) => !x.hidden && !x.disabled && !x.closest('[hidden]') && x.getAttribute('aria-hidden') !== 'true');
 }
 
 // How many modals are open. The page behind them is made inert by the first
@@ -355,9 +367,14 @@ function setAppInert(on) {
 
 /** `describedBy` is the id of the element that explains the dialog (a
  *  confirm's message, say); it becomes the dialog's aria-describedby. */
+/**
+ * @param {{ title?: string, body?: any, footer?: any, wide?: boolean, onClose?: (result?: any) => void,
+ *   closeOnBackdrop?: boolean, ariaLabel?: string, describedBy?: string | null }} opts
+ * @returns {{ el: HTMLElement, body: HTMLElement, close: (result?: any) => void }}
+ */
 export function openModal({ title, body, footer, wide = false, onClose, closeOnBackdrop = true, ariaLabel, describedBy }) {
   const root = document.getElementById('modals');
-  const prevFocus = document.activeElement;
+  const prevFocus = /** @type {HTMLElement | null} */ (document.activeElement);
   // Named by its own heading, so what a screen reader announces is exactly
   // what is written at the top of the box. A caller with a different name in
   // mind passes ariaLabel, which then wins.
@@ -407,6 +424,10 @@ export function openModal({ title, body, footer, wide = false, onClose, closeOnB
   return { el: dialog, body: bodyEl, close };
 }
 
+/**
+ * @param {{ title?: string, message?: string, confirmLabel?: string, cancelLabel?: string, danger?: boolean, body?: any }} [opts]
+ * @returns {Promise<boolean>}
+ */
 export function confirmDialog({ title = 'Are you sure?', message, confirmLabel = 'Confirm', cancelLabel = 'Cancel', danger = false, body } = {}) {
   return new Promise((resolve) => {
     let result = false;
@@ -424,12 +445,16 @@ export function confirmDialog({ title = 'Are you sure?', message, confirmLabel =
   });
 }
 
+/**
+ * @param {{ title?: string, message?: string, label?: string, value?: string, placeholder?: string, type?: string, confirmLabel?: string, required?: boolean }} [opts]
+ * @returns {Promise<string | null>} null when cancelled
+ */
 export function promptDialog({ title, message, label = 'Name', value = '', placeholder = '', type = 'text', confirmLabel = 'Save', required = true } = {}) {
   return new Promise((resolve) => {
     let result = null;
     const input = h('input', { type, value, placeholder, id: 'prompt-input', autocomplete: type === 'password' ? 'current-password' : 'off' });
     const form = h('form', { onsubmit: (e) => { e.preventDefault(); if (required && !input.value.trim()) { input.focus(); return; } result = input.value; m.close(); } },
-      message ? h('p', { style: { marginBottom: '14px' } }, message) : null,
+      message ? h('p', { class: 'u-mb-14' }, message) : null,
       field({ label, input }),
     );
     const m = openModal({
@@ -538,6 +563,10 @@ export function menuButton(items, { label = 'More actions', small = false, cls =
 let idSeq = 0;
 export function uid(prefix = 'f') { return `${prefix}-${++idSeq}`; }
 
+/**
+ * @param {{ label?: any, input: any, help?: any, error?: any, id?: string, cls?: string }} opts
+ * @returns {HTMLElement & { setError: (msg?: string) => void }}
+ */
 export function field({ label, input, help, error, id, cls = '' }) {
   // The label and the descriptions point at the element that actually takes
   // the input, not at whatever wraps it: a composite control (chipInput, say)
@@ -581,9 +610,14 @@ export function numberInput(attrs = {}) { return h('input', { type: 'number', ..
 export function textarea(attrs = {}) { return h('textarea', attrs); }
 
 /** options: [{value, label, disabled}] or ['a','b'] */
+/**
+ * @param {{ options?: Array<string | number | { value: any, label?: string, disabled?: boolean }>, value?: any, [attr: string]: any }} [opts]
+ * @returns {HTMLSelectElement}
+ */
 export function selectInput({ options, value, ...attrs } = {}) {
   const sel = h('select', attrs);
   for (const o of options || []) {
+    /** @type {{ value: any, label?: any, disabled?: boolean }} */
     const opt = typeof o === 'object' ? o : { value: o, label: o };
     sel.append(h('option', { value: opt.value, disabled: !!opt.disabled }, opt.label ?? opt.value));
   }
@@ -594,6 +628,10 @@ export function selectInput({ options, value, ...attrs } = {}) {
   return sel;
 }
 
+/**
+ * @param {{ label?: any, checked?: boolean, onChange?: (checked: boolean) => void, id?: string, disabled?: boolean }} [opts]
+ * @returns {HTMLLabelElement & { input: HTMLInputElement }}
+ */
 export function checkbox({ label, checked = false, onChange, id, disabled } = {}) {
   const input = h('input', { type: 'checkbox', checked, id: id || uid('cb'), disabled: !!disabled });
   if (onChange) input.addEventListener('change', () => onChange(input.checked));
@@ -602,6 +640,10 @@ export function checkbox({ label, checked = false, onChange, id, disabled } = {}
   return el;
 }
 
+/**
+ * @param {{ label?: any, checked?: boolean, onChange?: (checked: boolean) => void, id?: string, disabled?: boolean, ariaLabel?: string }} [opts]
+ * @returns {HTMLLabelElement & { input: HTMLInputElement }}
+ */
 export function toggle({ label, checked = false, onChange, id, disabled, ariaLabel } = {}) {
   const input = h('input', { type: 'checkbox', role: 'switch', checked, id: id || uid('sw'), disabled: !!disabled, 'aria-label': ariaLabel || null });
   if (onChange) input.addEventListener('change', () => onChange(input.checked));
@@ -611,6 +653,10 @@ export function toggle({ label, checked = false, onChange, id, disabled, ariaLab
 }
 
 /** Chip / tag input. `.value` returns an array of strings. */
+/**
+ * @param {{ values?: string[] | null, placeholder?: string, suggestions?: string[] | null, onChange?: (values: string[]) => void, validate?: (value: string) => boolean, id?: string }} [opts]
+ * @returns {HTMLDivElement & { value: string[], input: HTMLInputElement }}
+ */
 export function chipInput({ values = [], placeholder = 'Add…', suggestions = [], onChange, validate, id } = {}) {
   // The API sends an empty list as null (a Go nil slice), so null is empty.
   let items = [...(values || [])];
@@ -665,6 +711,7 @@ export function chipInput({ values = [], placeholder = 'Add…', suggestions = [
 
 /* ---------- Misc ---------- */
 
+/** @param {{ icon?: string, title?: string, text?: any, actions?: any, compact?: boolean }} [opts] */
 export function emptyState({ icon: ic = 'info', title, text, actions, compact = false } = {}) {
   return h('div', { class: `empty ${compact ? 'empty-compact' : ''}` },
     h('span', { class: 'empty-icon' }, icon(ic)),
@@ -674,6 +721,7 @@ export function emptyState({ icon: ic = 'info', title, text, actions, compact = 
   );
 }
 
+/** @param {{ lines?: number, height?: number | string }} [opts] */
 export function skeleton({ lines = 3, height } = {}) {
   if (height) return h('div', { class: 'skeleton-block', style: { height: typeof height === 'number' ? `${height}px` : height }, 'aria-busy': 'true' });
   const el = h('div', { class: 'skeleton', 'aria-busy': 'true' });
@@ -681,9 +729,10 @@ export function skeleton({ lines = 3, height } = {}) {
   return el;
 }
 
+/** @param {string} kind @param {any} text @param {{ icon?: string, actions?: any }} [opts] */
 export function banner(kind, text, { icon: ic, actions } = {}) {
   const icons = { warn: 'alert', down: 'x', maint: 'wrench', info: 'info', up: 'check' };
-  const el = h('div', { class: `banner banner-${kind}` }, icon(ic || icons[kind] || 'info'), h('div', { style: { flex: '1' } }, text));
+  const el = h('div', { class: `banner banner-${kind}` }, icon(ic || icons[kind] || 'info'), h('div', { class: 'u-flex-1' }, text));
   if (actions) el.append(h('div', { class: 'btn-group' }, actions));
   return el;
 }
@@ -703,6 +752,7 @@ export function relTimeEl(v, { prefix = '' } = {}) {
   return el;
 }
 
+/** @param {string[] | null | undefined} tags @param {{ group?: string }} [opts] */
 export function tagList(tags, { group } = {}) {
   const wrap = h('span', { class: 'n-tags' });
   if (group) wrap.append(h('span', { class: 'tag tag-group' }, group));
@@ -739,6 +789,8 @@ export const EVENT_META = {
   service_started: { label: 'Service started', icon: 'power', cls: 'ev-info' },
   service_stopped: { label: 'Service stopped', icon: 'power', cls: 'ev-neutral' },
   monitor_gap: { label: 'Monitoring gap', icon: 'moon', cls: 'ev-warn' },
+  collector_unreachable: { label: 'Collector unreachable', icon: 'radar', cls: 'ev-down' },
+  collector_back: { label: 'Collector back', icon: 'radar', cls: 'ev-up' },
   internal_error: { label: 'Internal error', icon: 'alert', cls: 'ev-down' },
   backup: { label: 'Backup', icon: 'save', cls: 'ev-info' },
   restore: { label: 'Restore', icon: 'upload', cls: 'ev-info' },
@@ -764,7 +816,7 @@ export function eventRow(ev, { showNode = true, now = Date.now() } = {}) {
   const m = eventMeta(ev.type);
   const link = ev.nodeId ? `#/nodes/${ev.nodeId}` : null;
   const title = h('div', { class: 'ev-title' });
-  if (showNode && ev.nodeName) title.append(link ? h('a', { href: link, style: { color: 'inherit' } }, ev.nodeName) : ev.nodeName, ev.checkName ? ` › ${ev.checkName}` : '', ' — ');
+  if (showNode && ev.nodeName) title.append(link ? h('a', { class: 'u-color-inherit', href: link }, ev.nodeName) : ev.nodeName, ev.checkName ? ` › ${ev.checkName}` : '', ' — ');
   title.append(ev.title || m.label);
   // An event about one of a check's metrics says which one, so a disk filling
   // up and the memory on the same check read as the two incidents they are.
@@ -792,6 +844,12 @@ export function checkOptions(nodes, filterType) {
 }
 
 /** Multi-select list of checks with "Node › Check" labels. `.value` → array of ids. */
+/**
+ * @param {any[]} nodes
+ * @param {Array<number | string>} [selected]
+ * @param {{ filterType?: (check: any) => boolean, onChange?: (ids: number[]) => void }} [opts]
+ * @returns {HTMLDivElement & { value: number[] }}
+ */
 export function checkMultiSelect(nodes, selected = [], { filterType, onChange } = {}) {
   let sel = new Set((selected || []).map(Number));
   const wrap = h('div', { class: 'check-list', role: 'group', 'aria-label': 'Checks' });
@@ -800,7 +858,7 @@ export function checkMultiSelect(nodes, selected = [], { filterType, onChange } 
   for (const g of groups) {
     for (const c of g.checks) {
       const cb = checkbox({ label: `${g.node.name} › ${c.name}`, checked: sel.has(Number(c.id)), onChange: (v) => { if (v) sel.add(Number(c.id)); else sel.delete(Number(c.id)); onChange && onChange([...sel]); } });
-      cb.append(h('span', { class: 'tag', style: { marginLeft: 'auto' } }, c.type));
+      cb.append(h('span', { class: 'tag u-ml-auto' }, c.type));
       wrap.append(cb);
     }
   }
@@ -814,6 +872,7 @@ export const CHECK_TYPES = [
   { value: 'cert', label: 'HTTPS certificate', desc: 'Check that the TLS certificate is valid and warn before it expires.' },
   { value: 'tcp', label: 'TCP port', desc: 'Can a connection be opened on a port? Good for SSH (22), Plex (32400), databases.' },
   { value: 'snmp', label: 'SNMP', desc: 'Read a switch, router, firewall, access point, printer or UPS directly: each port’s link and traffic, uptime, processor load. Test the connection and pick ports — no OIDs needed.' },
+  { value: 'matter', label: 'Matter', desc: 'Read Matter sensors, plugs and bridges through a python-matter-server: temperature, humidity, on/off, door contacts, motion, light level and battery, each with its own thresholds.' },
   { value: 'dns', label: 'DNS', desc: 'Does the hostname resolve, optionally to the addresses you expect?' },
   { value: 'keyword', label: 'Keyword', desc: 'Load a page and check that some text is present (or absent).' },
   { value: 'json', label: 'JSON', desc: 'Call an API and check that a value at a path matches what you expect.' },
@@ -821,6 +880,27 @@ export const CHECK_TYPES = [
   { value: 'system', label: 'Hardware health', desc: 'Processor, memory, disk space and throughput — for this computer, or for a machine running the agent.' },
 ];
 export function checkTypeLabel(t) { return (CHECK_TYPES.find((x) => x.value === t) || { label: t }).label; }
+
+// syncQuery writes a view's filters into the address, so a reload, Back and
+// Forward and a copied link all keep them. Each key set to '' or null is taken
+// out; the rest of the query is kept. replaceState fires no hashchange, so the
+// view on screen is not built again for it. Nothing is written unless the
+// address is still the view's own (route), so a view finishing a refresh after
+// the user has moved on cannot rewrite someone else's address.
+export function syncQuery(route, values) {
+  const hash = (location.hash || '#/dashboard').slice(1);
+  const [path, query = ''] = hash.split('?');
+  if (path.replace(/\/+$/, '') !== route) return;
+  const params = new URLSearchParams(query);
+  for (const [k, v] of Object.entries(values)) {
+    if (v == null || v === '') params.delete(k); else params.set(k, String(v));
+  }
+  const q = params.toString();
+  const next = `#${path}${q ? `?${q}` : ''}`;
+  if (next !== location.hash) {
+    try { window.history.replaceState(window.history.state, '', next); } catch { /* sandboxed frame: the address stays as it was */ }
+  }
+}
 
 /** Preserve keyboard focus across a synchronous refresh using stable semantic keys. */
 export function preserveFocus(root) {
@@ -834,3 +914,167 @@ export function preserveFocus(root) {
   };
 }
 export function scrollBehavior() { return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'; }
+
+/* ---------- Refreshing a region without losing the user's place ---------- */
+// Two ways to refresh part of a view (#118). Prefer renderKeyed whenever the
+// contents are a list of things with ids: it keeps the very same elements, so
+// nothing about them — focus, hover, an open menu, a half-typed value — is
+// lost. refreshRegion is for contents with no natural keys: it rebuilds, and
+// puts the focus and the scroll position back afterwards.
+
+/** The key a keyed child was rendered under (see renderKeyed). */
+const KEY = Symbol('gwatchKey');
+
+/**
+ * Bring `container`'s children in line with `items`, one element per item,
+ * matched by key. An element whose key is still present is kept — the same
+ * DOM node, so its focus ring, hover, scroll and any open menu survive — and
+ * handed to `update` to bring its contents up to date; a new key is built
+ * with `render`; a key that has gone is removed. Elements are only moved when
+ * the order really changed, and the focused element is focused again if a
+ * move took the focus away (a browser blurs a node it moves).
+ *
+ * Every child of `container` should come from here: children without a key
+ * are removed. A null/false `item` is skipped.
+ *
+ * @template T
+ * @param {Element} container
+ * @param {ReadonlyArray<T | null | undefined | false>} items
+ * @param {{
+ *   key: (item: T, index: number) => string,
+ *   render: (item: T, index: number) => Element,
+ *   update?: (el: Element, item: T, index: number) => Element | void,
+ * }} opts `update` may return a different element to swap in; without
+ *   `update` an existing element is kept exactly as it is.
+ * @returns {Element} the container
+ */
+export function renderKeyed(container, items, { key, render, update }) {
+  const active = /** @type {HTMLElement | null} */ (document.activeElement);
+  const hadFocus = !!active && active !== document.body && container.contains(active);
+  /** @type {Map<string, Element>} */
+  const old = new Map();
+  for (const el of [...container.children]) {
+    const k = /** @type {any} */ (el)[KEY];
+    if (k == null || old.has(k)) el.remove(); else old.set(k, el);
+  }
+  /** @type {Element[]} */
+  const next = [];
+  const seen = new Set();
+  items.forEach((item, i) => {
+    if (item == null || item === false) return;
+    const it = /** @type {T} */ (item);
+    const k = String(key(it, i));
+    if (seen.has(k)) return; // a duplicate key would steal its twin's element
+    seen.add(k);
+    let el = old.get(k);
+    if (el) {
+      const swapped = update ? update(el, it, i) : undefined;
+      if (swapped && swapped !== el) { el.replaceWith(swapped); el = swapped; }
+      old.delete(k);
+    } else {
+      el = render(it, i);
+    }
+    /** @type {any} */ (el)[KEY] = k;
+    next.push(el);
+  });
+  for (const el of old.values()) el.remove();
+  let cursor = container.firstElementChild;
+  for (const el of next) {
+    if (el === cursor) { cursor = cursor.nextElementSibling; continue; }
+    container.insertBefore(el, cursor);
+  }
+  if (hadFocus && active && active.isConnected && document.activeElement !== active) active.focus({ preventScroll: true });
+  return container;
+}
+
+/**
+ * Rebuild a region wholesale — for content with no natural keys, or that is
+ * cheap to write again — while keeping the user's place in it: the focused
+ * control (matched by data-focus-key, href, aria-label or id; see
+ * preserveFocus) and the region's own scroll position.
+ *
+ * @param {Element} region
+ * @param {(region: Element) => void} build writes the new contents; the
+ *   region is already empty when it is called.
+ * @returns {Element} the region
+ */
+export function refreshRegion(region, build) {
+  const restore = preserveFocus(region);
+  const top = region.scrollTop, left = region.scrollLeft;
+  clear(region);
+  try { build(region); } finally {
+    if (top || left) { region.scrollTop = top; region.scrollLeft = left; }
+    restore();
+  }
+  return region;
+}
+
+/**
+ * @typedef {{ value: string, label: string }} ChipItem
+ * @typedef {{
+ *   label: string,
+ *   items: ChipItem[],
+ *   current: string,
+ *   onPick: (value: string) => void,
+ *   allLabel?: string,
+ * }} ChipRowOptions
+ * @typedef {{ kind: 'label' } | { kind: 'chip', value: string, text: string }} ChipPart
+ */
+
+/**
+ * A filter chip row: "Label  [All] [a] [b]…", one of them pressed. Pass the
+ * row this returned last time as `row` and it is brought up to date in place
+ * (the same buttons, so a refresh never takes the focus off a chip); pass
+ * null to build one. With no items there is no row and null comes back.
+ * Picking the pressed chip again goes back to All.
+ *
+ * @param {Element | null} row
+ * @param {ChipRowOptions} opts
+ * @returns {HTMLElement | null}
+ */
+export function chipRow(row, { label, items, current, onPick, allLabel = 'All' }) {
+  if (!items.length) return null;
+  const el = /** @type {HTMLElement} */ (row || h('div', { class: 'chip-row', role: 'group' }));
+  el.setAttribute('aria-label', label);
+  /** @type {ChipPart[]} */
+  const parts = [{ kind: 'label' }, { kind: 'chip', value: '', text: allLabel }, ...items.map((it) => /** @type {ChipPart} */ ({ kind: 'chip', value: it.value, text: it.label }))];
+  /** @param {Element} b @param {ChipPart} p */
+  const sync = (b, p) => {
+    if (p.kind === 'label') { if (b.textContent !== label) b.textContent = label; return; }
+    const on = p.value ? current === p.value : !current;
+    b.className = `chip ${on ? 'active' : ''}`;
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    b.setAttribute('data-focus-key', `${label}:${p.value || 'all'}`);
+    if (b.textContent !== p.text) b.textContent = p.text;
+    /** @type {any} */ (b)._pick = () => onPick(p.value && current === p.value ? '' : p.value);
+  };
+  renderKeyed(el, parts, {
+    key: (p) => (p.kind === 'label' ? '\u0000label' : `chip:${p.value}`),
+    render: (p) => {
+      /** @type {HTMLElement} */
+      const b = p.kind === 'label'
+        ? h('span', { class: 'chip-label' })
+        : h('button', { type: 'button', onclick: () => /** @type {any} */ (b)._pick() });
+      sync(b, p);
+      return b;
+    },
+    update: (b, p) => { sync(b, p); },
+  });
+  return el;
+}
+
+/**
+ * Several chip rows in one container (a view's filter bar), each kept between
+ * refreshes by its label. A row with no items is left out.
+ *
+ * @param {Element} container
+ * @param {ChipRowOptions[]} rows
+ * @returns {Element} the container
+ */
+export function chipRows(container, rows) {
+  return renderKeyed(container, rows.filter((r) => r.items.length), {
+    key: (r) => r.label,
+    render: (r) => /** @type {HTMLElement} */ (chipRow(null, r)),
+    update: (el, r) => { chipRow(el, r); },
+  });
+}

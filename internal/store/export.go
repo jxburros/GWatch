@@ -120,7 +120,7 @@ func (s *Store) ImportAPIKey(ctx context.Context, r APIKeyRecord) (bool, error) 
 
 // ExportAgents returns every registered machine with its token digest.
 func (s *Store) ExportAgents(ctx context.Context) ([]AgentRecord, error) {
-	rows, err := s.query(ctx, "SELECT "+agentCols+", token_hash, collect FROM agents ORDER BY id")
+	rows, err := s.query(ctx, "SELECT "+agentCols+", token_hash, collect, collector FROM agents ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -133,8 +133,9 @@ func (s *Store) ExportAgents(ctx context.Context) ([]AgentRecord, error) {
 		var created string
 		var revoked, lastSeen sql.NullString
 		var collect string
+		var collector int
 		if err := rows.Scan(&r.ID, &r.Name, &nodeID, &r.Prefix, &enabled, &r.CreatedBy, &created,
-			&revoked, &lastSeen, &r.LastAddr, &r.LastVersion, &r.Hostname, &r.OS, &r.Arch, &r.TokenHash, &collect); err != nil {
+			&revoked, &lastSeen, &r.LastAddr, &r.LastVersion, &r.Hostname, &r.OS, &r.Arch, &r.TokenHash, &collect, &collector); err != nil {
 			return nil, err
 		}
 		// The sealed copy of the token is left out of a backup on purpose: it is
@@ -147,6 +148,7 @@ func (s *Store) ExportAgents(ctx context.Context) ([]AgentRecord, error) {
 		}
 		r.NodeID = int64Ptr(nodeID)
 		r.Enabled = enabled == 1
+		r.Collector = collector == 1
 		r.CreatedAt = mustTime(created)
 		r.RevokedAt, r.LastSeenAt = parseTime(revoked), parseTime(lastSeen)
 		out = append(out, r)
@@ -154,24 +156,42 @@ func (s *Store) ExportAgents(ctx context.Context) ([]AgentRecord, error) {
 	return out, rows.Err()
 }
 
+// AgentTokenKnown says whether an agent with this token digest is registered.
+func (s *Store) AgentTokenKnown(ctx context.Context, tokenHash string) (bool, error) {
+	var n int
+	if err := s.queryRow(ctx, "SELECT COUNT(*) FROM agents WHERE token_hash = ?", tokenHash).Scan(&n); err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // ImportAgent adds a machine exported by ExportAgents, keeping its id: the
 // readings it sent are keyed "agent:<id>", so a new id would orphan them. An
-// agent with the same token digest is left alone and false is returned.
+// agent with the same token digest is left alone, apart from its node link,
+// and false is returned.
 func (s *Store) ImportAgent(ctx context.Context, r AgentRecord) (bool, error) {
 	var n int
 	if err := s.queryRow(ctx, "SELECT COUNT(*) FROM agents WHERE token_hash = ?", r.TokenHash).Scan(&n); err != nil {
 		return false, err
 	}
 	if n > 0 {
+		// The machine is still here, but restoring the nodes cleared its link
+		// to one (agents.node_id is ON DELETE SET NULL), so put that back.
+		if r.NodeID != nil {
+			if _, err := s.exec(ctx, "UPDATE agents SET node_id = ? WHERE token_hash = ? AND node_id IS NULL AND EXISTS (SELECT 1 FROM nodes WHERE id = ?)",
+				*r.NodeID, r.TokenHash, *r.NodeID); err != nil {
+				return false, err
+			}
+		}
 		return false, nil
 	}
 	if r.CreatedAt.IsZero() {
 		r.CreatedAt = time.Now()
 	}
 	return true, s.insertWithID(ctx, "agents", r.ID,
-		[]string{"name", "node_id", "token_hash", "prefix", "enabled", "created_by", "created_at", "revoked_at", "last_seen_at", "last_addr", "last_version", "hostname", "os", "arch", "collect"},
+		[]string{"name", "node_id", "token_hash", "prefix", "enabled", "created_by", "created_at", "revoked_at", "last_seen_at", "last_addr", "last_version", "hostname", "os", "arch", "collect", "collector"},
 		r.Name, nullInt64(r.NodeID), r.TokenHash, r.Prefix, boolInt(r.Enabled), r.CreatedBy, fmtTime(r.CreatedAt), fmtTimePtr(r.RevokedAt), fmtTimePtr(r.LastSeenAt),
-		r.LastAddr, r.LastVersion, r.Hostname, r.OS, r.Arch, collectColumn(r.Collect))
+		r.LastAddr, r.LastVersion, r.Hostname, r.OS, r.Arch, collectColumn(r.Collect), boolInt(r.Collector))
 }
 
 // ReplaceWallboards removes every wallboard and writes the given ones in

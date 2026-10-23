@@ -23,7 +23,7 @@ import (
 // exposes, and the rest behind Mach calls, which it does not. Rather than pull
 // in cgo for a monitoring agent, the two Mach-only readings are taken from the
 // command line tools that already print them: vm_stat for memory and
-// netstat for interface counters. Processor utilisation has no such fallback
+// netstat for interface counters, and ioreg for disk activity. Processor utilisation has no such fallback
 // that is cheap enough to run every interval, so on macOS the load average per
 // core stands in for it — see collectCPU below.
 
@@ -64,7 +64,12 @@ func collect(ctx context.Context) (*raw, error) {
 	} else {
 		r.interfaces = nics
 	}
-	// Per-device disk throughput needs IOKit, which is cgo-only.
+	// Per-device disk counters live in the I/O Registry, which ioreg prints.
+	if out, err := exec.CommandContext(ctx, "/usr/sbin/ioreg", "-r", "-c", "IOBlockStorageDriver", "-w0").Output(); err != nil {
+		r.addWarning("disk activity: %v", err)
+	} else {
+		r.disks = parseIORegDiskStats(out)
+	}
 	return r, ctx.Err()
 }
 

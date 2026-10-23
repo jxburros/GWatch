@@ -3,7 +3,14 @@
 // A small web page, served on this machine's loopback address, for someone who
 // would rather not edit a file in a terminal: what the agent is doing, its
 // settings, what it collects (with checkboxes for the interfaces and drives this
-// machine actually has), its token, and start/stop/restart.
+// machine actually has), its token, and start/stop/restart; and (ui_actions.go)
+// the end of its log, "copy diagnostics", "update now" and pairing again.
+//
+// Its front doors are this command, a Start menu entry the Windows setup
+// program adds, a .desktop entry in the Linux packages, and the Windows
+// notification-area icon (tray_windows.go). Opened from any of them by someone
+// who cannot read the agent's settings, it asks the system for an
+// administrator's rights rather than refusing (elevate.go).
 //
 // It is deliberately not part of the service. The service runs as root or
 // SYSTEM, and a page hosted by it would let any user on the machine change what
@@ -39,7 +46,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"io/fs"
 	"net"
 	"net/http"
@@ -55,9 +61,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kardianos/service"
-
 	"github.com/jxburros/GWatch/internal/model"
+	"github.com/jxburros/GWatch/internal/svc"
+	"github.com/jxburros/GWatch/internal/sysmetrics"
 	"github.com/jxburros/GWatch/web"
 )
 
@@ -87,7 +93,16 @@ func runUI(cfg config, addr string, openBrowser bool) error {
 	// the reason is nearly always the same: on a machine where the agent was
 	// installed by root or an administrator its files are theirs alone. Say so
 	// before opening a page that would only show an error.
+	//
+	// Where the desktop can ask for an administrator's rights, it is asked
+	// instead (elevate.go): the panel starts again with them and this copy
+	// opens the browser. The copy that was started that way never asks again.
 	if err := checkConfigReadable(cfg.configPathOrDefault()); err != nil {
+		if uiHandoffDir == "" && canElevate() {
+			if rerr := relaunchUIElevated(addr); rerr == nil || errors.Is(rerr, errElevationDeclined) {
+				return rerr
+			}
+		}
 		return err
 	}
 	ln, err := net.Listen("tcp", addr)
@@ -109,14 +124,26 @@ func runUI(cfg config, addr string, openBrowser bool) error {
 		Handler:           srv.handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      3 * time.Minute, // a service restart can take a while
-		IdleTimeout:       60 * time.Second,
+		// A service restart can take a while, and "update now" downloads,
+		// verifies and test-runs a release before it answers.
+		WriteTimeout: 12 * time.Minute,
+		IdleTimeout:  60 * time.Second,
 	}
 
 	link := "http://" + ln.Addr().String() + "/?k=" + code
 	fmt.Printf("GWatch agent control panel: %s\n", link)
 	fmt.Println("The address works once, for the first browser to open it. The panel runs with your account's rights, only on this machine, and stops by itself after half an hour of not being used. Press Ctrl-C to stop it now.")
-	if openBrowser {
+	if uiHandoffDir != "" {
+		// The elevated copy: the unelevated one that started it opens the
+		// browser, as the person, on the page left in its directory.
+		_, cleanup, err := writeHandoffPage(uiHandoffDir, link)
+		if err != nil {
+			return fmt.Errorf("could not hand the panel's address over: %w", err)
+		}
+		defer cleanup()
+		srv.onRedeemed = cleanup
+		time.AfterFunc(uiCodeLifetime, cleanup)
+	} else if openBrowser {
 		// The browser is handed the name of a file that only this account can
 		// read, not the address: the address would be on the opener's command
 		// line, where any user of the machine can see it.
@@ -195,12 +222,8 @@ func writeLaunchPage(link string) (string, func(), error) {
 	}
 	var once sync.Once
 	cleanup := func() { once.Do(func() { _ = os.RemoveAll(dir) }) }
-	page := filepath.Join(dir, "open-panel.html")
-	esc := html.EscapeString(link)
-	body := `<!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer">` +
-		`<meta http-equiv="refresh" content="0;url=` + esc + `"><title>GWatch agent</title>` +
-		`<p>Opening the GWatch agent control panel… <a href="` + esc + `">continue</a></p>`
-	if err := os.WriteFile(page, []byte(body), 0o600); err != nil {
+	page := filepath.Join(dir, handoffPage)
+	if err := os.WriteFile(page, launchPageHTML(link), 0o600); err != nil {
 		cleanup()
 		return "", nil, err
 	}
@@ -255,6 +278,14 @@ type uiServer struct {
 	// Reading and updates, so a test need not reach the network.
 	testReading func(ctx context.Context, c config) error
 	checkUpdate func(ctx context.Context, c config) (model.UpdateInfo, error)
+	// installUpdate installs a release by the same path the automatic
+	// updater takes; pair is pair(); elevate runs a service command through
+	// the system's administrator prompt, and is nil where there is none.
+	installUpdate func(ctx context.Context, c config, info model.UpdateInfo) error
+	pair          func(c *config) error
+	elevate       func(action string) error
+	// recentLog finds the end of the agent's log (agentlog.go).
+	recentLog func(tokens ...string) recentLog
 }
 
 type serviceState struct {
@@ -277,13 +308,21 @@ func newUIServer(cfg config, addr, secret, code string) *uiServer {
 		c2 := c
 		ctx, cancel := context.WithTimeout(ctx, 2*requestTimeout)
 		defer cancel()
-		metrics, err := collect(ctx, c2, newCollector(c2))
+		rt, collector := newRuntime(c2), newCollector(c2)
+		rt.watch(collector)
+		metrics, err := collect(ctx, c2, collector)
 		if err != nil {
 			return fmt.Errorf("cannot read this computer's hardware: %w", err)
 		}
-		return send(ctx, newClient(c2), c2, newRuntime(c2).shape(metrics))
+		return send(ctx, newClient(c2), c2, rt.shape(metrics))
 	}
 	s.checkUpdate = checkUpdate
+	s.installUpdate = installUpdateFromPanel
+	s.pair = pair
+	if canElevate() {
+		s.elevate = elevateService
+	}
+	s.recentLog = func(tokens ...string) recentLog { return readRecentLog(logTailLines, tokens...) }
 	return s
 }
 
@@ -301,7 +340,13 @@ func (s *uiServer) handler() http.Handler {
 	mux.HandleFunc("POST /api/token", s.handleToken)
 	mux.HandleFunc("POST /api/service/{action}", s.handleService)
 	mux.HandleFunc("POST /api/test", s.handleTest)
+	mux.HandleFunc("GET /api/watchable", s.handleWatchable)
 	mux.HandleFunc("POST /api/update-check", s.handleUpdateCheck)
+	// ui_actions.go
+	mux.HandleFunc("GET /api/log", s.handleLog)
+	mux.HandleFunc("GET /api/diagnostics", s.handleDiagnostics)
+	mux.HandleFunc("POST /api/update-now", s.handleUpdateNow)
+	mux.HandleFunc("POST /api/pair", s.handlePair)
 	return s.guard(mux)
 }
 
@@ -466,8 +511,12 @@ func (s *uiServer) buildState() map[string]any {
 			{"key": model.MetricInodes, "label": "Inodes (needs disk space)"},
 			{"key": model.MetricNet, "label": "Network throughput"},
 			{"key": model.MetricDiskIO, "label": "Disk throughput"},
+			{"key": model.MetricTemp, "label": "Temperatures (Linux)"},
+			{"key": model.MetricPSI, "label": "Pressure stall (Linux)"},
+			{"key": model.MetricPool, "label": "ZFS pool health (Linux)"},
 		},
 	}
+	s.addPanelState(st, c)
 	if status, err := readAgentStatus(); err == nil {
 		st["status"] = status
 		st["statusAgeSeconds"] = int(time.Since(status.UpdatedAt).Seconds())
@@ -477,6 +526,30 @@ func (s *uiServer) buildState() map[string]any {
 
 func (s *uiServer) handleState(w http.ResponseWriter, r *http.Request) {
 	writeUIJSON(w, http.StatusOK, s.buildState())
+}
+
+// listWatchable is sysmetrics' service and program listing; tests replace it.
+var listWatchable = func(ctx context.Context) (services, processes []model.InventoryItem, problems []string) {
+	services, err := sysmetrics.ListServices(ctx)
+	if err != nil {
+		problems = append(problems, "services: "+err.Error())
+	}
+	processes, err = sysmetrics.ListProcesses(ctx)
+	if err != nil {
+		problems = append(problems, "programs: "+err.Error())
+	}
+	return services, processes, problems
+}
+
+// handleWatchable lists every service on this machine and every program
+// running on it now, so whoever is choosing what to watch can tick names
+// rather than guess at them. It is only made when the panel asks: the list
+// is the whole machine, and nothing else needs it.
+func (s *uiServer) handleWatchable(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	services, processes, problems := listWatchable(ctx)
+	writeUIJSON(w, http.StatusOK, map[string]any{"services": services, "processes": processes, "problems": problems})
 }
 
 // configWritable asks the operating system rather than guessing from modes: can
@@ -680,7 +753,7 @@ func (s *uiServer) fileText() string {
 
 // ---- the service ----
 
-func (s *uiServer) serviceHandle() (service.Service, error) {
+func (s *uiServer) serviceHandle() (*svc.Service, error) {
 	return newService(&program{cfg: s.cfg, mode: "status"}, s.cfg, "status")
 }
 
@@ -688,30 +761,26 @@ func (s *uiServer) serviceState() serviceState {
 	if p, ok := currentPackaging(); ok && p.ownsService {
 		return serviceState{Managed: false, Manager: p.manager, State: "managed by " + p.manager, Hint: p.serviceCommand("restart")}
 	}
-	svc, err := s.serviceHandle()
+	service, err := s.serviceHandle()
 	if err != nil {
 		return serviceState{Managed: true, State: "unknown", Error: err.Error()}
 	}
-	st, err := svc.Status()
+	st, err := service.Status()
 	if err != nil {
-		if errors.Is(err, service.ErrNotInstalled) {
+		if errors.Is(err, svc.ErrNotInstalled) {
 			return serviceState{Managed: true, State: "not installed", Hint: "Install it with `gwatch-agent install` (from an Administrator terminal on Windows)."}
 		}
 		return serviceState{Managed: true, State: "unknown", Error: err.Error()}
 	}
-	state := map[service.Status]string{service.StatusRunning: "running", service.StatusStopped: "stopped"}[st]
-	if state == "" {
-		state = "unknown"
-	}
-	return serviceState{Managed: true, State: state}
+	return serviceState{Managed: true, State: st.String()}
 }
 
 func (s *uiServer) controlService(action string) error {
-	svc, err := s.serviceHandle()
+	service, err := s.serviceHandle()
 	if err != nil {
 		return err
 	}
-	return service.Control(svc, action)
+	return service.Control(action)
 }
 
 func (s *uiServer) handleService(w http.ResponseWriter, r *http.Request) {
@@ -726,7 +795,18 @@ func (s *uiServer) handleService(w http.ResponseWriter, r *http.Request) {
 		writeUIError(w, http.StatusConflict, p.refuseServiceCommand(action).Error())
 		return
 	}
-	if err := s.control(action); err != nil {
+	err := s.control(action)
+	if err != nil && isPermissionError(err) && s.elevate != nil {
+		// Not allowed as this account: ask the system for an administrator's
+		// rights for this one command (elevate.go). Declining is an answer,
+		// and the answer to it is the usual hint.
+		if eerr := s.elevate(action); eerr == nil {
+			err = nil
+		} else if !errors.Is(eerr, errElevationDeclined) {
+			err = eerr
+		}
+	}
+	if err != nil {
 		if isPermissionError(err) {
 			writeUIError(w, http.StatusForbidden, elevateHint)
 			return

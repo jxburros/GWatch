@@ -34,3 +34,28 @@ test('hidden tabs close the stream and visible tabs reconnect', (t) => {
   assert.equal(opened, 2);
   off(); assert.equal(closed, 2);
 });
+
+// #114: every subscriber shares one stream, opened with the first and closed
+// with the last.
+test('subscribers share one EventSource', (t) => {
+  let opened = 0, closed = 0;
+  const sources = [];
+  const original = window.EventSource;
+  window.EventSource = class {
+    constructor() { opened++; this.listeners = {}; sources.push(this); }
+    addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
+    close() { closed++; }
+  };
+  t.after(() => { window.EventSource = original; });
+  const got = [[], [], []];
+  const offs = got.map((list) => subscribeUpdates((d) => list.push(d)));
+  assert.equal(opened, 1, 'one stream for three subscribers');
+  for (const fn of sources[0].listeners.update) fn({ data: '{"kind":"state"}' });
+  assert.deepEqual(got.map((l) => l.length), [1, 1, 1], 'each subscriber hears the update');
+  offs[0](); offs[1]();
+  assert.equal(closed, 0, 'still open while someone listens');
+  offs[1]();
+  assert.equal(closed, 0, 'unsubscribing twice is harmless');
+  offs[2]();
+  assert.equal(closed, 1, 'closed with the last subscriber');
+});

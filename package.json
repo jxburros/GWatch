@@ -2,14 +2,16 @@
   "name": "gwatch-web-tests",
   "private": true,
   "type": "module",
-  "description": "Test-only tooling for the GWatch web interface (web/). Nothing here ships in the gwatch binary — the shipped web assets stay dependency-free, embedded straight from web/ with no build step. `npm test` is the jsdom suite (tests/web/); `npm run test:e2e` drives a real Chromium through Playwright with axe (tests/e2e/).",
+  "description": "Test-only tooling for the GWatch web interface (web/). Nothing here ships in the gwatch binary — the shipped web assets stay dependency-free, embedded straight from web/ with no build step. `npm test` is the jsdom suite (tests/web/); `npm run test:e2e` drives a real Chromium through Playwright with axe (tests/e2e/); `npm run typecheck` runs tsc over the web/ files marked // @ts-check (see tsconfig.json).",
   "scripts": {
     "test": "node --test tests/web/*.test.mjs tests/web/views/*.test.mjs",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",
     "@playwright/test": "1.56.1",
-    "jsdom": "30.1.0"
+    "jsdom": "30.1.0",
+    "typescript": "6.0.3"
   }
 }

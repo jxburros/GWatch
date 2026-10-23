@@ -46,11 +46,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kardianos/service"
-
 	"github.com/jxburros/GWatch/internal/model"
 	"github.com/jxburros/GWatch/internal/permissions"
 	"github.com/jxburros/GWatch/internal/serviceinstall"
+	"github.com/jxburros/GWatch/internal/svc"
 	"github.com/jxburros/GWatch/internal/sysmetrics"
 )
 
@@ -98,6 +97,10 @@ type config struct {
 	// collect is the machine's own limit on what it will report: a list that is
 	// empty means no limit, and GWatch narrows within whatever is set here.
 	collect model.CollectSelection
+	// collector is this machine's half of the agreement that makes it a remote
+	// collector: it may run the network checks GWatch assigns it (collector.go).
+	// Off unless agent.json (or GWATCH_AGENT_COLLECTOR) says so.
+	collector bool
 	// hostRoot is where the host's root filesystem is mounted when the agent
 	// runs in a container and is watching the machine around it rather than
 	// the container (docs/HARDWARE.md#in-a-container). Empty everywhere else.
@@ -112,6 +115,11 @@ type config struct {
 	fileServer  string
 	tokenSource string
 	sources     map[string]string
+
+	// pairedAs and pairedNode are what GWatch called this machine and the node
+	// it belongs to, once pair() has succeeded (probe.go, ui_actions.go).
+	pairedAs   string
+	pairedNode int64
 }
 
 func usage() {
@@ -134,6 +142,10 @@ Usage:
         open the control panel: status, settings, what is collected and the
         token, in a browser. It runs as you, only on this machine, and closes by
         itself when it is not being used.
+  gwatch-agent probe --server URL [--insecure]
+        check that URL is a GWatch this computer can reach, without pairing
+  gwatch-agent tray [start-at-login|stop-at-login]
+        Windows: show the agent's state in the notification area
   gwatch-agent config [show|path|validate] [--show-token]
         show every setting and where it came from, print the configuration
         file's location, or check the file for mistakes
@@ -246,6 +258,9 @@ func main() {
 	fs.StringVar(&uiAddr, "ui-listen", "127.0.0.1:0", "ui: loopback address for the control panel (port 0 picks a free one)")
 	var uiNoBrowser bool
 	fs.BoolVar(&uiNoBrowser, "no-browser", false, "ui: print the address instead of opening a browser")
+	fs.StringVar(&uiHandoffDir, "ui-handoff", "", "ui: used when the panel restarts itself with elevation (elevate.go)")
+	fs.StringVar(&resultFile, "result-file", "", "probe, install: also write the outcome to this file (for the setup program)")
+	resultTarget = &cfg
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -313,6 +328,16 @@ func main() {
 		return
 	case "rollback":
 		if err := runRollback(); err != nil {
+			fatal(err)
+		}
+		return
+	case "probe":
+		if err := runProbe(cfg); err != nil {
+			fatal(err)
+		}
+		return
+	case "tray":
+		if err := runTray(cfg, fs.Args()); err != nil {
 			fatal(err)
 		}
 		return
@@ -402,14 +427,14 @@ func main() {
 	}
 
 	prg := &program{cfg: cfg, mode: cmd}
-	svc, err := newService(prg, cfg, cmd)
+	service, err := newService(prg, cfg, cmd)
 	if err != nil {
 		fatal(err)
 	}
 
 	switch cmd {
 	case "run", "serve":
-		if err := svc.Run(); err != nil {
+		if err := service.Run(); err != nil {
 			fatal(err)
 		}
 	case "install":
@@ -420,39 +445,36 @@ func main() {
 		if err := persistConfig(cfg); err != nil {
 			fatal(err)
 		}
-		if err := svc.Install(); err != nil {
+		if err := service.Install(); err != nil {
 			fatal(fmt.Errorf("install failed: %w (on Windows run this from an Administrator prompt)", err))
 		}
 		fmt.Printf("Installed service %q. Its settings are in %s.\n", serviceName, cfg.configPathOrDefault())
 		if noStart {
 			return
 		}
-		if err := svc.Start(); err != nil {
+		if err := service.Start(); err != nil {
 			fatal(fmt.Errorf("service installed but could not be started: %w", err))
 		}
 		fmt.Println("Service started. This computer will appear in GWatch within a minute.")
+		noteInstallResult(nil, "running")
 	case "uninstall":
-		_ = svc.Stop()
-		if err := svc.Uninstall(); err != nil {
+		_ = service.Stop()
+		if err := service.Uninstall(); err != nil {
 			fatal(fmt.Errorf("uninstall failed: %w", err))
 		}
 		fmt.Printf("Service %q removed.\n", serviceName)
 	case "start", "stop", "restart":
-		if err := service.Control(svc, cmd); err != nil {
+		if err := service.Control(cmd); err != nil {
 			fatal(err)
 		}
 		fmt.Printf("Service %s: done.\n", cmd)
 	case "status":
-		st, err := svc.Status()
+		st, err := service.Status()
 		if err != nil {
 			fmt.Println("Service status: not installed or unavailable:", err)
 			return
 		}
-		fmt.Printf("Service status: %s\n", map[service.Status]string{
-			service.StatusRunning: "running",
-			service.StatusStopped: "stopped",
-			service.StatusUnknown: "unknown",
-		}[st])
+		fmt.Printf("Service status: %s\n", st)
 	default:
 		usage()
 		os.Exit(2)
@@ -638,10 +660,19 @@ func (c config) serviceArgs(cmd string) []string {
 	return args
 }
 
+// agentEnvFile is the optional environment file the Linux service reads
+// before it starts, for settings given as GWATCH_AGENT_* variables.
+const agentEnvFile = "/etc/gwatch-agent/agent.env"
+
 // newService describes the background service to the platform's service
 // manager. It is here rather than inline so that the commands which only need
 // to ask after the service — update, for one — describe it the same way.
-func newService(prg *program, cfg config, cmd string) (service.Service, error) {
+//
+// Windows restarts the service five seconds after it fails (svc's default
+// RestartDelay); the systemd unit says the same with RestartSec=, and launchd
+// restarts it whenever it exits. On a Linux machine without systemd the
+// OpenRC or System V script reads the same environment file the unit does.
+func newService(prg *program, cfg config, cmd string) (*svc.Service, error) {
 	exe := ""
 	if cmd == "install" {
 		var err error
@@ -650,19 +681,20 @@ func newService(prg *program, cfg config, cmd string) (service.Service, error) {
 			return nil, err
 		}
 	}
-	return service.New(prg, &service.Config{
+	return svc.New(prg, svc.Config{
 		Executable:  exe,
 		Name:        serviceName,
 		DisplayName: serviceDisplay,
 		Description: serviceDesc,
 		Arguments:   cfg.serviceArgs(cmd),
-		Option:      service.KeyValue{"StartType": "automatic", "OnFailure": "restart", "OnFailureDelayDuration": "5s", "SystemdScript": strings.ReplaceAll(serviceinstall.SystemdScript, "/etc/gwatch/gwatch.env", "/etc/gwatch-agent/agent.env")},
+		SystemdUnit: strings.ReplaceAll(serviceinstall.SystemdScript, "/etc/gwatch/gwatch.env", agentEnvFile),
+		EnvFile:     agentEnvFile,
 	})
 }
 
 // agentService is newService for a caller that has no program to run: asking
 // whether the service exists, and nothing else.
-func agentService(cfg config, cmd string) (service.Service, error) {
+func agentService(cfg config, cmd string) (*svc.Service, error) {
 	return newService(&program{cfg: cfg, mode: cmd}, cfg, cmd)
 }
 
@@ -691,7 +723,7 @@ type program struct {
 	done   chan struct{}
 }
 
-func (p *program) Start(service.Service) error {
+func (p *program) Start(*svc.Service) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	p.mu.Lock()
 	p.cancel = cancel
@@ -701,7 +733,7 @@ func (p *program) Start(service.Service) error {
 	return nil
 }
 
-func (p *program) Stop(service.Service) error {
+func (p *program) Stop(*svc.Service) error {
 	p.mu.Lock()
 	cancel, done := p.cancel, p.done
 	p.mu.Unlock()
@@ -731,6 +763,11 @@ func (p *program) run(ctx context.Context) {
 		case <-ctx.Done():
 		}
 	}()
+
+	if p.cfg.configPath != "" {
+		keepConfigBackup(p.cfg.configPath)
+	}
+	defer startServiceLog()() // agentlog.go: a copy of the log the control panel can show
 
 	// Keeping itself current is only the reporting agent's job. serve mode is
 	// driven by GWatch asking for readings, and an agent that restarted itself
@@ -766,19 +803,30 @@ func (p *program) restartForUpdate() {
 
 // report sends a reading every interval, backing off when the server cannot
 // be reached and recovering as soon as it can. Readings that could not be
-// delivered are held, oldest first, and sent when it can — the agent keeps
-// nothing on this machine, but it does not throw away the last few hours just
-// because the network was down for them.
+// delivered are held, oldest first, and sent when it can, so the last few hours
+// are not thrown away just because the network was down for them; they are kept
+// in a small bounded file beside agent.json while they wait, so a restart or a
+// power cut during the outage does not throw them away either (spool.go).
 func (p *program) report(ctx context.Context) {
 	collector := newCollector(p.cfg)
 	client := newClient(p.cfg)
 	rt := newRuntime(p.cfg)
-	queue := newReadingQueue(p.cfg)
+	queue := openReadingQueue(p.cfg, queueFile())
+	// Whatever is still held when the agent stops is on disk for the next run.
+	defer queue.sync()
 	log.Printf("gwatch-agent %s reporting to %s every %s (settings: %s)", version, p.cfg.server, p.cfg.interval, p.cfg.configPathOrDefault())
 	if ov := overrides(p.cfg); len(ov) > 0 {
 		for _, o := range ov {
 			log.Printf("note: %s", o)
 		}
+	}
+	if p.cfg.collector {
+		col := newCollectorRunner(ctx, p.cfg, rt, client)
+		rt.mu.Lock()
+		rt.collector = col
+		rt.mu.Unlock()
+		log.Print(describeCollector(p.cfg))
+		go col.sendLoop(ctx)
 	}
 	rt.writeStatus(p.cfg, queue.len())
 	go p.checkInLoop(ctx, rt, client)
@@ -796,6 +844,7 @@ func (p *program) report(ctx context.Context) {
 		// for as long as they run, turning a fleet into a spike the server
 		// sees and the network feels.
 		wait := jittered(p.cfg.interval, p.cfg.interval/10)
+		rt.watch(collector)
 		metrics, err := takeReading(ctx, p.cfg, collector)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -833,6 +882,7 @@ func (p *program) report(ctx context.Context) {
 				}
 			}
 		}
+		queue.sync()
 		rt.writeStatus(p.cfg, queue.len())
 
 		select {
@@ -873,6 +923,9 @@ func send(ctx context.Context, client *http.Client, cfg config, metrics model.Ho
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+cfg.token)
 	req.Header.Set("User-Agent", userAgent())
+	if isHeld(cfg, metrics, time.Now()) {
+		req.Header.Set(heldHeader, "1")
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -894,17 +947,38 @@ func send(ctx context.Context, client *http.Client, cfg config, metrics model.Ho
 	return &sendFailure{retry: retry, err: fmt.Errorf("the server answered HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))}
 }
 
+// heldHeader marks a reading that is being delivered late, after it was held
+// through an outage. GWatch keeps the time such a reading was taken, and refuses
+// one whose time it cannot believe rather than filing it as current: a reading
+// from yesterday stamped "now" would be judged as if the machine were in that
+// state now. A live reading carries no mark, so a machine whose clock is simply
+// wrong still has its readings filed, at the time they arrive.
+const heldHeader = "X-GWatch-Held"
+
+// isHeld is whether a reading is being sent late: taken more than an interval
+// ago by this machine's own clock, which is the clock that took it, so the
+// answer does not depend on whether this clock agrees with GWatch's.
+func isHeld(cfg config, m model.HostMetrics, now time.Time) bool {
+	interval := cfg.interval
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	return !m.Timestamp.IsZero() && now.Sub(m.Timestamp) > interval
+}
+
 func runOnce(cfg config) error {
 	if err := cfg.validate("once"); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*requestTimeout)
 	defer cancel()
-	metrics, err := collect(ctx, cfg, newCollector(cfg))
+	rt, collector := newRuntime(cfg), newCollector(cfg)
+	rt.watch(collector)
+	metrics, err := collect(ctx, cfg, collector)
 	if err != nil {
 		return fmt.Errorf("cannot read this computer's hardware: %w", err)
 	}
-	return send(ctx, newClient(cfg), cfg, newRuntime(cfg).shape(metrics))
+	return send(ctx, newClient(cfg), cfg, rt.shape(metrics))
 }
 
 // printReading shows what this machine would report. It contacts nothing, so
@@ -912,11 +986,13 @@ func runOnce(cfg config) error {
 func printReading(cfg config) error {
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
-	metrics, err := collect(ctx, cfg, newCollector(cfg))
+	rt, collector := newRuntime(cfg), newCollector(cfg)
+	rt.watch(collector)
+	metrics, err := collect(ctx, cfg, collector)
 	if err != nil {
 		return fmt.Errorf("cannot read this computer's hardware: %w", err)
 	}
-	metrics = newRuntime(cfg).shape(metrics)
+	metrics = rt.shape(metrics)
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(metrics)
@@ -925,6 +1001,11 @@ func printReading(cfg config) error {
 func newCollector(cfg config) *sysmetrics.Collector {
 	c := sysmetrics.NewCollector(model.HostKeyLocal)
 	c.AgentVersion = version
+	// The services and programs named in this machine's own file. The
+	// reporting loop narrows this to GWatch's choice before each reading
+	// (agentRuntime.watch); serve mode, which GWatch never chooses for,
+	// watches exactly these.
+	c.SetWatch(cfg.collect.WatchedServices(), cfg.collect.WatchedProcesses())
 	return c
 }
 
@@ -1005,7 +1086,8 @@ func pair(cfg *config) error {
 	var out struct {
 		Token string `json:"token"`
 		Agent struct {
-			Name string `json:"name"`
+			Name   string `json:"name"`
+			NodeID *int64 `json:"nodeId"`
 		} `json:"agent"`
 	}
 	if err := json.Unmarshal(payload, &out); err != nil || out.Token == "" {
@@ -1044,6 +1126,11 @@ func pair(cfg *config) error {
 		name = hostname
 	}
 	fmt.Printf("Paired with GWatch as %q.\n", name)
+	cfg.pairedAs = name
+	if out.Agent.NodeID != nil {
+		cfg.pairedNode = *out.Agent.NodeID
+	}
+	fmt.Printf("See it in GWatch: %s\n", machineLink(*cfg))
 	if path != "" {
 		fmt.Printf("Token and settings saved to %s (readable only by this account); edit that file to change them.\n", path)
 	}
@@ -1174,11 +1261,35 @@ func (p *program) serve(ctx context.Context) {
 		_ = srv.Shutdown(shutdown)
 	}()
 
-	log.Printf("gwatch-agent %s serving readings on http://%s/metrics", version, p.cfg.listen)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Printf("cannot listen on %s: %v", p.cfg.listen, err)
+	// The address to listen on may not exist yet: a machine coming back from
+	// a power cut starts its services before the network has handed it its
+	// address. Giving up here would leave a running service that serves
+	// nothing until someone restarts it, so the agent keeps trying instead.
+	backoff := time.Duration(0)
+	for {
+		ln, err := listen("tcp", p.cfg.listen)
+		if err == nil {
+			log.Printf("gwatch-agent %s serving readings on http://%s/metrics", version, p.cfg.listen)
+			if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("stopped serving on %s: %v", p.cfg.listen, err)
+			}
+			return
+		}
+		backoff = min(max(2*backoff, listenRetry), time.Minute)
+		log.Printf("cannot listen on %s yet (trying again in %s): %v", p.cfg.listen, backoff, err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
 	}
 }
+
+// listen is net.Listen; tests replace it.
+var listen = net.Listen
+
+// listenRetry is the first wait before serve mode tries its address again.
+var listenRetry = 5 * time.Second
 
 // metricsHandler is everything serve mode exposes: one route, behind the
 // token. It is separate from serve so that what is reachable can be tested
@@ -1239,6 +1350,7 @@ func envBool(key string, def bool) bool {
 }
 
 func fatal(err error) {
+	noteInstallResult(err, "")
 	fmt.Fprintln(os.Stderr, "error:", err)
 	os.Exit(1)
 }

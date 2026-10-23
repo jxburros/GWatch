@@ -15,7 +15,7 @@ import (
 
 // group_name holds the node's first group. It stays in the row next to the
 // groups list because older binaries and the existing indexes still read it.
-const nodeCols = `id, name, host, group_name, "groups", tags, notes, importance, enabled, depends_on_node_id, link_style, template, created_at, updated_at`
+const nodeCols = `id, name, host, group_name, "groups", tags, notes, importance, enabled, depends_on_node_id, link_style, template, collector_id, created_at, updated_at`
 
 // linkStyleJSON is how a node's link style is kept in its row: the JSON of the
 // style, or an empty string when there is none. It is sanitised on the way in
@@ -40,16 +40,35 @@ func parseLinkStyle(raw string) *model.LinkStyle {
 	return ls.Sanitized()
 }
 
+// collectorPtr and collectorPtrOf keep "checked from this server" one value:
+// a NULL column and a nil pointer, never a zero or negative id that some
+// later reader would have to remember means the same thing.
+func collectorPtr(v sql.NullInt64) *int64 {
+	if !v.Valid || v.Int64 <= 0 {
+		return nil
+	}
+	id := v.Int64
+	return &id
+}
+
+func collectorPtrOf(p *int64) *int64 {
+	if p == nil || *p <= 0 {
+		return nil
+	}
+	return p
+}
+
 func scanNode(sc interface{ Scan(...any) error }) (model.Node, error) {
 	var n model.Node
 	var groups, tags, linkStyle, created, updated string
 	var enabled int
-	var dep sql.NullInt64
-	if err := sc.Scan(&n.ID, &n.Name, &n.Host, &n.Group, &groups, &tags, &n.Notes, &n.Importance, &enabled, &dep, &linkStyle, &n.Template, &created, &updated); err != nil {
+	var dep, collector sql.NullInt64
+	if err := sc.Scan(&n.ID, &n.Name, &n.Host, &n.Group, &groups, &tags, &n.Notes, &n.Importance, &enabled, &dep, &linkStyle, &n.Template, &collector, &created, &updated); err != nil {
 		return n, err
 	}
 	n.Enabled = enabled == 1
 	n.DependsOnNode = int64Ptr(dep)
+	n.CollectorID = collectorPtr(collector)
 	n.LinkStyle = parseLinkStyle(linkStyle)
 	n.CreatedAt = mustTime(created)
 	n.UpdatedAt = mustTime(updated)
@@ -130,9 +149,9 @@ func (s *Store) CreateNode(ctx context.Context, n model.Node) (model.Node, error
 		n.Importance = model.ImportanceNormal
 	}
 	err := s.writeTx(ctx, func(tx *wtx) error {
-		newID, err := tx.insertID(ctx, `INSERT INTO nodes(name, host, group_name, "groups", tags, notes, importance, enabled, depends_on_node_id, link_style, template, created_at, updated_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), linkStyleJSON(n.LinkStyle), n.Template, fmtTime(now), fmtTime(now))
+		newID, err := tx.insertID(ctx, `INSERT INTO nodes(name, host, group_name, "groups", tags, notes, importance, enabled, depends_on_node_id, link_style, template, collector_id, created_at, updated_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), linkStyleJSON(n.LinkStyle), n.Template, nullInt64(collectorPtrOf(n.CollectorID)), fmtTime(now), fmtTime(now))
 		if err != nil {
 			return err
 		}
@@ -172,8 +191,8 @@ func (s *Store) UpdateNode(ctx context.Context, n model.Node) (model.Node, []int
 	}
 	var deleted []int64
 	err := s.writeTx(ctx, func(tx *wtx) error {
-		res, err := tx.exec(ctx, `UPDATE nodes SET name=?, host=?, group_name=?, "groups"=?, tags=?, notes=?, importance=?, enabled=?, depends_on_node_id=?, link_style=?, template=?, updated_at=? WHERE id=?`,
-			n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), linkStyleJSON(n.LinkStyle), n.Template, fmtTime(now), n.ID)
+		res, err := tx.exec(ctx, `UPDATE nodes SET name=?, host=?, group_name=?, "groups"=?, tags=?, notes=?, importance=?, enabled=?, depends_on_node_id=?, link_style=?, template=?, collector_id=?, updated_at=? WHERE id=?`,
+			n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), linkStyleJSON(n.LinkStyle), n.Template, nullInt64(collectorPtrOf(n.CollectorID)), fmtTime(now), n.ID)
 		if err != nil {
 			return err
 		}
@@ -283,6 +302,33 @@ func (s *Store) GroupCounts(ctx context.Context) (groups map[string]int, tags ma
 		}
 	}
 	return groups, tags, nil
+}
+
+// CheckGroupCounts counts the checks in each check group (#36). The names are
+// case-insensitive, as node groups are; the first spelling seen is kept.
+func (s *Store) CheckGroupCounts(ctx context.Context) (map[string]int, error) {
+	nodes, err := s.ListNodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]int{}
+	spelling := map[string]string{}
+	for _, n := range nodes {
+		for _, c := range n.Checks {
+			for _, g := range c.Config.Groups {
+				g = strings.TrimSpace(g)
+				if g == "" {
+					continue
+				}
+				k := strings.ToLower(g)
+				if _, ok := spelling[k]; !ok {
+					spelling[k] = g
+				}
+				out[spelling[k]]++
+			}
+		}
+	}
+	return out, nil
 }
 
 // ---- bulk editing ----
@@ -1045,6 +1091,21 @@ func (s *Store) sealSettings(st *model.Settings) error {
 		return fmt.Errorf("seal backup password: %w", err)
 	}
 	st.Backups.Password = bp
+	// The alert channels' credentials (webhook URLs, bot tokens, routing
+	// keys) are sealed field by field through the same Action.SecretFields
+	// list triggers and rules use. The slice is copied first: st is a copy
+	// of the caller's settings, but its Channels still share their backing
+	// array with the engine's live settings, which must stay in cleartext.
+	if len(st.Alerts.Channels) > 0 {
+		chs := make([]model.AlertChannel, len(st.Alerts.Channels))
+		copy(chs, st.Alerts.Channels)
+		for i := range chs {
+			if err := chs[i].Action.TransformSecrets(s.sealSecret); err != nil {
+				return fmt.Errorf("seal alert channel %q: %w", chs[i].Name, err)
+			}
+		}
+		st.Alerts.Channels = chs
+	}
 	return nil
 }
 
@@ -1068,6 +1129,13 @@ func (s *Store) openSettings(st *model.Settings) {
 	open(&st.Alerts.SMTP.Password, "smtp password")
 	open(&st.General.AccessPassword, "access password")
 	open(&st.Backups.Password, "backup password")
+	for i := range st.Alerts.Channels {
+		name := st.Alerts.Channels[i].Name
+		_ = st.Alerts.Channels[i].Action.TransformSecrets(func(v string) (string, error) {
+			open(&v, "alert channel "+name)
+			return v, nil
+		})
+	}
 	s.setSecretsErr(firstErr)
 }
 
@@ -1085,7 +1153,17 @@ func (s *Store) migrateSecrets(ctx context.Context) error {
 		return nil
 	}
 	plaintext := func(v string) bool { return v != "" && !secrets.IsSealed(v) }
-	if !plaintext(st.Alerts.SMTP.Password) && !plaintext(st.General.AccessPassword) && !plaintext(st.Backups.Password) {
+	channelPlaintext := false
+	for i := range st.Alerts.Channels {
+		a := st.Alerts.Channels[i].Action
+		_ = a.TransformSecrets(func(v string) (string, error) {
+			if plaintext(v) {
+				channelPlaintext = true
+			}
+			return v, nil
+		})
+	}
+	if !plaintext(st.Alerts.SMTP.Password) && !plaintext(st.General.AccessPassword) && !plaintext(st.Backups.Password) && !channelPlaintext {
 		return nil
 	}
 	if err := s.sealSettings(&st); err != nil {
@@ -1190,6 +1268,13 @@ func (s *Store) LoadSettings(ctx context.Context) (model.Settings, error) {
 	}
 	if st.Alerts.Recipients == nil {
 		st.Alerts.Recipients = []string{}
+	}
+	if st.Alerts.Channels == nil {
+		st.Alerts.Channels = []model.AlertChannel{}
+	}
+	st.Alerts.GroupWindowSeconds = min(max(st.Alerts.GroupWindowSeconds, 0), model.MaxAlertGroupWindowSeconds)
+	if st.Alerts.WarningDigest == "" || !model.ValidWarningDigest(st.Alerts.WarningDigest) {
+		st.Alerts.WarningDigest = model.WarningDigestOff
 	}
 	if st.Alerts.SMTP.Security == "" {
 		st.Alerts.SMTP.Security = "starttls"

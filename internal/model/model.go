@@ -28,10 +28,11 @@ const (
 	CheckCustom  CheckType = "custom"  // user-supplied command/script, output parsed for status/metrics
 	CheckSystem  CheckType = "system"  // hardware health of a machine: processor, memory, disk space, throughput
 	CheckSNMP    CheckType = "snmp"    // SNMP readings from a network device: interfaces, processor, uptime
+	CheckMatter  CheckType = "matter"  // Matter device telemetry read through a python-matter-server sidecar
 )
 
 // AllCheckTypes lists the supported check types in display order.
-var AllCheckTypes = []CheckType{CheckPing, CheckHTTP, CheckCert, CheckTCP, CheckDNS, CheckKeyword, CheckJSON, CheckCustom, CheckSystem, CheckSNMP}
+var AllCheckTypes = []CheckType{CheckPing, CheckHTTP, CheckCert, CheckTCP, CheckDNS, CheckKeyword, CheckJSON, CheckCustom, CheckSystem, CheckSNMP, CheckMatter}
 
 // Valid reports whether the type is one the engine can run.
 func (t CheckType) Valid() bool {
@@ -66,6 +67,8 @@ func (t CheckType) Label() string {
 		return "Hardware health"
 	case CheckSNMP:
 		return "SNMP"
+	case CheckMatter:
+		return "Matter"
 	}
 	return string(t)
 }
@@ -143,8 +146,12 @@ type Node struct {
 	DependsOnNode *int64     `json:"dependsOnNodeId"` // parent node for dependency-aware alerting
 	LinkStyle     *LinkStyle `json:"linkStyle"`       // how the line to that parent is drawn on the network map
 	Template      string     `json:"template"`        // template used when created (informational)
-	CreatedAt     time.Time  `json:"createdAt"`
-	UpdatedAt     time.Time  `json:"updatedAt"`
+	// CollectorID is where the node's network checks run from: nil for this
+	// server, or the id of a paired agent acting as a remote collector
+	// (model/collector.go). Checks of other types run here either way.
+	CollectorID *int64    `json:"collectorId"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
 
 	// Checks is populated by the API when returning a full node.
 	Checks []Check `json:"checks"`
@@ -256,6 +263,12 @@ type CheckConfig struct {
 	// URL for http, keyword, json (scheme optional, https assumed).
 	Target string `json:"target,omitempty"`
 
+	// Groups are the check's own groups, across nodes: "HTTPS certificates",
+	// "Plex ports". They are separate from the node's groups, optional, and
+	// any type of check can have them; they are kept with the rest of the
+	// check's settings so backups, exports and bulk edits carry them as is.
+	Groups []string `json:"groups,omitempty"`
+
 	// Ping
 	PingCount  int    `json:"pingCount,omitempty"`  // packets per run (default 4, max 20)
 	PingMethod string `json:"pingMethod,omitempty"` // "" = use GeneralSettings.PingMethod, else "auto" | "builtin" | "system"
@@ -356,6 +369,20 @@ type CheckConfig struct {
 	SNMPPrivProto string    `json:"snmpPrivProto,omitempty"` // "" (noPriv) | DES | AES | AES192 | AES256 | AES192C | AES256C
 	SNMPPrivPass  string    `json:"snmpPrivPass,omitempty"`
 	SNMPOIDs      []SNMPOID `json:"snmpOids,omitempty"`
+
+	// Matter: readings taken from a Matter device through the Matter
+	// controller python-matter-server, which GWatch talks to over its
+	// WebSocket API (docs/MATTER.md). GWatch is not on the Matter fabric
+	// itself: the sidecar holds the fabric's credentials in its own store,
+	// and all GWatch keeps is the address to ask it at, so there is nothing
+	// here to seal. MatterServer may be left blank, in which case the node's
+	// host is asked on the sidecar's default port and path
+	// (ws://<host>:5580/ws). MatterNodeID is the node id the sidecar gave the
+	// device when it was commissioned; a bridge is one node whose bridged
+	// devices are endpoints, so each reading names its own endpoint.
+	MatterServer   string          `json:"matterServer,omitempty"`
+	MatterNodeID   uint64          `json:"matterNodeId,omitempty"`
+	MatterReadings []MatterReading `json:"matterReadings,omitempty"`
 }
 
 // DefaultJSONMetric is the metric name a recording json check uses when the
@@ -382,6 +409,12 @@ func (c Check) MetricUnits() map[string]string {
 		for _, o := range c.Config.SNMPOIDs {
 			if o.Name != "" {
 				units[o.Name] = o.Unit
+			}
+		}
+	case CheckMatter:
+		for _, r := range c.Config.MatterReadings {
+			if name := strings.TrimSpace(r.Name); name != "" {
+				units[name] = r.Unit
 			}
 		}
 	case CheckJSON:
@@ -464,6 +497,47 @@ type SNMPValue struct {
 	Unit string   `json:"unit,omitempty"`
 }
 
+// MatterReading is one value a Matter check reads from one endpoint of its
+// node, with the thresholds that decide the check's verdict — the Matter
+// counterpart of an SNMPOID.
+//
+// Kind names one of the standard readings GWatch knows how to interpret
+// (temperature, humidity, onoff, contact, occupancy, illuminance, battery;
+// see internal/matter.Standards for the cluster, attribute and conversion of
+// each), in which case Cluster and Attribute are implied and ignored. The kind
+// "attribute" reads any other attribute as it stands, multiplied by Scale,
+// from the Cluster and Attribute given here.
+//
+// A boolean reading is charted as 1 or 0: on, open and occupied are 1. A
+// threshold on one is how a state becomes an alert — "critical above 0" on a
+// door's contact is "tell me when it is open".
+type MatterReading struct {
+	Endpoint  uint32   `json:"endpoint"`
+	Kind      string   `json:"kind"`
+	Cluster   uint32   `json:"cluster,omitempty"`   // kind "attribute" only
+	Attribute uint32   `json:"attribute,omitempty"` // kind "attribute" only
+	Scale     float64  `json:"scale,omitempty"`     // kind "attribute" only; 0 and 1 mean "as read"
+	Name      string   `json:"name"`                // the metric name, unique within the check
+	Unit      string   `json:"unit,omitempty"`
+	WarnAbove *float64 `json:"warnAbove,omitempty"`
+	CritAbove *float64 `json:"critAbove,omitempty"`
+	WarnBelow *float64 `json:"warnBelow,omitempty"`
+	CritBelow *float64 `json:"critBelow,omitempty"`
+}
+
+// MatterValue is one reading as the last run read it.
+type MatterValue struct {
+	Name     string `json:"name"`
+	Endpoint uint32 `json:"endpoint"`
+	Path     string `json:"path"`           // the attribute path read, "endpoint/cluster/attribute"
+	Raw      string `json:"raw,omitempty"`  // how a person reads it: "21.5", "on", "open"
+	Unit     string `json:"unit,omitempty"` // as configured
+	// Value is the number the reading was charted and judged as. It is nil
+	// when the device has no value right now (the attribute is null) or the
+	// value is not a number, which Raw then explains.
+	Value *float64 `json:"value,omitempty"`
+}
+
 // SystemDefaults are the thresholds a new hardware check starts with. They are
 // written into the check's configuration rather than applied at run time, so
 // what the check does is what the edit screen shows.
@@ -476,6 +550,20 @@ func SystemDefaults() CheckConfig {
 			{Metric: MetricDisk, Warn: Float(85), Crit: Float(95)},
 			{Metric: MetricInodes, Warn: Float(85), Crit: Float(95)},
 			{Metric: MetricLoad, Warn: Float(2)},
+			// A ZFS pool that has lost a disk is the one storage problem
+			// nobody wants to find out about from the second disk. Machines
+			// without ZFS report no pool readings, so this costs them nothing.
+			// Temperatures and pressure are charted but have no default:
+			// what is hot depends on the chip, and some report nonsense.
+			{Metric: MetricPool, Warn: Float(1), Crit: Float(2)},
+			// A service or program someone named is one they expect to be
+			// running, so the default is the obvious one: critical when the
+			// service is stopped (its reading is 0) or no copy of the program
+			// is running (a count of 0). Less is worse for both, so these are
+			// "at or below" levels. A machine watching nothing reports no such
+			// readings and these never come into play.
+			{Metric: MetricService, Crit: Float(0), Below: true},
+			{Metric: MetricProcess, Crit: Float(0), Below: true},
 		},
 	}
 }
@@ -585,6 +673,11 @@ type ResultDetails struct {
 
 	// SNMP: every OID the run asked for, in the order the check lists them.
 	SNMP []SNMPValue `json:"snmp,omitempty"`
+
+	// Matter: every reading the run asked for, in the order the check lists
+	// them, and which sidecar answered.
+	Matter       []MatterValue `json:"matter,omitempty"`
+	MatterServer string        `json:"matterServer,omitempty"`
 }
 
 // CertInfo describes the leaf certificate presented by a TLS server.
@@ -666,6 +759,10 @@ const (
 	EventDiscovery          EventType = "discovery"       // a subnet was swept, or nodes were added from a sweep
 	EventRuleFired          EventType = "rule_fired"      // a notification rule's conditions came together
 	EventRuleCleared        EventType = "rule_cleared"    // a notification rule's conditions came apart again
+	// A remote collector stopped sending results (its checks are unknown until
+	// it is back), and came back. One pair for the collector, not one per check.
+	EventCollectorDown EventType = "collector_unreachable"
+	EventCollectorUp   EventType = "collector_back"
 )
 
 // Event is one entry in the incident/event timeline.
@@ -852,6 +949,93 @@ type AlertSettings struct {
 	NotifyWarnings   bool         `json:"notifyWarnings"`
 	CertWarnDays     int          `json:"certWarnDays"` // default 14
 	SMTP             SMTPSettings `json:"smtp"`
+	// Channels are the "also notify" list: notification actions the engine
+	// sends to at exactly the moments it sends an alert e-mail (down,
+	// recovered, warning), so they inherit every suppression the e-mail has —
+	// maintenance windows, silences, dependencies, acknowledgements and the
+	// cooldown — without any rules of their own. See AlertChannel.
+	Channels []AlertChannel `json:"channels"`
+	// GroupWindowSeconds (issue #99) gathers the alerts about one node into
+	// a single e-mail. The first down, recovery or warning about a node opens
+	// a window this long; the alerts of the same kind about that node's other
+	// checks that arrive inside it join it, and when it closes one e-mail
+	// ("Web server: 3 checks down") and one message per channel go out
+	// instead of one per check. 0, the default and what every install did
+	// before, sends each alert at once. At most MaxAlertGroupWindowSeconds.
+	GroupWindowSeconds int `json:"groupWindowSeconds"`
+	// WarningDigest collects warning e-mails (never down or recovery ones)
+	// into one summary sent hourly or daily instead of one e-mail each. One
+	// of the WarningDigest* constants; "" reads as off.
+	WarningDigest string `json:"warningDigest"`
+}
+
+// MaxAlertGroupWindowSeconds bounds AlertSettings.GroupWindowSeconds. A
+// longer window would hold a down alert back for longer than most people
+// would accept before learning that something is broken.
+const MaxAlertGroupWindowSeconds = 300
+
+// Warning digest intervals, see AlertSettings.WarningDigest.
+const (
+	WarningDigestOff    = "off"
+	WarningDigestHourly = "hourly"
+	WarningDigestDaily  = "daily"
+)
+
+// ValidWarningDigest reports whether v is one of the digest intervals, or
+// empty, which means off.
+func ValidWarningDigest(v string) bool {
+	switch v {
+	case "", WarningDigestOff, WarningDigestHourly, WarningDigestDaily:
+		return true
+	}
+	return false
+}
+
+// Alert channel severities. A channel set to "warning" receives everything
+// the e-mail would (down, recovered and warnings); one set to "down" only
+// receives outages and their recoveries, which is how "critical → SMS,
+// everything → e-mail" is spelled.
+const (
+	AlertSeverityWarning = "warning"
+	AlertSeverityDown    = "down"
+)
+
+// AlertChannel is one entry of Settings › Alerts › Also notify. Its Action
+// must be a notification type (ActionType.IsNotify); the secrets inside it
+// are sealed at rest exactly like a trigger's and masked by the API.
+type AlertChannel struct {
+	// ID is assigned by the server when the channel is first saved and never
+	// changes. It is how a save that carries masked secrets back is matched
+	// to the stored channel whose real secrets it should keep.
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
+	// MinSeverity is AlertSeverityWarning (the default) or AlertSeverityDown.
+	MinSeverity string `json:"minSeverity"`
+	// Groups limits the channel to nodes in at least one of these groups;
+	// empty means every node.
+	Groups []string `json:"groups,omitempty"`
+	Action Action   `json:"action"`
+}
+
+// Wants reports whether the channel should receive an alert of the given
+// kind ("down", "recovered", "warning", "warning_cleared") about node n.
+func (c AlertChannel) Wants(kind string, n Node) bool {
+	if !c.Enabled {
+		return false
+	}
+	if c.MinSeverity == AlertSeverityDown && kind != "down" && kind != "recovered" {
+		return false
+	}
+	if len(c.Groups) == 0 {
+		return true
+	}
+	for _, g := range c.Groups {
+		if n.InGroup(g) {
+			return true
+		}
+	}
+	return false
 }
 
 // RetentionSettings control raw retention and rollups. 0 days = keep forever.
@@ -912,6 +1096,14 @@ type GeneralSettings struct {
 	// other client. It only takes effect once at least one account exists, so
 	// it can never lock the owner out of a fresh install.
 	RequireLoginLocally bool `json:"requireLoginLocally"`
+	// PasswordHashing chooses how new account password hashes and backup
+	// encryption keys are derived: "argon2id" (the default and the
+	// recommendation; empty means the same) or "pbkdf2-sha256", the
+	// standard-library-only alternative for owners who would rather not
+	// depend on golang.org/x/crypto (#49). Existing hashes keep verifying
+	// whichever is selected; each account moves to the selected algorithm the
+	// next time it signs in.
+	PasswordHashing string `json:"passwordHashing"`
 }
 
 // BackupSettings controls scheduled, unattended backups. Backups are always
@@ -1129,6 +1321,7 @@ func DefaultSettings() Settings {
 			Theme:                "dark",
 			AccentColor:          "#43c9c0",
 			UpdateRepo:           "jxburros/GWatch",
+			PasswordHashing:      "argon2id",
 		},
 		Alerts: AlertSettings{
 			Enabled:          false,
@@ -1139,6 +1332,7 @@ func DefaultSettings() Settings {
 			NotifyWarnings:   true,
 			CertWarnDays:     14,
 			SMTP:             SMTPSettings{Port: 587, Security: "starttls"},
+			WarningDigest:    WarningDigestOff,
 		},
 		Retention: RetentionSettings{
 			RawDays:     30,
@@ -1202,6 +1396,7 @@ type HistoryPoint struct {
 type HistorySeries struct {
 	CheckID    int64          `json:"checkId"`
 	CheckName  string         `json:"checkName"`
+	NodeID     int64          `json:"nodeId,omitempty"`
 	NodeName   string         `json:"nodeName"`
 	CheckType  CheckType      `json:"checkType"`
 	Range      string         `json:"range"`
@@ -1305,6 +1500,36 @@ type Health struct {
 	LastAlertError       string          `json:"lastAlertError,omitempty"`
 	ListenAddress        string          `json:"listenAddress"`
 	Platform             string          `json:"platform"`
+	Ping                 PingStatus      `json:"ping"`
+}
+
+// Ways the built-in ping can reach the network, as PingStatus.Auto reports
+// what the "auto" ping method will actually use on this machine.
+const (
+	PingViaUnprivileged = "unprivileged" // an unprivileged ICMP datagram socket
+	PingViaRaw          = "raw"          // a raw ICMP socket (root or CAP_NET_RAW)
+	PingViaSystem       = "system"       // the operating system's ping command
+	PingViaNone         = "none"         // nothing works: every ping check fails
+)
+
+// PingStatus is what Monitor Health says about ping: which way of sending
+// one this machine allows, and why the ones before it in the order the
+// built-in ping tries them (unprivileged socket, raw socket, system command)
+// were not available. It exists because "ping failed: no permission" was a
+// dead end — the reason is usually one sysctl or one capability away, and
+// this names it.
+type PingStatus struct {
+	Configured         string     `json:"configured"` // GeneralSettings.PingMethod
+	Auto               string     `json:"auto"`       // a PingVia* value
+	Unprivileged       bool       `json:"unprivileged"`
+	UnprivilegedReason string     `json:"unprivilegedReason"`
+	Raw                bool       `json:"raw"`
+	RawReason          string     `json:"rawReason"`
+	SystemPing         string     `json:"systemPing"` // path of the ping command, if there is one
+	Summary            string     `json:"summary"`    // one sentence, as logged at startup
+	LastFallback       string     `json:"lastFallback,omitempty"`
+	LastFallbackAt     *time.Time `json:"lastFallbackAt,omitempty"`
+	CheckedAt          time.Time  `json:"checkedAt"`
 }
 
 // GapInfo records a detected period where the scheduler did not run
@@ -1329,15 +1554,52 @@ const (
 	ActionTeams    ActionType = "teams"    // post an Adaptive Card to a Teams webhook
 	ActionNtfy     ActionType = "ntfy"     // publish to an ntfy topic
 	ActionPushover ActionType = "pushover" // send a Pushover notification
+
+	// The channels below arrived together (issue #122). Each talks to one
+	// provider's own API rather than to a generic webhook, so the payload is
+	// built field by field with encoding/json (or net/url for form posts) and
+	// a placeholder value can never reshape the request.
+	ActionTelegram  ActionType = "telegram"  // Telegram Bot API sendMessage
+	ActionDiscord   ActionType = "discord"   // post to a Discord channel webhook
+	ActionGotify    ActionType = "gotify"    // push a message to a Gotify server
+	ActionMatrix    ActionType = "matrix"    // send an m.room.message to a Matrix room
+	ActionTwilio    ActionType = "twilio"    // send an SMS through Twilio's Messages API
+	ActionPagerDuty ActionType = "pagerduty" // trigger/resolve a PagerDuty Events API v2 incident
+	ActionOpsgenie  ActionType = "opsgenie"  // create/close an Opsgenie alert by alias
 )
 
 // Valid reports whether the action type is known.
 func (t ActionType) Valid() bool {
 	switch t {
-	case ActionHTTP, ActionGit, ActionScript, ActionRunNode, ActionSlack, ActionTeams, ActionNtfy, ActionPushover:
+	case ActionHTTP, ActionGit, ActionScript, ActionRunNode:
+		return true
+	}
+	return t.IsNotify()
+}
+
+// IsNotify reports whether the action type is a notification channel: a
+// purpose-built integration with a messaging, push, SMS or paging service, as
+// opposed to a generic HTTP request, a git command, a script or "run a node".
+// Only notification channels may be used as the "also notify" channels of
+// Settings › Alerts, because those are sent at the same moments as alert
+// e-mails and are expected to deliver a message to a person, not to run
+// arbitrary work on the monitor's computer.
+func (t ActionType) IsNotify() bool {
+	switch t {
+	case ActionSlack, ActionTeams, ActionNtfy, ActionPushover,
+		ActionTelegram, ActionDiscord, ActionGotify, ActionMatrix, ActionTwilio, ActionPagerDuty, ActionOpsgenie:
 		return true
 	}
 	return false
+}
+
+// IsIncident reports whether the action type opens an incident that stays
+// open on the provider's side until something closes it (PagerDuty and
+// Opsgenie). For these a recovery is not a courtesy message but the only
+// thing that resolves the page, so the alert engine sends them the recovery
+// even when recovery e-mails are switched off.
+func (t ActionType) IsIncident() bool {
+	return t == ActionPagerDuty || t == ActionOpsgenie
 }
 
 // Action describes one thing to execute. String fields may contain
@@ -1384,6 +1646,33 @@ type Action struct {
 	Tags       string `json:"tags,omitempty"`
 	Token      string `json:"token,omitempty"`
 	UserKey    string `json:"userKey,omitempty"`
+
+	// The channels added for issue #122 reuse the fields above where the
+	// meaning is the same and add only what is genuinely new:
+	//
+	//	telegram   Token (bot token, secret) + ChatID
+	//	discord    WebhookURL (secret: the URL is the credential)
+	//	gotify     Server + Token (application token, secret) + Priority (0-10)
+	//	matrix     Server (homeserver) + Token (access token, secret) + RoomID
+	//	twilio     AccountSID + Token (auth token, secret) + From + To (comma-separated numbers)
+	//	pagerduty  RoutingKey (integration key, secret) + EventAction + DedupKey + Severity
+	//	opsgenie   Token (API key, secret) + Region + EventAction + DedupKey (the alias) + Priority (P1-P5)
+	//
+	// EventAction is "auto" (the default, also spelled empty), "trigger" or
+	// "resolve". In auto mode an action that runs for a recovery, a cleared
+	// warning or a cleared rule resolves the incident, and every other event
+	// opens it. DedupKey defaults to one key per check (or per rule), so the
+	// recovery resolves exactly the incident the outage opened.
+	ChatID      string `json:"chatId,omitempty"`
+	RoomID      string `json:"roomId,omitempty"`
+	AccountSID  string `json:"accountSid,omitempty"`
+	From        string `json:"from,omitempty"`
+	To          string `json:"to,omitempty"`
+	RoutingKey  string `json:"routingKey,omitempty"`
+	EventAction string `json:"eventAction,omitempty"`
+	DedupKey    string `json:"dedupKey,omitempty"`
+	Severity    string `json:"severity,omitempty"`
+	Region      string `json:"region,omitempty"`
 
 	TimeoutSeconds int `json:"timeoutSeconds,omitempty"` // default 30
 }
@@ -1638,6 +1927,12 @@ type UpdateStatus struct {
 	NextCheckAt  *time.Time  `json:"nextCheckAt"` // nil when automatic checks are off
 	AutoCheck    bool        `json:"autoCheck"`
 	PromptOnOpen bool        `json:"promptOnOpen"`
+	// PackagedBy is set when a package manager installed this copy (deb, rpm,
+	// docker, homebrew, winget): it owns the executable, CanApply is false,
+	// and PackageManager and PackageCommand say who updates it and how.
+	PackagedBy     string `json:"packagedBy,omitempty"`
+	PackageManager string `json:"packageManager,omitempty"`
+	PackageCommand string `json:"packageCommand,omitempty"`
 }
 
 // NetworkInfo tells the UI how the interface is reachable.

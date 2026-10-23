@@ -23,10 +23,26 @@ func (e *Engine) reportLoop() {
 			if err := e.runReports(e.ctx, now); err != nil {
 				e.RecordError("scheduled reports", err)
 			}
+			// The warning digest (alertbatch.go) is due on the hour, or
+			// once a day, so the reports' minute tick serves it too.
+			// Like the reports, it waits out a restore (pause.go) and
+			// catches up on the next tick.
+			if e.enterWork() {
+				if err := e.runDigest(e.ctx, now); err != nil {
+					e.RecordError("warning digest", err)
+				}
+				e.leaveWork()
+			}
 		}
 	}
 }
 func (e *Engine) runReports(ctx context.Context, now time.Time) error {
+	// A report due during a restore (pause.go) is sent on the first pass
+	// after it: delivery catches up on any period not yet sent.
+	if !e.enterWork() {
+		return nil
+	}
+	defer e.leaveWork()
 	var defs []model.ReportDefinition
 	if err := e.store.GetSetting(ctx, "reports", &defs); errors.Is(err, store.ErrNotFound) {
 		return nil

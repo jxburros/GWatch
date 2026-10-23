@@ -88,7 +88,7 @@ function conditionRow(c, { nodes, onRemove }) {
 function actionCard(a, { nodes, defaultInterpreter, onRemove }) {
   const editor = actionEditor(a, { nodes, defaultInterpreter });
   const card = h('div', { class: 'rule-action', role: 'group', 'aria-label': 'Action' },
-    h('div', { class: 'rule-action-head' }, h('span', { class: 'section-title', style: { marginBottom: 0 } }, 'Action'),
+    h('div', { class: 'rule-action-head' }, h('span', { class: 'section-title u-mb-0' }, 'Action'),
       h('button', { class: 'btn btn-sm btn-ghost icon-btn', type: 'button', 'aria-label': 'Remove action', onclick: () => onRemove(card) }, icon('x'))),
     editor,
     actionTester(() => editor.value));
@@ -128,7 +128,7 @@ export function openRuleEditor(existing, { nodes = [] } = {}) {
     const removeAction = (card) => { card.remove(); };
     const addAction = (a) => { actionList.append(actionCard(a, { nodes, defaultInterpreter: meta.defaultInterpreter || 'sh', onRemove: removeAction })); };
     for (const a of r.actions) addAction(a);
-    const actionsField = field({ label: 'Actions', input: actionList, help: 'Every action runs when the rule is met. Placeholders: ' + RULE_PLACEHOLDERS.map((p) => `{{${p}}}`).join(', ') + '. In the default Slack, Teams, ntfy and Pushover text {{node.name}} is the rule\'s name and {{status}} is "met" or "cleared".' });
+    const actionsField = field({ label: 'Actions', input: actionList, help: 'Every action runs when the rule is met. Placeholders: ' + RULE_PLACEHOLDERS.map((p) => `{{${p}}}`).join(', ') + '. In the default text of the notification channels (Slack, Teams, Telegram, PagerDuty …) {{node.name}} is the rule\'s name and {{status}} is "met" or "cleared".' });
     const addActionBtn = h('button', { class: 'btn btn-sm', type: 'button', onclick: () => addAction({ type: 'http' }) }, icon('plus'), 'Add action');
 
     const cooldown = numberInput({ value: r.cooldownMinutes || '', min: 0, placeholder: '0 = none' });
@@ -189,7 +189,7 @@ export function ruleRow(r, { nodes = [], onChange } = {}) {
       const { state, ...rule } = r;
       try { await api.put(`/api/rules/${r.id}`, { ...rule, enabled: v }); onChange && onChange(); } catch (e) { toast(e.message, { kind: 'error' }); onChange && onChange(); }
     } })),
-    h('div', { style: { minWidth: 0 } },
+    h('div', { class: 'u-min-w-0' },
       h('div', { class: 't-name' }, r.name, ...(r.actions || []).map(actionBadge), r.enabled === false ? h('span', { class: 'tag' }, 'disabled') : null),
       h('div', { class: 't-sub' }, `${joinLabel(r)}: ${conditionLabels(r, nodes).join('; ')}${r.cooldownMinutes ? ` · cooldown ${r.cooldownMinutes} min` : ''}${r.notifyCleared ? ' · notifies when cleared' : ''}`),
       h('div', { class: 't-sub' }, (r.actions || []).map((a, i) => h('span', null, i ? ' · ' : '', actionSummary(a, nodes)))),
@@ -231,7 +231,7 @@ export async function rulesPanel({ isDestroyed = () => false, onRefresh } = {}) 
     for (const r of rules) card.append(ruleRow(r, { nodes, onChange: load }));
     wrap.append(card,
       h('section', { class: 'card' }, h('h2', null, 'How rules behave'),
-        h('div', { class: 'stack-sm', style: { marginTop: '8px' } },
+        h('div', { class: 'stack-sm u-mt-8' },
           h('p', { class: 'note' }, h('b', null, 'Conditions: '), 'a check condition holds while that check is at the status you picked; a node condition holds while any of the node\'s enabled checks is. "Degraded or worse" also holds while the check is down.'),
           h('p', { class: 'note' }, h('b', null, 'Maintenance and silence: '), 'a check under a maintenance window or silenced does not count towards a rule while that lasts, and counts again afterwards.'),
           h('p', { class: 'note' }, h('b', null, 'Firing: '), 'a rule fires once when it goes from not met to met, and again only after it has cleared and come back. The cooldown is the shortest time between two runs of the actions; a firing inside it is still recorded in the timeline, just without the actions.'),

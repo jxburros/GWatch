@@ -5,12 +5,14 @@ package sysmetrics
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -105,6 +107,24 @@ func collect(ctx context.Context) (*raw, error) {
 	r.filesystems = fs
 	for _, w := range warn {
 		r.addWarning("%s", w)
+	}
+	for _, f := range fs {
+		if f.FSType != "zfs" {
+			continue
+		}
+		if pools, err := readPools(ctx); err != nil {
+			r.addWarning("ZFS pool health: %v", err)
+		} else {
+			r.pools = pools
+		}
+		break
+	}
+	r.temperatures = readTemperatures()
+	r.pressure = readPressure()
+	if cg, err := readContainerLimits(); err != nil {
+		r.addWarning("container limits: %v", err)
+	} else {
+		r.cgroup = cg
 	}
 	if nics, err := readNetDev(); err != nil {
 		r.addWarning("network counters: %v", err)
@@ -268,7 +288,23 @@ var pseudoFS = map[string]bool{
 }
 
 // readMounts lists real filesystems with their space usage. A device mounted
-// more than once (a bind mount) is reported once, under the first mount point.
+// more than once (a bind mount, or a btrfs subvolume, which is the same
+// filesystem on the same device under another path) is reported once, under
+// the first mount point.
+//
+// Two kinds of filesystem need more than that:
+//
+//   - ZFS mounts every dataset separately and names it after its pool
+//     ("tank/media") rather than a device under /dev. Each dataset's statfs
+//     reports the pool's shared free space, so listing them one by one shows
+//     the same free figure a dozen times and fires a dozen disk alerts for one
+//     full pool. They are folded into one entry per pool (see foldZFS).
+//   - overlay is what / is inside a Docker container. Every other overlay is
+//     a container's layer seen from the host and is skipped like the other
+//     pseudo filesystems; but an agent or GWatch running in a container would
+//     otherwise report no root filesystem at all, so an overlay mounted at /
+//     is measured. Its statfs is the space left on the host filesystem the
+//     image layers live on, which is exactly the thing that fills up.
 func readMounts() ([]model.HostFilesystem, []string) {
 	f, err := os.Open(mountTable())
 	if err != nil {
@@ -276,7 +312,7 @@ func readMounts() ([]model.HostFilesystem, []string) {
 	}
 	defer f.Close()
 
-	var out []model.HostFilesystem
+	var out, zfsSets []model.HostFilesystem
 	var warnings []string
 	seen := map[string]bool{}
 	sc := bufio.NewScanner(f)
@@ -286,7 +322,9 @@ func readMounts() ([]model.HostFilesystem, []string) {
 			continue
 		}
 		device, mount, fsType := unescapeMount(fields[0]), unescapeMount(fields[1]), fields[2]
-		if pseudoFS[fsType] || !strings.HasPrefix(device, "/") {
+		rootOverlay := fsType == "overlay" && mount == "/"
+		zfs := fsType == "zfs"
+		if (pseudoFS[fsType] && !rootOverlay) || (!strings.HasPrefix(device, "/") && !rootOverlay && !zfs) {
 			continue
 		}
 		if seen[device] {
@@ -298,8 +336,8 @@ func readMounts() ([]model.HostFilesystem, []string) {
 		if mountRoot != "" {
 			at = filepath.Join(mountRoot, mount)
 		}
-		var st syscall.Statfs_t
-		if err := statfs(at, &st); err != nil {
+		st, err := statfsWithin(at, statfsTimeout)
+		if err != nil {
 			if len(warnings) < 3 {
 				warnings = append(warnings, "filesystem "+mount+": "+err.Error())
 			}
@@ -326,9 +364,105 @@ func readMounts() ([]model.HostFilesystem, []string) {
 			pct := usedPct(fs.InodesUsed, fs.InodesTotal)
 			fs.InodesUsedPct = &pct
 		}
+		if zfs {
+			zfsSets = append(zfsSets, fs)
+			continue
+		}
 		out = append(out, fs)
 	}
-	return out, warnings
+	return append(out, foldZFS(zfsSets)...), warnings
+}
+
+// foldZFS turns a list of mounted ZFS datasets into one filesystem per pool,
+// the pool being the dataset name up to its first slash. The pool is reported
+// under the mount point of its own top-level dataset when that is mounted, and
+// otherwise under the dataset mounted closest to the root, so its metric key
+// ("disk:/tank") is a path someone would recognise and stays put.
+//
+// The arithmetic follows what statfs on a dataset means: its used blocks are
+// what that dataset alone refers to, and its available blocks are what the
+// pool has left for it. Used is therefore the sum over the datasets, and free
+// the most any of them can still write (a dataset with a quota sees less).
+// Snapshots and unmounted datasets are not in the sum; zpool's own figures,
+// which are, are raw sizes including parity, and are reported separately with
+// the pool's health. Inodes are left out: ZFS allocates them as it goes, and
+// the count statfs gives is an estimate that moves with free space.
+func foldZFS(sets []model.HostFilesystem) []model.HostFilesystem {
+	pools := map[string]*model.HostFilesystem{}
+	rooted := map[string]bool{} // the pool's own top-level dataset is mounted
+	var order []string
+	for _, ds := range sets {
+		pool, _, _ := strings.Cut(ds.Device, "/")
+		p, ok := pools[pool]
+		if !ok {
+			p = &model.HostFilesystem{Mount: ds.Mount, Device: pool, FSType: "zfs"}
+			pools[pool] = p
+			order = append(order, pool)
+		}
+		switch {
+		case ds.Device == pool:
+			p.Mount, rooted[pool] = ds.Mount, true
+		case rooted[pool]:
+		case len(ds.Mount) < len(p.Mount) || (len(ds.Mount) == len(p.Mount) && ds.Mount < p.Mount):
+			p.Mount = ds.Mount
+		}
+		p.UsedBytes += ds.UsedBytes
+		if ds.FreeBytes > p.FreeBytes {
+			p.FreeBytes = ds.FreeBytes
+		}
+		p.Datasets++
+	}
+	out := make([]model.HostFilesystem, 0, len(order))
+	for _, name := range order {
+		p := pools[name]
+		p.TotalBytes = p.UsedBytes + p.FreeBytes
+		p.UsedPct = usedPct(p.UsedBytes, p.TotalBytes)
+		out = append(out, *p)
+	}
+	return out
+}
+
+// statfsTimeout is how long one filesystem may take to say how full it is.
+const statfsTimeout = 2 * time.Second
+
+var (
+	statfsMu      sync.Mutex
+	statfsPending = map[string]bool{} // mounts whose statfs has not come back
+)
+
+// statfsWithin is statfs with a time limit. A network share whose server has
+// gone away (a dead CIFS mount) can block statfs indefinitely, and waiting on
+// it stopped the whole reading: the hardware check went stale and stopping the
+// service hung. The call that is stuck is left to finish on its own, and the
+// mount is skipped, with a warning, until it has.
+func statfsWithin(path string, limit time.Duration) (syscall.Statfs_t, error) {
+	statfsMu.Lock()
+	if statfsPending[path] {
+		statfsMu.Unlock()
+		return syscall.Statfs_t{}, errors.New("not responding (a network share whose server cannot be reached?)")
+	}
+	statfsPending[path] = true
+	statfsMu.Unlock()
+
+	type answer struct {
+		st  syscall.Statfs_t
+		err error
+	}
+	done := make(chan answer, 1)
+	go func() {
+		var st syscall.Statfs_t
+		err := statfs(path, &st)
+		statfsMu.Lock()
+		delete(statfsPending, path)
+		statfsMu.Unlock()
+		done <- answer{st, err}
+	}()
+	select {
+	case a := <-done:
+		return a.st, a.err
+	case <-time.After(limit):
+		return syscall.Statfs_t{}, fmt.Errorf("did not answer within %s (a network share whose server cannot be reached?)", limit)
+	}
 }
 
 // unescapeMount decodes the octal escapes /proc/mounts uses for spaces and

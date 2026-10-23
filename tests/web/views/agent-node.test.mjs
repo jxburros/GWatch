@@ -106,7 +106,7 @@ test('what an agent collects is chosen from what the machine says it has', async
   section.querySelector('input[id$="-interfaces-only"]').click();
   docker0.checked = true;
   eth0.checked = false;
-  for (const fam of ['memory', 'swap', 'load', 'disk', 'inodes', 'diskio']) section.querySelector(`input[id$="-${fam}"]`).checked = false;
+  for (const fam of ['memory', 'swap', 'load', 'disk', 'inodes', 'diskio', 'temp', 'psi', 'pool']) section.querySelector(`input[id$="-${fam}"]`).checked = false;
   button(section, 'Save what to collect').click();
   await waitFor(() => {
     const a = window.__gwatchMock.agents?.[0];
@@ -188,35 +188,112 @@ test('adding a machine takes a name and what to monitor, then shows the code', a
   // The choice rode with the code and reaches the agent when it arrives.
   const pairings = await (await fetch('/api/agents/pairings')).json();
   const mine = pairings.find((p) => p.name === 'Garage Pi');
-  assert.deepEqual(mine.collect.metrics.sort(), ['cpu', 'disk', 'diskio', 'load', 'memory', 'net']);
+  assert.deepEqual(mine.collect.metrics.sort(), ['cpu', 'disk', 'diskio', 'load', 'memory', 'net', 'pool', 'psi', 'temp']);
   const status = document.querySelector('.modal [role="status"]');
   await waitFor(() => /is paired and reporting/.test(status.textContent), { timeout: 5000 });
   const agents = await (await fetch('/api/agents')).json();
   const agent = agents.find((a) => a.name === 'Garage Pi');
-  assert.deepEqual(agent.collect.metrics.sort(), ['cpu', 'disk', 'diskio', 'load', 'memory', 'net']);
+  assert.deepEqual(agent.collect.metrics.sort(), ['cpu', 'disk', 'diskio', 'load', 'memory', 'net', 'pool', 'psi', 'temp']);
 });
 
 /* ---------- the picker on its own ---------- */
 
 test('the collection picker writes nothing it was not asked to', () => {
   const picker = collectionPicker({ value: {}, inventory: { interfaces: [{ name: 'eth0', auto: true }, { name: 'docker0', auto: false }] } });
-  assert.deepEqual(picker.value(), { metrics: [], interfaces: [], disks: [], mounts: [] }, 'untouched means automatic everywhere');
+  assert.deepEqual(picker.value(), { metrics: [], interfaces: [], disks: [], mounts: [], services: [], processes: [] }, 'untouched means automatic everywhere, and watches nothing');
   assert.equal(picker.summary(), 'everything, with virtual interfaces left out');
 
   picker.el.querySelector('input[id$="-cpu"]').checked = false;
-  assert.deepEqual(picker.value().metrics.length, 7);
-  assert.match(picker.summary(), /7 of 8 kinds of reading/);
+  assert.deepEqual(picker.value().metrics.length, 10);
+  assert.match(picker.summary(), /10 of 11 kinds of reading/);
 });
 
 test('a name that was chosen but is not on the machine now is kept, not forgotten', () => {
   const picker = collectionPicker({ value: { mounts: ['/', '/mnt/usb'] }, inventory: { mounts: [{ name: '/', auto: true }, { name: '/data', auto: true }] } });
   assert.match(picker.el.textContent, /not seen now/);
   assert.deepEqual(picker.value().mounts.sort(), ['/', '/mnt/usb']);
-  assert.match(describeSelection({ mounts: ['/'], metrics: ['cpu'] }), /1 of 8 kinds of reading, 1 filesystems/);
+  assert.match(describeSelection({ mounts: ['/'], metrics: ['cpu'] }), /1 of 11 kinds of reading, 1 filesystems/);
 });
 
 test('kinds only: no instance lists before the machine has reported', () => {
   const picker = collectionPicker({ instances: false });
   assert.doesNotMatch(picker.el.textContent, /Network interfaces|Filesystems/);
   assert.deepEqual(Object.keys(picker.value()), ['metrics']);
+});
+
+// #132: a Linux machine's sensors, pressure figures and ZFS pool are shown
+// with its other readings, and the pool is one filesystem, not one per dataset.
+test('a Linux machine shows its temperatures, pressure and ZFS pool', async (t) => {
+  const { root } = await mountNas(t);
+  await waitFor(() => /cpu_thermal\/temp1/.test(root.textContent), { timeout: 5000 });
+  assert.match(root.textContent, /Pressure stall/);
+  assert.match(root.textContent, /ZFS pools/);
+  assert.match(root.textContent, /ONLINE/);
+  assert.match(root.textContent, /zfs · 4 datasets/);
+});
+
+/* ---------- services and programs (#62) ---------- */
+
+// A machine's watched services and programs are shown with its readings, each
+// with its state, and the hardware check judges each one.
+test('a machine shows the services and programs it watches', async (t) => {
+  const { root } = await mountNas(t);
+  await waitFor(() => /Watched services/.test(root.textContent), { timeout: 5000 });
+  assert.match(root.textContent, /smbd/);
+  assert.match(root.textContent, /Samba SMB Daemon/);
+  assert.match(root.textContent, /active \(running\)/);
+  assert.match(root.textContent, /Watched programs/);
+  assert.match(root.textContent, /Plex Media Server/);
+});
+
+// They are chosen on the agent card with the rest of what it collects,
+// offered from the list the machine sent at its check-in.
+test('an agent is told which services and programs to watch', async (t) => {
+  const { root } = await mountNas(t);
+  const card = await waitFor(() => root.querySelector('.agent-card'));
+  const section = card.querySelector('[data-section="collect"]');
+  const svc = section.querySelector('[data-watch="services"]');
+  assert.ok(svc, 'the services box is there');
+  assert.match(svc.textContent, /docker/, 'what is watched now is shown');
+  assert.match(svc.textContent, /5 on this machine, 4 running/, 'the machine\'s own list is offered');
+  assert.ok([...svc.querySelectorAll('datalist option')].some((o) => o.value === 'nginx'));
+  const input = svc.querySelector('input');
+  input.value = 'nginx';
+  input.dispatchEvent(new window.Event('change'));
+  button(section, 'Save what to collect').click();
+  await waitFor(async () => (await (await fetch('/api/agents')).json())[0].collect.services.includes('nginx'), { timeout: 5000 });
+  const saved = (await (await fetch('/api/agents')).json())[0].collect;
+  assert.deepEqual(saved.services.sort(), ['docker', 'nginx', 'smbd']);
+  assert.deepEqual(saved.processes, ['Plex Media Server']);
+  assert.match(describeSelection(saved), /watching 3 services and 1 program/);
+});
+
+// The computer GWatch runs on has no agent: its list is set on its own
+// hardware panel, and what it has is listed only when asked.
+test('this computer\'s services are chosen on its hardware panel', async (t) => {
+  const { hardwarePanel } = await import('../../../web/views/machines.js');
+  const panel = hardwarePanel('local', { isAdmin: true });
+  document.body.append(panel.el);
+  t.after(() => { panel.destroy(); panel.el.remove(); });
+  const section = await waitFor(() => panel.el.querySelector('[data-section="watch"]'), { timeout: 5000 });
+  assert.equal(section.querySelectorAll('datalist option').length, 0, 'nothing is listed until asked');
+  button(section, 'List what this computer has').click();
+  await waitFor(() => section.querySelectorAll('datalist option').length > 0, { timeout: 5000 });
+  assert.match(section.textContent, /4 on this machine, 3 running/);
+  const input = section.querySelector('[data-watch="services"] input');
+  input.value = 'Spooler';
+  input.dispatchEvent(new window.Event('change'));
+  button(section, 'Save what to watch').click();
+  await waitFor(async () => (await (await fetch('/api/hosts/local')).json()).watch?.services?.includes('Spooler'), { timeout: 5000 });
+  const host = await (await fetch('/api/hosts/local')).json();
+  assert.equal(host.metrics.services[0].name, 'Spooler');
+
+  // A viewer gets the readings but not the editor.
+  const viewer = hardwarePanel('local', { isAdmin: false });
+  document.body.append(viewer.el);
+  t.after(() => { viewer.destroy(); viewer.el.remove(); });
+  await viewer.ready;
+  assert.equal(viewer.el.querySelector('[data-section="watch"]'), null);
+  // Leave the mock as it was found.
+  await fetch('/api/hosts/local/watch', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}' });
 });

@@ -191,7 +191,9 @@ func Validate(a model.Action) error {
 		if a.NodeID == nil || *a.NodeID <= 0 {
 			return errors.New("a node is required")
 		}
-	case model.ActionSlack, model.ActionTeams, model.ActionNtfy, model.ActionPushover:
+	case model.ActionSlack, model.ActionTeams, model.ActionNtfy, model.ActionPushover,
+		model.ActionTelegram, model.ActionDiscord, model.ActionGotify, model.ActionMatrix,
+		model.ActionTwilio, model.ActionPagerDuty, model.ActionOpsgenie:
 		if err := ValidateNotify(a); err != nil {
 			return err
 		}
@@ -256,6 +258,20 @@ func (r *Runner) Run(ctx context.Context, a model.Action, vars Vars) (res model.
 		return r.runNtfy(ctx, a, vars, res)
 	case model.ActionPushover:
 		return r.runPushover(ctx, a, vars, res)
+	case model.ActionTelegram:
+		return r.runTelegram(ctx, a, vars, res)
+	case model.ActionDiscord:
+		return r.runDiscord(ctx, a, vars, res)
+	case model.ActionGotify:
+		return r.runGotify(ctx, a, vars, res)
+	case model.ActionMatrix:
+		return r.runMatrix(ctx, a, vars, res)
+	case model.ActionTwilio:
+		return r.runTwilio(ctx, a, vars, res)
+	case model.ActionPagerDuty:
+		return r.runPagerDuty(ctx, a, vars, res)
+	case model.ActionOpsgenie:
+		return r.runOpsgenie(ctx, a, vars, res)
 	}
 	res.Error = "unsupported action"
 	return res
@@ -467,8 +483,65 @@ var interpreters = map[string]interpreter{
 	"bash":       {ext: ".sh", cmds: [][]string{{"bash", "{{file}}"}}},
 	"powershell": {ext: ".ps1", cmds: [][]string{{"pwsh", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "{{file}}"}, {"powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "{{file}}"}}},
 	"cmd":        {ext: ".cmd", cmds: [][]string{{"cmd", "/C", "{{file}}"}}},
-	"python":     {ext: ".py", cmds: [][]string{{"python3", "{{file}}"}, {"python", "{{file}}"}, {"py", "{{file}}"}}},
+	"python":     {ext: ".py", cmds: pythonCmds(runtime.GOOS)},
 	"node":       {ext: ".js", cmds: [][]string{{"node", "{{file}}"}}},
+}
+
+// pythonCmds orders the Python candidates for goos. On Windows the py
+// launcher comes first: it picks the newest installed Python, whereas
+// python3 there is usually the Microsoft Store's "install me" stub.
+func pythonCmds(goos string) [][]string {
+	if goos == "windows" {
+		return [][]string{{"py", "-3", "{{file}}"}, {"python", "{{file}}"}, {"python3", "{{file}}"}}
+	}
+	return [][]string{{"python3", "{{file}}"}, {"python", "{{file}}"}, {"py", "{{file}}"}}
+}
+
+// lookPath is exec.LookPath; tests replace it.
+var lookPath = exec.LookPath
+
+// isStoreAlias reports whether p is one of the app execution aliases
+// Windows keeps in %LOCALAPPDATA%\Microsoft\WindowsApps. With nothing
+// installed from the Store, python.exe and python3.exe there only print
+// "Python was not found" and exit 9009, so findInterpreter tries them last.
+func isStoreAlias(p string) bool {
+	p = strings.ToLower(strings.ReplaceAll(p, "/", `\`))
+	return strings.Contains(p, `\microsoft\windowsapps\`)
+}
+
+// findInterpreter returns the first candidate on PATH, preferring one that
+// is not a Store alias, with {{file}} replaced by path.
+func findInterpreter(candidates [][]string, path string) (string, []string) {
+	var aliasExe string
+	var aliasCand []string
+	for _, cand := range candidates {
+		if len(cand) == 0 {
+			continue
+		}
+		p, err := lookPath(cand[0])
+		if err != nil {
+			continue
+		}
+		if isStoreAlias(p) {
+			if aliasExe == "" {
+				aliasExe, aliasCand = p, cand
+			}
+			continue
+		}
+		return p, fillFile(cand[1:], path)
+	}
+	if aliasExe != "" {
+		return aliasExe, fillFile(aliasCand[1:], path)
+	}
+	return "", nil
+}
+
+func fillFile(args []string, path string) []string {
+	out := make([]string, 0, len(args))
+	for _, c := range args {
+		out = append(out, strings.ReplaceAll(c, "{{file}}", path))
+	}
+	return out
 }
 
 // DefaultInterpreter is used when none is given.
@@ -540,20 +613,7 @@ func (r *Runner) runScript(ctx context.Context, a model.Action, vars Vars, res m
 	f.Close()
 	_ = os.Chmod(path, 0o700)
 
-	var exe string
-	var args []string
-	for _, cand := range candidates {
-		if len(cand) == 0 {
-			continue
-		}
-		if p, err := exec.LookPath(cand[0]); err == nil {
-			exe = p
-			for _, c := range cand[1:] {
-				args = append(args, strings.ReplaceAll(c, "{{file}}", path))
-			}
-			break
-		}
-	}
+	exe, args := findInterpreter(candidates, path)
 	if exe == "" {
 		res.Error = fmt.Sprintf("interpreter for %q is not installed or not on PATH", name)
 		return res

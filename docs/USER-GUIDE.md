@@ -183,6 +183,11 @@ Each node carries:
   matches *any* of them, and a name that differs only in case is folded onto
   the first spelling you used. Maximum 16.
 - **Tags** — free-form labels for filtering.
+- **Check groups** — separate from the node's groups, a check can be put in
+  groups of its own (under *Check groups* in each check's settings), so that
+  checks on different nodes can be handled as a set: "HTTPS certificates",
+  "Plex ports". The Nodes list and bulk edit filter by them, and the chart
+  picker finds them by name. Up to 10 a check.
 - **Importance** — *low*, *normal*, *high* or *critical*. Critical and high
   nodes are listed first on a wallboard.
 - **Depends on** — a parent node. While the parent is down, alerts for this
@@ -198,7 +203,7 @@ Each node carries:
 ### Templates
 
 **Add node** starts from a template, which prefills sensible checks and
-thresholds. There are ten:
+thresholds. There are eleven:
 
 | Template | Checks it creates |
 |---|---|
@@ -206,6 +211,7 @@ thresholds. There are ten:
 | **Home server** | *Reachable (ping)*, *SSH port 22* (TCP), *Web interface* (HTTP, TLS errors ignored) |
 | **Network device** | *Reachable (ping)*, *Internet name lookup* (DNS for `google.com`), *Admin page port 80* (TCP) |
 | **SNMP device** | *Reachable (ping)*, *SNMP readings* (v2c, community `public`, uptime and device name) — then **Pick interfaces** for the ports |
+| **Matter device** | *Matter server port 5580* (TCP), *Matter readings* — then **Load devices** to pick the device and its readings |
 | **Ping only** | *Reachable (ping)* — the quickest way to add a printer or a camera |
 | **API endpoint** | *API responds* (HTTP, expects 200-299), *Status value* (JSON, `status` must equal `ok`) |
 | **TCP service** | *Port accepts connections* — port 32400, i.e. Plex, ready to change |
@@ -223,7 +229,7 @@ changing what a node does is a matter of editing its checks, not its template.
 
 **Nodes** is a searchable, filterable list. The search box matches a node's
 name, host, groups, tags **and its check names**. Above it sit chip filters for
-status, group and tag, with live counts.
+status, group, tag and check group, with live counts.
 
 > **The filters travel in the address bar.** Filter the list down to what you
 > want and the URL changes with it, so you can bookmark "everything critical
@@ -457,6 +463,30 @@ refused. Up to 64 readings per check, fetched in one request per run.
 
 See [`SNMP.md`](SNMP.md) for enabling SNMP on the device end.
 
+### Matter
+
+Reads Matter sensors, plugs and bridges — temperature, humidity, on/off, door
+and window contacts, occupancy, light level and battery — through
+**python-matter-server**, the Matter controller Home Assistant uses, running
+beside GWatch. GWatch asks it over a WebSocket and stores only its address; the
+Matter fabric and its credentials stay in the server's own storage.
+
+1. Run python-matter-server (see [`MATTER.md`](MATTER.md) for a Docker Compose
+   file) and add a node from the **Matter device** template with that machine as
+   its host — or add a **Matter** check to any node and fill in **Matter
+   server** (`ws://host:5580/ws`).
+2. To add a device to the Matter server, open **Add a device to the Matter
+   server** in the check and paste its pairing code. A device already in Apple
+   Home, Google Home, Alexa or SmartThings gives a fresh code from that app and
+   stays there too.
+3. Press **Load devices**, pick the device, tick the readings and **Add
+   readings**. A bridge lists every device behind it.
+
+States are charted as 1 and 0 — on, open and occupied are 1 — so a state is an
+alert with a threshold: **Crit > 0** on a contact marks the check down while the
+door is open. A device the Matter server cannot reach marks the check down. Thread
+devices need a Thread border router on the same network as the Matter server.
+
 ---
 
 ## 5. Discovery: adding a whole network at once
@@ -472,15 +502,27 @@ answers, tries a few ports on it, and offers the lot as a list you can tick.
 - **Put them in a group** — everything you add lands in that group.
 
 Each responder comes back with its address, its name, its round-trip time, its
-open ports and a **suggested template**. Tick the ones you want and add them in
-one go. Progress is live, and a sweep can be cancelled while it runs.
+open ports, its **MAC address and the maker** of its network card, and a
+**suggested template**. Tick the ones you want and add them in one go. Progress
+is live, and a sweep can be cancelled while it runs.
+
+After pinging, GWatch reads this computer's own neighbour (ARP) table, so a
+device that ignored the ping but answered the network's address lookup — a
+firewalled PC, a phone — is listed too, marked **no ping**; a ping check on it
+would show it as down, so watch one of its ports instead. The maker comes from
+the IEEE's public registry, built into GWatch: "Brother Industries" turns an
+unnamed address into the printer, and a phone using a private, randomised
+address says so. Devices on other networks, reached through a router, have no
+MAC address here. (Linux and Windows; macOS lists what answered the ping
+only.)
 
 Nothing is installed and no `nmap` is involved — it is ICMP plus a few TCP
 connects.
 
 > **Inside Docker with the default bridge network, discovery sees Docker's
-> own subnet, not your LAN.** Host or macvlan networking is what makes it
-> useful there. See [`DOCKER.md`](DOCKER.md).
+> own subnet, not your LAN**, and no MAC addresses or makers — the results say
+> so. Host or macvlan networking is what makes it useful there. See
+> [`DOCKER.md`](DOCKER.md).
 
 ---
 
@@ -575,17 +617,18 @@ lines curved, straight or right-angled; narrows the map to a group or a tag
 nodes with no dependency. Those choices are remembered in this browser.
 
 **Clusters** (this replaces the layout that was called *Radial*; a map saved
-that way keeps working and now draws as clusters) draws a node with things plugged into it in the middle of a
-ring of them. A switch sits in the centre of a circle of the machines plugged
-into it; a line joins the switch to the router it is plugged into; and the
-switches that hang off the router sit in a circle round the router — circles
-around circles, to as many levels as there are. A node with a single node
-under it puts that one straight out beyond itself, so a chain of switches
-reads as a chain. Where there are several separate trees, the biggest is drawn
-as above and the others sit on a ring round it; nodes with no dependency are
-kept in rows underneath, since a ring would suggest they hang off something.
-Rings are made big enough that nothing overlaps, so a switch with a great many
-nodes on it makes a large circle — zoom in, or press **0** to fit it all.
+that way keeps working and now draws as clusters) draws each node with the
+things that depend on it spread round it, branching off in whatever direction
+has room — the way you would sketch the network on a whiteboard. Nothing is
+put on a circle: lines to single devices are short, a line to a switch with a
+crowd of machines behind it is longer so that crowd has space, and a node's
+children fan out away from the node above it. A switch with many machines
+staggers them at two distances rather than stringing them round one huge
+circle. Where there are several separate trees, the biggest is drawn in the
+middle and the others are set down in the nearest free space round it; nodes
+with no dependency are kept in rows underneath. No two boxes overlap and no
+line runs through a box it does not join, and the same nodes always give the
+same picture.
 In this layout a line is straight, or gently curved if **Line shape** is
 *Curved*; right-angled lines belong to the tree layouts and are drawn straight.
 
@@ -715,7 +758,7 @@ blank actor column means "nobody did this, it just happened".
 
 **Settings › Alerts** holds the global email configuration.
 
-- **Send email alerts** — the master switch.
+- **Send alerts** — the master switch, for email and the channels below alike.
 - **Recipients** — where they go.
 - **Failures before down** — consecutive failed runs before a check alerts.
 - **Cooldown** — the minimum gap between two alerts about the same check, so a
@@ -724,11 +767,84 @@ blank actor column means "nobody did this, it just happened".
 - **Also email for warnings** — latency, packet loss, expiring certificates,
   content changes.
 - **Certificate warning** — how many days before expiry counts as a warning.
+- **Group alerts for the same node within** — see *Fewer emails* below. 0 (off)
+  by default.
+- **Send warnings as a digest** — *off*, *hourly* or *daily*; see below.
 - **SMTP** — host, port, security (*STARTTLS* on 587, *TLS/SSL* on 465, or
   *none*), from address, user name and password.
 
 **Send a test message** is not optional in spirit. An alerting setup you have
 never watched deliver is a guess.
+
+Alert emails are sent at most three at a time, and one that fails is tried
+once more fifteen seconds later. If it still fails, the alert is not counted as
+sent: the next failing run tries again.
+
+### Fewer emails: grouping and the warning digest
+
+One web server stopping takes its HTTP, JSON and TCP checks down together,
+which is three down emails and, later, three recovery emails. **Group alerts
+for the same node within N seconds** turns that into one of each. The first
+alert about a node opens a window of N seconds; alerts of the same kind (down,
+recovered or warning) about that node's other checks that arrive before it
+closes join it, and when it closes one email goes out — *"Web server: 3 checks
+down"* — listing every check with its own message and details. Each chat or
+push channel gets one message for the group too.
+
+- The price is time: the first down email waits up to N seconds. 30 seconds is
+  a good value when several checks share an interval; the most is 300. It is
+  off by default so that nothing changes for an existing install until you ask.
+- If only one alert arrives in the window, it is sent as an ordinary email.
+- A check that recovers while its down alert is still waiting is not reported
+  at all — neither the outage nor the recovery — and its cooldown is not used
+  up. The timeline still shows the outage and says the alert was dropped.
+- Cooldowns, silences, maintenance and dependencies work per check exactly as
+  before; grouping only changes how many emails carry the alerts. If a grouped
+  email cannot be delivered, every check in it is re-armed.
+- Checks with their own recipient list are grouped separately, since one email
+  cannot go to both lists.
+- PagerDuty and Opsgenie still get one event per check (at the moment the
+  group is sent), because each check has its own incident there and must be
+  resolved on its own.
+- Stopping the service sends whatever is waiting at once.
+
+**Send warnings as a digest** collects warning emails (never down or recovery
+ones) and sends them as one summary: *hourly* on the hour, or *daily* at 08:00.
+The collected warnings are kept in the database, so a restart does not lose
+them; if the digest cannot be sent it is tried again after 15 minutes. Chat and
+push channels still get each warning as it happens — set a channel to *outages
+only* if you want it quieter. Switching the digest off sends whatever it has
+collected on the next minute.
+
+### Also notify: chat, push, SMS and paging
+
+The **Also notify** card sends the same alerts somewhere other than email:
+Slack, Microsoft Teams (Workflows), Discord, Telegram, Matrix, ntfy, Gotify,
+Pushover, SMS through Twilio, PagerDuty or Opsgenie. Each channel has:
+
+- **Send** — *everything* (outages, recoveries and warnings, as the email gets
+  them) or *outages only* (down and recovered).
+- **Only for these groups** — leave empty for every node, or name groups to
+  route, say, the servers to an SMS and everything else to a chat channel.
+- **Where it goes** — the service and its credentials, with a **Test this
+  action** button that sends a sample alert.
+
+A channel gets an alert at exactly the moment the email would go out. That
+means everything below that narrows an email narrows the channel too —
+silences, maintenance, dependencies, the cooldown — without setting anything up
+twice. Alerts can go to channels only: with no recipients, enabling alerts
+needs at least one channel switched on.
+
+PagerDuty incidents and Opsgenie alerts are opened on an outage and resolved
+when the check recovers, even if recovery emails are switched off; each check
+has its own incident, and warnings their own, so a cleared warning never closes
+an outage. Keys, tokens and webhook URLs are stored encrypted and shown as
+`********` afterwards; editing a channel without retyping them keeps them.
+
+Each delivery is in the timeline as **alert sent** ("Down alert sent to On-call
+SMS") or **alert failed** with the provider's reason. A down alert counts as
+delivered if the email or any channel got through; if nothing did, the next
+failing run tries again.
 
 ### The four ways an alert gets narrowed
 
@@ -806,15 +922,23 @@ and **Cooldown** stops it running constantly.
 
 ### Actions
 
-Eight kinds:
+Fifteen kinds. The notification ones are also what **Settings › Alerts ›
+Also notify** uses (see [section 10](#10-email-alerts)):
 
 | Action | Fields |
 |---|---|
 | **HTTP request** | URL, method (*auto* sends POST when there is a body), headers, body, expected status, timeout, ignore TLS errors |
 | **Slack** | Webhook URL |
-| **Microsoft Teams** | Webhook URL |
+| **Microsoft Teams** | Workflows webhook URL (in Teams: *Workflows › Post to a channel when a webhook request is received*; the old Office 365 connector URLs no longer work), title, message |
+| **Discord** | Channel webhook URL, title, message. `@everyone` in a message never pings |
+| **Telegram** | Bot token from @BotFather, chat ID (a number, or `@channelname`), title, message |
+| **Matrix** | Homeserver URL, access token of a bot account, room ID (`!…:server`), title, message |
 | **ntfy** | Server, topic, title, message, tags, priority (*min* to *urgent*) |
+| **Gotify** | Server, application token, title, message, priority (0–10) |
 | **Pushover** | Application token, user key, title, message, priority (*lowest (-2)* to *emergency (2)*) |
+| **SMS (Twilio)** | Account SID, auth token, from (a Twilio number or a messaging service), to (one or more numbers in `+15551234567` form), message |
+| **PagerDuty** | Events API v2 integration key, event (*automatic*: open on a failure, resolve on a recovery), severity, deduplication key, summary |
+| **Opsgenie** | API key, region (US or EU), event (*automatic*: create, then close on a recovery), priority, alias, tags, message |
 | **Git command** | Repository directory, git command and arguments |
 | **Custom code** | Interpreter (*sh*, *bash*, *PowerShell*, *cmd.exe*, *Python*, *Node.js*, or *Custom command…* where `{{file}}` is the script's path), the code, and a working directory |
 | **Run a node now** | Which node's checks to run |
@@ -1012,7 +1136,7 @@ token can read that one board and nothing else.
 
 ## 15. Settings, tab by tab
 
-Seventeen tabs. Three of them — *Appearance*, *Monitor health* and *About* — are
+Sixteen tabs. Three of them — *Appearance*, *Monitor health* and *About* — are
 visible to viewer accounts; the rest are administrator-only.
 
 | Tab | What lives there |
@@ -1025,7 +1149,6 @@ visible to viewer accounts; the rest are administrator-only.
 | **Alerts** | Email and SMTP, as in [section 10](#10-email-alerts) |
 | **Automation** | Triggers and custom endpoints, as in [section 12](#12-automation-triggers-and-endpoints) |
 | **Rules** | Notification rules, as in [section 11](#11-notification-rules) |
-| **Hardware** | Registered machines, pairing codes, agent tokens, revoking and purging |
 | **AI & MCP** | Setting up the optional MCP companion, and the downloadable agent skill |
 | **Retention** | How long each resolution of history is kept, current storage, and where your files are |
 | **Maintenance** | One-off and weekly recurring maintenance windows |
@@ -1035,12 +1158,19 @@ visible to viewer accounts; the rest are administrator-only.
 | **Monitor health** | Whether GWatch itself is well |
 | **About** | Version, licence, and the terms, privacy and disclaimer documents |
 
+There is no Hardware tab any more: a machine with the agent is a node, so it is
+paired from **Nodes › Add node › A machine with the GWatch agent**, and its
+agent (token, rotation, what it collects, revoking and deleting) is managed on
+that node's page.
+
 A few worth calling out:
 
 ### Retention
 
-Recent data stays detailed; older data is summarised so the database never
-grows without limit. `0` means keep forever.
+Recent data stays detailed; older data is summarised and the detail deleted, so
+the database grows slowly rather than with every result. It does still grow: daily
+summaries are kept forever by default (one row per check per day), so set a limit
+there if that matters to you. `0` means keep forever.
 
 | Setting | Default |
 |---|---|
@@ -1088,6 +1218,26 @@ shipped. Nothing here is on by default. See [`mcp/README.md`](../mcp/README.md).
 GWatch will not let you remove or demote the last administrator. Passwords are
 stored as argon2id hashes; session tokens and API keys only as sha256 digests.
 None can be read back out of the database.
+
+### Password hashing
+
+**Settings › Users & access › Password hashing** chooses how passwords are
+hashed and how backup files are encrypted:
+
+- **Argon2id (recommended)** — the default. Every guess needs a large block of
+  memory, which is what makes a stolen hash or backup expensive to attack with
+  graphics cards.
+- **PBKDF2 (standard library only)** — PBKDF2-HMAC-SHA256 with 600,000
+  iterations, for owners who would rather GWatch depended on the Go standard
+  library alone. At the same cost to your computer it is cheaper to attack on a
+  GPU than Argon2id. That is an acceptable trade for a monitor that stays on
+  your own network, but it is a trade.
+
+Switching never locks anybody out: passwords hashed either way keep working,
+and each account is quietly re-hashed with the chosen method the next time it
+signs in. New backups use the chosen method from then on; older backups still
+restore. A backup made with PBKDF2 cannot be restored by a GWatch release older
+than this option.
 
 ### API keys
 
@@ -1138,6 +1288,9 @@ signs it out everywhere.
 
 A backup is a single password-encrypted archive (Argon2id + AES-256-GCM) of
 your configuration, optionally including the whole history and event timeline.
+If you chose PBKDF2 under [Password hashing](#password-hashing), new backups
+derive their key with PBKDF2 instead; the archive records which one it used, so
+restore needs nothing but the password.
 
 - **Manual backups** always work, whatever the settings below say, and are
   never pruned automatically.
@@ -1268,6 +1421,7 @@ A short list of things that exist but are easy to never find.
 | [`DOCKER.md`](DOCKER.md) | Running in a container |
 | [`DATABASE.md`](DATABASE.md) | PostgreSQL or MySQL instead of SQLite |
 | [`HARDWARE.md`](HARDWARE.md) | Hardware health and the agent in full |
+| [`COLLECTORS.md`](COLLECTORS.md) | Checking a second site from a paired agent (Check from) |
 | [`SNMP.md`](SNMP.md) | Enabling SNMP on a device, choosing OIDs |
 | [`RECIPES.md`](RECIPES.md) | Ready-made trigger and endpoint recipes |
 | [`REMOTE-ACCESS.md`](REMOTE-ACCESS.md) | Reaching GWatch from outside, safely |

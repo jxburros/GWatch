@@ -92,7 +92,7 @@ export async function mount(root, ctx) {
 
     append(selectedCard, [
       h('div', { class: 'card-title row-between' }, h('span', { class: 'truncate' }, n.name), statusPill(n.enabled === false ? 'paused' : e.status)),
-      h('div', { class: 'muted mono', style: { marginBottom: '8px' } }, n.host || ''),
+      h('div', { class: 'muted mono u-mb-8' }, n.host || ''),
       e.affectedBy ? h('p', { class: 'note affected-note' }, icon('link'), `Affected by ${e.affectedBy}`) : null]);
 
     // Which node in a chain could this one depend on: anything except itself
@@ -109,7 +109,7 @@ export async function mount(root, ctx) {
       onChange: (style) => setLinkStyle(n, style),
     }) : null;
     append(selectedCard, [
-      field({ label: 'Depends on', input: h('div', { class: 'row netmap-parent', style: { gap: '6px', flexWrap: 'nowrap' } }, sel, saveBtn), help: 'While the node it depends on is down, this node’s failures are put down to it and its alerts are held back.' }),
+      field({ label: 'Depends on', input: h('div', { class: 'row netmap-parent u-gap-6 u-nowrap-flex' }, sel, saveBtn), help: 'While the node it depends on is down, this node’s failures are put down to it and its alerts are held back.' }),
       linkEditor,
       chain.length ? h('div', { class: 'netmap-facts' }, h('span', { class: 'section-title' }, 'Upstream'), h('div', null, chain.map((p, i) => [i ? ' › ' : '', h('a', { href: '#', onclick: (ev) => { ev.preventDefault(); select(p.id); } }, p.name)]))) : null,
       h('div', { class: 'netmap-facts' }, h('span', { class: 'section-title' }, 'Depends on this'),

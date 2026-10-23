@@ -1,3 +1,4 @@
+// @ts-check
 // Formatting helpers: relative times, durations, milliseconds, percentages,
 // bytes, rates and readings in whatever unit a metric is measured in.
 
@@ -5,11 +6,12 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const DAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+/** @param {any} v @returns {Date | null} */
 export function toDate(v) {
   if (v == null || v === '') return null;
-  if (v instanceof Date) return isNaN(v) ? null : v;
+  if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
   const d = new Date(v);
-  return isNaN(d) ? null : d;
+  return isNaN(d.getTime()) ? null : d;
 }
 
 function pad(n) { return String(n).padStart(2, '0'); }
@@ -150,7 +152,7 @@ export function toLocalInput(v) {
 export function fromLocalInput(s) {
   if (!s) return null;
   const d = new Date(s);
-  return isNaN(d) ? null : d.toISOString();
+  return isNaN(d.getTime()) ? null : d.toISOString();
 }
 
 /** Retention days → "30 days", "6 months", "2 years", "forever". */
@@ -194,10 +196,12 @@ export function inGroup(n, group) {
 
 // A hardware check's metrics are keyed "cpu", "memory", "swap", "load" for
 // the readings a machine has one of, and "family:instance" for the rest:
-// "disk:/srv", "inodes:/srv", "net:eth0.rx", "diskio:sda.busy". These mirror
+// "disk:/srv", "inodes:/srv", "net:eth0.rx", "diskio:sda.busy",
+// "temp:coretemp/Package id 0", "psi:memory.avg10", "pool:tank",
+// "service:nginx", "process:plex". These mirror
 // model.SplitMetricKey and model.SystemMetricUnit on the server.
 
-const METRIC_FAMILY_LABELS = { cpu: 'Processor', memory: 'Memory', swap: 'Swap', load: 'Load per core', disk: 'Disk', inodes: 'Inodes', net: 'Network', diskio: 'Disk I/O' };
+const METRIC_FAMILY_LABELS = { cpu: 'Processor', memory: 'Memory', swap: 'Swap', load: 'Load per core', disk: 'Disk', inodes: 'Inodes', net: 'Network', diskio: 'Disk I/O', temp: 'Temperature', psi: 'Pressure stall', pool: 'Pool', service: 'Service', process: 'Program' };
 
 /** Splits a metric key into its family and instance ('' for a singleton). */
 export function metricFamily(key) {
@@ -210,7 +214,11 @@ export function metricFamily(key) {
 export function metricUnit(key) {
   const { family, instance } = metricFamily(key);
   switch (family) {
-    case 'cpu': case 'memory': case 'swap': case 'disk': case 'inodes': return '%';
+    case 'cpu': case 'memory': case 'swap': case 'disk': case 'inodes': case 'psi': return '%';
+    case 'temp': return '°C';
+    case 'pool': return 'state';
+    case 'service': return 'running';
+    case 'process': return 'count';
     case 'load': return '';
     case 'net': return 'B/s';
     case 'diskio': return instance.endsWith('.busy') ? '%' : 'B/s';
@@ -225,6 +233,10 @@ export function metricLabel(key) {
   if (!base) return key;
   if (!instance) return base;
   if (family === 'inodes') return `Inodes on ${instance}`;
+  if (family === 'psi') {
+    const [res, avg] = instance.split('.');
+    return `Pressure on ${res}${avg ? ` (${avg.replace('avg', '')} s)` : ''}`;
+  }
   if (family === 'net' || family === 'diskio') {
     const dot = instance.lastIndexOf('.');
     if (dot > 0) {
@@ -235,11 +247,22 @@ export function metricLabel(key) {
   return `${base} ${instance}`;
 }
 
+/** A ZFS pool's health metric (0, 1, 2) as the word it stands for. */
+export function poolState(v) {
+  if (v >= 2) return 'faulted';
+  if (v >= 1) return 'degraded';
+  return 'healthy';
+}
+
 /** A metric reading with its unit, the way an alert would say it. */
 export function metricValue(v, unit) {
   if (v == null || isNaN(v)) return '—';
   if (unit === '%') return pct(v, 0);
   if (unit === 'B/s' || unit === 'bit/s') return rate(v, unit);
+  if (unit === '°C') return `${Math.round(v)} °C`;
+  if (unit === 'state') return poolState(v);
+  if (unit === 'running') return v >= 1 ? 'running' : 'stopped';
+  if (unit === 'count') return String(Math.round(v));
   return Number(v).toFixed(2);
 }
 
@@ -287,8 +310,15 @@ function plainNumber(v) {
  * else — a load average, an SNMP gauge in a unit someone typed — as a number
  * followed by that unit.
  */
+// STATE_UNITS are the hardware "units" that are really states or counts: a
+// pool's health (0, 1, 2), a service's running (1) or stopped (0), how many
+// copies of a program are running. A value reads as its word or a bare
+// count, and an axis as a bare number, never as "1 state" or "3 count".
+const STATE_UNITS = new Set(['state', 'running', 'count']);
+
 export function unitValue(v, unit) {
   if (v == null || isNaN(v)) return '—';
+  if (STATE_UNITS.has(unit)) return metricValue(v, unit);
   if (unit === '%') return pct(v, 1);
   if (unit === 'ms') return ms(v);
   if (RATE_UNITS[unit]) return rate(v, unit);
@@ -311,7 +341,7 @@ export function unitAxis(v, unit, { max = v, step = 0 } = {}) {
     return `${(v / div).toFixed(decimals(step / div))} ${RATE_UNITS[unit][i]}`;
   }
   const n = step ? Number(v).toFixed(decimals(step)) : String(Math.round(v * 100) / 100);
-  return unit ? `${n} ${unit}` : n;
+  return unit && !STATE_UNITS.has(unit) ? `${n} ${unit}` : n;
 }
 
 /**

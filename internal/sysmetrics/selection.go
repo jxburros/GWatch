@@ -211,6 +211,41 @@ func Apply(m model.HostMetrics, sel model.CollectSelection, automatic bool) mode
 		}
 		out.Disks = ds
 	}
+
+	// Temperatures, pressure and pool health are whole families with no
+	// instance list of their own: a machine with one noisy sensor turns the
+	// family off, or leaves the sensor charted without a threshold.
+	if !has(model.MetricTemp) {
+		out.Temperatures = nil
+	}
+	if !has(model.MetricPSI) {
+		out.Pressure = nil
+	}
+	if !has(model.MetricPool) {
+		out.Pools = nil
+	}
+
+	// Watched services and programs are chosen by name, not by family: the
+	// collector only looked for the names it was given, so this only has to
+	// keep a machine's own limit when GWatch asked for something outside it.
+	if len(sel.Services) > 0 {
+		svcs := make([]model.HostService, 0, len(m.Services))
+		for _, s := range m.Services {
+			if listed(sel.Services, s.Name) {
+				svcs = append(svcs, s)
+			}
+		}
+		out.Services = svcs
+	}
+	if len(sel.Processes) > 0 {
+		procs := make([]model.HostProcess, 0, len(m.Processes))
+		for _, p := range m.Processes {
+			if listed(sel.Processes, p.Name) {
+				procs = append(procs, p)
+			}
+		}
+		out.Processes = procs
+	}
 	return out
 }
 

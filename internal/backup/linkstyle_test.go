@@ -109,7 +109,7 @@ func TestRestoreDropsALinkStyleThatIsNotAllowed(t *testing.T) {
 		{ID: 2, Name: "Cam", Enabled: true, DependsOnNode: ptr(int64(1)), LinkStyle: &model.LinkStyle{Color: "url(#x)", Width: 99, Dash: "wavy"}},
 	}, Settings: model.DefaultSettings()}
 	var sum Summary
-	if err := restoreConfig(ctx, dst, cfg, &sum, false); err != nil {
+	if err := restoreConfig(ctx, dst, cfg, &sum, false, true); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
 	got, err := dst.GetNode(ctx, 2)

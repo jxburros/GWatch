@@ -524,7 +524,9 @@ func TestValidateSystemCheck(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := Validate(systemCheck(tt.cfg), "")
+			c := systemCheck(tt.cfg)
+			c.Enabled = true
+			err := Validate(c, "")
 			switch {
 			case tt.wantErr == "" && err != nil:
 				t.Fatalf("want no error, got %v", err)
@@ -532,5 +534,10 @@ func TestValidateSystemCheck(t *testing.T) {
 				t.Fatalf("want an error containing %q, got %v", tt.wantErr, err)
 			}
 		})
+	}
+	// Switched off, an agent check may wait for its machine: a pairing
+	// code's node does until the code is redeemed.
+	if err := Validate(systemCheck(model.CheckConfig{HostSource: model.HostSourceAgent}), ""); err != nil {
+		t.Errorf("a switched-off check waiting for its machine: %v", err)
 	}
 }

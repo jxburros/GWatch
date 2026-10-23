@@ -106,6 +106,37 @@ function snmpTable(rows, check, result) {
 }
 
 /**
+ * matterTable lists a Matter check's readings: each with the attribute path
+ * it was read from, what it read in words (21.5 °C, open, on), and whether it
+ * crossed a threshold — the same verdict rules as an SNMP reading, because
+ * the server judges both with the same comparisons.
+ */
+function matterTable(rows, check, server) {
+  const byName = new Map((check?.config?.matterReadings || []).map((r) => [r.name, r]));
+  const table = h('table', { class: 'table' }, h('thead', null, h('tr', null,
+    h('th', null, 'Reading'), h('th', null, 'Path'), h('th', { class: 'num' }, 'Value'), h('th', null, 'Verdict'))));
+  const tb = h('tbody');
+  for (const r of rows) {
+    const verdict = r.value == null
+      ? { label: r.raw === 'no value reported' ? 'No value right now' : r.raw === 'not available on this device' ? 'Not on this device' : 'Reported as text', cls: r.raw === 'not available on this device' ? 'text-down' : 'dim' }
+      : snmpVerdict(r.value, byName.get(r.name));
+    // A state reads better as its word ("open") than as the 1 it is charted
+    // as; a measurement reads better as the number with its unit.
+    const shown = r.value != null && r.unit ? snmpValueText(r.value, r.unit) : (r.raw || (r.value != null ? snmpValueText(r.value, '') : '—'));
+    tb.append(h('tr', null,
+      h('td', null, r.name),
+      h('td', { class: 'mono dim' }, r.path),
+      h('td', { class: 'num mono' }, shown),
+      h('td', { class: verdict.cls }, verdict.label)));
+  }
+  table.append(tb);
+  return h('div', null,
+    h('div', { class: 'section-title' }, 'Matter readings'),
+    h('div', { class: 'table-wrap' }, table),
+    server ? h('p', { class: 'note' }, 'Read through the Matter server at ', h('code', null, server), '. Paths are endpoint/cluster/attribute.') : null);
+}
+
+/**
  * metricResultsTable lists a hardware check's metrics with each one's reading
  * and verdict, the table the check-level status is the worst row of.
  */
@@ -211,7 +242,7 @@ export function resultInspector(result, check, { compact = false } = {}) {
     for (let i = 0; i < lost; i++) chips.append(h('span', { class: 'lost' }, 'lost'));
     right.push(h('div', null, h('div', { class: 'section-title' }, 'Packets'),
       kv([['Sent / received', `${d.packetsSent ?? 0} / ${d.packetsReceived ?? 0}`, { mono: true }]]),
-      d.rtts?.length || lost ? h('div', { style: { marginTop: '10px' } }, chips) : null));
+      d.rtts?.length || lost ? h('div', { class: 'u-mt-10' }, chips) : null));
   }
 
   // DNS
@@ -276,6 +307,9 @@ export function resultInspector(result, check, { compact = false } = {}) {
   // crossed one of its thresholds. A reading with no number is text the
   // device reported (a description, a name) and is shown as it arrived.
   if (d.snmp?.length) left.push(snmpTable(d.snmp, check, result));
+
+  // Matter: every reading the run asked for, as SNMP's are shown.
+  if (d.matter?.length) left.push(matterTable(d.matter, check, d.matterServer));
 
   // Custom script output
   if (d.output) left.push(h('div', null, h('div', { class: 'section-title' }, 'Output'),

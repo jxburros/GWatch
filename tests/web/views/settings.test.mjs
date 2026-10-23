@@ -6,6 +6,7 @@ import '../../../web/mock.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as settingsView from '../../../web/views/settings.js';
+import { api } from '../../../web/api.js';
 import { mountView, waitFor } from '../view-harness.mjs';
 
 test('settings view (admin) lists every tab and opens on General', async (t) => {
@@ -41,6 +42,17 @@ test('settings General has a Ping card with the method choice', async (t) => {
   assert.deepEqual([...select.options].map((o) => o.value), ['auto', 'builtin', 'system']);
   assert.equal(select.value, 'auto'); // web/mock.js's settings.general.pingMethod
   assert.match(panel.textContent, /falls back to the system ping command/);
+});
+
+// #131: Monitor health says which way ping works and why not the first choice.
+test('settings Monitor health shows the ping method and the reason it is not the first choice', async (t) => {
+  const { root } = await mountView(settingsView, { params: { tab: 'health' } }, t);
+  await waitFor(() => /Built-in \(raw socket\)/.test(root.textContent));
+  const card = [...root.querySelectorAll('.health-card')].find((c) => c.querySelector('.hl')?.textContent === 'Ping');
+  assert.ok(card, 'a Ping health card');
+  assert.match(card.textContent, /Method setting: auto/);
+  assert.match(card.textContent, /windows has no unprivileged ICMP socket/);
+  assert.doesNotMatch(card.textContent, /How to allow ping/, 'no help link when the built-in ping works');
 });
 
 // #56: the AI & MCP tab carries the set-up guide (a read-only key first), the
@@ -132,4 +144,144 @@ test('settings no longer has a Hardware section, and the old link goes to Nodes'
   const { root, ctx } = await mountView(settingsView, { params: { tab: 'hardware' } }, t);
   assert.deepEqual(ctx.navigated, ['/nodes']);
   assert.equal(root.querySelector('.settings-nav'), null, 'nothing of Settings is drawn for a link that is passed on');
+});
+
+// #49: Users & access carries the password-hashing choice. Argon2id is the
+// default and labelled as recommended; choosing PBKDF2 saves the setting
+// straight away, like the other switches on this tab.
+test('settings Users & access offers the password hashing choice and saves it', async (t) => {
+  const { root } = await mountView(settingsView, { params: { tab: 'users' } }, t);
+  const panel = root.querySelector('.settings-panel');
+  await waitFor(() => [...panel.querySelectorAll('h2')].some((el) => el.textContent === 'Password hashing'));
+  const select = [...panel.querySelectorAll('select')].find((el) => [...el.options].some((o) => o.value === 'pbkdf2-sha256'));
+  assert.ok(select, 'the password hashing select');
+  assert.deepEqual([...select.options].map((o) => o.value), ['argon2id', 'pbkdf2-sha256']);
+  assert.match(select.options[0].textContent, /Argon2id \(recommended\)/);
+  assert.match(select.options[1].textContent, /PBKDF2 \(standard library only\)/);
+  assert.equal(select.value, 'argon2id'); // web/mock.js's settings.general.passwordHashing
+  assert.match(panel.textContent, /Argon2id remains the recommendation/);
+
+  select.value = 'pbkdf2-sha256';
+  select.dispatchEvent(new window.Event('change'));
+  await waitFor(() => [...document.querySelectorAll('.toast')].find((el) => /Settings saved/.test(el.textContent)));
+  const saved = await api.get('/api/settings');
+  assert.equal(saved.general.passwordHashing, 'pbkdf2-sha256');
+  // Put the mock back the way the other tests expect it.
+  await api.put('/api/settings', { ...saved, general: { ...saved.general, passwordHashing: 'argon2id' } });
+});
+
+// #122: Settings › Alerts lists the "also notify" channels, adds one through
+// the channel editor (which offers notification types only and tests through
+// /api/settings/test-channel), and saves it with the settings.
+test('settings Alerts lists, adds, tests and saves alert channels', async (t) => {
+  const { root } = await mountView(settingsView, { params: { tab: 'alerts' } }, t);
+  const panel = root.querySelector('.settings-panel');
+  const card = [...panel.querySelectorAll('.card')].find((c) => c.querySelector('h2')?.textContent === 'Also notify');
+  assert.ok(card, 'an Also notify card');
+  const names = () => [...card.querySelectorAll('.trigger-row .t-name')].map((el) => el.textContent);
+  assert.equal(names().length, 2);
+  assert.match(names()[0], /Family Telegram/);
+  assert.match(card.textContent, /Outages only · groups: Servers · SMS → \+15550002222/);
+
+  [...card.querySelectorAll('button')].find((b) => b.textContent.includes('Add channel')).click();
+  const modal = await waitFor(() => document.querySelector('.modal'));
+  const typeSel = [...modal.querySelectorAll('select')].find((s) => [...s.options].some((o) => o.value === 'pagerduty'));
+  const types = [...typeSel.options].map((o) => o.value);
+  assert.ok(!types.includes('script') && !types.includes('http') && !types.includes('git'), `only notification types (got ${types})`);
+  assert.ok(['telegram', 'discord', 'gotify', 'matrix', 'twilio', 'pagerduty', 'opsgenie'].every((v) => types.includes(v)));
+  typeSel.value = 'pagerduty';
+  typeSel.dispatchEvent(new window.Event('change'));
+  const set = (el, v) => { el.value = v; el.dispatchEvent(new window.Event('input')); };
+  set([...modal.querySelectorAll('input')].find((el) => (el.placeholder || '').startsWith('Integration key')), 'R0UTING');
+  set([...modal.querySelectorAll('input')].find((el) => (el.placeholder || '').startsWith('e.g. On-call')), 'Pager');
+
+  [...modal.querySelectorAll('button')].find((b) => b.textContent.includes('Test this action')).click();
+  await waitFor(() => modal.querySelector('.result-box.ok'));
+  assert.match(modal.querySelector('.result-box').textContent, /pagerduty → 200 OK \(mock\)/);
+
+  [...document.querySelectorAll('.modal button')].find((b) => b.textContent.trim() === 'Add channel').click();
+  await waitFor(() => names().length === 3);
+  assert.match(names()[2], /Pager/);
+
+  // An earlier test's "Settings saved" toast may still be up; clear it so the
+  // wait below is for this save.
+  document.querySelectorAll('.toast').forEach((el) => el.remove());
+  [...card.querySelectorAll('button')].find((b) => b.textContent.includes('Save changes')).click();
+  await waitFor(() => [...document.querySelectorAll('.toast')].some((el) => /Settings saved/.test(el.textContent)));
+  const saved = await api.get('/api/settings');
+  const pager = saved.alerts.channels.find((c) => c.name === 'Pager');
+  assert.ok(pager?.id, 'the saved channel has an ID');
+  assert.equal(pager.action.type, 'pagerduty');
+  assert.equal(pager.action.routingKey, '********', 'the key comes back masked');
+});
+
+// #99: Settings › Alerts has the per-node grouping window and the warning
+// digest, and saves both with the settings.
+test('settings Alerts edits the grouping window and the warning digest', async (t) => {
+  const { root } = await mountView(settingsView, { params: { tab: 'alerts' } }, t);
+  const panel = root.querySelector('.settings-panel');
+  const byLabel = (re) => { const l = [...panel.querySelectorAll('label')].find((el) => re.test(el.textContent)); return l && document.getElementById(l.htmlFor); };
+  const window_ = byLabel(/Group alerts for the same node/);
+  const digest = byLabel(/Send warnings as a digest/);
+  assert.ok(window_ && digest, 'both controls are labelled');
+  assert.equal(window_.value, '30');
+  assert.equal(window_.max, '300');
+  assert.deepEqual([...digest.options].map((o) => o.value), ['off', 'hourly', 'daily']);
+  window_.value = '60'; window_.dispatchEvent(new window.Event('input'));
+  digest.value = 'daily'; digest.dispatchEvent(new window.Event('change'));
+  document.querySelectorAll('.toast').forEach((el) => el.remove());
+  [...panel.querySelectorAll('button')].find((b) => b.textContent.includes('Save changes')).click();
+  await waitFor(() => [...document.querySelectorAll('.toast')].some((el) => /Settings saved/.test(el.textContent)));
+  const saved = await api.get('/api/settings');
+  assert.equal(saved.alerts.groupWindowSeconds, 60);
+  assert.equal(saved.alerts.warningDigest, 'daily');
+});
+
+// #148: restoring a backup asks for its password, then shows what the backup
+// holds and everything in it that matters for security, and restores only
+// once that is confirmed. A backup that fails validation cannot be restored
+// from the dialog at all.
+test('settings Backups previews a restore before applying it', async (t) => {
+  t.after(() => { document.querySelectorAll('.modal-backdrop').forEach((b) => b.remove()); });
+  const { root } = await mountView(settingsView, { params: { tab: 'backups' } }, t);
+  const restoreButton = () => waitFor(() => [...root.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Restore'));
+  const visibleModal = () => [...document.querySelectorAll('.modal')].at(-1);
+  const before = (await api.get('/api/backups')).status.lastRestoreAt;
+
+  (await restoreButton()).click();
+  let modal = await waitFor(() => visibleModal());
+  modal.querySelector('input[type="password"]').value = 'secret';
+  [...modal.querySelectorAll('button')].find((b) => b.textContent === 'Continue').click();
+  modal = await waitFor(() => [...document.querySelectorAll('.modal')].find((m) => /Check these before you restore/.test(m.textContent)));
+  assert.match(modal.textContent, /This backup holds \d+ nodes/);
+  assert.match(modal.textContent, /sam \(administrator\)/, 'the account not on this server, marked as an administrator');
+  assert.match(modal.textContent, /left out/, 'without re-create ticked, missing accounts are left out');
+  assert.match(modal.textContent, /Home Assistant \(read only\)/, 'the API key that would be added');
+  assert.match(modal.textContent, /Runs a command on this computer: trigger Plex server › Restart Plex — script \(bash\)/);
+  assert.match(modal.textContent, /LAN access is turned on/);
+  [...modal.querySelectorAll('button')].find((b) => b.textContent === 'Cancel').click();
+  await waitFor(() => !document.querySelector('.modal'));
+  assert.equal((await api.get('/api/backups')).status.lastRestoreAt, before, 'cancelling the preview restores nothing');
+
+  // A backup whose configuration does not validate lists its problems and
+  // offers no way to go on.
+  (await restoreButton()).click();
+  modal = await waitFor(() => visibleModal());
+  modal.querySelector('input[type="password"]').value = 'invalid';
+  [...modal.querySelectorAll('button')].find((b) => b.textContent === 'Continue').click();
+  modal = await waitFor(() => [...document.querySelectorAll('.modal')].find((m) => /cannot be restored/.test(m.textContent)));
+  assert.match(modal.textContent, /custom interpreter/);
+  assert.ok(![...modal.querySelectorAll('button')].some((b) => b.textContent === 'Restore'), 'no Restore button for an invalid backup');
+  [...modal.querySelectorAll('button')].find((b) => b.textContent === 'Close').click();
+  await waitFor(() => !document.querySelector('.modal'));
+
+  // Confirmed, the restore goes ahead.
+  (await restoreButton()).click();
+  modal = await waitFor(() => visibleModal());
+  modal.querySelector('input[type="password"]').value = 'secret';
+  [...modal.querySelectorAll('button')].find((b) => b.textContent === 'Continue').click();
+  modal = await waitFor(() => [...document.querySelectorAll('.modal')].find((m) => /Check these before you restore/.test(m.textContent)));
+  [...modal.querySelectorAll('button')].find((b) => b.textContent === 'Restore').click();
+  await waitFor(() => [...document.querySelectorAll('.toast')].some((el) => /Restored \d+ nodes/.test(el.textContent)));
+  assert.notEqual((await api.get('/api/backups')).status.lastRestoreAt, before);
 });

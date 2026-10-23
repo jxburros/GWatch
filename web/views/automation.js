@@ -3,21 +3,43 @@
 // trigger editor and list rows, with placeholder help and inline testing.
 
 import { api } from '../api.js';
-import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, toast, confirmDialog, openModal, busy, relTimeEl } from '../components.js';
+import { h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, openModal, busy, relTimeEl } from '../components.js';
 import { relTime } from '../fmt.js';
 
 export const ACTION_TYPES = [
   { value: 'http', label: 'HTTP request', icon: 'webhook', desc: 'Call a webhook or any URL (GET / POST …) with an optional body.' },
   { value: 'slack', label: 'Slack', icon: 'hash', desc: 'Post a message to a Slack incoming webhook.' },
-  { value: 'teams', label: 'Microsoft Teams', icon: 'layers', desc: 'Post an Adaptive Card to a Teams (or Power Automate) webhook.' },
+  { value: 'teams', label: 'Microsoft Teams', icon: 'layers', desc: 'Post an Adaptive Card to a Teams Workflows (Power Automate) webhook. The old Office 365 connector webhooks are retired.' },
+  { value: 'discord', label: 'Discord', icon: 'hash', desc: 'Post a message to a Discord channel webhook. @everyone and @here in a message never ping.' },
+  { value: 'telegram', label: 'Telegram', icon: 'bell', desc: 'Send a message from your Telegram bot to a chat, group or channel.' },
+  { value: 'matrix', label: 'Matrix', icon: 'hash', desc: 'Send a message to a Matrix room with an access token.' },
   { value: 'ntfy', label: 'ntfy', icon: 'bell', desc: 'Publish a push notification to an ntfy.sh (or self-hosted) topic.' },
+  { value: 'gotify', label: 'Gotify', icon: 'bell', desc: 'Push a message to your self-hosted Gotify server.' },
   { value: 'pushover', label: 'Pushover', icon: 'zap', desc: 'Send a push notification through Pushover.' },
+  { value: 'twilio', label: 'SMS (Twilio)', icon: 'zap', desc: 'Send a text message to one or more phones through Twilio.' },
+  { value: 'pagerduty', label: 'PagerDuty', icon: 'alert', desc: 'Open a PagerDuty incident (Events API v2); a recovery resolves it.' },
+  { value: 'opsgenie', label: 'Opsgenie', icon: 'alert', desc: 'Create an Opsgenie alert; a recovery closes it.' },
   { value: 'git', label: 'Git command', icon: 'git', desc: 'Run git in a repository on this computer, e.g. pull --ff-only.' },
   { value: 'script', label: 'Custom code', icon: 'code', desc: 'Run a script with sh, bash, PowerShell, cmd, Python, Node or any command.' },
   { value: 'run_node', label: 'Run a node now', icon: 'play', desc: 'Run every check of a node immediately.' },
 ];
 const NOTIFY_PRIORITIES = [
   { value: '', label: 'Default' }, { value: 'min', label: 'Min' }, { value: 'low', label: 'Low' }, { value: 'default', label: 'Default (explicit)' }, { value: 'high', label: 'High' }, { value: 'urgent', label: 'Urgent' },
+];
+// The notification channels: the action types Settings › Alerts accepts as
+// "also notify" channels (the server enforces the same list).
+export const NOTIFY_TYPES = ['slack', 'teams', 'discord', 'telegram', 'matrix', 'ntfy', 'gotify', 'pushover', 'twilio', 'pagerduty', 'opsgenie'];
+const INCIDENT_ACTIONS = [
+  { value: '', label: 'Automatic: open on a failure, resolve on a recovery' }, { value: 'trigger', label: 'Always open (trigger)' }, { value: 'resolve', label: 'Always resolve' },
+];
+const PD_SEVERITIES = [
+  { value: '', label: 'Automatic (critical, or warning for warnings)' }, { value: 'critical', label: 'Critical' }, { value: 'error', label: 'Error' }, { value: 'warning', label: 'Warning' }, { value: 'info', label: 'Info' },
+];
+const OPSGENIE_PRIORITIES = [
+  { value: '', label: 'Opsgenie default (P3)' }, { value: 'P1', label: 'P1 — critical' }, { value: 'P2', label: 'P2 — high' }, { value: 'P3', label: 'P3 — moderate' }, { value: 'P4', label: 'P4 — low' }, { value: 'P5', label: 'P5 — informational' },
+];
+const GOTIFY_PRIORITIES = [
+  { value: '', label: 'Server default' }, ...[0, 2, 4, 5, 8, 10].map((n) => ({ value: String(n), label: String(n) })),
 ];
 const PUSHOVER_PRIORITIES = [
   { value: '', label: 'Normal (0)' }, { value: '-2', label: 'Lowest (-2)' }, { value: '-1', label: 'Low (-1)' }, { value: '0', label: 'Normal (0)' }, { value: '1', label: 'High (1)' }, { value: '2', label: 'Emergency (2)' },
@@ -51,6 +73,13 @@ export function actionSummary(a, nodes = []) {
     case 'teams': return `Teams → ${a.webhookUrl || '?'}`;
     case 'ntfy': return `ntfy → ${(a.server || 'https://ntfy.sh').replace(/\/$/, '')}/${a.topic || '?'}`;
     case 'pushover': return `Pushover → user ${a.userKey || '?'}`;
+    case 'discord': return 'Discord webhook';
+    case 'telegram': return `Telegram → chat ${a.chatId || '?'}`;
+    case 'matrix': return `Matrix → ${a.roomId || '?'}`;
+    case 'gotify': return `Gotify → ${(a.server || '?').replace(/\/$/, '')}`;
+    case 'twilio': return `SMS → ${a.to || '?'}`;
+    case 'pagerduty': return `PagerDuty${a.eventAction ? ` (${a.eventAction})` : ''}`;
+    case 'opsgenie': return `Opsgenie${a.region === 'eu' ? ' EU' : ''}${a.eventAction ? ` (${a.eventAction})` : ''}`;
     case 'git': return `git ${a.gitArgs || ''} in ${a.repo || '?'}`;
     case 'script': return `${a.interpreter || 'script'} · ${(a.code || '').split('\n')[0].slice(0, 60)}`;
     case 'run_node': { const n = nodes.find((x) => Number(x.id) === Number(a.nodeId)); return `run checks of ${n ? n.name : `node ${a.nodeId ?? '?'}`}`; }
@@ -61,7 +90,7 @@ export function actionSummary(a, nodes = []) {
 function placeholderHelp(extra = []) {
   const list = h('div', { class: 'placeholder-list' });
   for (const p of [...PLACEHOLDERS, ...extra]) list.append(h('code', { title: 'Click to copy', onclick: () => { navigator.clipboard?.writeText(`{{${p}}}`); toast(`Copied {{${p}}}`, { kind: 'info', timeout: 1500 }); } }, `{{${p}}}`));
-  return h('details', { class: 'collapsible' }, h('summary', null, icon('chevronRight'), 'Placeholders you can use'), h('div', { class: 'stack-sm', style: { paddingTop: '6px' } }, h('p', { class: 'note' }, 'Placeholders are replaced when the action runs. Scripts also receive them as environment variables (GWATCH_NODE_NAME, GWATCH_STATUS …) and the request body on stdin for endpoints.'),
+  return h('details', { class: 'collapsible' }, h('summary', null, icon('chevronRight'), 'Placeholders you can use'), h('div', { class: 'stack-sm u-pt-6' }, h('p', { class: 'note' }, 'Placeholders are replaced when the action runs. Scripts also receive them as environment variables (GWATCH_NODE_NAME, GWATCH_STATUS …) and the request body on stdin for endpoints.'),
     h('p', { class: 'note' }, 'Inside script code a placeholder does not become raw text: it becomes a safe reference to its value — ', h('code', null, '"${GWATCH_MESSAGE}"'), ' in sh/bash, ', h('code', null, '${env:GWATCH_MESSAGE}'), ' in PowerShell, a string literal in Python and Node. Values can contain anything the sender chose, so they are never allowed to be read as code. The GWATCH_* environment variables are always available and are the clearest thing to use.'),
     list));
 }
@@ -69,10 +98,14 @@ function placeholderHelp(extra = []) {
 /**
  * Action editor. Returns an element with `.value` → action object.
  */
-export function actionEditor(action = {}, { nodes = [], defaultInterpreter = 'sh', nodeId = null } = {}) {
-  const a = { type: 'http', method: '', url: '', headers: {}, body: '', ignoreTlsErrors: false, expectedStatus: '', repo: '', gitArgs: '', interpreter: defaultInterpreter, command: '', code: '', workDir: '', allowUntrustedInput: false, nodeId: nodeId, timeoutSeconds: 30, webhookUrl: '', title: '', message: '', topic: '', server: '', priority: '', tags: '', token: '', userKey: '', ...(action || {}) };
+export function actionEditor(action = {}, { nodes = [], defaultInterpreter = 'sh', nodeId = null, types = null } = {}) {
+  const a = { type: 'http', method: '', url: '', headers: {}, body: '', ignoreTlsErrors: false, expectedStatus: '', repo: '', gitArgs: '', interpreter: defaultInterpreter, command: '', code: '', workDir: '', allowUntrustedInput: false, nodeId: nodeId, timeoutSeconds: 30, webhookUrl: '', title: '', message: '', topic: '', server: '', priority: '', tags: '', token: '', userKey: '', chatId: '', roomId: '', accountSid: '', from: '', to: '', routingKey: '', eventAction: '', dedupKey: '', severity: '', region: '', ...(action || {}) };
   if (!a.interpreter) a.interpreter = defaultInterpreter;
-  const typeSel = selectInput({ options: ACTION_TYPES.map((t) => ({ value: t.value, label: t.label })), value: a.type, onchange: () => { a.type = typeSel.value; renderType(); } });
+  // `types` narrows the choice, as the alert channels of Settings › Alerts
+  // do to the notification types.
+  const offered = types ? ACTION_TYPES.filter((t) => types.includes(t.value)) : ACTION_TYPES;
+  if (!offered.some((t) => t.value === a.type)) a.type = offered[0].value;
+  const typeSel = selectInput({ options: offered.map((t) => ({ value: t.value, label: t.label })), value: a.type, onchange: () => { a.type = typeSel.value; renderType(); } });
   const typeDesc = h('div', { class: 'help' });
   const typeArea = h('div', { class: 'stack-sm' });
   const timeout = numberInput({ value: a.timeoutSeconds || 30, min: 1, max: 600, oninput: () => { a.timeoutSeconds = Number(timeout.value) || 30; } });
@@ -114,6 +147,36 @@ export function actionEditor(action = {}, { nodes = [], defaultInterpreter = 'sh
   const pushoverToken = textInput({ value: a.token || '', class: 'mono', placeholder: 'Application token', oninput: () => { a.token = pushoverToken.value; } });
   const pushoverUser = textInput({ value: a.userKey || '', class: 'mono', placeholder: 'User key', oninput: () => { a.userKey = pushoverUser.value; } });
   const pushoverPriority = selectInput({ options: PUSHOVER_PRIORITIES, value: a.priority || '', onchange: () => { a.priority = pushoverPriority.value; } });
+
+  // The channels of issue #122. Each field writes into the shared action
+  // object, so switching type keeps what was typed for fields two types share
+  // (the title and message, a token).
+  const secretInput = (key, placeholder) => { const el = h('input', { type: 'password', class: 'mono', value: a[key] || '', autocomplete: 'new-password', placeholder, oninput: () => { a[key] = el.value; } }); return el; };
+  const plainInput = (key, placeholder, cls = 'mono') => { const el = textInput({ value: a[key] || '', class: cls, placeholder, oninput: () => { a[key] = el.value; } }); return el; };
+  const pick = (key, options) => { const el = selectInput({ options, value: a[key] || '', onchange: () => { a[key] = el.value; } }); return el; };
+  const tgToken = secretInput('token', '123456789:AA… from @BotFather');
+  const tgChat = plainInput('chatId', '-1001234567890 or @yourchannel');
+  const discordUrl = secretInput('webhookUrl', 'https://discord.com/api/webhooks/…');
+  const gotifyServer = plainInput('server', 'https://gotify.example.com');
+  const gotifyToken = secretInput('token', 'Application token');
+  const gotifyPriority = pick('priority', GOTIFY_PRIORITIES);
+  const matrixServer = plainInput('server', 'https://matrix.example.org');
+  const matrixToken = secretInput('token', 'Access token of the bot account');
+  const matrixRoom = plainInput('roomId', '!abcdefgh:example.org');
+  const twSid = plainInput('accountSid', 'AC…');
+  const twToken = secretInput('token', 'Auth token');
+  const twFrom = plainInput('from', '+15551234567 or MG… messaging service');
+  const twTo = plainInput('to', '+15557654321, +447700900123');
+  const pdKey = secretInput('routingKey', 'Integration key (Events API v2)');
+  const pdAction = pick('eventAction', INCIDENT_ACTIONS);
+  const pdSeverity = pick('severity', PD_SEVERITIES);
+  const dedupKey = plainInput('dedupKey', 'Automatic: one per check (or rule)');
+  const ogKey = secretInput('token', 'API key of an API integration');
+  const ogRegion = pick('region', [{ value: '', label: 'US (api.opsgenie.com)' }, { value: 'eu', label: 'EU (api.eu.opsgenie.com)' }]);
+  const ogAction = pick('eventAction', [{ value: '', label: 'Automatic: create on a failure, close on a recovery' }, { value: 'create', label: 'Always create' }, { value: 'close', label: 'Always close' }]);
+  const ogPriority = pick('priority', OPSGENIE_PRIORITIES);
+  const ogTags = plainInput('tags', 'gwatch,{{node.group}}', '');
+  const messageHelp = 'Leave blank for "{{node.name}} is {{status}}: {{message}}". Use Test this action to send a test message.';
 
   // git
   const repo = textInput({ value: a.repo || '', class: 'mono', placeholder: 'C:\\repos\\homelab or /srv/homelab', oninput: () => { a.repo = repo.value; } });
@@ -184,6 +247,61 @@ export function actionEditor(action = {}, { nodes = [], defaultInterpreter = 'sh
           field({ label: 'Message', input: notifyMessage, cls: 'span-2', help: 'Leave blank for "{{node.name}} is {{status}}: {{message}}". Use Test this action to send a test message.' }),
         ));
         break;
+      case 'discord':
+        typeArea.append(h('div', { class: 'form-grid' },
+          field({ label: 'Webhook URL', input: discordUrl, cls: 'span-2', help: 'Channel settings › Integrations › Webhooks › Copy Webhook URL. The URL is the credential and is stored encrypted.' }),
+          field({ label: 'Title', input: notifyTitle, help: 'Sent in bold above the message.' }),
+          field({ label: 'Message', input: notifyMessage, cls: 'span-2', help: messageHelp })));
+        break;
+      case 'telegram':
+        typeArea.append(h('div', { class: 'form-grid' },
+          field({ label: 'Bot token', input: tgToken, help: 'Create a bot with @BotFather and paste its token.' }),
+          field({ label: 'Chat ID', input: tgChat, help: 'A user or group ID (groups are negative), or @channelname for a public channel. Add the bot to the group or channel first.' }),
+          field({ label: 'Title', input: notifyTitle, help: 'Sent as the first line.' }),
+          field({ label: 'Message', input: notifyMessage, cls: 'span-2', help: messageHelp })));
+        break;
+      case 'matrix':
+        typeArea.append(h('div', { class: 'form-grid' },
+          field({ label: 'Homeserver', input: matrixServer, help: 'The client-server API base URL of your homeserver.' }),
+          field({ label: 'Room ID', input: matrixRoom, help: 'Room settings › Advanced › Internal room ID (starts with !). Invite the bot account first.' }),
+          field({ label: 'Access token', input: matrixToken, cls: 'span-2', help: 'The access token of the account that posts. Use a dedicated bot account.' }),
+          field({ label: 'Title', input: notifyTitle, help: 'Sent as the first line.' }),
+          field({ label: 'Message', input: notifyMessage, cls: 'span-2', help: messageHelp })));
+        break;
+      case 'gotify':
+        typeArea.append(h('div', { class: 'form-grid' },
+          field({ label: 'Server', input: gotifyServer, help: 'Your Gotify server; plain http:// is fine on your own network.' }),
+          field({ label: 'Application token', input: gotifyToken, help: 'Apps › Create application. Sent in a header, never in the URL.' }),
+          field({ label: 'Priority', input: gotifyPriority, help: '0–10. Many Gotify clients only make a sound from 4 and up.' }),
+          field({ label: 'Title', input: notifyTitle }),
+          field({ label: 'Message', input: notifyMessage, cls: 'span-2', help: messageHelp })));
+        break;
+      case 'twilio':
+        typeArea.append(h('div', { class: 'form-grid' },
+          field({ label: 'Account SID', input: twSid }),
+          field({ label: 'Auth token', input: twToken }),
+          field({ label: 'From', input: twFrom, help: 'A Twilio number in international format, or a messaging service SID (MG…).' }),
+          field({ label: 'To', input: twTo, help: 'One or more numbers in international format, separated by commas.' }),
+          field({ label: 'Message', input: notifyMessage, cls: 'span-2', help: 'SMS has no title. ' + messageHelp + ' Every text costs money: consider "Outages only" for this channel.' })));
+        break;
+      case 'pagerduty':
+        typeArea.append(h('div', { class: 'form-grid' },
+          field({ label: 'Integration key', input: pdKey, cls: 'span-2', help: 'Service › Integrations › Events API v2 › Integration Key.' }),
+          field({ label: 'Event', input: pdAction }),
+          field({ label: 'Severity', input: pdSeverity }),
+          field({ label: 'Deduplication key', input: dedupKey, cls: 'span-2', help: 'Leave blank: GWatch uses one key per check (warnings separately) or per rule, so the recovery resolves the incident the outage opened.' }),
+          field({ label: 'Summary', input: notifyMessage, cls: 'span-2', help: messageHelp })));
+        break;
+      case 'opsgenie':
+        typeArea.append(h('div', { class: 'form-grid' },
+          field({ label: 'API key', input: ogKey, help: 'Teams › Integrations › API. The key needs create-and-update access.' }),
+          field({ label: 'Region', input: ogRegion }),
+          field({ label: 'Event', input: ogAction }),
+          field({ label: 'Priority', input: ogPriority }),
+          field({ label: 'Alias', input: dedupKey, help: 'Leave blank: one alias per check (or rule), so a recovery closes the right alert.' }),
+          field({ label: 'Tags', input: ogTags, help: 'Comma-separated.' }),
+          field({ label: 'Message', input: notifyMessage, cls: 'span-2', help: 'The first 130 characters are the alert headline. ' + messageHelp })));
+        break;
       case 'git':
         typeArea.append(h('div', { class: 'form-grid' }, field({ label: 'Repository directory', input: repo, cls: 'span-2', help: 'The command runs in this directory on the computer running GWatch.' }), field({ label: 'Git arguments', input: gitArgs, cls: 'span-2', help: 'Everything after "git". Placeholders are expanded, e.g. commit -am "{{node.name}} {{status}}".' })));
         break;
@@ -208,6 +326,13 @@ export function actionEditor(action = {}, { nodes = [], defaultInterpreter = 'sh
     if (a.type === 'slack' || a.type === 'teams') Object.assign(out, { webhookUrl: (a.webhookUrl || '').trim(), title: a.title || '', message: a.message || '' });
     if (a.type === 'ntfy') Object.assign(out, { server: (a.server || '').trim(), topic: (a.topic || '').trim(), priority: a.priority || '', tags: a.tags || '', token: a.token || '', title: a.title || '', message: a.message || '' });
     if (a.type === 'pushover') Object.assign(out, { token: (a.token || '').trim(), userKey: (a.userKey || '').trim(), priority: a.priority || '', title: a.title || '', message: a.message || '' });
+    if (a.type === 'discord') Object.assign(out, { webhookUrl: (a.webhookUrl || '').trim(), title: a.title || '', message: a.message || '' });
+    if (a.type === 'telegram') Object.assign(out, { token: (a.token || '').trim(), chatId: (a.chatId || '').trim(), title: a.title || '', message: a.message || '' });
+    if (a.type === 'matrix') Object.assign(out, { server: (a.server || '').trim(), token: (a.token || '').trim(), roomId: (a.roomId || '').trim(), title: a.title || '', message: a.message || '' });
+    if (a.type === 'gotify') Object.assign(out, { server: (a.server || '').trim(), token: (a.token || '').trim(), priority: a.priority || '', title: a.title || '', message: a.message || '' });
+    if (a.type === 'twilio') Object.assign(out, { accountSid: (a.accountSid || '').trim(), token: (a.token || '').trim(), from: (a.from || '').trim(), to: (a.to || '').trim(), message: a.message || '' });
+    if (a.type === 'pagerduty') Object.assign(out, { routingKey: (a.routingKey || '').trim(), eventAction: a.eventAction || '', severity: a.severity || '', dedupKey: (a.dedupKey || '').trim(), message: a.message || '' });
+    if (a.type === 'opsgenie') Object.assign(out, { token: (a.token || '').trim(), region: a.region || '', eventAction: a.eventAction || '', priority: a.priority || '', dedupKey: (a.dedupKey || '').trim(), tags: a.tags || '', message: a.message || '' });
     if (a.type === 'git') Object.assign(out, { repo: a.repo.trim(), gitArgs: a.gitArgs.trim() });
     if (a.type === 'script') Object.assign(out, { interpreter: a.interpreter || defaultInterpreter, command: a.command || '', code: a.code || '', workDir: a.workDir || '', allowUntrustedInput: !!a.allowUntrustedInput });
     if (a.type === 'run_node') Object.assign(out, { nodeId: a.nodeId != null ? Number(a.nodeId) : null });
@@ -225,16 +350,58 @@ export function resultBox(res) {
   return h('div', { class: `result-box ${res.ok ? 'ok' : 'failed'}` }, lines.join('\n'));
 }
 
-/** "Test this action" button + result area. */
-export function actionTester(getAction, { nodeId = null } = {}) {
+/** "Test this action" button + result area. `run` replaces the request when
+ * the action needs another endpoint (an alert channel, whose saved secrets
+ * come back masked, is tested through /api/settings/test-channel). */
+export function actionTester(getAction, { nodeId = null, run = null } = {}) {
   const out = h('div');
   const btn = h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => {
     const done = busy(btn, 'Running…');
-    try { const res = await api.post('/api/actions/test', { action: getAction(), nodeId: nodeId ? Number(nodeId) : null }); replace(out, resultBox(res)); }
+    try { const res = run ? await run(getAction()) : await api.post('/api/actions/test', { action: getAction(), nodeId: nodeId ? Number(nodeId) : null }); replace(out, resultBox(res)); }
     catch (e) { replace(out, h('div', { class: 'result-box failed' }, e.message)); }
     done();
   } }, icon('play'), 'Test this action');
   return h('div', { class: 'stack-sm' }, h('div', null, btn), out);
+}
+
+export const ALERT_SEVERITIES = [
+  { value: 'warning', label: 'Everything: outages, recoveries and warnings' },
+  { value: 'down', label: 'Outages only: down and recovered' },
+];
+
+/**
+ * Opens the editor for one Settings › Alerts "also notify" channel. Resolves
+ * with the edited channel (not yet saved — it is saved with the settings) or
+ * null. Secrets of a saved channel arrive masked; left as they are, the
+ * server keeps the stored ones.
+ */
+export function openAlertChannelEditor(existing, { groups = [] } = {}) {
+  return new Promise((resolve) => {
+    const c = existing ? { ...existing, groups: [...(existing.groups || [])], action: { ...(existing.action || {}) } } : { id: '', name: '', enabled: true, minSeverity: 'warning', groups: [], action: { type: 'slack' } };
+    let result = null;
+    const name = textInput({ value: c.name || '', placeholder: 'e.g. On-call phone, #alerts channel' });
+    const enabled = toggle({ label: 'Enabled', checked: c.enabled !== false });
+    const severity = selectInput({ options: ALERT_SEVERITIES, value: c.minSeverity || 'warning' });
+    const groupInput = chipInput({ values: c.groups, placeholder: 'All nodes — add a group to narrow', suggestions: groups, onChange: (v) => { c.groups = v; } });
+    const editor = actionEditor(c.action, { types: NOTIFY_TYPES });
+    const current = () => ({ ...c, name: name.value.trim(), enabled: enabled.input.checked, minSeverity: severity.value, groups: c.groups, action: editor.value });
+    const form = h('form', { class: 'stack', onsubmit: (ev) => { ev.preventDefault(); submit(); } },
+      h('div', { class: 'form-grid' },
+        field({ label: 'Name', input: name, help: 'Shown in the timeline: "Down alert sent to On-call phone".' }),
+        field({ label: 'Send', input: severity }),
+        field({ label: 'Only for these groups', input: groupInput, cls: 'span-2', help: 'Leave empty for every node. A node in any of the groups counts.' })),
+      h('div', null, h('div', { class: 'section-title' }, 'Where it goes'), editor),
+      actionTester(() => editor.value, { run: (action) => api.post('/api/settings/test-channel', { channel: { ...current(), action } }) }),
+      enabled,
+    );
+    const m = openModal({ title: existing ? 'Edit alert channel' : 'New alert channel', wide: true, body: form, footer: [h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn btn-primary', type: 'button', onclick: () => submit() }, existing ? 'Done' : 'Add channel')], onClose: () => resolve(result) });
+    function submit() {
+      const v = current();
+      if (!v.name) v.name = actionLabel(v.action.type);
+      result = v;
+      m.close();
+    }
+  });
 }
 
 /**
@@ -255,7 +422,7 @@ export function openTriggerEditor(existing, { node, nodes = [] }) {
     // "disk:/srv", an SNMP check's OID name — against a number of its own.
     const metricKey = textInput({ value: t.metric || '', placeholder: 'e.g. cpu, disk:/srv, net:eth0.rx', 'aria-label': 'Metric key' });
     const metricOver = numberInput({ value: t.metricOver || '', step: 'any', placeholder: 'value', 'aria-label': 'Metric threshold' });
-    const metricField = field({ label: 'Metric above', input: h('div', { class: 'row', style: { gap: '6px' } }, metricKey, metricOver), help: 'The key as it appears in the check’s last result (Inspect last result › Metrics).' });
+    const metricField = field({ label: 'Metric above', input: h('div', { class: 'row u-gap-6' }, metricKey, metricOver), help: 'The key as it appears in the check’s last result (Inspect last result › Metrics).' });
     const syncLatency = () => {
       latencyField.hidden = !conds.querySelector('input[value="latency_over"]:checked');
       metricField.hidden = !conds.querySelector('input[value="metric_over"]:checked');
@@ -301,7 +468,7 @@ export function triggerRow(t, { node, nodes = [], onChange } = {}) {
   const last = t.lastRunAt ? h('span', { class: t.lastStatus === 'failed' ? 'text-down' : 'text-up' }, `${t.lastStatus === 'failed' ? 'failed' : 'ran'} `, relTimeEl(t.lastRunAt), ` (${t.runCount} run${t.runCount === 1 ? '' : 's'})`) : h('span', { class: 'dim' }, 'never run');
   return h('div', { class: 'trigger-row' },
     h('div', { class: 'admin-only' }, toggle({ ariaLabel: `${t.name} enabled`, checked: t.enabled !== false, onChange: async (v) => { try { await api.put(`/api/triggers/${t.id}`, { ...t, enabled: v }); onChange && onChange(); } catch (e) { toast(e.message, { kind: 'error' }); onChange && onChange(); } } })),
-    h('div', { style: { minWidth: 0 } },
+    h('div', { class: 'u-min-w-0' },
       h('div', { class: 't-name' }, t.name, actionBadge(t.action), t.enabled === false ? h('span', { class: 'tag' }, 'disabled') : null),
       h('div', { class: 't-sub' }, `on: ${condLabels.join(', ')}${checkName ? ` · only ${checkName}` : ''}${t.cooldownMinutes ? ` · cooldown ${t.cooldownMinutes} min` : ''} · ${actionSummary(t.action, nodes)}`),
       h('div', { class: 't-sub' }, last),
@@ -387,7 +554,7 @@ export function endpointRow(e, { nodes = [], onChange } = {}) {
   } }, icon('play'), 'Run');
   const last = e.lastCalledAt ? h('span', { class: e.lastStatus === 'failed' ? 'text-down' : 'text-up' }, `${e.lastStatus === 'failed' ? 'failed' : 'ok'} · called `, relTimeEl(e.lastCalledAt), ` (${e.callCount} call${e.callCount === 1 ? '' : 's'})`) : h('span', { class: 'dim' }, 'never called');
   return h('div', { class: 'endpoint-row' },
-    h('div', { style: { minWidth: 0 } },
+    h('div', { class: 'u-min-w-0' },
       h('div', { class: 't-name', style: { fontWeight: 650, display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } }, e.name, actionBadge(e.action), h('span', { class: 'tag' }, e.method || 'ANY'), e.token ? h('span', { class: 'tag', title: 'Token required' }, icon('lock'), ' token') : h('span', { class: 'tag', style: { color: 'var(--down)', borderColor: 'var(--down)' }, title: 'Anyone who can reach this port can call this URL' }, icon('alert'), ' no token'), e.enabled === false ? h('span', { class: 'tag' }, 'disabled') : null),
       h('div', { class: 'e-url' }, url, ' ', h('button', { class: 'btn btn-ghost btn-sm icon-btn', type: 'button', title: 'Copy URL', 'aria-label': 'Copy URL', onclick: () => { navigator.clipboard?.writeText(e.token ? `${url}?token=${e.token}` : url); toast('URL copied', { kind: 'info', timeout: 1500 }); } }, icon('copy'))),
       h('div', { class: 't-sub' }, `${actionSummary(e.action, nodes)}${e.description ? ' · ' + e.description : ''}`),

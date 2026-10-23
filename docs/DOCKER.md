@@ -125,7 +125,10 @@ second. Inside a container, as a non-root user, both need help. Pick one:
   check settings too.
 
 Without any of the three, ping checks fail with "no permission to open an ICMP
-socket" and say so in the check's status.
+socket" and say so in the check's status. Settings › Monitor health › Ping, and
+the `ping:` line in the container log at startup, say which of the three is in
+use and why the others are not (for example, the group the process runs as
+lying outside `ping_group_range`).
 
 ## Discovery and the container network
 
@@ -135,6 +138,12 @@ subnet (`172.17.0.0/16` or similar), so a scan finds Docker's gateway and other
 containers, not your router, printers and NAS. Ordinary checks are not affected:
 a check against `192.168.1.1` reaches it fine through Docker's NAT, and that is
 what most people want.
+
+The neighbour (ARP) table discovery reads for MAC addresses and makers has the
+same limit: in a bridge-networked container it holds Docker's bridge and
+nothing from your LAN, so every MAC column is empty and devices that ignore
+pings are not found. A run in a container whose table shows no LAN device says
+so above its results.
 
 If you want discovery to see the real LAN there are two ways, both with a
 cost:

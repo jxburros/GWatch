@@ -37,17 +37,29 @@ func Executable(name string) (string, error) {
 		return "", fmt.Errorf("install requires administrator/root permissions: %w", err)
 	}
 	dst := filepath.Join(dir, name+ext)
+	if err := copyExecutable(src, dst); err != nil {
+		return "", err
+	}
+	return dst, nil
+}
+
+// copyExecutable puts a copy of src at dst, by way of a temporary file in
+// dst's own directory so that the final step is a rename: a service that is
+// started while the copy is under way finds either the old program or the new
+// one, never half of either. Copying a file onto itself is not an error — it
+// is what re-running an install from the installed program amounts to.
+func copyExecutable(src, dst string) error {
 	if strings.EqualFold(src, dst) {
-		return dst, nil
+		return nil
 	}
 	in, err := os.Open(src)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer in.Close()
-	out, err := os.CreateTemp(dir, "install-*")
+	out, err := os.CreateTemp(filepath.Dir(dst), "install-*")
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer os.Remove(out.Name())
 	_, err = io.Copy(out, in)
@@ -62,14 +74,20 @@ func Executable(name string) (string, error) {
 		err = closeErr
 	}
 	if err != nil {
-		return "", err
+		return err
 	}
-	if err = os.Rename(out.Name(), dst); err != nil {
-		return "", err
-	}
-	return dst, nil
+	return os.Rename(out.Name(), dst)
 }
 
+// SystemdScript is the unit internal/svc writes for the hardware agent
+// (cmd/gwatch-agent). The server no longer uses it on a systemd machine: there
+// `gwatch install` writes a unit of its own, hardened and run as a dedicated
+// user (systemd_linux.go).
+//
+// It is a text/template over svc's unit fields (.Description, .Path,
+// .Arguments, .UserName) and its cmd and cmdEscape quoting functions, which
+// are the ones the kardianos/service library offered before #46 replaced it,
+// so that the unit an earlier release installed is the unit this one writes.
 const SystemdScript = `[Unit]
 Description={{.Description}}
 After=network-online.target

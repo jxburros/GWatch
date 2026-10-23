@@ -45,7 +45,7 @@ func (e *Engine) RunBackup(ctx context.Context, dir, password string, includeHis
 	status.LastError = ""
 	status.LastBackupFile = info.FileName
 	e.SetBackupStatus(ctx, status)
-	e.RecordEvent(model.Event{Type: model.EventBackup, Title: reason + " created", Detail: fmt.Sprintf("%s (%s%s)", info.FileName, humanBytes(info.SizeBytes), map[bool]string{true: ", with history", false: ", configuration only"}[info.IncludeHistory])})
+	e.RecordEvent(BackupCreatedEvent(reason, info, now))
 	if keep > 0 {
 		if removed, perr := backup.PruneScheduled(dir, keep); perr == nil && len(removed) > 0 {
 			e.RecordEvent(model.Event{Type: model.EventBackup, Title: "Old backups pruned", Detail: fmt.Sprintf("Removed %d archive(s) beyond the configured %d to keep.", len(removed), keep)})
@@ -109,6 +109,12 @@ func (e *Engine) backupLoop() {
 // exposed (unexported but package-testable) so tests can call it directly
 // instead of waiting on the ticker.
 func (e *Engine) maybeRunScheduledBackup(now time.Time) {
+	// No scheduled backup of a database a restore is half-way through
+	// (pause.go); it is still due on the next minute's tick after.
+	if !e.enterWork() {
+		return
+	}
+	defer e.leaveWork()
 	s := e.Settings().Backups
 	if !s.Enabled || s.Password == "" {
 		return
@@ -132,4 +138,12 @@ func (e *Engine) maybeRunScheduledBackup(now time.Time) {
 	if _, err := e.RunBackup(e.ctx, dir, s.Password, s.IncludeHistory, keep, "Scheduled backup"); err != nil {
 		e.RecordError("scheduled backup", err)
 	}
+}
+
+// BackupCreatedEvent is the event RunBackup records for a backup made at
+// at. A restore with history replaces every event, the pre-restore backup's
+// among them, so it records this one again afterwards.
+func BackupCreatedEvent(reason string, info model.BackupInfo, at time.Time) model.Event {
+	return model.Event{Type: model.EventBackup, Timestamp: at, Title: reason + " created",
+		Detail: fmt.Sprintf("%s (%s%s)", info.FileName, humanBytes(info.SizeBytes), map[bool]string{true: ", with history", false: ", configuration only"}[info.IncludeHistory])}
 }

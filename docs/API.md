@@ -139,8 +139,9 @@ key is not something a cross-site page can obtain.
 `…+json` suffix is accepted). `text/plain`, `application/x-www-form-urlencoded` and
 `multipart/form-data` are refused with `415` — those are the content types a browser will
 send cross-origin without a preflight, so insisting on JSON puts every write behind one.
-A malformed JSON document is still a `400`. The multipart upload at
-`POST /api/backups/restore` is the one exception, and takes a file rather than a body.
+A malformed JSON document is still a `400`. The multipart uploads at
+`POST /api/backups/restore` and `POST /api/backups/inspect` (its preview) are the one
+exception, and take a file rather than a body.
 
 **Rate limits.** Failed credentials (API key, access password, agent token and
 custom-endpoint token) are limited to 10 per minute per client IP; API-key requests from
@@ -173,8 +174,12 @@ is sent `frame-ancestors *` and no `X-Frame-Options`. Everything else refuses to
 **Public routes**, reachable without any credential: `GET /api/health` (liveness only —
 `{"serviceRunning","schedulerRunning","now"}` — until the caller identifies itself),
 `GET /api/version`, `GET /api/me`, `GET /api/auth/setup`, `POST /api/auth/login`,
-`POST /api/auth/logout`, the static UI, and `/hook/…`, which is guarded by each
-endpoint's own token rather than by the sign-in.
+`POST /api/auth/logout`, the static UI (including `/wall`), and the routes that
+take a credential of their own in place of the sign-in:
+`GET /api/wallboards/{id}/view` (the token of a board whose sharing is switched on;
+every other caller is refused), `POST /api/agents/pair` (a one-use pairing code, with
+wrong codes counted against the same per-IP budget as wrong passwords), `/ingest/metrics`,
+`/ingest/checkin` and `/ingest/results` (an agent token), and `/hook/…` (each endpoint's own token).
 
 Anything not listed in the policy table is admin-only with API keys denied, so a new
 route is closed until it is opened on purpose.
@@ -233,7 +238,7 @@ companion that lets an AI assistant use this API with a key, is documented in
 - `POST /api/nodes/{id}/silence` body `{ "minutes": 60 }` (0 = unsilence) → silences every check of the node → Node.
 - `PATCH /api/nodes/bulk` — one change across many nodes and checks. See **Bulk edit** below.
 - `GET /api/templates` → `[NodeTemplate]` (website, home-server, router — shown as "Network device", ping, api, tcp-service, this-computer, agent-machine, dns).
-- `GET /api/groups` → `{ "groups": [{"name":"...","count":3}], "tags": [{"name":"...","count":2}] }`. A node in several groups is counted once in each of them, so the counts can add up to more than the number of nodes.
+- `GET /api/groups` → `{ "groups": [{"name":"...","count":3}], "tags": [{"name":"...","count":2}], "checkGroups": [{"name":"...","count":4}] }`. `checkGroups` counts checks by their own groups (`config.groups` on a check, up to 10 names of at most 64 characters, case-insensitive). A node in several groups is counted once in each of them, so the counts can add up to more than the number of nodes.
 
 **Credentials inside a check's config** — `metricsToken` (hardware health via a metrics
 URL) and `snmpCommunity`, `snmpAuthPass`, `snmpPrivPass` (SNMP) — follow the same
@@ -316,6 +321,35 @@ echoed as written, so an `Authorization` header on an HTTP check is stored in th
   A device that does not answer makes the check down with the usual network wording;
   note that SNMP v2c answers a *wrong community* with silence, so a wrong community and
   an unreachable device produce the same timeout — the message says so.
+- The `matter` check type (`Check.type == "matter"`) reads Matter devices through a
+  python-matter-server sidecar over its WebSocket API, one `read_attribute` per run for
+  every reading. See [MATTER.md](MATTER.md) for the sidecar, commissioning and the
+  conversions. Its config:
+
+  | field | meaning |
+  | --- | --- |
+  | `matterServer` | the sidecar's WebSocket URL, `ws://` or `wss://`; blank means the node host on `ws://<host>:5580/ws`, and `host[:port]` alone is accepted |
+  | `matterNodeId` | the node id the sidecar gave the device (required) |
+  | `matterReadings` | 1–64 readings, see below |
+
+  Each entry of `matterReadings` is `{ endpoint, kind, cluster, attribute, scale, name,
+  unit, warnAbove, critAbove, warnBelow, critBelow }`. `kind` is one of the standard
+  readings — `temperature` (°C), `humidity` (%), `onoff` (1 on / 0 off), `contact`
+  (1 open / 0 shut), `occupancy` (1 occupied), `illuminance` (lux), `battery` (%) —
+  whose cluster, attribute and conversion are fixed (and `cluster`, `attribute` and
+  `scale` are cleared on save), or `attribute`, which reads `cluster`/`attribute`
+  (decimal ids, cluster required) as a number times `scale`. A standard reading saved
+  without a `name` or `unit` gets the default ones (`Temperature`, `°C`, …). Names must
+  be non-empty and unique within the check; thresholds work exactly as an SNMP
+  reading's.
+
+  A run reports every reading in `Result.details.matter`, an array of
+  `{ name, endpoint, path, raw, unit, value }` — `path` is `endpoint/cluster/attribute`,
+  `raw` is the reading in words (`21.37`, `open`, `on`), `value` the number it was
+  judged and charted as — and the sidecar it asked in `Result.details.matterServer`.
+  Every reading with a number is in `Result.metrics`. An attribute the endpoint does not
+  have, an unavailable or unknown node and an unreachable sidecar make the check down; a
+  sensor reporting `null` makes it degraded. `latencyMs` is the live read's round trip.
 - `POST /api/checks/{id}/run` → `Result` (recorded and processed through alerting).
 - `POST /api/checks/{id}/enable` body `{ "enabled": bool }` → Check, masked (and for an API key stripped) the same way as in `GET /api/nodes/{id}`.
 - `POST /api/checks/{id}/silence` body `{ "minutes": 60 }` (0 = unsilence) → CheckState.
@@ -325,7 +359,7 @@ echoed as written, so an `Authorization` header on an HTTP check is stored in th
 ### Node and Check objects
 
 A `Node` is `{id, name, host, groups, group, tags, notes, importance, enabled,
-dependsOnNodeId, linkStyle, template, createdAt, updatedAt, checks}`. `host` is the default target
+dependsOnNodeId, linkStyle, collectorId, template, createdAt, updatedAt, checks}`. `host` is the default target
 its checks inherit when their own `config.target` is empty; `importance` is `low`,
 `normal`, `high` or `critical`; `dependsOnNodeId` is the parent used for
 dependency-aware alert suppression; `template` records which template the node was
@@ -345,6 +379,16 @@ and bulk edit. The style belongs to the link, so a node with no
 when the parent is deleted) and one pointed at a different parent keeps it.
 It is part of the node everywhere a node goes: the overview, the configuration
 export, backups and restores, and `POST /api/nodes/{id}/duplicate`.
+
+`collectorId` is where the node's network checks run from: `null` for this server, or
+the id of a paired agent acting as a remote collector
+([`COLLECTORS.md`](COLLECTORS.md)). Only its `ping`, `tcp`, `http`, `keyword`, `json`,
+`cert`, `dns` and `snmp` checks move; any other check of the node still runs here. A
+create or update naming an agent that does not exist, or has been revoked, is a `400`;
+`0` means this server. An agent whose collecting is not switched on is accepted, and the
+node's checks show as `unknown` with the reason until it is. While a check is collected,
+`POST /api/checks/{id}/run` answers `409` (this server is not where it runs) and
+`POST /api/nodes/{id}/run` skips it. Bulk edit does not change `collectorId`.
 
 A `Check` is `{id, nodeId, type, name, enabled, intervalSeconds, timeoutSeconds,
 retries, failureThreshold, config, alerts, sortOrder, createdAt, updatedAt}`.
@@ -376,6 +420,7 @@ falls back to `general.latencyWarnMs` / `general.packetLossWarnPct`).
 | `custom` | `command`, `workDir`, `env` — see the output contract above |
 | `system` | `hostSource`, `agentId`, `metricsUrl`, `metricsToken`, `metricThresholds`, `diskMounts`, `staleAfterSeconds` — see [Hardware check metrics](#hardware-check-metrics) |
 | `snmp` | the `snmp*` fields in the table above |
+| `matter` | `matterServer`, `matterNodeId`, `matterReadings` — see the `matter` table above |
 
 `contentWatch` turns an `http`, `keyword` or `json` check into a change watch as well:
 `""` (off), `"hash"` (the body's digest), `"header"` (the header named by
@@ -431,6 +476,27 @@ per-packet round-trip times in milliseconds).
   there, and reports what came back — that is a probe, and it belongs to the person in
   front of the machine rather than to an integration.
 
+### Matter devices and commissioning
+
+- `POST /api/matter/nodes` body `{ "server", "host" }` → `{ "server", "serverInfo",
+  "nodes": [{ "nodeId", "available", "isBridge", "vendor", "product", "label",
+  "endpoints": [{ "id", "label", "deviceTypes", "clusters", "readings": [{ "kind",
+  "name", "unit", "cluster", "attribute", "current" }] }] }], "standards": [...] }`.
+  Asks the sidecar at `server` (or `host` on port 5580) for every commissioned node
+  (`get_nodes`) and describes it from the sidecar's cache, with the standard readings
+  each endpoint offers and their current values. 502 when the sidecar cannot be reached.
+- `POST /api/matter/commission` body `{ "server", "host", "code", "networkOnly" }` →
+  `{ "server", "node": {…as above} }`. Relays a pairing code — an 11- or 21-digit manual
+  code (dashes and spaces are stripped) or `MT:` QR text — to `commission_with_code`.
+  `networkOnly` defaults to `true` (multi-admin, or a device already on the network);
+  `false` needs Bluetooth on the sidecar and is refused up front when it has none. Waits
+  up to three minutes, and records a `config_changed` event either way.
+
+  **Administrator only, and refused to API keys of every scope**, like the SNMP walk:
+  both make GWatch connect to an address of the caller's choosing, and commissioning
+  adds a device to a Matter controller. GWatch stores no Matter credential; the fabric
+  stays in the sidecar's storage.
+
 ## Discovery (find devices on the network)
 
 A discovery run pings a range of addresses, asks whatever answered for its name and
@@ -485,14 +551,31 @@ answered **409**; the registry is in memory, so a restart forgets the last run.
       "rttMs": 1.4,
       "openPorts": [22, 80],
       "template": "home-server",
-      "note": "SSH and a web interface — looks like a server or NAS."
+      "note": "SSH and a web interface — looks like a server or NAS.",
+      "mac": "00:11:32:aa:bb:cc",
+      "vendor": "Synology",
+      "noPing": false
     }
   ],
+  "notes": [],
   "error": "",
   "startedAt": "...",
   "finishedAt": "..."
 }
 ```
+
+After the pings, the server reads its own IPv4 neighbour (ARP) table — `/proc/net/arp` on
+Linux, `GetIpNetTable` on Windows; not yet on macOS. Every address in the swept ranges with
+a resolved entry is a responder, so a device that answered ARP but not the ping is found
+too, with `noPing: true` and `rttMs` 0 (its note warns that a ping check would read it as
+down). `mac` is the address in that table, lower-case and colon-separated, and `vendor` the
+maker of the network card from the IEEE registry embedded in GWatch, or
+`"Private (randomised) address"` for a locally administered MAC such as a phone's; both are
+absent for a device behind a router, which never has an entry of its own. The vendor also
+sharpens the suggested template's note — and a web-only device whose maker makes printers,
+cameras or smart-home kit is not suggested as a router. `notes` explain the results: today,
+that GWatch runs in a container whose neighbour table shows no LAN devices (bridge
+networking). IPv6 neighbours (NDP) are not read.
 
 Progress is also pushed over `/api/stream` (see Server-sent events), and each run leaves
 one entry of type `discovery` in the timeline — "Discovery scanned 254 addresses in
@@ -647,6 +730,19 @@ Every other check type leaves `metrics` absent.
   business, because only a check knows the thresholds somebody chose.
 - `GET /api/hosts/{key}` → one `HostSummary`. The key is `local`, `agent:<id>` or
   `url:<check id>`.
+- `GET /api/hosts/local/watchable` → `{ "services": [InventoryItem], "processes": [InventoryItem], "problems": [string] }`.
+  Every service on the computer GWatch runs on (`detail` is `running` or `stopped`,
+  then its description) and every program running on it now (`detail` is how many
+  copies), for choosing which to watch. Made when asked for and never otherwise; a
+  platform that cannot list one of them says why in `problems`. Administrator only,
+  never an API key.
+- `PUT /api/hosts/local/watch` body `{ "services": ["Spooler"], "processes": ["plex"] }` →
+  the stored `{ services, processes }`. Which services and programs the computer
+  GWatch runs on watches; the next sample reports them as `service:<name>` and
+  `process:<name>` metrics (below). An empty body watches nothing. `400` for a name
+  that starts with `-` or contains a control character. Administrator only, never an
+  API key; written to the audit trail. The current list is `watch` on this computer's
+  `HostSummary` (absent when nothing is watched).
 - `GET /api/hosts/{key}/history?range=1h|24h|7d|30d|1y` →
   `{ key, range, from, to, samples }`. A sample is the numeric series only
   (`cpuPct`, `memPct`, `swapPct`, `diskPct`, `loadPerCore`, `netRxBytesPerSec`,
@@ -663,8 +759,13 @@ each reading as a metric of its own (#60).
 a machine has one of. The rest are `family:instance`: `disk:/srv` and `inodes:/srv`
 per filesystem; `net:eth0.rx` and `net:eth0.tx` per interface (bytes/s received and
 sent); `diskio:sda.read`, `diskio:sda.write` (bytes/s) and `diskio:sda.busy` (%) per
-block device. Units follow the family: `%` for everything but `load` (no unit) and
-the throughput keys (`B/s`).
+block device. On Linux, `temp:<chip>/<sensor>` (°C), `psi:<resource>.avg10` and
+`.avg60` (%) and `pool:<name>` (unit `state`: 0 healthy, 1 degraded, 2 faulted). For
+the services and programs a machine is told to watch (#62), `service:<name>` (unit
+`running`: 1 running, 0 stopped or not installed) and `process:<name>` (unit `count`:
+how many copies are running); a machine watching none reports none. Units follow the
+family: `%` for everything but `load` (no unit), the throughput keys (`B/s`) and the
+ones just named.
 
 **Per-metric verdicts.** Every run puts one `MetricResult` per reading in
 `Result.details.metricResults`:
@@ -696,16 +797,18 @@ fails the whole check and carries no metric results.
 
 | field | meaning |
 | --- | --- |
-| `metric` | a family — `cpu`, `memory`, `swap`, `load`, `disk`, `inodes`, `net`, `diskio` — or an instance key. An instance entry replaces its family's for that instance alone; `net:eth0` and `diskio:sda` cover both directions of that interface or device, `net:eth0.rx` one of them. `cpu`, `memory`, `swap` and `load` take no instance. |
+| `metric` | a family — `cpu`, `memory`, `swap`, `load`, `disk`, `inodes`, `net`, `diskio`, `temp`, `psi`, `pool`, `service`, `process` — or an instance key. An instance entry replaces its family's for that instance alone; `net:eth0` and `diskio:sda` cover both directions of that interface or device, `net:eth0.rx` one of them. `cpu`, `memory`, `swap` and `load` take no instance. |
 | `warn`, `crit` | the levels; a missing level is off. Crossing `warn` makes the metric (and so the check) degraded, crossing `crit` makes it down. On an "above" threshold a level of `0` is also off, so an older configuration that said "0 turns it off" still means that. |
 | `below` | `true` for a reading where less is worse: the levels are then crossed at or *below* the number, and `crit` must be at or below `warn`. |
 
 Validation: a percentage family's levels are 0–100, a rate's are non-negative,
 `crit` is at or above `warn` (at or below with `below`), no two entries name the same
-key, and the family must be one of the eight. A family that is listed with no levels,
+key, and the family must be one of those above. A family that is listed with no levels,
 or not listed at all, is still measured and charted; it just never alerts. A check
 saved with an empty list gets `SystemDefaults` (cpu 90; memory 90/97; swap 50; disk
-and inodes 85/95; load 2).
+and inodes 85/95; load 2; pool 1/2; and `service` and `process` critical at or below
+0 — `{ "metric": "service", "crit": 0, "below": true }` — so a watched service
+stopping, or a watched program with no copy running, is critical).
 
 The flat fields that preceded the list — `cpuWarnPct`, `cpuCritPct`, `memWarnPct`,
 `memCritPct`, `swapWarnPct`, `diskWarnPct`, `diskCritPct`, `loadWarnPerCore`,
@@ -748,22 +851,45 @@ routes — an administrator in the browser, never an API key:
   readable copy), and a rotation gets a readable one. It is a `POST`, it writes to the audit
   trail, and like the rest of the credential routes it is for an administrator in the
   browser, never an API key. `Agent` carries `tokenViewable`, `rotationPending`,
-  `rotationSince`, `collect`, `inventory` and `checkedInAt`; never a token.
+  `rotationSince`, `collect`, `inventory` and `checkedInAt`; never a token. It also
+  carries the remote-collector fields: `collector` (turned on in GWatch),
+  `collectorAllowed` (the machine said at its last check-in that its own `agent.json`
+  allows it), `collectorSeenAt` (when it last sent results or a heartbeat),
+  `collectorChecks` (how many checks it runs) and `collectorStatus` — `""` (off),
+  `waiting` (on here, not allowed on the machine), `idle` (no node checks from it),
+  `running`, or `unreachable` (it has checks and has gone quiet).
 - `POST /api/agents/{id}/rotate` body `{ "retireOld": bool }` → `{ "token": "gwa_…", "retiredOld": bool, "agent": Agent }`.
   Issues a replacement token. By default the old token keeps working until the new one is
   first used; an agent holding the old one is handed the new one when it next checks in
   (below), writes it to its file and switches over, and its first request with the new token
-  retires the old. `retireOld: true` is for a token that may have leaked: the old token stops
+  retires the old (both are accepted until then, so there is no gap; an agent that never
+  takes the new one up — its token comes from an environment variable or a flag — keeps
+  using the old one until the rotation is cancelled or replaced). `retireOld: true` is for a token that may have leaked: the old token stops
   working at once, nothing is delivered over the network, and the new token has to be put on
   the machine by hand. `409` for a revoked agent.
 - `POST /api/agents/{id}/rotate/cancel` → 204. Drops a replacement nobody has used.
 - `PUT /api/agents/{id}/collect` body `CollectSelection` → `Agent`. Which readings the
   administrator wants from the machine: `{ "metrics": ["cpu","net"], "interfaces": ["eth0"],
-  "disks": [], "mounts": [] }`. An empty list is "automatic" — every kind of reading, every
-  disk and filesystem, and the interfaces that are not obviously virtual. The agent applies
-  it the next time it checks in, always inside the limit set in its own configuration file:
-  GWatch can narrow what a machine reports, never widen it. `400` for an unknown metric
-  family (`cpu`, `memory`, `swap`, `load`, `disk`, `inodes`, `net`, `diskio`).
+  "disks": [], "mounts": [], "services": ["nginx", "smbd"], "processes": ["plex"] }`. An
+  empty list is "automatic" — every kind of reading, every disk and filesystem, and the
+  interfaces that are not obviously virtual — except `services` and `processes`, the names
+  to watch, where empty means none. The agent applies it the next time it checks in,
+  always inside the limit set in its own configuration file: GWatch can narrow what a
+  machine reports, never widen it. `400` for an unknown metric family (`cpu`, `memory`,
+  `swap`, `load`, `disk`, `inodes`, `net`, `diskio`, `temp`, `psi`, `pool`), or a service
+  or program name that starts with `-` or contains a control character.
+- `PUT /api/agents/{id}/collector` body `{ "enabled": bool }` → `Agent`. GWatch's half of
+  the agreement that makes a machine a remote collector; the machine's half is
+  `"collector": true` in its own `agent.json`. Neither alone does anything: the checks are
+  handed out only when both are there. Written to the audit trail. `409` to turn it on for
+  a revoked agent. Administrator only, never an API key.
+- `GET /api/agents/latest` → `{ "version", "url", "checkedAt", "error"? }`, the newest
+  non-pre-release `gwatch-agent` release in the update repository, which the interface
+  uses to mark machines running an older agent. It reads the agent's own releases
+  (its own tags), not GWatch's; the answer is cached for six hours (ten minutes after a failed
+  lookup, and a failed lookup never replaces a good answer). When `updates.checkAutomatically`
+  is off, or the build has no updater, it returns an empty release
+  and makes no network request. Administrator only, never an API key.
 
 ### Pairing codes
 
@@ -826,7 +952,18 @@ and the server in `agent-settings.json`; an agent that finds those moves them in
 ### Submitting a reading
 
 `POST /ingest/metrics` with `Authorization: Bearer gwa_…` and a `HostMetrics` body.
-Answers `202` with `{ accepted, ts, intervalSeconds }`.
+Answers `202` with `{ accepted, ts, intervalSeconds }`; `ts` is the time the reading was
+filed at.
+
+GWatch keeps the reading's own `ts` — when the machine took it — so readings an agent held
+through an outage are filed when they were taken. A reading that arrives after a newer one
+is added to the history at its own time without being judged as current, and one GWatch
+already has a result for at about that time is ignored, so a replay does no harm. An
+agent marks a reading it is delivering late with `X-GWatch-Held: 1`. A held reading with
+no `ts`, one more than five minutes ahead of GWatch's clock, or one more than 48 hours old
+is refused with `422` (the agent drops it rather than retrying). An unmarked reading is
+taken to be live: if its `ts` is missing or implausible it is filed at the time it
+arrived, so a machine with a wrong clock still reports.
 
 This route is deliberately outside the authorization table above. It is reached with an
 agent token and nothing else; the token names exactly one machine, the reading is filed
@@ -839,30 +976,74 @@ per-IP failure budget as a wrong password.
 ### Asking for settings
 
 `POST /ingest/checkin` with `Authorization: Bearer gwa_…` and an optional body
-`{ "version": "0.7.0", "inventory": { "interfaces": [{ "name", "detail", "auto" }], "disks": […], "mounts": […] } }`.
+`{ "version": "0.7.0", "collector": true, "inventory": { "interfaces": [{ "name", "detail", "auto" }], "disks": […], "mounts": […], "services": […], "processes": […] } }`.
+`collector` says the machine's own configuration allows it to act as a remote collector.
 Answers `200` with an `AgentSettings`:
 
 ```json
 { "checkInSeconds": 900,
   "collect": { "metrics": [], "interfaces": ["eth0"], "disks": [], "mounts": [] },
   "latestAgent": "0.7.1",
-  "token": "gwa_…" }
+  "token": "gwa_…",
+  "collector": { "checks": [ { "id": 41, "type": "snmp", "name": "Switch", "intervalSeconds": 60,
+                               "timeoutSeconds": 5, "retries": 1, "target": "10.2.0.2",
+                               "config": { "snmpCommunity": "…", "snmpOids": [ … ] } } ],
+                 "options": { "defaultCertWarn": 14, "latencyWarnMs": 0, "packetLossWarnPct": 0, "pingMethod": "" } } }
 ```
 
 That is the **whole** of what GWatch can tell an agent, and it is a closed set on purpose:
 how long to wait before asking again, the readings the administrator chose, the newest
-agent release as a hint, and — only while a rotation is waiting, and only to a caller that
-holds the token being replaced — the replacement token. There is no field for a URL to
-fetch, a command to run, a file to write or a version to install. The agent applies each
+agent release as a hint, the replacement token (only while a rotation is waiting, and only
+to a caller that holds the token being replaced), and the built-in network checks to run
+(only when an administrator has made the agent a collector **and** this check-in said the
+machine allows it), each with its target resolved and only the settings its type reads —
+including an SNMP community or HTTP headers, which is why they go only to the collector
+assigned to them. A collector is asked to check in every two minutes, so a check
+added to one of its nodes starts soon. There is no field for a command or a script, a URL to
+fetch code from, a file to write or a version to install. The agent applies each
 part on its own terms: the selection only ever narrows what its own file allows, the
 interval is clamped to between one minute and a day, a token is taken up only if the
 agent's file owns it, and `latestAgent` changes nothing (an agent still fetches and
 verifies releases itself, from the release feed). The agent sends an inventory of what it
 could report so that GWatch can offer checkboxes for a disk or interface it has not been
-told about; only what the machine's own limit allows is listed. Like `/ingest/metrics` the
+told about; only what the machine's own limit allows is listed. `services` and
+`processes` (at most 1024 each) are every service the machine has and every program
+running at check-in time, listed then and never with a reading, for choosing which to
+watch. Like `/ingest/metrics` the
 route is reached with an agent token and nothing else, shares its failure budget, and is
 outside the authorization table. [`AGENT-DECISIONS.md`](AGENT-DECISIONS.md#12-an-agent-asks-gwatch-for-a-small-fixed-set-of-things)
-says why this does not turn GWatch into a control channel.
+says why this does not turn GWatch into a control channel, and
+[entry 16](AGENT-DECISIONS.md#16-an-agent-may-run-gwatchs-network-checks-from-where-it-is-if-both-sides-agree)
+why the collector's checks do not either.
+
+### Submitting check results (remote collectors)
+
+`POST /ingest/results` with `Authorization: Bearer gwa_…` and a body
+`{ "results": [ { "result": Result, "held": bool } ] }` — at most 500 results, an empty
+list being a heartbeat. Answers `202 { "accepted": n, "rejected": n }`.
+
+Each result has to be for a check this agent is currently assigned — an enabled check of a
+collectable type on an enabled node whose `collectorId` is this agent — or it is counted
+under `rejected` and dropped; a collector cannot write into any other check. A live result
+goes through exactly the processing a result taken here does (state, incidents, alerts,
+notification rules, maintenance, silences); its time is kept unless it is more than a
+minute ahead of GWatch's clock or five minutes behind, when the arrival time is used. A
+result marked `held` (kept through an outage, by the collector's own clock) is added to the
+check's history at its own time and judges nothing, like a held hardware reading, and is
+refused (rejected) if it has no time, is ahead of GWatch's clock or is more than 48 hours
+old. `403` when collecting is turned off for the agent in GWatch, or the agent has not said
+its own configuration allows it; the agent drops what it holds rather than retrying.
+`503` with `Retry-After` while a restore has monitoring paused; the agent holds the batch
+and sends it again. Like
+the other `/ingest/` routes it takes an agent token and nothing else, shares their failure
+budget and is outside the authorization table.
+
+A collector that sends nothing — results or heartbeat — for three of its shortest check
+interval (never less than three minutes) is called unreachable: its checks become
+`unknown`, with `suppressReason: "collector"` and the reason in `lastMessage`, and one
+`collector_unreachable` event and one alert are raised for the collector rather than one
+per check. When it sends again a `collector_back` event is recorded; a check that was
+down before is down again, without a second down alert.
 
 Rates in a `HostMetrics` (`usagePct`, anything `…PerSec`) are derived by the reporting
 machine from two of its own consecutive readings, never by GWatch subtracting across the
@@ -873,7 +1054,7 @@ arrival time. See [`HARDWARE.md`](HARDWARE.md).
 
 ## Events / incidents
 
-- `GET /api/events?limit=100&before=ID&nodeId=&checkId=&type=&q=&since=&until=` → `[Event]` newest first. A `type` filter also includes its counterpart (down+recovered, warning+warning_cleared, cert_warning+cert_warning_cleared, silenced+unsilenced, maintenance_began+maintenance_ended, alert_sent+alert_failed, rule_fired+rule_cleared) unless `exact=1`. `q` is a case-insensitive search over title, detail, node and check name; `since`/`until` accept RFC 3339, `2006-01-02T15:04` or `2006-01-02`.
+- `GET /api/events?limit=100&before=ID&nodeId=&checkId=&type=&q=&since=&until=` → `[Event]` newest first. A `type` filter also includes its counterpart (down+recovered, warning+warning_cleared, cert_warning+cert_warning_cleared, silenced+unsilenced, maintenance_began+maintenance_ended, alert_sent+alert_failed, rule_fired+rule_cleared, collector_unreachable+collector_back) unless `exact=1`. `q` is a case-insensitive search over title, detail, node and check name; `since`/`until` accept RFC 3339, `2006-01-02T15:04` or `2006-01-02`.
 - `POST /api/events/note` body `{ "nodeId": null|id, "text": "rebooted router" }` → Event (timeline annotation).
 
 Every `Event` carries an optional `actor` naming who caused it — `"local"`, `"password"`,
@@ -919,6 +1100,7 @@ every other event.
 | `auth` | a sign-in, sign-out, failed sign-in, or an account or API-key change |
 | `discovery` | a subnet was swept, or nodes were added from a sweep |
 | `rule_fired` / `rule_cleared` | a notification rule's conditions came together, or came apart again |
+| `collector_unreachable` / `collector_back` | a remote collector stopped sending results (its checks are unknown until it is back), or started again. One pair per collector, filed under the collector machine's node when it has one |
 
 ## Maintenance windows
 
@@ -953,7 +1135,7 @@ Widget types (`Widget.type`) and their `config`:
 | `summary` | `{}` | overall health counts (up/degraded/down/unknown) |
 | `groups` | `{ "groups": ["Home Network", ...] }` (empty = all) | group status cards |
 | `status_list` | `{ "group": "", "tag": "", "nodeIds": [], "sort": "" }` | node/check status list, filtered (`group` matches any of a node's groups); `sort` is `""` (as the overview lists them), `status`, `name`, `name-desc`, `host` or `importance` |
-| `network_map` | `{ "orientation": "down|right|radial", "labels": "name|name-host|none", "size": "small|medium|large", "edges": "curved|straight|elbow", "group": "", "tag": "", "onlyLinked": false, "colorEdges": true, "showLegend": true, "lineColor": "", "lineWidth": 1.5, "lineStyle": "solid|dashed|dotted|dash-dot" }` | the dependency map: every node under the node it depends on (`radial` is the clusters layout: each node in the middle of a ring of the nodes that depend on it). `lineColor` (`#rgb`, `#rrggbb` or `#rrggbbaa`; empty = the theme's), `lineWidth` (1–8) and `lineStyle` are how a line looks unless the node at its lower end has a `linkStyle` of its own; saving a dashboard with a colour or style that is not allowed is a 400, and a width out of range is clamped |
+| `network_map` | `{ "orientation": "down|right|radial", "labels": "name|name-host|none", "size": "small|medium|large", "edges": "curved|straight|elbow", "group": "", "tag": "", "onlyLinked": false, "colorEdges": true, "showLegend": true, "lineColor": "", "lineWidth": 1.5, "lineStyle": "solid|dashed|dotted|dash-dot" }` | the dependency map: every node under the node it depends on (`radial` is the clusters layout: the nodes that depend on a node branch off it in whatever direction has room, with longer lines to bigger branches). `lineColor` (`#rgb`, `#rrggbb` or `#rrggbbaa`; empty = the theme's), `lineWidth` (1–8) and `lineStyle` are how a line looks unless the node at its lower end has a `linkStyle` of its own; saving a dashboard with a colour or style that is not allowed is a 400, and a width out of range is clamped |
 | `latency_chart` | `{ "checkIds": [1,2], "range": "24h", "metric": "avg" }` | line chart of latency/response time |
 | `response_chart` | same as latency_chart (HTTP checks) | response time |
 | `loss_chart` | `{ "checkIds": [], "range": "24h" }` | packet loss % |
@@ -1053,21 +1235,30 @@ See [`docs/RECIPES.md`](RECIPES.md) for copy-pasteable trigger/endpoint recipes 
   A token is **required**: saving with an empty `token` is rejected with 400 unless `allowNoToken` is `true`, the explicit acknowledgement that anyone who can reach the port may run the action. A token must be at least 8 characters, and supplying one forces `allowNoToken` back to `false`.
 - `ANY /hook/{slug}` → runs the endpoint's action and answers `ActionResult` (200, or 502 when the action failed). The token is passed as `?token=`, `X-GWatch-Token` or `Authorization: Bearer`; a wrong token is 401, and 429 with `Retry-After` once the per-IP failure budget runs out. An endpoint with no stored token is refused with 401 unless `allowNoToken` is set. `/hook/` URLs are not covered by the LAN access password, so the token is their only protection. The request body and query parameters are available to the action as `{{body}}` and `{{query.<name>}}`.
 
-An `Action` is `{ "type": "http|slack|teams|ntfy|pushover|git|script|run_node", "timeoutSeconds", ... }`:
+An `Action` is `{ "type": "http|slack|teams|discord|telegram|matrix|ntfy|gotify|pushover|twilio|pagerduty|opsgenie|git|script|run_node", "timeoutSeconds", ... }`:
 | type | fields |
 |---|---|
 | `http` | `method` (auto: POST with body, else GET), `url`, `headers`, `body`, `expectedStatus` (default 200-399), `ignoreTlsErrors` |
 | `slack` | `webhookUrl` (https://, a Slack incoming webhook), `message` |
-| `teams` | `webhookUrl` (https://, a Teams/Power Automate webhook), `title`, `message` |
+| `teams` | `webhookUrl` (https://, a Teams Workflows / Power Automate "when a webhook request is received" URL — the Office 365 connector webhooks are retired), `title`, `message`. Posts `{type: "message", attachments: [{contentType: "application/vnd.microsoft.card.adaptive", contentUrl: null, content: <Adaptive Card 1.4>}]}` |
+| `discord` | `webhookUrl` (https://, a Discord channel webhook), `title` (sent in bold), `message`. Posts `{content, allowed_mentions: {parse: []}}`, so `@everyone` in a message never pings; content is cut to Discord's 2000 characters |
+| `telegram` | `token` (bot token from @BotFather, `123:AA…`), `chatId` (a numeric user/group/channel ID, or `@channelname`), `title`, `message`. Calls the Bot API `sendMessage` on `https://api.telegram.org` as plain text (no `parse_mode`), cut to 4096 characters; success needs `{"ok": true}` |
+| `matrix` | `server` (homeserver base URL, http:// or https://), `token` (access token), `roomId` (`!id:server`, not an `#alias`), `title`, `message`. `PUT /_matrix/client/v3/rooms/{roomId}/send/m.room.message/{txnId}` with `Authorization: Bearer`, body `{msgtype: "m.text", body}` |
+| `gotify` | `server` (http:// or https://), `token` (application token, sent as `X-Gotify-Key`, never in the URL), `title`, `message`, `priority` (`0`-`10`) |
+| `twilio` | `accountSid` (`AC` + 32 characters), `token` (auth token), `from` (a number, an alphanumeric sender, or a messaging service SID starting `MG`), `to` (one or more E.164 numbers, comma-separated), `message`. One `POST /2010-04-01/Accounts/{sid}/Messages.json` per number on `https://api.twilio.com` with basic auth; the run fails, naming who missed out, unless every number was accepted. SMS has no title; the body is cut to 1600 characters |
+| `pagerduty` | `routingKey` (Events API v2 integration key), `eventAction` (`""`/`auto`, `trigger` or `resolve`), `severity` (`""`/`auto`, `critical`, `error`, `warning`, `info`), `dedupKey`, `message` (the summary). Sends to `https://events.pagerduty.com/v2/enqueue`; success needs `{"status": "success"}` |
+| `opsgenie` | `token` (API key, sent as `Authorization: GenieKey …`), `region` (`""`/`us` or `eu`), `eventAction` (`""`/`auto`, `create`/`trigger` or `close`/`resolve`), `dedupKey` (the alert alias), `priority` (`P1`-`P5`), `tags` (comma-separated), `message` (first 130 characters are the headline, all of it the description). Create is `POST /v2/alerts`; close is `POST /v2/alerts/{alias}/close?identifierType=alias` |
 | `ntfy` | `server` (default `https://ntfy.sh`; http:// or https://), `topic`, `title`, `message`, `priority` (`min\|low\|default\|high\|urgent` or `1`-`5`), `tags`, `token` (optional bearer token) |
 | `pushover` | `token` (application token), `userKey`, `title`, `message`, `priority` (`-2`..`2`) |
 | `git` | `repo` (working directory), `gitArgs` (everything after `git`) |
 | `script` | `interpreter` (`sh`, `bash`, `powershell`, `cmd`, `python`, `node`, `custom`), `command` (for custom; `{{file}}` is the script path), `code`, `workDir`, `allowUntrustedInput` |
 | `run_node` | `nodeId` |
 
-A URL is where a request — and for ntfy its bearer token — is sent, so the `url` of an `http` action, the `webhookUrl` of `slack` and `teams`, and the ntfy `server` must spell out their scheme and host (and port, and any user info): a placeholder there is refused with 400 when the action is saved. Placeholders may appear in the path, query and fragment, where each value is escaped as data (path-escaped in the path, query-escaped in the query) and so cannot add a segment, a parameter or another host. The ntfy `topic` is one escaped path segment under `server`. ntfy's `Authorization` header is dropped if the server redirects to another scheme, host or port.
+A URL is where a request — and for ntfy its bearer token — is sent, so the `url` of an `http` action, the `webhookUrl` of `slack`, `teams` and `discord`, and the `server` of `ntfy`, `gotify` and `matrix` must spell out their scheme and host (and port, and any user info): a placeholder there is refused with 400 when the action is saved. Placeholders may appear in the path, query and fragment, where each value is escaped as data (path-escaped in the path, query-escaped in the query) and so cannot add a segment, a parameter or another host. The ntfy `topic` is one escaped path segment under `server`. ntfy's `Authorization` header is dropped if the server redirects to another scheme, host or port, and so are the credential headers of the other channels (`Authorization` for Matrix and Opsgenie, `X-Gotify-Key` for Gotify). Telegram, Twilio, PagerDuty and Opsgenie are pinned to their providers' fixed API hosts: there is no field to point them anywhere else. A Telegram bot token, which the Bot API puts in the URL path, is replaced by `<bot token>` in any error the run reports.
 
-`slack`, `teams`, `ntfy` and `pushover` all default `title` to `"GWatch {{instance}}"` and `message` to `"{{node.name}} is {{status}}: {{message}}"` when left blank; both fields are JSON-safe (or form/header-safe) no matter what characters `{{message}}` expands to, since the payload is built with `encoding/json` (or form-encoding for Pushover, headers for ntfy) instead of string concatenation.
+**Incidents (PagerDuty, Opsgenie).** With `eventAction` left automatic, a run whose `{{event}}` is `recovered`, `warning_cleared` or `rule_cleared` resolves (closes) the incident and anything else opens it. The default `dedupKey`/alias is one per check — `gwatch-node-<nodeId>-check-<checkId>`, with `-warning` appended for warning events (`degraded`, `warning`, `warning_cleared`, `cert_warning`, `content_changed`) so a cleared warning never resolves an outage — or `gwatch-rule-<ruleId>` for a rule, so a trigger on `down` + `recovered` (or a rule with "notify when cleared") opens and resolves the same incident. Severity in automatic mode is `critical`, or `warning` for warning events.
+
+Every notification type (`slack`, `teams`, `discord`, `telegram`, `matrix`, `ntfy`, `gotify`, `pushover`, `twilio`, `pagerduty`, `opsgenie`) defaults `title` to `"GWatch {{instance}}"` and `message` to `"{{node.name}} is {{status}}: {{message}}"` when left blank; both fields are JSON-safe (or form/header-safe) no matter what characters `{{message}}` expands to, since the payload is built with `encoding/json` (or form-encoding for Pushover, headers for ntfy) instead of string concatenation.
 
 String fields may contain `{{placeholders}}`: `node.name`, `node.host`, `node.group` (the node's first group), `node.groups` (all of them, comma-separated), `check.name`, `check.type`, `target`, `status`, `prev_status`, `message`, `error`, `success`, `latencyMs`, `lossPct`, `statusCode`, `failures`, `event`, `ts`, `instance`, `metric`, `metric.label`, `metric.value`, `metric.status` (the metric a metric-scoped event or a `metric_over` condition fired on; empty otherwise), `metrics.<key>` (every named metric of the run — a key's characters other than letters, digits, dots and dashes become `_`, so `disk:/srv` is `{{metrics.disk__srv}}`), `body`, `query.<name>`. Scripts also receive them as `GWATCH_*` environment variables (`node.name` → `GWATCH_NODE_NAME`).
 
@@ -1129,7 +1320,7 @@ Validation (400 with the reason): a name, at least one condition and one action,
 - **Maintenance and silence:** a check under an active maintenance window or silenced does not count towards any rule while that lasts, and counts again afterwards. A disabled check or node never counts. A disabled rule is put back to not-met without firing anything.
 - Rules are exported and restored with the backup configuration (`rules` in `config.json`; an older archive without it restores as before). A restored rule starts not-met.
 
-**Placeholders** for a rule's actions, beside the ones every action gets: `rule.id`, `rule.name`, `rule.join`, `rule.needed`, `rule.total`, `rule.met` (how many conditions hold), `rule.conditions` (`Pi-hole › DNS is down, Router › DNS is down`), `rule.summary` (`Rule 'Two of three DNS servers down' fired: 2 of 3 conditions met — …`), `message` (the sentence after the colon), `status` (`met` or `cleared`), `event` (`rule_fired`, `rule_cleared` or `test`), `ts`, `instance`. `node.name` carries the rule's name and `check.name`, `node.host`, `target` are empty, so the default Slack, Teams, ntfy and Pushover text ("{{node.name}} is {{status}}: {{message}}") reads as a sentence without a rule-specific template.
+**Placeholders** for a rule's actions, beside the ones every action gets: `rule.id`, `rule.name`, `rule.join`, `rule.needed`, `rule.total`, `rule.met` (how many conditions hold), `rule.conditions` (`Pi-hole › DNS is down, Router › DNS is down`), `rule.summary` (`Rule 'Two of three DNS servers down' fired: 2 of 3 conditions met — …`), `message` (the sentence after the colon), `status` (`met` or `cleared`), `event` (`rule_fired`, `rule_cleared` or `test`), `ts`, `instance`. `node.name` carries the rule's name and `check.name`, `node.host`, `target` are empty, so the default text of every notification type ("{{node.name}} is {{status}}: {{message}}") reads as a sentence without a rule-specific template.
 
 **Deliberately not included yet:** hold timers ("only when the conditions have held for N minutes") and metric conditions ("disk above 90 %"). The model is shaped for them — `kind` on a condition — but neither is built.
 
@@ -1165,10 +1356,11 @@ assistant up, not for the assistant: both are admin-only and refuse every API ke
 
 ## Settings
 
-- `GET /api/settings` → `Settings` (SMTP password, access password and the scheduled-backup password are returned masked as `"********"` when set).
-- `PUT /api/settings` body `Settings` → saved Settings (a masked password keeps the stored one). `general.theme` is `dark|light|system`, `general.accentColor` a hex colour, `general.remoteAccess` rebinds the listener to all interfaces live, `general.accessPassword` is the legacy shared password for other devices (user accounts replace it), `general.requireLoginLocally` makes a browser on this computer sign in too — it is refused while no administrator account exists, and ignored until one does, `general.updateRepo` is the GitHub repository checked for releases, `general.pingMethod` is `auto|builtin|system` and is refused if it is anything else (an empty value is read as `auto`, which is what settings saved before it existed contain). `backups` configures scheduled automatic backups (see below); it cannot be saved with `enabled: true` and no password. `updates` is `{checkAutomatically, checkIntervalHours, includePrerelease, promptOnOpen}`: `checkAutomatically` governs every check GWatch makes on its own (the periodic one and the one made when the interface is opened), `checkIntervalHours` must be 1-720, `includePrerelease` lets a pre-release be offered as an update, and `promptOnOpen` offers a waiting update in a dialog when the interface is opened. `indicators` configures the status circles in the header (see below).
+- `GET /api/settings` → `Settings` (SMTP password, access password, the scheduled-backup password and the credentials of every `alerts.channels` action are returned masked as `"********"` when set).
+- `PUT /api/settings` body `Settings` → saved Settings (a masked password keeps the stored one). `general.theme` is `dark|light|system`, `general.accentColor` a hex colour, `general.remoteAccess` rebinds the listener to all interfaces live, `general.accessPassword` is the legacy shared password for other devices (user accounts replace it), `general.requireLoginLocally` makes a browser on this computer sign in too — it is refused while no administrator account exists, and ignored until one does, `general.updateRepo` is the GitHub repository checked for releases, `general.pingMethod` is `auto|builtin|system` and is refused if it is anything else (an empty value is read as `auto`, which is what settings saved before it existed contain), `general.passwordHashing` is `argon2id|pbkdf2-sha256` and is refused if it is anything else (an empty value is read as `argon2id`). `backups` configures scheduled automatic backups (see below); it cannot be saved with `enabled: true` and no password. `updates` is `{checkAutomatically, checkIntervalHours, includePrerelease, promptOnOpen}`: `checkAutomatically` governs every check GWatch makes on its own (the periodic one and the one made when the interface is opened), `checkIntervalHours` must be 1-720, `includePrerelease` lets a pre-release be offered as an update, and `promptOnOpen` offers a waiting update in a dialog when the interface is opened. `indicators` configures the status circles in the header (see below).
 - All three passwords are stored encrypted in the database with the local `gwatch.key` file; the API request and response bodies are unchanged.
 - `POST /api/settings/test-email` body `{ "to": "optional@override" }` → `{ "ok": true, "message": "..." }` or error.
+- `POST /api/settings/test-channel` body `{ "channel": AlertChannel }` → `ActionResult`. Sends a sample down alert ("Example node is down: This is a test alert from GWatch", `{{event}}` = `test`) through one alert channel as it stands in the form; masked secrets are taken from the saved channel with the same `id`, so a saved channel can be tested without retyping its key. Nothing is recorded. A PagerDuty or Opsgenie test opens a real incident with the key `gwatch-test`, which you resolve by hand.
 - `GET /api/retention/status` → `RetentionStatus`. `POST /api/retention/run` → runs rollup+cleanup now → RetentionStatus.
 
 `Settings` is `{ general, alerts, retention, backups, updates, indicators }`.
@@ -1192,6 +1384,7 @@ assistant up, not for the assistant: both are admin-only and refuse every API ke
 | `accessPassword` | — | the legacy shared password for other devices (user accounts replace it) |
 | `updateRepo` | `jxburros/GWatch` | the GitHub `owner/repo` checked for releases |
 | `requireLoginLocally` | `false` | makes a browser on this computer sign in too. Refused while no administrator account exists, and ignored until one does |
+| `passwordHashing` | `argon2id` | how new account password hashes and new backup encryption keys are derived: `argon2id` (recommended) or `pbkdf2-sha256` (PBKDF2-HMAC-SHA256, 600,000 iterations, from the Go standard library only). Anything else is a `400`; an empty value reads as `argon2id`. Existing hashes of either kind keep verifying; each account is rehashed with the selected algorithm on its next successful sign-in, without ending its sessions. PBKDF2 is weaker than Argon2id against GPU guessing at equal cost — see [`DISCLAIMER.md`](DISCLAIMER.md#password-hashing-argon2id-or-pbkdf2) |
 
 **`alerts`**
 
@@ -1205,6 +1398,24 @@ assistant up, not for the assistant: both are admin-only and refuse every API ke
 | `notifyWarnings` | `true` | also mail on a degraded condition |
 | `certWarnDays` | `14` | how many days before expiry a certificate starts warning |
 | `smtp` | port `587`, `starttls` | `{ host, port, username, password, from, security }`; `security` is `starttls`, `tls` or `none` |
+| `channels` | `[]` | the "Also notify" list, see below |
+| `groupWindowSeconds` | `0` | 0–300; when above 0, alerts of the same kind (`down`, `recovered`, `warning`) about checks on the same node within this many seconds of the first are sent as one e-mail ("Web: 3 checks down") and one message per non-incident channel (issue #99). PagerDuty and Opsgenie still get one event per check. A check that recovers while its down alert is still waiting sends neither. Out of range is a `400` |
+| `warningDigest` | `"off"` | `off`, `hourly` or `daily`: warning e-mails (not down or recovery ones) are collected and sent as one summary on the hour, or daily at 08:00 local time; channels still get each warning at once. Anything else is a `400` |
+
+`enabled: true` needs somewhere to send: at least one recipient (and then SMTP settings that validate) or at least one enabled channel. Alerts can be channel-only.
+
+**`alerts.channels`** (issue #122) are notification actions sent at exactly the points an alert e-mail is: a check going down, recovering (when `notifyRecovery`), and a warning beginning (when `notifyWarnings`). They are decided by the same code that decides the e-mail, so a channel is held back by everything that holds the e-mail back — an active maintenance window, a silence, a parent that is down (dependency), an acknowledged incident, the cooldown, alerts disabled for the check — and needs no rules of its own. An `AlertChannel` is:
+
+| field | meaning |
+| --- | --- |
+| `id` | assigned by the server on first save and kept after; send it back unchanged |
+| `name` | shown in the timeline ("Down alert sent to On-call phone") |
+| `enabled` | whether it is used |
+| `minSeverity` | `warning` (default: everything the e-mail gets) or `down` (outages and their recoveries only) |
+| `groups` | only nodes in at least one of these groups; empty means every node |
+| `action` | an `Action` of a notification type (`slack`, `teams`, `discord`, `telegram`, `matrix`, `ntfy`, `gotify`, `pushover`, `twilio`, `pagerduty`, `opsgenie`); anything else is a 400 |
+
+The action runs with the same placeholders a trigger gets, `{{event}}` being the alert kind (`down`, `recovered`, `warning`) and `{{status}}` what the check is now, plus `{{alert.kind}}`, `{{alert.channel}}`, `{{alert.count}}` and `{{alert.checks}}` (how many checks the alert is about and their names: `1` and the check's name, or for a grouped alert the count and a comma-separated list, with `{{check.*}}` empty and `{{message}}` the summary, e.g. "3 checks down: HTTP, JSON, TCP"). Each channel send uses the alert e-mail's delivery slots and its single retry, and records `alert_sent` or `alert_failed` in the timeline. A down alert counts as delivered when the e-mail or any channel got through; only when nothing did is it re-armed for the next failing result. When recovery e-mails are off, the recovery still goes to PagerDuty and Opsgenie channels, so the incident they opened is resolved. Channel credentials are sealed with `gwatch.key` like the passwords, masked in `GET /api/settings` (a masked value saved back keeps the stored one, matched by `id`), and left out of `/api/export/config.json`.
 
 **`retention`** — all in days; `0` means "keep forever".
 
@@ -1281,8 +1492,12 @@ stripped from `GET /api/export/config.json` like the SMTP password.
 - `POST /api/backups` body `{ "password": "...", "includeHistory": true }` → BackupInfo. (Manual backups are never pruned.)
 - `GET /api/backups/{fileName}/download` → file (`application/octet-stream`).
 - `DELETE /api/backups/{fileName}` → `{ok:true}`.
-- `POST /api/backups/restore` multipart form: `file`, `password`, `includeHistory` ("true"/"false") → `{ "ok": true, "nodes": n, "checks": n, "results": n }`. A body over 2 GiB (plus 1 MiB for the form) is refused with 413, as is an archive over any of the limits in [`RESTORE.md`](RESTORE.md#size-limits); either way nothing is changed.
-- `POST /api/backups/restore-existing` body `{ "fileName": "...", "password": "...", "includeHistory": bool }` → same.
+- `POST /api/backups/inspect` multipart form: `file`, `password`, `restoreAccounts` (as for a restore) → `Preview`, and nothing is changed. It is what the restore dialog shows before asking for confirmation:
+  `{ "manifest": Manifest, "counts": { "nodes", "checks", "dashboards", "maintenance", "triggers", "endpoints", "rules", "charts", "wallboards", "reports", "users", "apiKeys", "agents", "incidents", "history": bool, "results", "rollups", "events" }, "accounts": [{ "username", "role", "admin": bool }], "accountsRecreatedAnyway": bool, "agents": ["name"], "apiKeys": [{ "name", "prefix", "scope", "revoked": bool }], "commands": [{ "kind": "trigger|endpoint|rule|check", "name", "detail" }], "tokenlessEndpoints": ["slug"], "accessChanges": ["sentence"], "problems": ["..."] }`.
+  `accounts` and `agents` are the ones in the archive that are not on this server; they are added only with `restoreAccounts`, or when `accountsRecreatedAnyway` (this server has no accounts). `apiKeys` are the archive's keys this server does not know, which are always added. `commands` are the things that run a program on this computer (script and git actions; checks that run code). `tokenlessEndpoints` can be called without a token. `accessChanges` compare the archive's network-access and sign-in settings with those in force (LAN access, access password, sign-in on this computer, behind an HTTPS proxy, listening port, password hashing; trusted proxies are a command-line setting and never in an archive). `problems` lists why the archive's configuration fails validation; a restore of it would be refused. A wrong password is a 400.
+- `POST /api/backups/inspect-existing` body `{ "fileName": "...", "password": "...", "restoreAccounts": bool }` → the same, for an archive in the backup folder.
+- `POST /api/backups/restore` multipart form: `file`, `password`, `includeHistory` ("true"/"false"), `restoreAccounts` ("true"/"false", default false: accounts and agents no longer on this server are left out and listed) → `{ "ok": true, "nodes": n, "checks": n, "results": n, "skippedUsers": [...], "skippedAgents": [...], "safetyBackup": "file name" }`. The archive's configuration is validated first, as each part of it would be when saved through this API (settings, nodes and checks, triggers, endpoints, rules and their actions, reports, accounts, keys, agents); an archive that fails is refused with **400** `{ "error": "...", "problems": ["..."] }` before anything is written. Then a full backup of the current data is taken under the same password; if it cannot be, nothing is restored. Monitoring is paused while the restore runs and resumed, with the restored configuration loaded, when it ends, whatever the outcome; a restore started while another is running is refused with **409**. The configuration is written in one transaction: a failure in it (**500**, "Nothing was changed") leaves the database as it was. The history is imported after that transaction commits; a failure there is a **500** with `"configRestored": true` and the counts imported so far (see [`RESTORE.md`](RESTORE.md#if-a-restore-fails)). A body over 2 GiB (plus 1 MiB for the form) is refused with 413, as is an archive over any of the limits in [`RESTORE.md`](RESTORE.md#size-limits); either way nothing is changed.
+- `POST /api/backups/restore-existing` body `{ "fileName": "...", "password": "...", "includeHistory": bool, "restoreAccounts": bool }` → same.
 
 See [`RESTORE.md`](RESTORE.md) for the end-to-end restore-to-a-new-machine procedure.
 
@@ -1291,13 +1506,22 @@ See [`RESTORE.md`](RESTORE.md) for the end-to-end restore-to-a-new-machine proce
 - `GET /api/export/history.csv?checkId=ID&range=30d` → CSV: `timestamp,avg_ms,min_ms,max_ms,jitter_ms,loss_pct,availability_pct,count,failures`.
 - `GET /api/export/results.csv?checkId=ID&limit=5000` → raw results CSV: `timestamp,success,status,message,error,latency_ms,min_ms,max_ms,jitter_ms,stddev_ms,loss_pct,http_status,final_url,attempts`.
 - `GET /api/export/events.csv?nodeId=&limit=5000&type=&q=&since=&until=` → events CSV (same filters as `/api/events`).
+- Every CSV is UTF-8 and starts with a byte-order mark, so Excel shows accents and dashes as written; strip the leading `\uFEFF` if a tool of yours does not expect it.
 - In the CSV exports, a text cell (names, titles, notes, messages, errors, URLs) that
   begins with `=`, `+`, `-`, `@`, a tab or a carriage return is written with a leading
   `'`, so a spreadsheet shows it as text rather than evaluating it as a formula. Numeric
   columns are written as they are. Use `/api/events` or `/api/checks/{id}/results` for
   the raw values.
 - `GET /api/export/logs.txt?limit=1000` → the recent service log as text.
-- `GET /api/export/config.json` → nodes+checks+dashboards+maintenance+triggers+endpoints+saved charts as JSON (no passwords).
+- `GET /api/export/config.json` → settings, nodes and checks, dashboards, maintenance
+  windows, triggers, rules, endpoints, saved charts, wallboards and report definitions as
+  JSON, meant to be readable and shareable. Secrets come out empty: the access, SMTP and
+  backup passwords; every check credential (metrics token, SNMP community and passphrases,
+  request body, header and environment values); every action credential (tokens, user
+  keys, webhook and request URLs, bodies, headers); endpoint tokens and wallboard share
+  tokens. Accounts, API keys, agents and incidents are left out, and reports lose their
+  recipients and are switched off. Administrator only, never an API key. It is not a
+  backup: use an encrypted backup for a complete recoverable copy.
 
 ## Logs
 

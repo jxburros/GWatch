@@ -73,3 +73,26 @@ func TestWindowsInterfaceTableParsing(t *testing.T) {
 		}
 	}
 }
+
+func TestWindowsInterfaceRows2(t *testing.T) {
+	rows := make([]windows.MibIfRow2, 4)
+	rows[0] = windows.MibIfRow2{InterfaceIndex: 7, OperStatus: ifOperStatusUp, ReceiveLinkSpeed: 2_500_000_000, TransmitLinkSpeed: 2_500_000_000,
+		InOctets: 1 << 40, OutOctets: 5 << 33, InErrors: 2, OutDiscards: 3}
+	rows[1] = windows.MibIfRow2{InterfaceIndex: 8, Type: windows.IF_TYPE_SOFTWARE_LOOPBACK}
+	rows[2] = windows.MibIfRow2{InterfaceIndex: 9}
+	copy(rows[2].Description[:], windows.StringToUTF16("Fallback adapter"))
+	rows[3] = windows.MibIfRow2{InterfaceIndex: 10, InterfaceAndOperStatusFlags: ifFilterInterface}
+	copy(rows[3].Description[:], windows.StringToUTF16("Ethernet-WFP Native MAC Layer LightWeight Filter-0000"))
+	got := windowsInterfaceRows2(rows, map[uint32]string{7: "Ethernet"}, map[string][]string{"Ethernet": {"192.0.2.1"}})
+	if len(got) != 2 {
+		t.Fatalf("%+v", got)
+	}
+	// Counters beyond 32 bits survive: that is the point of the table.
+	if got[0].name != "Ethernet" || !got[0].up || got[0].rxBytes != 1<<40 || got[0].txBytes != 5<<33 || got[0].speedMbit != 2500 ||
+		got[0].rxErrors != 2 || got[0].txDropped != 3 || got[0].addresses[0] != "192.0.2.1" {
+		t.Fatalf("%+v", got[0])
+	}
+	if got[1].name != "Fallback adapter" {
+		t.Fatalf("%+v", got[1])
+	}
+}

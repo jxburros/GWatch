@@ -875,6 +875,24 @@ Approximate round trip times in milli-seconds:
 	}
 }
 
+// A ping stopped before it printed its summary reports the replies it saw, not
+// the requests it never sent as lost.
+func TestSettleSentWhenPingWasCutShort(t *testing.T) {
+	cut := parsePingOutput(`PING 10.0.0.1 (10.0.0.1) 56(84) bytes of data.
+64 bytes from 10.0.0.1: icmp_seq=1 ttl=64 time=0.5 ms
+64 bytes from 10.0.0.1: icmp_seq=2 ttl=64 time=0.6 ms`)
+	if pr := settleSent(cut, 20, true); pr.Sent != 2 || pr.Received != 2 {
+		t.Errorf("cut short: %+v, want 2 sent and 2 received", pr)
+	}
+	if pr := settleSent(cut, 20, false); pr.Sent != 20 {
+		t.Errorf("ran to the end without a summary: sent %d, want 20", pr.Sent)
+	}
+	full := parsePingOutput("4 packets transmitted, 3 received, 25% packet loss")
+	if pr := settleSent(full, 4, true); pr.Sent != 4 || pr.Received != 3 {
+		t.Errorf("a summary was overridden: %+v", pr)
+	}
+}
+
 func TestValidate(t *testing.T) {
 	yes := true
 	_ = yes
@@ -930,14 +948,14 @@ func TestValidate(t *testing.T) {
 
 func TestTemplates(t *testing.T) {
 	tpls := Templates()
-	if len(tpls) != 10 {
+	if len(tpls) != 11 {
 		t.Fatalf("got %d templates", len(tpls))
 	}
 	// A template whose check reads a registered machine cannot name one until
 	// the person picks it in the editor, exactly as the others cannot know a
 	// host. Listing it here keeps that exception deliberate rather than
 	// letting any template quietly ship unvalidatable.
-	needsAChoice := map[string]string{"agent-machine": "which registered machine"}
+	needsAChoice := map[string]string{"agent-machine": "which registered machine", "matter-device": "choose the Matter node"}
 	seen := map[string]bool{}
 	for _, tpl := range tpls {
 		if tpl.ID == "" || tpl.Name == "" || tpl.Description == "" || len(tpl.Checks) == 0 {
@@ -949,7 +967,7 @@ func TestTemplates(t *testing.T) {
 		seen[tpl.ID] = true
 		for _, c := range tpl.Checks {
 			err := Validate(c, "192.168.1.10")
-			if want, ok := needsAChoice[tpl.ID]; ok {
+			if want, ok := needsAChoice[tpl.ID]; ok && (c.Type == model.CheckSystem || c.Type == model.CheckMatter) {
 				if err == nil || !strings.Contains(err.Error(), want) {
 					t.Errorf("template %s check %s: want an error asking for %q, got %v", tpl.ID, c.Name, want, err)
 				}

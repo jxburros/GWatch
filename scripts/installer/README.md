@@ -87,6 +87,31 @@ Pairing runs in `CurStepChanged` rather than `[Run]` so a mistyped, expired or
 already-used code produces a real error message instead of a service that never
 reports.
 
+The Connect page has a **Test connection** button, and Next runs the same test
+if it has not passed for the address and certificate setting on the page. It
+runs `gwatch-agent probe --server … [--insecure]` from a copy of the agent
+extracted to `{tmp}`, which checks the address is reachable, its certificate is
+acceptable and that it is a GWatch (`GET /api/health` answers with
+`schedulerRunning`), without presenting the pairing code — a code is good once,
+and the point is not to spend it on a typo. A failed test asks whether to
+install anyway; a silent install goes ahead.
+
+`probe` and `install` are both given `--result-file "{tmp}\…ini"`, and write
+their outcome there as an INI file (`[result]` with `ok`, `message`, `name`,
+`url`, `service`; UTF-16 with a BOM), which the wizard reads with
+`GetIniString`. The last page says "Paired as *name*, service running" with an
+**Open this machine in GWatch** box, or the agent's own reason for failing.
+
+The Start menu gets **GWatch Agent control panel** (`gwatch-agent ui`, which
+asks for UAC itself when it needs to). The last page also offers, unticked,
+**Show the agent in the notification area**, which runs `gwatch-agent tray
+start-at-login` as the person who started setup: a value under their
+`HKCU\…\Run` key, and the icon. Uninstalling runs `tray stop-at-login` and ends
+any running icon before removing the files; upgrading ends it too (it comes
+back at the next sign-in). The value is removed from the HKCU of the account
+the uninstaller runs as, which is the same account unless setup was elevated
+with a different administrator's credentials.
+
 ```powershell
 gwatch-agent-setup-0.1.0.exe /VERYSILENT /SERVER=http://gwatch.lan:7230 /CODE=ABCD-2345 /NAME=nas
 ```
@@ -187,9 +212,11 @@ committed object would pin it to whatever it was when the object was generated.
 
 ## Known limitations
 
-- Neither setup program is Authenticode-signed, so Windows SmartScreen shows an
-  "unknown publisher" warning. See
-  [`docs/RELEASING.md`](../../docs/RELEASING.md#the-installer-artefact).
+- The release Authenticode-signs both setup programs, their uninstallers and the
+  executables inside them only once its signing account is configured; until then they
+  are unsigned and Windows SmartScreen shows an "unknown publisher" warning. A local
+  build signs when `GWATCH_SIGNING_CERT_THUMBPRINT` is set. See
+  [`docs/RELEASING.md`](../../docs/RELEASING.md#authenticode-signing).
 - On upgrade, if the port or LAN setting changes, the already-registered `GWatch`
   service keeps its original `--data-dir`/`--listen` arguments: the installer
   calls `gwatch.exe start`, not a fresh `gwatch.exe install`, when the service

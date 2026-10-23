@@ -83,18 +83,31 @@ Inside the database:
   address the session was last seen from.
 - **API keys** — stored only as a sha256 digest plus a short display prefix. A
   key is shown to you once, at creation, and never again.
-- **Agent tokens** — likewise stored only as a hash plus a prefix. See
-  [`HARDWARE.md`](HARDWARE.md) for why an agent token is worth very little even
-  if it leaks.
+- **Agent tokens** — authenticated by a hash plus a prefix. A token issued by a
+  recent version is also kept as a copy encrypted with `gwatch.key`, so an
+  administrator can read it back; backups never carry that copy. Pairing codes
+  are stored only as a hash. See [`HARDWARE.md`](HARDWARE.md) for why an agent
+  token is worth very little even if it leaks.
 - **Settings**, including your SMTP host, username and password, the legacy
   shared access password, and your scheduled-backup password. Those three
-  secrets are encrypted in the database with the `gwatch.key` key file; the rest
-  of the settings are stored as-is.
-- **Automation** — your triggers and custom endpoints, including their action
-  configuration and each endpoint's token. These are **stored in the clear**: a
-  Slack or Teams webhook URL, an ntfy or Pushover credential, or an API token
-  you paste into a webhook action sits readable in `gwatch.db`. Protect the file
-  accordingly — see [`DISCLAIMER.md`](DISCLAIMER.md).
+  passwords are encrypted in the database with the `gwatch.key` key file; the
+  rest of the settings are stored as-is.
+- **Check credentials** — an SNMP community string and SNMPv3 passphrases, the
+  bearer token for a hardware metrics endpoint, an HTTP check's request headers
+  and body, and a custom script's environment values. These are encrypted with
+  `gwatch.key`; the rest of each check (addresses, URLs, user names) is stored
+  as-is.
+- **Automation** — your triggers, rules and custom endpoints. The secret parts of
+  each action (tokens, user keys, webhook and request URLs, request bodies and
+  headers) and each endpoint's token are encrypted with `gwatch.key`; older
+  installations' plaintext rows are encrypted when this version first starts.
+- **Wallboard share tokens** — stored in the clear, because the address has to
+  be readable again to type into a display. Each one is worth one read-only
+  board, and switching sharing off or clearing the token takes it back.
+
+Encryption with `gwatch.key` protects a copy of `gwatch.db` that leaves the
+machine without the key; anyone who can read both files can read the secrets.
+Protect the data directory accordingly — see [`DISCLAIMER.md`](DISCLAIMER.md).
 
 None of this is transmitted anywhere by GWatch itself. Exports (CSV, PNG, JSON
 configuration, the service log) and backup archives are files GWatch hands to
@@ -105,40 +118,60 @@ you; where they go afterwards is entirely your decision.
 Only what you configure, and only to destinations you chose.
 
 1. **The checks you create.** ICMP echo requests, TCP connections, HTTP and
-   HTTPS requests, DNS queries and TLS handshakes to the hosts you told GWatch
-   to watch. This is the product doing its job. The corollary is in
-   [`TERMS.md`](TERMS.md): only point it at things you are allowed to probe.
-2. **Alert email**, if you configure it — sent through your own SMTP server,
+   HTTPS requests, DNS queries, TLS handshakes and SNMP queries (UDP, port 161
+   unless you choose another, with the community string or SNMPv3 credentials
+   you gave it) to the hosts you told GWatch to watch, and, for a hardware check
+   reading a metrics endpoint, an HTTP request to that endpoint with its token.
+   **Walk this device** in an SNMP check's editor sends the same SNMP queries,
+   once, when you press it. This is the product doing its job. The corollary is
+   in [`TERMS.md`](TERMS.md): only point it at things you are allowed to probe.
+2. **Discovery**, when you start a scan. GWatch pings every address in the
+   range you give it, asks your DNS resolver for the name behind each address
+   that answers, and opens and immediately closes a TCP connection to each
+   port in the scan's list on those addresses. Nothing is scanned unless you
+   start it. The list of what answered is not stored; the audit log records that
+   a scan ran and how it went, and which nodes you added from it.
+3. **Alert email**, if you configure it — sent through your own SMTP server,
    with your credentials, to the addresses you nominate. GWatch has no mail
    relay of its own, so if you do not configure SMTP, no email is ever sent.
-3. **Update checks.** A check makes a request to `api.github.com` for the
+4. **Update checks.** A check makes a request to `api.github.com` for the
    GWatch repository's releases, and installing an update downloads the asset
-   from GitHub. Nothing about your installation is sent with that request
-   beyond what any HTTPS request necessarily reveals — your IP address and the
-   fact that something asked about GWatch releases. GitHub's handling of that
-   request is covered by GitHub's own privacy policy.
+   from GitHub. When an administrator opens the page of a machine that runs
+   the agent, GWatch makes a similar request for the agent's releases, so the
+   page can say whether that machine is behind; the answer is reused for six
+   hours. Nothing about your installation is sent with these requests beyond
+   what any HTTPS request necessarily reveals — your IP address and the fact
+   that something asked about GWatch or agent releases. GitHub's handling of
+   them is covered by GitHub's own privacy policy.
 
    GWatch checks on its own as well as when you press **Check now**: shortly
    after the service starts, once every 24 hours after that (or whatever
    interval you set), and when you open the web interface. This is the only
    thing GWatch does that reaches outside your network without you asking, and
    it is switchable: turn off **Check for updates automatically** in
-   Settings › Updates and GWatch contacts nobody until you press the button.
+   Settings › Updates and GWatch contacts nobody until you press the button
+   (the agent-release lookup stops too).
    Nothing is installed without you choosing to install it, whether or not
    automatic checks are on.
-4. **Automation you set up.** Triggers and custom endpoints send exactly what
-   you told them to send, to the webhook URL, Slack or Teams workspace, ntfy
-   server or Pushover account you configured, or run the command you wrote on
-   the local machine. If you point a trigger at a third-party notification
-   service, that service sees whatever the message contains, and their privacy
-   policy applies to it — not ours.
-5. **Agent traffic**, if you use `gwatch-agent`. The agent connects outwards to
+5. **Automation and alert channels you set up.** Triggers, notification
+   rules, custom endpoints and the "also notify" alert channels send exactly
+   what you told them to send, to the webhook URL, chat workspace (Slack,
+   Teams, Discord, Telegram, Matrix), push service (ntfy, Gotify, Pushover),
+   SMS provider (Twilio) or paging service (PagerDuty, Opsgenie) you configured, or
+   run the command you wrote on the local machine. If you point a trigger at a
+   third-party notification service, that service sees whatever the message
+   contains, and their privacy policy applies to it — not ours.
+6. **Agent traffic**, if you use `gwatch-agent`. The agent connects outwards to
    *your* GWatch server and posts that one machine's hardware reading. It is
    one-directional: GWatch never connects back to the agent and holds no
    credential for the machine. (Serve mode reverses this and is off unless you
-   ask for it.) Nothing goes to any third party.
+   ask for it: GWatch then polls the agent, with the token you gave the check.)
+   Separately, the agent on each machine checks GitHub for its own releases
+   every few hours and updates itself — see
+   [`HARDWARE.md`](HARDWARE.md#keeping-agents-up-to-date). That is the agent's
+   traffic, from that machine; GWatch is not involved in it.
 
-There is no sixth item. If you disconnect the machine from the internet and
+There is no seventh item. If you disconnect the machine from the internet and
 monitor only your LAN, GWatch is fully functional and makes no outbound
 connection beyond your own network.
 

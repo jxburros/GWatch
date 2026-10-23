@@ -80,8 +80,8 @@ authentication. If GWatch listens anywhere but loopback, create an account.
 
 ### Weak or reused passwords
 
-Passwords are stored as argon2id hashes, which protects them if the database
-leaks. It does nothing about a password that is guessable, or one you also use
+Passwords are stored as argon2id hashes (or PBKDF2 ones, if you opted in —
+see below), which protects them if the database leaks. It does nothing about a password that is guessable, or one you also use
 somewhere that has already been breached. GWatch cannot tell the difference
 between you and someone who knows your password.
 
@@ -136,6 +136,32 @@ The same goes for backup archives. They are properly encrypted (Argon2id +
 AES-256-GCM) and contain your settings in the clear inside that encryption, so
 the archive is exactly as strong as the password you chose. Pick a weak backup
 password and you have published your SMTP credentials to anyone who gets a copy.
+
+### Password hashing: Argon2id or PBKDF2
+
+Account passwords and backup keys are derived with Argon2id by default. An
+administrator can switch to PBKDF2-HMAC-SHA256 (600,000 iterations) under
+Settings › Users & access, for an install that should depend on the Go standard
+library alone rather than on `golang.org/x/crypto`.
+
+Know what that costs. Argon2id is memory-hard: every guess needs 64 MiB, which
+is what keeps graphics cards and custom hardware from trying billions of
+passwords a second against a stolen hash or backup. PBKDF2 needs almost no
+memory, so at the same cost to your computer an attacker with a GPU gets far
+more guesses per second. For a monitor that lives on your own network, behind
+accounts and a rate-limited sign-in, that is an acceptable trade — the hash only
+matters once someone already has a copy of the database or a backup — but it is
+a trade, and Argon2id stays the recommendation. Either way, a long password does
+more for you than the choice of algorithm.
+
+Switching is safe in both directions: hashes of either kind keep verifying, each
+account is rehashed with the selected algorithm the next time it signs in, and
+older backups keep restoring. A backup encrypted with PBKDF2 needs a GWatch
+release that knows about this option to restore it.
+
+GWatch does not implement Argon2 itself; the default comes from
+`golang.org/x/crypto/argon2`, and PBKDF2 from the standard library's
+`crypto/pbkdf2`.
 
 ### Custom checks and triggers you did not write
 

@@ -1,6 +1,6 @@
 // Incident lifecycle, with the raw event feed kept as a separate view.
 import { api, qs } from '../api.js';
-import { h, replace, selectInput, textarea, field, toast, openModal, emptyState, eventRow, preserveFocus } from '../components.js';
+import { h, replace, selectInput, textarea, field, toast, openModal, emptyState, eventRow, append, renderKeyed, refreshRegion } from '../components.js';
 import { relTime, duration, dateTime } from '../fmt.js';
 import * as eventsView from './incident-events.js';
 import * as reportsView from './reports.js';
@@ -21,14 +21,20 @@ export async function mount(root, ctx) {
     try {
       const rows = await api.get(`/api/incidents${qs({ state: filter.value })}`);
       if (destroyed || token !== request) return;
-      const restore = preserveFocus(list);
-      replace(list, ...(rows || []).map((i) => h('article', { class: 'card' },
+      // Keyed by incident (#118): a refresh rewrites each card where it stands,
+      // so the button the keyboard is on keeps the focus.
+      const fill = (card, i) => append(card, [
         h('div', { class: 'row-between' }, h('h2', null, h('a', { href: `#/nodes/${i.nodeId}` }, i.nodeName)), h('span', { class: 'pill' }, i.state)),
         h('p', { class: 'note' }, `Opened ${relTime(i.openedAt)} · ${duration(i.durationSeconds)} · ${(i.checkIds || []).length} checks`),
         i.acknowledgedAt ? h('p', { class: 'note' }, `Acknowledged by ${i.acknowledgedBy || 'operator'} ${relTime(i.acknowledgedAt)}`) : null,
-        h('button', { class: 'btn', type: 'button', 'data-focus-key': `incident:${i.id}`, onclick: () => detail(i.id) }, 'Timeline and notes'))));
-      if (!rows?.length) list.append(emptyState({ icon: 'check', title: 'No incidents match', text: filter.value === 'active' ? 'There are no open or acknowledged outages.' : 'Try another incident state.' }));
-      restore();
+        h('button', { class: 'btn', type: 'button', 'data-focus-key': `incident:${i.id}`, onclick: () => detail(i.id) }, 'Timeline and notes')]);
+      const empty = { empty: true };
+      const emptyEl = () => emptyState({ icon: 'check', title: 'No incidents match', text: filter.value === 'active' ? 'There are no open or acknowledged outages.' : 'Try another incident state.' });
+      renderKeyed(list, rows?.length ? rows : [empty], {
+        key: (i) => (i === empty ? 'empty' : `incident:${i.id}`),
+        render: (i) => (i === empty ? emptyEl() : fill(h('article', { class: 'card' }), i)),
+        update: (el, i) => (i === empty ? emptyEl() : refreshRegion(el, (card) => fill(card, i))),
+      });
     } catch (e) { if (!destroyed && token === request) replace(list, emptyState({ icon: 'alert', title: 'Could not load incidents', text: e.message })); }
   }
   async function detail(id) {

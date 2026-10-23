@@ -6,7 +6,6 @@ require (
 	github.com/go-sql-driver/mysql v1.10.1
 	github.com/gosnmp/gosnmp v1.45.0
 	github.com/jackc/pgx/v5 v5.11.0
-	github.com/kardianos/service v1.2.2
 	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/ncruces/go-sqlite3 v0.35.5
 	golang.org/x/crypto v0.57.0

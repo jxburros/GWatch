@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -459,5 +460,46 @@ func TestTheTokenIsTakenOffTheCommandLine(t *testing.T) {
 	}
 	if got := strings.Join(env, " "); got != "PATH=/bin HOME=/root "+tokenEnv+"=gwa_x" {
 		t.Errorf("env = %q", got)
+	}
+}
+
+// After a power cut the address serve mode listens on may not exist for a while.
+// The agent must keep trying rather than leave a service that serves nothing.
+func TestServeKeepsTryingToListen(t *testing.T) {
+	oldListen, oldRetry := listen, listenRetry
+	t.Cleanup(func() { listen, listenRetry = oldListen, oldRetry })
+	listenRetry = time.Millisecond
+	attempts := 0
+	got := make(chan net.Listener, 1)
+	listen = func(network, addr string) (net.Listener, error) {
+		attempts++
+		if attempts < 3 {
+			return nil, errors.New("cannot assign requested address")
+		}
+		ln, err := net.Listen(network, "127.0.0.1:0")
+		if err == nil {
+			got <- ln
+		}
+		return ln, err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		(&program{cfg: config{token: "t", listen: "192.0.2.10:7231"}}).serve(ctx)
+		close(done)
+	}()
+	select {
+	case <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve never listened")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("serve did not stop")
+	}
+	if attempts != 3 {
+		t.Errorf("attempts = %d, want 3", attempts)
 	}
 }

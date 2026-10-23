@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"runtime"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jxburros/GWatch/internal/checks"
 	"github.com/jxburros/GWatch/internal/model"
 	"github.com/jxburros/GWatch/internal/store"
 )
@@ -32,6 +34,13 @@ func (e *Engine) maintenanceLoop() {
 
 // trackMaintenance records began/ended events when windows change state.
 func (e *Engine) trackMaintenance(now time.Time) {
+	// A window opening or closing writes an event and moves the rules; both
+	// wait until a restore is over (pause.go), and the change is seen on the
+	// first pass after it.
+	if !e.enterWork() {
+		return
+	}
+	defer e.leaveWork()
 	e.mu.Lock()
 	var began, ended []model.MaintenanceWindow
 	seen := map[int64]bool{}
@@ -114,7 +123,17 @@ func (e *Engine) retentionLoop() {
 		return
 	case <-time.After(20 * time.Second):
 	}
-	if err := e.RunRetention(e.ctx, true); err != nil {
+	// After the first full backfill, a start only catches up from where the
+	// last one got to (see backfillMark), so a restart or an update no
+	// longer re-rolls the whole history while every result write waits.
+	since := time.Time{}
+	var mark backfillMark
+	if err := e.store.GetSetting(e.ctx, backfillMarkKey, &mark); err == nil && !mark.Through.IsZero() {
+		// Three days back covers readings an agent held through an outage
+		// (at most 48 h) and delivered late.
+		since = mark.Through.Add(-72 * time.Hour)
+	}
+	if err := e.runRetentionSince(e.ctx, true, true, since); err != nil && !errors.Is(err, ErrPaused) {
 		e.RecordError("retention backfill", err)
 	}
 	ticker := time.NewTicker(5 * time.Minute)
@@ -126,7 +145,12 @@ func (e *Engine) retentionLoop() {
 			return
 		case <-ticker.C:
 			cleanup := time.Since(lastCleanup) >= time.Hour
-			if err := e.runRetention(e.ctx, false, cleanup); err != nil {
+			err := e.runRetention(e.ctx, false, cleanup)
+			if errors.Is(err, ErrPaused) {
+				// Skipped for a restore; the cleanup is still due next time.
+				continue
+			}
+			if err != nil {
 				e.RecordError("retention", err)
 			}
 			if cleanup {
@@ -142,7 +166,54 @@ func (e *Engine) RunRetention(ctx context.Context, backfill bool) error {
 	return e.runRetention(ctx, backfill, true)
 }
 
+// backfillMarkKey names the setting that records how far the last full
+// backfill got.
+const backfillMarkKey = "rollupBackfill"
+
+type backfillMark struct {
+	Through time.Time `json:"through"`
+}
+
+// backfillChunk is how much history one rollup statement covers during a
+// backfill. Each chunk is its own statement, so the database's single writer
+// is released between them and results keep being recorded while months of
+// history are rolled up.
+const backfillChunk = 24 * time.Hour
+
+// chunked calls fn over [from, to) in pieces of step, with every boundary a
+// multiple of step since the epoch (so of every bucket size that divides it).
+func chunked(ctx context.Context, from, to time.Time, step time.Duration, fn func(a, b time.Time) error) error {
+	secs := int64(step / time.Second)
+	a := time.Unix(from.Unix()-from.Unix()%secs, 0)
+	for a.Before(to) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		b := a.Add(step)
+		if b.After(to) {
+			b = to
+		}
+		if err := fn(a, b); err != nil {
+			return err
+		}
+		a = b
+	}
+	return nil
+}
+
 func (e *Engine) runRetention(ctx context.Context, backfill, cleanup bool) error {
+	return e.runRetentionSince(ctx, backfill, cleanup, time.Time{})
+}
+
+// runRetentionSince is runRetention with a backfill that starts at since
+// rather than at the beginning of the data, when since is set.
+func (e *Engine) runRetentionSince(ctx context.Context, backfill, cleanup bool, since time.Time) error {
+	// Rollups and deletions over a history a restore is re-importing would
+	// race it (pause.go).
+	if !e.enterWork() {
+		return ErrPaused
+	}
+	defer e.leaveWork()
 	start := time.Now()
 	now := start
 	s := e.Settings().Retention
@@ -159,22 +230,47 @@ func (e *Engine) runRetention(ctx context.Context, backfill, cleanup bool) error
 		if oldest != nil {
 			from5 = *oldest
 		}
+		// hourly/daily are built from the 5-minute tier which may reach
+		// further back than raw data; rebuild from the very beginning.
 		from1h = time.Unix(0, 0)
 		from1d = time.Unix(0, 0)
-		if oldest != nil {
-			// hourly/daily are built from the 5-minute tier which may reach
-			// further back than raw data; rebuild from the very beginning.
-			from1h = time.Unix(0, 0)
+		if !since.IsZero() {
+			from5 = laterOf(from5, since)
+			from1h, from1d = since, since
 		}
 	}
 	var deleted int64
 	var runErr error
-	if _, err := st.RollupFromRaw(ctx, from5, now); err != nil {
-		runErr = fmt.Errorf("5-minute rollup: %w", err)
-	}
-	if runErr == nil {
-		if _, err := st.RollupUp(ctx, store.Bucket5m, store.Bucket1h, from1h, now); err != nil {
+	if backfill {
+		if err := chunked(ctx, from5, now, backfillChunk, func(a, b time.Time) error { _, err := st.RollupFromRaw(ctx, a, b); return err }); err != nil {
+			runErr = fmt.Errorf("5-minute rollup: %w", err)
+		}
+		// Hourly buckets are built from the 5-minute ones, so there is
+		// nothing to roll up before the oldest of those (and walking a week
+		// at a time from 1970 would be thousands of empty statements).
+		if oldest5, err := st.OldestRollup(ctx, store.Bucket5m); err != nil {
 			runErr = fmt.Errorf("hourly rollup: %w", err)
+		} else if oldest5 == nil {
+			from1h = now
+		} else {
+			from1h = laterOf(from1h, *oldest5)
+		}
+		if runErr == nil {
+			if err := chunked(ctx, from1h, now, 7*backfillChunk, func(a, b time.Time) error {
+				_, err := st.RollupUp(ctx, store.Bucket5m, store.Bucket1h, a, b)
+				return err
+			}); err != nil {
+				runErr = fmt.Errorf("hourly rollup: %w", err)
+			}
+		}
+	} else {
+		if _, err := st.RollupFromRaw(ctx, from5, now); err != nil {
+			runErr = fmt.Errorf("5-minute rollup: %w", err)
+		}
+		if runErr == nil {
+			if _, err := st.RollupUp(ctx, store.Bucket5m, store.Bucket1h, from1h, now); err != nil {
+				runErr = fmt.Errorf("hourly rollup: %w", err)
+			}
 		}
 	}
 	if runErr == nil {
@@ -222,6 +318,9 @@ func (e *Engine) runRetention(ctx context.Context, backfill, cleanup bool) error
 		if deleted > 0 {
 			_ = st.Checkpoint(ctx)
 		}
+	}
+	if backfill && runErr == nil {
+		_ = st.PutSetting(ctx, backfillMarkKey, backfillMark{Through: start})
 	}
 	status := e.retentionStatus(ctx, s)
 	status.LastRunAt = ptrTime(start)
@@ -310,8 +409,15 @@ func (e *Engine) Health(ctx context.Context) model.Health {
 	if errs == nil {
 		errs = []model.Event{}
 	}
+	// The probe may open two sockets, so it runs before the engine lock is
+	// taken; it is cached for a minute in any case.
+	ping := checks.PingStatusNow()
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	ping.Configured = e.settings.General.PingMethod
+	if ping.Configured == "" {
+		ping.Configured = model.PingMethodAuto
+	}
 	now := time.Now()
 	h := model.Health{
 		Version:          e.opts.Version,
@@ -339,6 +445,7 @@ func (e *Engine) Health(ctx context.Context) model.Health {
 		LastAlertError:   e.lastAlertErr,
 		ListenAddress:    e.opts.ListenAddr,
 		Platform:         runtime.GOOS + "/" + runtime.GOARCH,
+		Ping:             ping,
 	}
 	for id, c := range e.checks {
 		h.ChecksTotal++
@@ -478,7 +585,7 @@ func (e *Engine) Overview(ctx context.Context) (Overview, error) {
 	if err != nil {
 		return Overview{}, err
 	}
-	incidents, err := e.store.ListEvents(ctx, store.EventFilter{Limit: 20, Types: []model.EventType{model.EventDown, model.EventRecovered, model.EventWarning, model.EventWarningCleared, model.EventCertWarning, model.EventContentChanged, model.EventAffectedByParent, model.EventMaintenanceBegan, model.EventMaintenanceEnded, model.EventMonitorGap}})
+	incidents, err := e.store.ListEvents(ctx, store.EventFilter{Limit: 20, Types: []model.EventType{model.EventDown, model.EventRecovered, model.EventWarning, model.EventWarningCleared, model.EventCertWarning, model.EventContentChanged, model.EventAffectedByParent, model.EventMaintenanceBegan, model.EventMaintenanceEnded, model.EventMonitorGap, model.EventCollectorDown, model.EventCollectorUp}})
 	if err != nil {
 		return Overview{}, err
 	}
@@ -632,4 +739,11 @@ func (e *Engine) NodeStatus(n model.Node) (model.Status, bool) {
 func (e *Engine) hostSampleLoop() {
 	defer e.wg.Done()
 	e.hosts.Run(e.ctx)
+}
+
+func laterOf(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }

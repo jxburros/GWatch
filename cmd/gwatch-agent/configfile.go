@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -68,7 +69,7 @@ func configFile() string {
 // configKeys is every setting the file knows, in the order they are written.
 var configKeys = []string{
 	"server", "token", "name", "interval", "checkIn", "buffer", "autoUpdate",
-	"insecure", "certPin", "listen", "repo", "hostRoot", "collect",
+	"insecure", "certPin", "listen", "repo", "hostRoot", "collect", "collector",
 }
 
 // configDoc is the file as it is on disk. The settings are read from it, and a
@@ -77,11 +78,22 @@ var configKeys = []string{
 type configDoc struct {
 	path   string
 	exists bool
-	raw    map[string]json.RawMessage
+	// recovered is set when the file itself was damaged — emptied or left
+	// half-written by a power cut — and the copy kept beside it was read
+	// instead. The next save writes the file whole again.
+	recovered bool
+	raw       map[string]json.RawMessage
 }
 
 // loadConfigDoc reads the file. A file that is not there is an empty document,
 // not an error; one that cannot be parsed is an error that names the file.
+//
+// The one exception is a file that a power cut has damaged: emptied, filled
+// with zeros, or cut off part-way. Every save also keeps a copy beside the
+// file (backupPath), and when the file is damaged and that copy is whole, the
+// copy is what is read. Without it a machine that lost power at the wrong
+// moment would come back refusing to start, and nobody would visit it to find
+// out why.
 func loadConfigDoc(path string) (*configDoc, error) {
 	d := &configDoc{path: path, raw: map[string]json.RawMessage{}}
 	b, err := os.ReadFile(path)
@@ -92,16 +104,75 @@ func loadConfigDoc(path string) (*configDoc, error) {
 		return nil, fmt.Errorf("cannot read %s: %w", path, err)
 	}
 	d.exists = true
+	if looksDamaged(b) {
+		if raw, ok := readBackup(path); ok {
+			d.raw, d.recovered = raw, true
+			return d, nil
+		}
+	}
 	if len(bytes.TrimSpace(b)) == 0 {
 		return d, nil
 	}
 	if err := json.Unmarshal(b, &d.raw); err != nil {
+		var syn *json.SyntaxError
+		if errors.Is(err, io.ErrUnexpectedEOF) || (errors.As(err, &syn) && int(syn.Offset) >= len(bytes.TrimSpace(b))) {
+			// Cut off part-way: what a write interrupted by a power cut
+			// leaves behind.
+			if raw, ok := readBackup(path); ok {
+				d.raw, d.recovered = raw, true
+				return d, nil
+			}
+		}
 		return nil, fmt.Errorf("%s is not valid JSON: %s", path, jsonErrorWhere(b, err))
 	}
 	if d.raw == nil {
 		d.raw = map[string]json.RawMessage{}
 	}
 	return d, nil
+}
+
+// backupPath is the copy of the configuration file every save keeps.
+func backupPath(path string) string { return path + ".bak" }
+
+// keepConfigBackup makes sure the copy beside the file matches it, for a file
+// written before copies were kept or edited by hand since. It is best effort:
+// the copy is a safety net, and a failure to write it stops nothing.
+func keepConfigBackup(path string) {
+	b, err := os.ReadFile(path)
+	if err != nil || looksDamaged(b) {
+		return
+	}
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(b, &raw) != nil || len(raw) == 0 {
+		return
+	}
+	if cur, err := os.ReadFile(backupPath(path)); err == nil && bytes.Equal(cur, b) {
+		return
+	}
+	if writeFileAtomic(backupPath(path), b) == nil {
+		restrictWindowsACL(backupPath(path))
+	}
+}
+
+// looksDamaged says whether the bytes are what an interrupted write leaves: an
+// empty file, or one holding zeros where the text should be (NTFS and ext4 can
+// both leave a file its new length with none of its new contents).
+func looksDamaged(b []byte) bool {
+	return len(bytes.TrimSpace(b)) == 0 || bytes.IndexByte(b, 0) >= 0
+}
+
+// readBackup reads the copy kept beside the file, if there is one and it is a
+// whole JSON object with something in it.
+func readBackup(path string) (map[string]json.RawMessage, bool) {
+	b, err := os.ReadFile(backupPath(path))
+	if err != nil || looksDamaged(b) {
+		return nil, false
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil || len(raw) == 0 {
+		return nil, false
+	}
+	return raw, true
 }
 
 // jsonErrorWhere words a JSON syntax error with a line number, which is the
@@ -173,18 +244,39 @@ func (d *configDoc) bytes() []byte {
 
 // save writes the document so that nobody ever sees half of it: to a sibling
 // file, then moved over the original. It is private from the moment it exists.
+// A copy is then kept beside it (see loadConfigDoc), written the same way, so
+// that whichever of the two writes a power cut interrupts, the other is whole.
 func (d *configDoc) save() error {
 	dir := filepath.Dir(d.path)
 	if err := permissions.EnsurePrivateDir(dir); err != nil {
 		return fmt.Errorf("create %s: %w", dir, err)
 	}
-	tmp, err := os.CreateTemp(dir, ".agent-*.json")
+	body := d.bytes()
+	if err := writeFileAtomic(d.path, body); err != nil {
+		return err
+	}
+	restrictWindowsACL(d.path)
+	d.exists, d.recovered = true, false
+	if err := writeFileAtomic(backupPath(d.path), body); err == nil {
+		restrictWindowsACL(backupPath(d.path))
+	}
+	return nil
+}
+
+// writeFileAtomic replaces path with data, readable only by its owner, so that
+// a reader — or a power cut — sees the old file or the new one and never part
+// of either: the data goes to a sibling file, is flushed to the disk, and is
+// then renamed over the original, and the directory is flushed so the rename
+// itself survives.
+func writeFileAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+"-*")
 	if err != nil {
 		return err
 	}
 	name := tmp.Name()
 	defer os.Remove(name)
-	if _, err := tmp.Write(d.bytes()); err != nil {
+	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -198,12 +290,24 @@ func (d *configDoc) save() error {
 	if err := os.Chmod(name, 0o600); err != nil && !isWindows() {
 		return err
 	}
-	if err := os.Rename(name, d.path); err != nil {
+	if err := os.Rename(name, path); err != nil {
 		return err
 	}
-	restrictWindowsACL(d.path)
-	d.exists = true
+	syncDir(dir)
 	return nil
+}
+
+// syncDir flushes a directory, which is what makes a rename durable on Linux
+// and macOS. Windows has no such call for a directory and needs none: NTFS
+// journals the rename.
+func syncDir(dir string) {
+	if isWindows() {
+		return
+	}
+	if f, err := os.Open(dir); err == nil {
+		_ = f.Sync()
+		f.Close()
+	}
 }
 
 func isWindows() bool { return filepath.Separator == '\\' }
@@ -215,7 +319,7 @@ func isWindows() bool { return filepath.Separator == '\\' }
 type fileSettings struct {
 	Server, Token, Name, Listen, CertPin, Repo, HostRoot string
 	Interval, CheckIn, Buffer                            time.Duration
-	AutoUpdate, Insecure                                 *bool
+	AutoUpdate, Insecure, Collector                      *bool
 	Collect                                              model.CollectSelection
 }
 
@@ -275,6 +379,7 @@ func (d *configDoc) settings() (fileSettings, []string) {
 	dur("buffer", &fsx.Buffer)
 	flag("autoUpdate", &fsx.AutoUpdate)
 	flag("insecure", &fsx.Insecure)
+	flag("collector", &fsx.Collector)
 	if raw, ok := d.raw["collect"]; ok {
 		if err := json.Unmarshal(raw, &fsx.Collect); err != nil {
 			bad("collect", "must be an object like {\"interfaces\": [\"eth0\"]}")
@@ -379,6 +484,9 @@ func baseConfig() (c config, problems, warnings []string) {
 		return c, []string{err.Error()}, nil
 	}
 	c.fileExists = doc.exists
+	if doc.recovered {
+		warnings = append(warnings, fmt.Sprintf("%s was damaged (most likely by a power cut while it was being written); using the copy kept in %s", c.configPath, backupPath(c.configPath)))
+	}
 	fsx, fileProblems := doc.settings()
 	for _, p := range fileProblems {
 		problems = append(problems, fmt.Sprintf("%s: %s", c.configPath, p))
@@ -427,6 +535,9 @@ func baseConfig() (c config, problems, warnings []string) {
 	if doc.has("collect") {
 		set("collect", srcFile, func() { c.collect = fsx.Collect })
 	}
+	if fsx.Collector != nil {
+		set("collector", srcFile, func() { c.collector = *fsx.Collector })
+	}
 	c.fileServer = c.server
 
 	// An agent paired by an older version kept its token and its server in two
@@ -469,6 +580,9 @@ func baseConfig() (c config, problems, warnings []string) {
 	env("hostRoot", "GWATCH_HOST_ROOT", func(v string) bool { c.hostRoot = v; return true })
 	if v, ok := envBoolSet("GWATCH_AGENT_AUTO_UPDATE"); ok {
 		c.autoUpdate, c.sources["autoUpdate"] = v, srcEnv
+	}
+	if v, ok := envBoolSet("GWATCH_AGENT_COLLECTOR"); ok {
+		c.collector, c.sources["collector"] = v, srcEnv
 	}
 	c.code = os.Getenv("GWATCH_AGENT_CODE")
 
@@ -528,6 +642,11 @@ func persistConfig(c config) error {
 	if fresh || explicit("collect") || !c.collect.IsZero() {
 		coll := c.collect.Normalize()
 		doc.set("collect", coll)
+	}
+	// Written false into a new file so that whoever opens it sees the switch
+	// is there; never turned on by anything but a person (collector.go).
+	if fresh || explicit("collector") || doc.has("collector") {
+		doc.set("collector", c.collector)
 	}
 	return doc.save()
 }
@@ -712,6 +831,7 @@ func showConfig(c config, problems, warnings []string, showToken bool) error {
 	row("repo", c.repo)
 	row("hostRoot", orNone(c.hostRoot))
 	row("collect", describeCollect(c.collect))
+	row("collector", map[bool]string{true: "allowed: runs the checks GWatch assigns, if GWatch has also turned it on", false: "off"}[c.collector])
 	tw.Flush()
 	if !showToken && c.token != "" {
 		fmt.Println("\nThe token is shortened here; run `gwatch-agent config show --show-token` to print it in full.")

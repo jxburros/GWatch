@@ -13,14 +13,16 @@ served on `http://127.0.0.1:7230` (optionally to the rest of your LAN).
 
 No cloud account, no AI features in the product itself, never exposed to the internet
 by itself. (An optional, separate MCP companion can let an assistant *read* your
-monitoring if you set one up — see [`mcp/README.md`](mcp/README.md).) The product
-brief that defines the scope lives in [`local-network-monitoring-product-brief.md`](local-network-monitoring-product-brief.md).
+monitoring if you set one up — see [`mcp/README.md`](mcp/README.md).) The original
+product brief is [`local-network-monitoring-product-brief.md`](local-network-monitoring-product-brief.md);
+some of its non-goals have since shipped in a narrow form, and [`ROADMAP.md`](ROADMAP.md)
+is where the current scope and its limits are kept.
 
 > **GWatch is in beta (0.5.0).** It works and it looks after your data, but the
 > interface and the JSON API can still change between releases, and bugs are likelier
 > now than they will be at 1.0 — which is reserved for the first public, stable
-> release. [`CHANGELOG.md`](CHANGELOG.md) lists what is in this version and the gaps it
-> ships with. Please [report anything that looks wrong](https://github.com/jxburros/GWatch/issues).
+> release. [`CHANGELOG.md`](CHANGELOG.md) lists what is in each version, and
+> [`ROADMAP.md`](ROADMAP.md#known-gaps) the known gaps it still ships with. Please [report anything that looks wrong](https://github.com/jxburros/GWatch/issues).
 
 ## What's new in 0.5.0
 
@@ -43,8 +45,10 @@ The agent is unchanged and stays at **gwatch-agent 0.5.0**. Full detail in
 - **Check types**: Ping, HTTP/S, HTTPS certificate, TCP port, DNS, Keyword, JSON, Custom
   script (run your own command), Hardware health (this computer, or any machine you
   install the small agent on — processor, memory, swap, load, disks, inodes, network and
-  disk throughput) and SNMP (readings off a router, switch or access point — test the
-  connection and pick ports by name, no OIDs to look up).
+  disk throughput), SNMP (readings off a router, switch or access point — test the
+  connection and pick ports by name, no OIDs to look up) and Matter (sensors, plugs and
+  bridges read through a python-matter-server sidecar — load its devices and tick the
+  readings).
 - **Every reading stands on its own**: each hardware metric, each SNMP OID and a JSON
   check's recorded value has its own value, status, threshold, chart, incident and
   trigger variable.
@@ -62,9 +66,14 @@ The agent is unchanged and stays at **gwatch-agent 0.5.0**. Full detail in
   down" — joined by all, any or at-least-N, with the same actions triggers use.
 - **Incident timeline**, **dashboards**, a **Charts** tab (with timestacked charts that lay a
   metric over its own earlier days, weeks or months) and an **Audit** tab with full
-  history — retained and rolled up automatically so the database never grows without bound.
-- **Automation**: triggers and custom inbound endpoints run webhooks, Slack/Teams/ntfy/
-  Pushover notifications, git commands or scripts when something changes.
+  history — rolled up and pruned automatically, so the database grows by roughly one daily
+  summary per check per day once the finer data ages out (daily summaries are kept forever
+  unless you set a limit).
+- **Alert channels**: besides email, alerts can also go to Slack, Teams, Discord,
+  Telegram, Matrix, ntfy, Gotify, Pushover, SMS (Twilio), PagerDuty or Opsgenie, per
+  severity and node group, with the same silences, maintenance and dependency rules.
+- **Automation**: triggers and custom inbound endpoints run webhooks, the same
+  notification channels, git commands or scripts when something changes.
 - **Wallboards** for a spare monitor or tablet, with an optional no-sign-in projected view.
   The interface is responsive, so a narrow window or a tablet can read it, but it is built
   for a desk: GWatch is not a phone app and is not designed to run on phone hardware.
@@ -138,8 +147,10 @@ deliberately does and does not do on a machine.
 | [`docs/DATABASE.md`](docs/DATABASE.md) | Keeping the data on your own PostgreSQL or MySQL/MariaDB server instead of the SQLite file: setup, `database.json`, TLS, `gwatch migrate-db` |
 | [`docs/DOCKER.md`](docs/DOCKER.md) | Running GWatch in a container: the first account, the `/data` volume, ping and discovery inside Docker, upgrading by pulling |
 | [`docs/HARDWARE.md`](docs/HARDWARE.md) | Hardware health, the agent, its trust model, and what each platform can measure |
+| [`docs/COLLECTORS.md`](docs/COLLECTORS.md) | Remote collectors: checking a second site through a paired agent, what it is sent (credentials included) and what happens when it goes quiet |
 | [`docs/AGENT-DECISIONS.md`](docs/AGENT-DECISIONS.md) | Why the agent is built the way it is: self-update, what GWatch deliberately cannot do to a machine, and the options not taken |
 | [`docs/SNMP.md`](docs/SNMP.md) | SNMP checks: enabling SNMP on a router or switch, choosing OIDs, interface traffic in bits per second |
+| [`docs/MATTER.md`](docs/MATTER.md) | Matter devices: running python-matter-server beside GWatch, commissioning with a pairing code, the readings and what Thread needs |
 | [`docs/RECIPES.md`](docs/RECIPES.md) | Ready-made trigger/endpoint recipes: Home Assistant, Slack/Discord, ntfy/Pushover, Docker, git |
 | [`docs/REMOTE-ACCESS.md`](docs/REMOTE-ACCESS.md) | Reaching GWatch from outside your network safely — accounts, API keys, Tailscale, a TLS proxy |
 | [`docs/RESTORE.md`](docs/RESTORE.md) | Moving GWatch to a new machine: backup, restore, and what does and doesn't come across |
@@ -169,6 +180,8 @@ terms, privacy and disclaimer documents above before it installs anything.
 
 GWatch is developed by **Jeffrey Guntly** and **Garrett Guntly**, and published by
 **JX Holdings, LLC**.
+
+Copyright (c) 2026 JX Holdings. Original developers: Jeffrey Guntly and Garrett Guntly.
 
 For signed Linux installation, systemd, headless setup and Raspberry Pi builds, see [Installing on Linux](docs/INSTALL-LINUX.md).
 

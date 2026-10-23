@@ -107,14 +107,16 @@ func TestMaintenanceWindowActiveAbsolute(t *testing.T) {
 
 func TestMaintenanceWindowActiveRecurring(t *testing.T) {
 	// Recurring Tuesday/Thursday 22:00 for 3 hours, so it crosses midnight.
+	// With no TimeZone set, a recurring window keeps the legacy
+	// server-local wall-clock reading, so the times are built in time.Local.
 	w := MaintenanceWindow{
 		Enabled:         true,
-		StartAt:         time.Date(2026, 3, 3, 22, 0, 0, 0, time.UTC), // a Tuesday
+		StartAt:         time.Date(2026, 3, 3, 22, 0, 0, 0, time.Local), // a Tuesday
 		Weekdays:        []int{int(time.Tuesday), int(time.Thursday)},
 		DurationMinutes: 180,
 	}
 	at := func(day, hour, min int) time.Time {
-		return time.Date(2026, 3, day, hour, min, 0, 0, time.UTC)
+		return time.Date(2026, 3, day, hour, min, 0, 0, time.Local)
 	}
 	cases := []struct {
 		name string
@@ -142,13 +144,13 @@ func TestMaintenanceWindowRecurringDefaultDuration(t *testing.T) {
 	// DurationMinutes unset falls back to one hour.
 	w := MaintenanceWindow{
 		Enabled:  true,
-		StartAt:  time.Date(2026, 3, 3, 9, 0, 0, 0, time.UTC),
+		StartAt:  time.Date(2026, 3, 3, 9, 0, 0, 0, time.Local),
 		Weekdays: []int{int(time.Tuesday)},
 	}
-	if !w.Active(time.Date(2026, 3, 10, 9, 59, 0, 0, time.UTC)) {
+	if !w.Active(time.Date(2026, 3, 10, 9, 59, 0, 0, time.Local)) {
 		t.Error("want active 59 minutes in")
 	}
-	if w.Active(time.Date(2026, 3, 10, 10, 0, 0, 0, time.UTC)) {
+	if w.Active(time.Date(2026, 3, 10, 10, 0, 0, 0, time.Local)) {
 		t.Error("want inactive after one hour")
 	}
 }

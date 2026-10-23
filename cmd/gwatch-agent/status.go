@@ -36,6 +36,7 @@ type agentStatus struct {
 	Collecting  model.CollectSelection `json:"collecting"`
 	FromGWatch  model.CollectSelection `json:"fromGwatch"`
 	Inventory   *model.Inventory       `json:"inventory,omitempty"`
+	Collector   *collectorStatus       `json:"collector,omitempty"`
 }
 
 func statusFile() string { return filepath.Join(filepath.Dir(configFile()), "agent-status.json") }
@@ -98,6 +99,9 @@ func (rt *agentRuntime) writeStatus(cfg config, held int) {
 		inv := rt.inventoryAll
 		st.Inventory = &inv
 	}
+	if rt.collector != nil {
+		st.Collector = rt.collector.status()
+	}
 	rt.mu.Unlock()
 
 	path := statusFile()
@@ -114,6 +118,9 @@ func (rt *agentRuntime) writeStatus(cfg config, held int) {
 	}
 	// World-readable on purpose: it holds nothing secret, and the panel is run
 	// by whoever is at the keyboard, not by the account the service runs as.
+	// On Windows the mode bits mean nothing, so the file is given an ACL that
+	// says the same thing (status_share_windows.go), for the tray icon.
+	shareStatusFile(tmp)
 	_ = os.Rename(tmp, path)
 }
 

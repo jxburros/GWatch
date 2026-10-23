@@ -772,6 +772,7 @@ export function sparkline(values, { width = 120, height = 28, color = null } = {
  * summary of the periods become the bar's accessible name, since the
  * coloured segments are a picture and their titles are never read out.
  */
+/** @param {any[]} points @param {{ maxSegments?: number, bucketSeconds?: number, from?: any, to?: any, label?: string }} [opts] */
 export function uptimeBar(points, { maxSegments = 90, bucketSeconds = 0, from, to, label = '' } = {}) {
   const name = label ? `Availability per period — ${label}` : 'Availability per period';
   const wrap = h('div', { class: 'uptime-bar', role: 'img', 'aria-label': name });

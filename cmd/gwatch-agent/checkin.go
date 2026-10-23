@@ -1,5 +1,5 @@
-// The agent's occasional question to GWatch, and the queue that keeps readings
-// through an outage.
+// The agent's occasional question to GWatch. (The queue that keeps readings
+// through an outage is in spool.go.)
 //
 // The agent still only ever dials out. Every so often it asks GWatch a small,
 // fixed set of questions and applies the answers, each on its own terms: which
@@ -7,10 +7,12 @@
 // configuration allows), when to ask again, which agent release is newest (a
 // hint; releases are still fetched and verified from the release feed, never
 // from here), and — only while an administrator is rotating this machine's
-// token — the replacement token. GWatch's answer has no field for a URL, a
-// command, a file or a version to install, so there is nothing in it that could
-// make this machine run something it did not choose to (docs/AGENT-DECISIONS.md,
-// entry 12).
+// token — the replacement token. For a machine whose own agent.json allows it,
+// and whose agent an administrator has made a remote collector, the answer also
+// lists built-in network checks to run (collector.go, entry 16). GWatch's
+// answer has no field for a command, a script, a file or a version to install,
+// so there is nothing in it that could make this machine run something it did
+// not choose to (docs/AGENT-DECISIONS.md, entry 12).
 package main
 
 import (
@@ -39,15 +41,6 @@ import (
 // machine that has just paired shows its checkboxes in GWatch within moments.
 const firstCheckIn = 8 * time.Second
 
-// maxFlushPerCycle bounds how many held readings are sent in one go, so an
-// agent that has been offline for hours catches up over a few cycles rather
-// than in one burst.
-const maxFlushPerCycle = 120
-
-// maxQueued bounds the held readings by count whatever the buffer setting
-// says, so a very short interval with a long buffer cannot grow without limit.
-const maxQueued = 4000
-
 // agentRuntime is the part of the agent that changes while it runs: the token it
 // presents (it can be rotated), what GWatch wants collected, and what this
 // machine could collect.
@@ -64,6 +57,9 @@ type agentRuntime struct {
 	checkIn       time.Duration
 	latestSeen    string
 	warnedToken   bool
+	// collector runs checks for GWatch when this machine allows it (collector.go);
+	// nil when it does not, and then nothing a check-in says about checks is used.
+	collector *collectorRunner
 
 	// What the control panel is told (status.go).
 	startedAt      time.Time
@@ -126,6 +122,50 @@ func (rt *agentRuntime) shape(m model.HostMetrics) model.HostMetrics {
 	return sysmetrics.Apply(visible, rt.effective(), true)
 }
 
+// watch points the collector at the services and programs to watch now: the
+// machine's own list, narrowed to GWatch's choice. It is called before every
+// reading, so a change GWatch sends takes effect on the next one.
+func (rt *agentRuntime) watch(c *sysmetrics.Collector) {
+	eff := rt.effective()
+	c.SetWatch(eff.WatchedServices(), eff.WatchedProcesses())
+}
+
+// watchInventory lists the services and programs this machine could watch,
+// for GWatch to offer as choices. It runs at check-in, not with each
+// reading: listing every service is a systemctl call or a walk of the
+// Service Control Manager, cheap once every quarter of an hour and pointless
+// every minute. When the machine's own file names services or programs,
+// those are all GWatch may choose from, so they are all it is offered.
+func (rt *agentRuntime) watchInventory(ctx context.Context) (services, processes []model.InventoryItem) {
+	rt.mu.Lock()
+	ceiling := rt.ceiling
+	rt.mu.Unlock()
+	services, _ = sysmetrics.ListServices(ctx)
+	processes, _ = sysmetrics.ListProcesses(ctx)
+	return withinCeiling(services, ceiling.WatchedServices()), withinCeiling(processes, ceiling.WatchedProcesses())
+}
+
+// withinCeiling narrows an inventory list to the names a machine's own file
+// allows, keeping each allowed name even when the machine does not have it
+// now (the picker marks it "not seen now"). An empty ceiling allows anything.
+func withinCeiling(items []model.InventoryItem, ceiling []string) []model.InventoryItem {
+	if len(ceiling) == 0 {
+		return items
+	}
+	out := make([]model.InventoryItem, 0, len(ceiling))
+	for _, name := range ceiling {
+		item := model.InventoryItem{Name: name}
+		for _, it := range items {
+			if strings.EqualFold(it.Name, name) {
+				item.Detail = it.Detail
+				break
+			}
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
 // ---- state kept between runs ----
 
 // agentState is what the agent remembers of GWatch's answers, so a restart
@@ -164,7 +204,7 @@ func writeAgentState(st agentState) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, append(b, '\n'), 0o600); err != nil {
+	if err := writeFileAtomic(path, append(b, '\n')); err != nil {
 		return err
 	}
 	restrictWindowsACL(path)
@@ -175,8 +215,9 @@ func writeAgentState(st agentState) error {
 
 func (c config) checkInURL() string { return c.baseURL() + "/ingest/checkin" }
 
-// maxSettingsBody bounds GWatch's answer. It is a few hundred bytes.
-const maxSettingsBody = 256 << 10
+// maxSettingsBody bounds GWatch's answer. It is a few hundred bytes, or for a
+// remote collector the definitions of up to model.MaxCollectorChecks checks.
+const maxSettingsBody = 4 << 20
 
 // askSettings makes one check-in.
 func askSettings(ctx context.Context, client *http.Client, cfg config, token string, req model.AgentCheckIn) (model.AgentSettings, error) {
@@ -269,13 +310,19 @@ func (p *program) checkInLoop(ctx context.Context, rt *agentRuntime, client *htt
 // checkInOnce asks once, applies the answer and returns when to ask again.
 func (p *program) checkInOnce(ctx context.Context, rt *agentRuntime, client *http.Client) (time.Duration, error) {
 	rt.mu.Lock()
-	req := model.AgentCheckIn{Version: version}
+	req := model.AgentCheckIn{Version: version, Collector: p.cfg.collector}
 	if rt.haveInventory {
 		inv := rt.inventory
 		req.Inventory = &inv
 	}
 	token := rt.token
 	rt.mu.Unlock()
+	if req.Inventory != nil {
+		req.Inventory.Services, req.Inventory.Processes = rt.watchInventory(ctx)
+		// Bounded here as GWatch would bound it, so a machine with
+		// thousands of services still sends a check-in GWatch accepts.
+		*req.Inventory = req.Inventory.Normalize()
+	}
 
 	settings, err := askSettings(ctx, client, p.cfg, token, req)
 	rt.noteCheckIn(err)
@@ -329,6 +376,16 @@ func (rt *agentRuntime) apply(cfg config, s model.AgentSettings) time.Duration {
 	if tok := strings.TrimSpace(s.Token); tok != "" {
 		rt.takeToken(cfg, tok)
 	}
+
+	// Checks to run as a remote collector. Only a machine whose own settings
+	// allow it has a runner; for any other, whatever GWatch says here is
+	// ignored (and GWatch says nothing, since the check-in told it).
+	rt.mu.Lock()
+	col := rt.collector
+	rt.mu.Unlock()
+	if col != nil {
+		col.assign(s.Collector)
+	}
 	return next
 }
 
@@ -380,71 +437,4 @@ func sameSelection(a, b model.CollectSelection) bool {
 	x, _ := json.Marshal(a.Normalize())
 	y, _ := json.Marshal(b.Normalize())
 	return bytes.Equal(x, y)
-}
-
-// ---- holding readings through an outage ----
-
-// sendFailure is a report that did not go through, with whether trying the same
-// reading again later can help.
-type sendFailure struct {
-	err   error
-	retry bool
-}
-
-func (f *sendFailure) Error() string { return f.err.Error() }
-func (f *sendFailure) Unwrap() error { return f.err }
-
-// readingQueue holds readings that could not be delivered, oldest first, so a
-// gap in the network leaves a gap in the history no longer than the gap itself.
-// It lives in memory only: the agent stores nothing on this machine beyond its
-// configuration, and a reading that is hours old and lost to a restart is not
-// worth a spool file.
-type readingQueue struct {
-	max  int
-	held []model.HostMetrics
-}
-
-func newReadingQueue(cfg config) *readingQueue {
-	n := 0
-	if cfg.buffer > 0 && cfg.interval > 0 {
-		n = int(cfg.buffer / cfg.interval)
-	}
-	return &readingQueue{max: max(0, min(n, maxQueued))}
-}
-
-func (q *readingQueue) len() int { return len(q.held) }
-
-// add puts a new reading at the back, dropping the oldest if the queue is full.
-// With no buffer at all the queue holds only what is about to be sent.
-func (q *readingQueue) add(m model.HostMetrics) {
-	q.held = append(q.held, m)
-	if limit := max(q.max, 1); len(q.held) > limit {
-		q.held = q.held[len(q.held)-limit:]
-	}
-}
-
-// flush sends held readings oldest first and stops at the first that cannot go.
-// It reports how many were delivered, and the failure if there was one. A
-// reading the server refuses outright (not an outage, a verdict) is dropped,
-// because holding it would block everything behind it for ever.
-func (q *readingQueue) flush(ctx context.Context, sendOne func(model.HostMetrics) error) (sent int, err error) {
-	for len(q.held) > 0 && sent < maxFlushPerCycle {
-		if ctx.Err() != nil {
-			return sent, ctx.Err()
-		}
-		err := sendOne(q.held[0])
-		if err == nil {
-			q.held = q.held[1:]
-			sent++
-			continue
-		}
-		var sf *sendFailure
-		if errors.As(err, &sf) && !sf.retry {
-			log.Printf("dropping a reading GWatch refused: %v", err)
-			q.held = q.held[1:]
-			continue
-		}
-		return sent, err
-	}
-	return sent, nil
 }

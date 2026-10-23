@@ -80,6 +80,29 @@ type HostMetrics struct {
 	Interfaces  []HostInterface  `json:"interfaces,omitempty"`
 	Disks       []HostDiskIO     `json:"disks,omitempty"`
 
+	// Temperatures, Pressure and Pools are Linux readings: every hardware
+	// monitoring chip and thermal zone the kernel exposes, the kernel's
+	// pressure-stall figures, and the health of each ZFS pool. A platform or
+	// a machine without them simply leaves them out.
+	Temperatures []HostTemperature `json:"temperatures,omitempty"`
+	Pressure     []HostPressure    `json:"pressure,omitempty"`
+	Pools        []HostPool        `json:"pools,omitempty"`
+
+	// Services and Processes are the ones this machine was told to watch,
+	// and only those: each named service with whether it is running, and
+	// each named program with how many copies of it are. Both are empty
+	// unless someone chose names (CollectSelection.Services, .Processes),
+	// which is what keeps them free for every machine nobody asked about.
+	Services  []HostService `json:"services,omitempty"`
+	Processes []HostProcess `json:"processes,omitempty"`
+
+	// Container is set when the reading was taken inside a container that has
+	// its own memory or processor limit. Memory and processor use are then
+	// measured against that limit rather than the host's totals: a container
+	// capped at 2 GiB is out of memory at 2 GiB, whatever the machine around
+	// it has spare.
+	Container *HostContainer `json:"container,omitempty"`
+
 	// Warnings records collector problems — a counter this platform does not
 	// expose, a filesystem that could not be stat'ed. A partial reading is
 	// still worth having, so these never fail the whole collection.
@@ -131,6 +154,116 @@ type HostFilesystem struct {
 	InodesTotal   uint64   `json:"inodesTotal,omitempty"`
 	InodesUsed    uint64   `json:"inodesUsed,omitempty"`
 	InodesUsedPct *float64 `json:"inodesUsedPct,omitempty"`
+	// Datasets is how many ZFS datasets were folded into this entry. Every
+	// dataset of a pool is its own mount sharing the pool's free space, so
+	// listing them separately shows the same free figure a dozen times; they
+	// are reported once, as the pool, under the dataset mounted closest to the
+	// root. Zero for anything that is not ZFS.
+	Datasets int `json:"datasets,omitempty"`
+}
+
+// HostTemperature is one temperature sensor. Name is the sensor's metric
+// instance ("coretemp/Package id 0", "nvme/Composite", "thermal/acpitz"): the
+// chip or zone it belongs to, then the sensor's own label.
+type HostTemperature struct {
+	Name    string  `json:"name"`
+	Celsius float64 `json:"celsius"`
+	// HighCelsius and CritCelsius are the limits the chip itself declares,
+	// shown beside the reading. They are not thresholds: the hardware check's
+	// configuration decides what alerts, and plenty of chips declare limits
+	// that are nonsense.
+	HighCelsius *float64 `json:"highCelsius,omitempty"`
+	CritCelsius *float64 `json:"critCelsius,omitempty"`
+}
+
+// HostPressure is the kernel's pressure-stall information for one resource
+// (cpu, memory or io): the share of recent wall-clock time in which at least
+// one task was stalled waiting for it ("some"), and — for memory and io —
+// the share in which every task was ("full"). Averaged over 10 and 60
+// seconds, 0..100.
+type HostPressure struct {
+	Resource  string   `json:"resource"`
+	Avg10     float64  `json:"avg10"`
+	Avg60     float64  `json:"avg60"`
+	FullAvg10 *float64 `json:"fullAvg10,omitempty"`
+	FullAvg60 *float64 `json:"fullAvg60,omitempty"`
+}
+
+// HostPool is one ZFS pool as zpool reports it. The sizes are the pool's raw
+// figures, parity and all, which is why usable space is read from the
+// filesystem instead and these are only shown beside it.
+type HostPool struct {
+	Name       string `json:"name"`
+	Health     string `json:"health"` // ONLINE, DEGRADED, FAULTED, UNAVAIL, ...
+	SizeBytes  uint64 `json:"sizeBytes,omitempty"`
+	AllocBytes uint64 `json:"allocBytes,omitempty"`
+	FreeBytes  uint64 `json:"freeBytes,omitempty"`
+}
+
+// PoolHealthValue turns a pool's state into the number its metric carries: 0
+// for a healthy pool, 1 for one still serving data with its redundancy gone
+// (DEGRADED), 2 for one that is not serving it (FAULTED, UNAVAIL, SUSPENDED,
+// and anything else zpool may print). A threshold of warn 1, crit 2 then
+// reads "tell me when a disk drops out, and shout when the pool goes".
+func PoolHealthValue(health string) float64 {
+	switch strings.ToUpper(strings.TrimSpace(health)) {
+	case "ONLINE":
+		return 0
+	case "DEGRADED":
+		return 1
+	}
+	return 2
+}
+
+// HostService is one watched service: a systemd unit on Linux, a service in
+// the Service Control Manager on Windows, a launchd job on macOS. Name is the
+// name as it was asked for ("nginx"), which is also the metric instance, so
+// the key stays what someone typed even where the system knows the service
+// by a longer name ("nginx.service").
+type HostService struct {
+	Name    string `json:"name"`
+	Running bool   `json:"running"`
+	// State is the system's own word for it, shown beside the verdict:
+	// "active (running)", "failed", "inactive (dead)" on Linux; "running",
+	// "stopped", "start pending" on Windows; "running" or "not running"
+	// (with the last exit status) on macOS. "not found" means the system
+	// has no service by that name, which is reported as stopped: something
+	// that was meant to be running is not, whatever the reason.
+	State string `json:"state,omitempty"`
+	// Description is the service's own one-line description, or its display
+	// name on Windows, when the system has one.
+	Description string `json:"description,omitempty"`
+}
+
+// ServiceValue is a service's metric: 1 running, 0 not. The way round is
+// chosen for the threshold it makes natural — "critical at or below 0" is
+// "critical when stopped" — and so that a chart of it reads up as up.
+func ServiceValue(s HostService) float64 {
+	if s.Running {
+		return 1
+	}
+	return 0
+}
+
+// HostProcess is one watched program: how many processes are running with
+// that executable name. Zero is a reading like any other — the program is
+// not running — and the default threshold makes it critical.
+type HostProcess struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+// HostContainer describes the container a reading was taken in and the
+// limits it was measured against. A limit left at zero (or nil) is no limit
+// of that kind, and that reading is the host's.
+type HostContainer struct {
+	Kind             string   `json:"kind"` // docker, podman, lxc, kubernetes, container
+	MemoryLimitBytes uint64   `json:"memoryLimitBytes,omitempty"`
+	CPULimitCores    *float64 `json:"cpuLimitCores,omitempty"`
+	// HostMemoryBytes and HostCores are what the machine itself has, kept so
+	// a limit can be shown in proportion to it.
+	HostMemoryBytes uint64 `json:"hostMemoryBytes,omitempty"`
+	HostCores       int    `json:"hostCores,omitempty"`
 }
 
 // HostInterface is throughput and error counts for one network interface.
@@ -260,6 +393,17 @@ type Agent struct {
 	Collect     CollectSelection `json:"collect"`
 	Inventory   *Inventory       `json:"inventory,omitempty"`
 	CheckedInAt *time.Time       `json:"checkedInAt,omitempty"`
+
+	// Remote collector (model/collector.go). Collector is the administrator's
+	// half of the agreement, CollectorAllowed the machine's (what it said at
+	// its last check-in), and CollectorSeenAt when it last sent results.
+	// CollectorStatus and CollectorChecks are filled in by the API: one of
+	// the Collector* states, and how many checks the agent runs.
+	Collector        bool       `json:"collector"`
+	CollectorAllowed bool       `json:"collectorAllowed"`
+	CollectorSeenAt  *time.Time `json:"collectorSeenAt,omitempty"`
+	CollectorStatus  string     `json:"collectorStatus,omitempty"`
+	CollectorChecks  int        `json:"collectorChecks"`
 }
 
 // Revoked reports whether the agent's token can no longer be used.
@@ -321,4 +465,8 @@ type HostSummary struct {
 	Stale    bool         `json:"stale"`
 	Metrics  *HostMetrics `json:"metrics,omitempty"`
 	Warnings []string     `json:"warnings,omitempty"`
+	// Watch is, for the computer GWatch runs on, the services and programs
+	// it watches (an agent's are in Agent.Collect). Absent when it watches
+	// none.
+	Watch *CollectSelection `json:"watch,omitempty"`
 }

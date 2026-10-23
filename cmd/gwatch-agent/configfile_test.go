@@ -19,7 +19,7 @@ func isolate(t *testing.T) string {
 	dir := t.TempDir()
 	t.Setenv("GWATCH_AGENT_TOKEN_FILE", filepath.Join(dir, "agent-token"))
 	for _, k := range []string{"GWATCH_AGENT_CONFIG", "GWATCH_SERVER", "GWATCH_AGENT_TOKEN", "GWATCH_AGENT_INTERVAL",
-		"GWATCH_AGENT_LISTEN", "GWATCH_AGENT_CERT_PIN", "GWATCH_AGENT_REPO", "GWATCH_AGENT_AUTO_UPDATE", "GWATCH_HOST_ROOT", "GWATCH_AGENT_CODE"} {
+		"GWATCH_AGENT_LISTEN", "GWATCH_AGENT_CERT_PIN", "GWATCH_AGENT_REPO", "GWATCH_AGENT_AUTO_UPDATE", "GWATCH_HOST_ROOT", "GWATCH_AGENT_CODE", "GWATCH_AGENT_COLLECTOR"} {
 		t.Setenv(k, "")
 	}
 	old := configPathOverride
@@ -261,4 +261,69 @@ func TestConfigValidateReportsAndFails(t *testing.T) {
 		t.Error("an unknown subcommand should be refused")
 	}
 	_ = model.CollectSelection{}
+}
+
+// A power cut while the file was being written leaves it empty, full of zeros
+// or cut off. The agent must come back on the copy every save keeps, not exit
+// as "not configured" (which the packaged unit does not restart).
+func TestADamagedFileFallsBackToTheCopy(t *testing.T) {
+	for name, damaged := range map[string]string{
+		"empty":   "",
+		"zeros":   strings.Repeat("\x00", 120),
+		"cut off": `{"server": "https://gwatch.lan:7230", "tok`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := isolate(t)
+			path := filepath.Join(dir, "agent.json")
+			doc := &configDoc{path: path, raw: map[string]json.RawMessage{}}
+			doc.set("server", "https://gwatch.lan:7230")
+			doc.set("token", "gwa_filetoken0000000000000000")
+			if err := doc.save(); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, path, damaged)
+			c, problems, warnings := baseConfig()
+			if len(problems) > 0 {
+				t.Fatalf("problems: %v", problems)
+			}
+			if c.server != "https://gwatch.lan:7230" || c.token != "gwa_filetoken0000000000000000" {
+				t.Errorf("did not read the copy: server=%q token=%q", c.server, c.token)
+			}
+			if len(warnings) == 0 || !strings.Contains(warnings[0], "damaged") {
+				t.Errorf("warnings = %v, want one saying the file was damaged", warnings)
+			}
+		})
+	}
+}
+
+// A mistake made by hand is not a power cut: it is reported, not papered over
+// with the copy.
+func TestAHandEditMistakeIsStillAnError(t *testing.T) {
+	dir := isolate(t)
+	path := filepath.Join(dir, "agent.json")
+	doc := &configDoc{path: path, raw: map[string]json.RawMessage{}}
+	doc.set("server", "https://gwatch.lan:7230")
+	if err := doc.save(); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, path, "{\n  \"server\": \"https://other:7230\",,\n}\n")
+	if _, problems, _ := baseConfig(); len(problems) == 0 {
+		t.Fatal("a syntax error in the middle of the file was not reported")
+	}
+}
+
+func TestKeepConfigBackupCopiesAWholeFile(t *testing.T) {
+	dir := isolate(t)
+	path := filepath.Join(dir, "agent.json")
+	writeFile(t, path, `{"server": "https://gwatch.lan:7230"}`)
+	keepConfigBackup(path)
+	b, err := os.ReadFile(backupPath(path))
+	if err != nil || !strings.Contains(string(b), "gwatch.lan") {
+		t.Fatalf("backup = %q, %v", b, err)
+	}
+	writeFile(t, path, "")
+	keepConfigBackup(path)
+	if b, _ := os.ReadFile(backupPath(path)); !strings.Contains(string(b), "gwatch.lan") {
+		t.Fatal("an empty file overwrote the backup")
+	}
 }

@@ -27,9 +27,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kardianos/service"
-
 	"github.com/jxburros/GWatch/internal/api"
+	"github.com/jxburros/GWatch/internal/checks"
 	"github.com/jxburros/GWatch/internal/dbconfig"
 	"github.com/jxburros/GWatch/internal/engine"
 	"github.com/jxburros/GWatch/internal/logging"
@@ -37,6 +36,7 @@ import (
 	"github.com/jxburros/GWatch/internal/permissions"
 	"github.com/jxburros/GWatch/internal/serviceinstall"
 	"github.com/jxburros/GWatch/internal/store"
+	"github.com/jxburros/GWatch/internal/svc"
 	"github.com/jxburros/GWatch/internal/update"
 )
 
@@ -82,6 +82,10 @@ type config struct {
 	// replace lets migrate-db overwrite a target database that already
 	// holds data.
 	replace bool
+	// purge makes uninstall delete what install created as well (Linux,
+	// systemd); yes answers its question for a script.
+	purge bool
+	yes   bool
 }
 
 func usage() {
@@ -91,7 +95,9 @@ Usage:
   gwatch [run] [--data-dir DIR] [--listen 127.0.0.1:7230]   run in the foreground (or as the service when started by Windows)
                                                              use --listen 0.0.0.0:7230 (or Settings › Network) to allow other devices
   gwatch install [--data-dir DIR] [--listen ADDR]            install and start the background service (run as Administrator on Windows)
-  gwatch uninstall                                           stop and remove the background service
+                                                             on Linux with systemd: run again to update or to change --listen/--data-dir
+  gwatch uninstall [--purge [--yes]]                         stop and remove the background service
+                                                             --purge (Linux): also delete the data, /etc/gwatch, the gwatch user and the program
   gwatch start | stop | restart | status                     control the installed service
   gwatch open                                                open the web interface in your browser
   gwatch migrate-db [--db-* flags] [--replace]               copy the SQLite database into the PostgreSQL/MySQL database
@@ -139,9 +145,12 @@ func main() {
 	fs.StringVar(&cfg.db.SSLMode, "db-sslmode", "", "TLS to the server: disable, prefer, require, verify-ca or verify-full")
 	fs.StringVar(&cfg.db.DSN, "db-dsn", "", "complete connection string, in place of the host/user/name flags")
 	fs.BoolVar(&cfg.replace, "replace", false, "migrate-db: empty the target database first if it already holds GWatch data")
+	fs.BoolVar(&cfg.purge, "purge", false, "uninstall (Linux): also delete the data directory, /etc/gwatch, the gwatch user and the program")
+	fs.BoolVar(&cfg.yes, "yes", false, "uninstall --purge: do not ask for confirmation")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
+	given := givenFlags(fs)
 	if cfg.db.Password != "" {
 		fmt.Fprintln(os.Stderr, "warning: a password given with --db-password is visible to every user of this computer in the process list; set GWATCH_DB_PASSWORD instead, or save it with Settings › Database")
 	}
@@ -185,22 +194,41 @@ func main() {
 
 	if err := validateListen(cfg.listen); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(2)
+		os.Exit(usageExitCode(cmd))
 	}
 	proxies, err := api.ParseTrustedProxies(cfg.trustedProxies)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error: --trusted-proxies:", err)
-		os.Exit(2)
+		os.Exit(usageExitCode(cmd))
 	}
 	cfg.proxies = proxies
 
+	systemd := runtime.GOOS == "linux" && serviceinstall.SystemdAvailable()
+	if cfg.purge && (cmd != "uninstall" || !systemd) {
+		fmt.Fprintln(os.Stderr, "error: --purge only goes with uninstall, on a Linux machine that runs systemd")
+		os.Exit(2)
+	}
+	if systemd && (cmd == "install" || cmd == "uninstall") {
+		os.Exit(systemdCommand(cmd, cfg, given))
+	}
+	name := serviceName
+	if systemd {
+		name = serviceinstall.SystemdServiceName()
+	}
+
 	prg := &program{cfg: cfg}
-	svcConfig := &service.Config{
-		Name:        serviceName,
+	// Windows restarts the service five seconds after it fails (svc's
+	// default RestartDelay); the unit and the launchd daemon say the same in
+	// their own terms. On Linux the environment file carries the settings,
+	// for systemd through the unit and for OpenRC and System V through the
+	// init script.
+	svcConfig := svc.Config{
+		Name:        name,
 		DisplayName: serviceDisplay,
 		Description: serviceDesc,
 		Arguments:   []string{"run", "--data-dir", cfg.dataDir, "--listen", cfg.listen},
-		Option:      service.KeyValue{"StartType": "automatic", "OnFailure": "restart", "OnFailureDelayDuration": "5s", "SystemdScript": serviceinstall.SystemdScript},
+		SystemdUnit: serviceinstall.SystemdScript,
+		EnvFile:     serviceinstall.EnvPath,
 	}
 	if cfg.trustedProxies != "" {
 		svcConfig.Arguments = append(svcConfig.Arguments, "--trusted-proxies", cfg.trustedProxies)
@@ -230,16 +258,15 @@ func main() {
 		}
 		svcConfig.Executable = exe
 	}
-	svc, err := service.New(prg, svcConfig)
+	service, err := svc.New(prg, svcConfig)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
-	prg.svc = svc
 
 	switch cmd {
 	case "run":
-		if err := svc.Run(); err != nil {
+		if err := service.Run(); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
@@ -262,7 +289,7 @@ func main() {
 			}
 			fmt.Printf("Database settings saved to %s (%s).\n", dbconfig.Path(cfg.dataDir), dbCfg.Describe())
 		}
-		if err := svc.Install(); err != nil {
+		if err := service.Install(); err != nil {
 			fmt.Fprintln(os.Stderr, "error: install failed:", err, "(on Windows run this from an Administrator prompt)")
 			os.Exit(1)
 		}
@@ -270,42 +297,40 @@ func main() {
 		if cfg.noStart {
 			return
 		}
-		if err := svc.Start(); err != nil {
+		if err := service.Start(); err != nil {
 			fmt.Fprintln(os.Stderr, "warning: service installed but could not be started:", err)
 			os.Exit(1)
 		}
 		fmt.Printf("Service started. Open http://%s in your browser (or run: gwatch open).\n", browserHost(cfg.listen))
 	case "uninstall":
-		_ = svc.Stop()
-		if err := svc.Uninstall(); err != nil {
+		_ = service.Stop()
+		if err := service.Uninstall(); err != nil {
 			fmt.Fprintln(os.Stderr, "error: uninstall failed:", err)
 			os.Exit(1)
 		}
 		fmt.Printf("Service %q removed. Data in %s was kept.\n", serviceName, cfg.dataDir)
 	case "start", "stop", "restart":
-		if err := service.Control(svc, cmd); err != nil {
+		if err := service.Control(cmd); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
 		fmt.Printf("Service %s: done.\n", cmd)
 	case "status":
-		st, err := svc.Status()
+		st, err := service.Status()
 		if err != nil {
 			fmt.Println("Service status: not installed or unavailable:", err)
 			return
 		}
-		names := map[service.Status]string{service.StatusRunning: "running", service.StatusStopped: "stopped", service.StatusUnknown: "unknown"}
-		fmt.Printf("Service status: %s\n", names[st])
+		fmt.Printf("Service status: %s\n", st)
 	default:
 		usage()
 		os.Exit(2)
 	}
 }
 
-// program implements service.Interface.
+// program is what the service runs (svc.Program).
 type program struct {
 	cfg    config
-	svc    service.Service
 	cancel context.CancelFunc
 	done   chan struct{}
 
@@ -372,12 +397,12 @@ func (p *program) afterStop() {
 	os.Exit(0)
 }
 
-func (p *program) Start(s service.Service) error {
+func (p *program) Start(*svc.Service) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
 	p.done = make(chan struct{})
 	mode := "console"
-	if !service.Interactive() && (runtime.GOOS == "windows" || os.Getenv("INVOCATION_ID") != "") {
+	if !svc.Interactive() && (runtime.GOOS == "windows" || os.Getenv("INVOCATION_ID") != "") {
 		mode = "service"
 	}
 	p.mode = mode
@@ -388,10 +413,16 @@ func (p *program) Start(s service.Service) error {
 			if mode == "console" {
 				os.Exit(1)
 			}
+			if os.Getenv("INVOCATION_ID") != "" {
+				// Under systemd, leave so that Restart=on-failure can try
+				// again — unless the settings are wrong, which another try
+				// will not fix (RestartPreventExitStatus=78).
+				os.Exit(fatalExitCode(err))
+			}
 			return
 		}
 		p.afterStop()
-		if mode == "console" && service.Interactive() {
+		if mode == "console" && svc.Interactive() {
 			// Ctrl+C or a restart request in console mode: leave the
 			// process instead of waiting for a service manager.
 			os.Exit(0)
@@ -400,7 +431,7 @@ func (p *program) Start(s service.Service) error {
 	return nil
 }
 
-func (p *program) Stop(s service.Service) error {
+func (p *program) Stop(*svc.Service) error {
 	if p.cancel != nil {
 		p.cancel()
 	}
@@ -428,10 +459,13 @@ func runApp(ctx context.Context, cfg config, mode string, requestRestart func())
 	}
 	defer log.Close()
 	log.Printf("GWatch %s starting (%s mode), data dir %s", version, mode, cfg.dataDir)
+	// Which way ping works here, and why not the others — the line to look
+	// for when every ping check says "no permission" (docs/INSTALL-LINUX.md).
+	log.Printf("ping: %s", checks.PingStatusNow().Summary)
 
 	dbCfg, fromFile, err := dbconfig.Resolve(cfg.dataDir, cfg.db)
 	if err != nil {
-		return fmt.Errorf("database settings: %w", err)
+		return configError{fmt.Errorf("database settings: %w", err)}
 	}
 	source := "the default"
 	switch {

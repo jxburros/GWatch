@@ -26,6 +26,7 @@ import (
 	"github.com/jxburros/GWatch/internal/discovery"
 	"github.com/jxburros/GWatch/internal/engine"
 	"github.com/jxburros/GWatch/internal/logging"
+	"github.com/jxburros/GWatch/internal/matter"
 	"github.com/jxburros/GWatch/internal/model"
 	"github.com/jxburros/GWatch/internal/store"
 )
@@ -140,6 +141,8 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "GET /api/checks/{id}/state", s.handleCheckState)
 
 	s.route(mux, "POST /api/snmp/walk", s.handleSNMPWalk)
+	s.route(mux, "POST /api/matter/nodes", s.handleMatterNodes)
+	s.route(mux, "POST /api/matter/commission", s.handleMatterCommission)
 
 	s.route(mux, "GET /api/history", s.handleHistory)
 	s.route(mux, "GET /api/history/multi", s.handleHistoryMulti)
@@ -171,6 +174,7 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "GET /api/settings", s.handleGetSettings)
 	s.route(mux, "PUT /api/settings", s.handlePutSettings)
 	s.route(mux, "POST /api/settings/test-email", s.handleTestEmail)
+	s.route(mux, "POST /api/settings/test-channel", s.handleTestAlertChannel)
 	s.route(mux, "GET /api/database", s.handleGetDatabase)
 	s.route(mux, "PUT /api/database", s.handlePutDatabase)
 	s.route(mux, "POST /api/database/test", s.handleTestDatabase)
@@ -183,6 +187,8 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "DELETE /api/backups/{name}", s.handleDeleteBackup)
 	s.route(mux, "POST /api/backups/restore", s.handleRestoreUpload)
 	s.route(mux, "POST /api/backups/restore-existing", s.handleRestoreExisting)
+	s.route(mux, "POST /api/backups/inspect", s.handleInspectUpload)
+	s.route(mux, "POST /api/backups/inspect-existing", s.handleInspectExisting)
 
 	s.route(mux, "GET /api/export/history.csv", s.handleExportHistory)
 	s.route(mux, "GET /api/export/results.csv", s.handleExportResults)
@@ -216,6 +222,8 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "GET /api/hosts", s.handleListHosts)
 	s.route(mux, "GET /api/hosts/{key}", s.handleGetHost)
 	s.route(mux, "GET /api/hosts/{key}/history", s.handleHostHistory)
+	s.route(mux, "GET /api/hosts/local/watchable", s.handleLocalWatchable)
+	s.route(mux, "PUT /api/hosts/local/watch", s.handleSetLocalWatch)
 
 	s.route(mux, "GET /api/agents", s.handleListAgents)
 	s.route(mux, "POST /api/agents", s.handleCreateAgent)
@@ -225,6 +233,7 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /api/agents/{id}/rotate", s.handleRotateAgentToken)
 	s.route(mux, "POST /api/agents/{id}/rotate/cancel", s.handleCancelAgentRotation)
 	s.route(mux, "PUT /api/agents/{id}/collect", s.handleSetAgentCollect)
+	s.route(mux, "PUT /api/agents/{id}/collector", s.handleSetAgentCollector)
 
 	s.route(mux, "GET /api/agents/latest", s.handleAgentLatest)
 	s.route(mux, "GET /api/agents/pairings", s.handleListPairings)
@@ -240,6 +249,7 @@ func (s *Server) Handler() http.Handler {
 	// authorization table; see handleIngestMetrics for why.
 	s.route(mux, "/ingest/metrics", s.handleIngestMetrics)
 	s.route(mux, "/ingest/checkin", s.handleAgentCheckIn)
+	s.route(mux, "/ingest/results", s.handleIngestResults)
 
 	s.route(mux, "GET /api/charts", s.handleListCharts)
 	s.route(mux, "PUT /api/charts", s.handlePutCharts)
@@ -430,6 +440,8 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "not found")
 	case errors.Is(err, backup.ErrBadPassword):
 		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, engine.ErrCollected):
+		writeError(w, http.StatusConflict, err.Error())
 	default:
 		id := fmt.Sprintf("%x", time.Now().UnixNano())
 		s.Log.Errorf("api [%s]: %v", id, err)
@@ -823,6 +835,8 @@ type checkDestination struct {
 	HostSource      model.HostSource
 	AgentID         int64
 	MetricsURL      string
+	MatterServer    string
+	MatterNodeID    uint64
 }
 
 // destinationOf reads a check's destination. The node host stands in for a
@@ -843,6 +857,8 @@ func destinationOf(c model.Check, nodeHost string) checkDestination {
 		HostSource:      cfg.HostSource,
 		AgentID:         cfg.AgentID,
 		MetricsURL:      strings.TrimSpace(cfg.MetricsURL),
+		MatterServer:    strings.TrimSpace(cfg.MatterServer),
+		MatterNodeID:    cfg.MatterNodeID,
 	}
 	if d.Target == "" {
 		d.Target = strings.TrimSpace(nodeHost)
@@ -1068,14 +1084,30 @@ func normalizeTags(tags []string) []string {
 	return out
 }
 
+// maxCheckGroups bounds how many check groups one check may be in.
+const maxCheckGroups = 10
+
 // maxChecksPerNode bounds how many checks one node may hold. A real device
 // has a handful; the limit is far above that and is there so that one 4 MiB
 // request cannot store a node whose "run now" is thousands of checks.
 const maxChecksPerNode = 500
 
 // normalizeNode validates and fills defaults on a node and its checks.
+// It also refuses a "check from" naming an agent that does not exist or has
+// been revoked; a restore, which goes through normalizeNodeWith alone, keeps
+// whatever the archive says, and a missing collector then shows as unknown.
 func (s *Server) normalizeNode(n *model.Node) error {
-	settings := s.Engine.Settings()
+	if err := normalizeNodeWith(n, s.Engine.Settings()); err != nil {
+		return err
+	}
+	return s.checkCollector(n)
+}
+
+// normalizeNodeWith is normalizeNode under the given settings (the defaults
+// and the minimum interval come from them). A restore validates an archive's
+// nodes under the archive's own settings, which are what will be in force
+// once it is applied.
+func normalizeNodeWith(n *model.Node, settings model.Settings) error {
 	n.Name = strings.TrimSpace(n.Name)
 	n.Host = strings.TrimSpace(n.Host)
 	// A body may carry groups, the older single group, or both; SyncGroups
@@ -1112,6 +1144,15 @@ func (s *Server) normalizeNode(n *model.Node) error {
 		c.Name = strings.TrimSpace(c.Name)
 		if c.Name == "" {
 			c.Name = c.Type.Label()
+		}
+		c.Config.Groups = normalizeTags(c.Config.Groups)
+		if len(c.Config.Groups) > maxCheckGroups {
+			return fmt.Errorf("check %q: at most %d check groups", c.Name, maxCheckGroups)
+		}
+		for _, g := range c.Config.Groups {
+			if len(g) > 64 {
+				return fmt.Errorf("check %q: a check group name is at most 64 characters", c.Name)
+			}
 		}
 		if !c.Type.Valid() {
 			return fmt.Errorf("check %q: unsupported type %q", c.Name, c.Type)
@@ -1164,6 +1205,32 @@ func (s *Server) normalizeNode(n *model.Node) error {
 				}
 				if o.Scale == 0 {
 					o.Scale = 1
+				}
+			}
+		}
+		if c.Type == model.CheckMatter {
+			// A standard reading saved without a name or unit takes the
+			// ones the editor would have shown, so a reading added through
+			// the API charts under the same name as one picked in the
+			// browser. The cluster and attribute of a standard reading are
+			// implied by its kind, so stray ones are cleared rather than
+			// stored to confuse the next reader.
+			c.Config.MatterServer = strings.TrimSpace(c.Config.MatterServer)
+			for i := range c.Config.MatterReadings {
+				rd := &c.Config.MatterReadings[i]
+				rd.Kind = strings.ToLower(strings.TrimSpace(rd.Kind))
+				rd.Name = strings.TrimSpace(rd.Name)
+				rd.Unit = strings.TrimSpace(rd.Unit)
+				if st, ok := matter.StandardFor(matter.Kind(rd.Kind)); ok {
+					if rd.Name == "" {
+						rd.Name = st.Name
+					}
+					if rd.Unit == "" {
+						rd.Unit = st.Unit
+					}
+					rd.Cluster, rd.Attribute, rd.Scale = 0, 0, 0
+				} else if rd.Scale == 0 {
+					rd.Scale = 1
 				}
 			}
 		}
@@ -1284,8 +1351,22 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 		checks.ForgetCheck(id)
 	}
 	detail := describeNodeChange(existing, updated, len(deleted))
+	if pruned := s.pruneRules(r.Context(), nil, deleted); len(pruned) > 0 {
+		detail += ". " + strings.Join(pruned, ". ")
+	}
 	s.configChanged(r.Context(), &updated, fmt.Sprintf("Updated node %s", updated.Name), detail)
 	writeJSON(w, http.StatusOK, s.decorateNode(r, updated, s.Engine.States(), nil))
+}
+
+// pruneRules takes deleted nodes and checks out of the rules that named them
+// (see store.PruneRuleReferences). A failure is logged rather than failing the
+// deletion, which has already happened.
+func (s *Server) pruneRules(ctx context.Context, nodeIDs, checkIDs []int64) []string {
+	pruned, err := s.Store.PruneRuleReferences(ctx, nodeIDs, checkIDs)
+	if err != nil {
+		s.Log.Errorf("update rules after a deletion: %v", err)
+	}
+	return pruned
 }
 
 func describeNodeChange(before, after model.Node, deletedChecks int) string {
@@ -1307,6 +1388,13 @@ func describeNodeChange(before, after model.Node, deletedChecks int) string {
 	}
 	if !before.LinkStyle.Equal(after.LinkStyle) {
 		parts = append(parts, "link style changed")
+	}
+	if (before.CollectorID == nil) != (after.CollectorID == nil) || (before.CollectorID != nil && after.CollectorID != nil && *before.CollectorID != *after.CollectorID) {
+		if after.CollectorID == nil {
+			parts = append(parts, "checked from this server")
+		} else {
+			parts = append(parts, fmt.Sprintf("checked from collector agent %d", *after.CollectorID))
+		}
 	}
 	added := len(after.Checks) - (len(before.Checks) - deletedChecks)
 	if added > 0 {
@@ -1363,10 +1451,16 @@ func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	checkIDs := make([]int64, 0, len(n.Checks))
 	for _, c := range n.Checks {
 		checks.ForgetCheck(c.ID)
+		checkIDs = append(checkIDs, c.ID)
 	}
-	s.configChanged(r.Context(), nil, fmt.Sprintf("Deleted node %s", n.Name), fmt.Sprintf("Removed %d check(s) and their history.", len(n.Checks)))
+	detail := fmt.Sprintf("Removed %d check(s) and their history.", len(n.Checks))
+	if pruned := s.pruneRules(r.Context(), []int64{id}, checkIDs); len(pruned) > 0 {
+		detail += " " + strings.Join(pruned, ". ") + "."
+	}
+	s.configChanged(r.Context(), nil, fmt.Sprintf("Deleted node %s", n.Name), detail)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -1510,6 +1604,11 @@ func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	checkGroups, err := s.Store.CheckGroupCounts(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
 	type entry struct {
 		Name  string `json:"name"`
 		Count int    `json:"count"`
@@ -1528,7 +1627,7 @@ func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
 		}
 		return out
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"groups": toList(groups), "tags": toList(tags)})
+	writeJSON(w, http.StatusOK, map[string]any{"groups": toList(groups), "tags": toList(tags), "checkGroups": toList(checkGroups)})
 }
 
 // ---- checks ----

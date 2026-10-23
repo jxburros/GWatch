@@ -51,6 +51,20 @@ func (s *Server) normalizeAction(a *model.Action) error {
 }
 
 func (s *Server) normalizeTrigger(ctx context.Context, t *model.Trigger) error {
+	var node *model.Node
+	if t.NodeID > 0 {
+		if n, err := s.Store.GetNode(ctx, t.NodeID); err == nil {
+			node = &n
+		}
+	}
+	return s.normalizeTriggerFor(t, node)
+}
+
+// normalizeTriggerFor is normalizeTrigger with the trigger's node already
+// looked up (nil when there is none with its id). A restore validates an
+// archive's triggers against the archive's nodes, which are not in the
+// database yet.
+func (s *Server) normalizeTriggerFor(t *model.Trigger, n *model.Node) error {
 	t.Name = strings.TrimSpace(t.Name)
 	if t.Name == "" {
 		t.Name = "Trigger"
@@ -58,8 +72,7 @@ func (s *Server) normalizeTrigger(ctx context.Context, t *model.Trigger) error {
 	if t.NodeID <= 0 {
 		return fmt.Errorf("a node is required")
 	}
-	n, err := s.Store.GetNode(ctx, t.NodeID)
-	if err != nil {
+	if n == nil || n.ID != t.NodeID {
 		return fmt.Errorf("the node does not exist")
 	}
 	if t.CheckID != nil {
@@ -279,6 +292,46 @@ func endpointDocs(list []model.Endpoint, redact bool) []endpointDoc {
 	return out
 }
 
+// normalizeEndpoint validates and tidies a custom endpoint the way a save
+// does: a name, a URL name (slug) of the allowed form, a known method, and
+// either a token of at least minEndpointToken characters or an explicit
+// "allow calls without a token", and an action that validates. A restore
+// holds an archive's endpoints to the same.
+func (s *Server) normalizeEndpoint(e *model.Endpoint) error {
+	e.Name = strings.TrimSpace(e.Name)
+	if e.Name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if strings.TrimSpace(e.Slug) == "" {
+		e.Slug = slugify(e.Name)
+	} else {
+		e.Slug = slugify(e.Slug)
+	}
+	if !slugPattern.MatchString(e.Slug) {
+		return fmt.Errorf("the URL name may only contain lowercase letters, digits, - and _")
+	}
+	e.Method = strings.ToUpper(strings.TrimSpace(e.Method))
+	switch e.Method {
+	case "", "ANY":
+		e.Method = "ANY"
+	case "GET", "POST", "PUT", "DELETE":
+	default:
+		return fmt.Errorf("method must be GET, POST, PUT, DELETE or ANY")
+	}
+	e.Token = strings.TrimSpace(e.Token)
+	if e.Token != "" {
+		// A token and "allow calls without a token" are mutually exclusive; the
+		// token wins so an acknowledgement cannot linger on a protected endpoint.
+		e.AllowNoToken = false
+		if len(e.Token) < minEndpointToken {
+			return fmt.Errorf("the token must be at least %d characters", minEndpointToken)
+		}
+	} else if !e.AllowNoToken {
+		return fmt.Errorf("a token is required; generate one or explicitly allow calls without a token")
+	}
+	return s.normalizeAction(&e.Action)
+}
+
 func (s *Server) handleListEndpoints(w http.ResponseWriter, r *http.Request) {
 	list, err := s.Store.ListEndpoints(r.Context())
 	if err != nil {
@@ -304,43 +357,7 @@ func (s *Server) handleSaveEndpoint(w http.ResponseWriter, r *http.Request) {
 	} else {
 		e.ID = 0
 	}
-	e.Name = strings.TrimSpace(e.Name)
-	if e.Name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
-		return
-	}
-	if strings.TrimSpace(e.Slug) == "" {
-		e.Slug = slugify(e.Name)
-	} else {
-		e.Slug = slugify(e.Slug)
-	}
-	if !slugPattern.MatchString(e.Slug) {
-		writeError(w, http.StatusBadRequest, "the URL name may only contain lowercase letters, digits, - and _")
-		return
-	}
-	e.Method = strings.ToUpper(strings.TrimSpace(e.Method))
-	switch e.Method {
-	case "", "ANY":
-		e.Method = "ANY"
-	case "GET", "POST", "PUT", "DELETE":
-	default:
-		writeError(w, http.StatusBadRequest, "method must be GET, POST, PUT, DELETE or ANY")
-		return
-	}
-	e.Token = strings.TrimSpace(e.Token)
-	if e.Token != "" {
-		// A token and "allow calls without a token" are mutually exclusive; the
-		// token wins so an acknowledgement cannot linger on a protected endpoint.
-		e.AllowNoToken = false
-		if len(e.Token) < minEndpointToken {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("the token must be at least %d characters", minEndpointToken))
-			return
-		}
-	} else if !e.AllowNoToken {
-		writeError(w, http.StatusBadRequest, "a token is required; generate one or explicitly allow calls without a token")
-		return
-	}
-	if err := s.normalizeAction(&e.Action); err != nil {
+	if err := s.normalizeEndpoint(&e); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -660,6 +677,16 @@ func (u *Updater) Status() model.UpdateStatus {
 	st := u.status
 	st.Executable = u.exe()
 	st.CanApply = st.Executable != "" && update.DirWritable(st.Executable)
+	if u.PackagedBy != "" {
+		latest := ""
+		if st.Last != nil {
+			latest = st.Last.LatestVersion
+		}
+		st.CanApply = false
+		st.PackagedBy = u.PackagedBy
+		st.PackageManager = packageManager(u.PackagedBy)
+		st.PackageCommand = packageUpdateCommand(u.PackagedBy, latest, packageArch)
+	}
 	st.AutoCheck = p.CheckAutomatically
 	st.PromptOnOpen = p.CheckAutomatically && p.PromptOnOpen
 	if !u.lastCheck.IsZero() {
@@ -880,11 +907,7 @@ func (u *Updater) target(ctx context.Context, repo, version string) (model.Updat
 // like any other.
 func (u *Updater) Apply(ctx context.Context, repo, version string) (model.UpdateInfo, error) {
 	if u.PackagedBy != "" {
-		command := map[string]string{"docker": "docker compose pull && docker compose up -d", "deb": "sudo apt install --only-upgrade gwatch", "rpm": "sudo dnf upgrade gwatch", "homebrew": "brew upgrade gwatch", "winget": "winget upgrade GWatch.GWatch"}[u.PackagedBy]
-		if command == "" {
-			command = "use the package manager that installed this executable"
-		}
-		return model.UpdateInfo{}, fmt.Errorf("installed by %s; to update, %s", u.PackagedBy, command)
+		return model.UpdateInfo{}, packagedRefusal(u.PackagedBy, u.latestKnown())
 	}
 	u.mu.Lock()
 	if u.status.Applying {
@@ -1060,6 +1083,7 @@ func (s *Server) eventFilterFromQuery(r *http.Request, def int) store.EventFilte
 		model.EventAlertSent:        model.EventAlertFailed,
 		model.EventServiceStarted:   model.EventServiceStopped,
 		model.EventRuleFired:        model.EventRuleCleared,
+		model.EventCollectorDown:    model.EventCollectorUp,
 	}
 	for _, t := range r.URL.Query()["type"] {
 		for _, part := range strings.Split(t, ",") {

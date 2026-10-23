@@ -4,7 +4,7 @@
 VERSION ?= $(shell tr -d ' \t\r\n' < VERSION)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build build-ncruces build-cgo windows docker rsrc agent agent-all test test-race test-postgres test-mysql cover fmt fmt-check vet tidy-check web-check web-test web-e2e ci run keygen sign verify-release mcp-build mcp-test mcp-fmt
+.PHONY: build build-ncruces build-cgo windows docker rsrc agent agent-all test test-race test-postgres test-mysql cover fmt fmt-check vet tidy-check web-check web-test web-typecheck web-e2e ci run keygen sign verify-release mcp-build mcp-test mcp-fmt
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/gwatch .
@@ -126,6 +126,10 @@ web-check:
 # `npm ci` run once first (devDependencies only; see package.json).
 web-test:
 	npm test
+# tsc over the web/ files marked `// @ts-check` (JSDoc types, no build step;
+# tsconfig.json says how to bring another file under it).
+web-typecheck:
+	npm run typecheck
 # The browser suite (tests/e2e/): Playwright drives Chromium through every
 # page in mock mode with an axe-core accessibility scan, and walks the Help
 # page's keyboard contract. Needs Chromium once:
@@ -148,7 +152,7 @@ mcp-test:
 mcp-fmt:
 	cd mcp && gofmt -w .
 
-ci: fmt-check vet tidy-check test-race mcp-test mcp-build web-test web-e2e
+ci: fmt-check vet tidy-check test-race mcp-test mcp-build web-test web-typecheck web-e2e
 
 run:
 	go run . run --data-dir ./data
@@ -193,6 +197,15 @@ NFPM ?= go run github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
 .PHONY: agent-packages agent-image
 agent-packages:
 	NFPM='$(NFPM)' sh packaging/nfpm/package.sh $(AGENT_VERSION) dist/packages
+
+# ---- Server packages (docs/INSTALL-LINUX.md#from-a-deb-or-rpm-package) ----
+#
+# The GWatch server's .deb and .rpm for amd64, arm64 and armhf, into
+# dist/server-packages, the way the server-linux-packages release job builds
+# them; the binaries inside are built with -X main.packagedBy=deb/rpm.
+.PHONY: server-packages
+server-packages:
+	NFPM='$(NFPM)' sh packaging/nfpm/gwatch/package.sh $(VERSION) dist/server-packages
 
 # The agent's container image for this machine's platform (the Docker host
 # watcher — docs/HARDWARE.md#in-a-container).
