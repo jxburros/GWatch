@@ -3,7 +3,10 @@
 set -eu
 umask 077
 version=
-listen=127.0.0.1:7230
+# Empty unless --listen is given: on Linux, re-running the installer to update
+# keeps the address an earlier install chose (gwatch install reads it back from
+# /etc/gwatch/gwatch.env).
+listen=
 no_start=false
 uninstall=false
 while [ "$#" -gt 0 ]; do
@@ -19,7 +22,13 @@ done
 product=gwatch
 prefix=v
 if "$uninstall"; then
- "/usr/local/libexec/$product/$product" uninstall
+ # /usr/local/bin is where gwatch install has put the program on Linux since
+ # #125; libexec is where earlier releases, and macOS, keep it.
+ if [ -x "/usr/local/bin/$product" ] && [ "$(uname -s)" = Linux ]; then
+  "/usr/local/bin/$product" uninstall
+ else
+  "/usr/local/libexec/$product/$product" uninstall
+ fi
  echo "Service removed; data and executable retained."
  exit 0
 fi
@@ -51,8 +60,15 @@ printf '\060\052\060\005\006\003\053\145\160\003\041\000' > "$tmp/key.der"
 printf '%s' 'OzN/mY/5zRszwN7DxuhrC718w+3TjL36FuZHbYV/qkk=' | openssl base64 -d -A >> "$tmp/key.der"
 openssl pkeyutl -verify -pubin -keyform DER -inkey "$tmp/key.der" -rawin -in "$tmp/message" -sigfile "$tmp/signature" >/dev/null || { echo 'Release signature verification failed' >&2; exit 1; }
 chmod 700 "$tmp/binary"
-set -- install --data-dir /var/lib/gwatch --listen "$listen"
+if [ "$os" = linux ]; then
+ # gwatch install defaults to /var/lib/gwatch and keeps whatever data
+ # directory and address an earlier install wrote to /etc/gwatch/gwatch.env.
+ set -- install
+ if [ -n "$listen" ]; then set -- "$@" --listen "$listen"; fi
+else
+ set -- install --data-dir /var/lib/gwatch --listen "${listen:-127.0.0.1:7230}"
+fi
 if "$no_start"; then set -- "$@" --no-start; fi
 "$tmp/binary" "$@"
-echo "GWatch installed. Open http://$listen (or use an SSH tunnel)."
+echo "GWatch installed. Open http://${listen:-127.0.0.1:7230} (or use an SSH tunnel)."
 echo 'First administrator: ssh -L 7230:127.0.0.1:7230 user@server, then open http://127.0.0.1:7230 and Settings > Accounts.'

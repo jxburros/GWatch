@@ -82,6 +82,10 @@ type config struct {
 	// replace lets migrate-db overwrite a target database that already
 	// holds data.
 	replace bool
+	// purge makes uninstall delete what install created as well (Linux,
+	// systemd); yes answers its question for a script.
+	purge bool
+	yes   bool
 }
 
 func usage() {
@@ -91,7 +95,9 @@ Usage:
   gwatch [run] [--data-dir DIR] [--listen 127.0.0.1:7230]   run in the foreground (or as the service when started by Windows)
                                                              use --listen 0.0.0.0:7230 (or Settings › Network) to allow other devices
   gwatch install [--data-dir DIR] [--listen ADDR]            install and start the background service (run as Administrator on Windows)
-  gwatch uninstall                                           stop and remove the background service
+                                                             on Linux with systemd: run again to update or to change --listen/--data-dir
+  gwatch uninstall [--purge [--yes]]                         stop and remove the background service
+                                                             --purge (Linux): also delete the data, /etc/gwatch, the gwatch user and the program
   gwatch start | stop | restart | status                     control the installed service
   gwatch open                                                open the web interface in your browser
   gwatch migrate-db [--db-* flags] [--replace]               copy the SQLite database into the PostgreSQL/MySQL database
@@ -139,9 +145,12 @@ func main() {
 	fs.StringVar(&cfg.db.SSLMode, "db-sslmode", "", "TLS to the server: disable, prefer, require, verify-ca or verify-full")
 	fs.StringVar(&cfg.db.DSN, "db-dsn", "", "complete connection string, in place of the host/user/name flags")
 	fs.BoolVar(&cfg.replace, "replace", false, "migrate-db: empty the target database first if it already holds GWatch data")
+	fs.BoolVar(&cfg.purge, "purge", false, "uninstall (Linux): also delete the data directory, /etc/gwatch, the gwatch user and the program")
+	fs.BoolVar(&cfg.yes, "yes", false, "uninstall --purge: do not ask for confirmation")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
+	given := givenFlags(fs)
 	if cfg.db.Password != "" {
 		fmt.Fprintln(os.Stderr, "warning: a password given with --db-password is visible to every user of this computer in the process list; set GWATCH_DB_PASSWORD instead, or save it with Settings › Database")
 	}
@@ -185,18 +194,31 @@ func main() {
 
 	if err := validateListen(cfg.listen); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(2)
+		os.Exit(usageExitCode(cmd))
 	}
 	proxies, err := api.ParseTrustedProxies(cfg.trustedProxies)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error: --trusted-proxies:", err)
-		os.Exit(2)
+		os.Exit(usageExitCode(cmd))
 	}
 	cfg.proxies = proxies
 
+	systemd := runtime.GOOS == "linux" && serviceinstall.SystemdAvailable()
+	if cfg.purge && (cmd != "uninstall" || !systemd) {
+		fmt.Fprintln(os.Stderr, "error: --purge only goes with uninstall, on a Linux machine that runs systemd")
+		os.Exit(2)
+	}
+	if systemd && (cmd == "install" || cmd == "uninstall") {
+		os.Exit(systemdCommand(cmd, cfg, given))
+	}
+	name := serviceName
+	if systemd {
+		name = serviceinstall.SystemdServiceName()
+	}
+
 	prg := &program{cfg: cfg}
 	svcConfig := &service.Config{
-		Name:        serviceName,
+		Name:        name,
 		DisplayName: serviceDisplay,
 		Description: serviceDesc,
 		Arguments:   []string{"run", "--data-dir", cfg.dataDir, "--listen", cfg.listen},
@@ -388,6 +410,12 @@ func (p *program) Start(s service.Service) error {
 			if mode == "console" {
 				os.Exit(1)
 			}
+			if os.Getenv("INVOCATION_ID") != "" {
+				// Under systemd, leave so that Restart=on-failure can try
+				// again — unless the settings are wrong, which another try
+				// will not fix (RestartPreventExitStatus=78).
+				os.Exit(fatalExitCode(err))
+			}
 			return
 		}
 		p.afterStop()
@@ -431,7 +459,7 @@ func runApp(ctx context.Context, cfg config, mode string, requestRestart func())
 
 	dbCfg, fromFile, err := dbconfig.Resolve(cfg.dataDir, cfg.db)
 	if err != nil {
-		return fmt.Errorf("database settings: %w", err)
+		return configError{fmt.Errorf("database settings: %w", err)}
 	}
 	source := "the default"
 	switch {
