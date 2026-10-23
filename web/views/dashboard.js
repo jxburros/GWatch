@@ -5,7 +5,7 @@
 import { api } from '../api.js';
 import { preserveFocus, h, icon, clear, replace, statusPill, statusSpine, statusWord, statusGlyph, checkChip, statusOrb, toast, confirmDialog, promptDialog, openModal, menuButton, field, textInput, numberInput, selectInput, checkbox, emptyState, skeleton, eventRow, rangeChips, statusMeta, uid } from '../components.js';
 import { relTime, bytes, plural, dateShort, duration, pct, nodeGroups, inGroup, NODE_SORTS, sortNodes } from '../fmt.js';
-import { chartConfigEditor, renderConfiguredChart, normalizeChartConfig, cachedHistoryFetch, chartCsvItems, TIMESTACK_PERIODS } from '../chart-config.js';
+import { chartConfigEditor, renderConfiguredChart, normalizeChartConfig, cachedHistoryFetch, expireHistory, chartCsvItems, TIMESTACK_PERIODS } from '../chart-config.js';
 // charts.js is already in the graph by way of chart-config.js, so naming these
 // here costs nothing and spares the availability widget an await it does not
 // need — the widget must be able to fill itself in one synchronous step.
@@ -143,7 +143,7 @@ export async function mount(root, ctx) {
     const [overview, health] = await Promise.all([api.get('/api/overview'), api.get('/api/health').catch(() => state.health)]);
     if (state.destroyed || state.interacting || token !== refreshToken) return;
     state.overview = overview; state.health = health;
-    state.historyCache.clear();
+    expireHistory(state.historyCache);
     refreshWidgets();
   }
 
@@ -787,7 +787,8 @@ export async function mount(root, ctx) {
     if (v) { v.destroy(); state.chartViews.delete(id); }
   }
   // A chart widget may also ask for one of a check's named metrics (#68);
-  // everything is cached by what was asked for, until the next refresh.
+  // everything is cached by what was asked for, for as long as that range
+  // can go without changing (expireHistory).
   const fetchHistory = cachedHistoryFetch(state.historyCache);
   function renderChart(w, body) {
     disposeChart(w.id);

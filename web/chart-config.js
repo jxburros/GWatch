@@ -416,7 +416,9 @@ export function historyFetch(ids, range, metric, end) {
   return ids.length ? getHistoryMulti(ids, range, end) : getHistoryAuto(range);
 }
 
-/** historyFetch behind a cache (a Map the caller owns and clears on refresh). */
+/** historyFetch behind a cache (a Map the caller owns). A live update calls
+ *  expireHistory on it rather than clearing it, so only the series old enough
+ *  to have changed are asked for again. */
 export function cachedHistoryFetch(cache) {
   return (ids, range, metric, end) => {
     const key = `${ids.join(',')}|${range}|${metric || ''}|${end ?? ''}`;
@@ -424,10 +426,25 @@ export function cachedHistoryFetch(cache) {
       const p = historyFetch(ids, range, metric, end);
       // A failed request is not kept, so the next refresh asks again.
       p.catch(() => { if (cache.get(key) === p) cache.delete(key); });
-      cache.set(key, p);
+      cache.set(key, Object.assign(p, { fetchedAt: Date.now(), range, fixed: end != null && end !== '' }));
     }
     return cache.get(key);
   };
+}
+
+// How long a cached series is good for, by range. Live updates arrive every
+// second or so on a busy install, and re-downloading a month of history for
+// each one was steady, pointless load: a 30-day chart's newest bucket is
+// hours wide, so it cannot have moved in a few seconds.
+const HISTORY_MAX_AGE = { '1h': 10e3, '24h': 30e3, '3d': 60e3, '7d': 60e3, '30d': 5 * 60e3, '1y': 15 * 60e3 };
+
+/** Drops the cached series that are old enough to be worth asking for again
+ *  (a window that ends at a fixed time never changes, so it is kept). */
+export function expireHistory(cache, now = Date.now()) {
+  for (const [key, p] of cache) {
+    if (p.fixed) continue;
+    if (now - (p.fetchedAt || 0) >= (HISTORY_MAX_AGE[p.range] ?? 30e3)) cache.delete(key);
+  }
 }
 
 const asList = (x) => (Array.isArray(x) ? x : x ? [x] : []);

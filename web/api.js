@@ -212,53 +212,69 @@ export const getHistoryMulti = (checkIds, range, end) => {
  * Subscribe to live updates. Handler receives the parsed update payload
  * (or null for polling ticks). Falls back to polling every 15s when the
  * EventSource fails. Returns an unsubscribe function.
+ *
+ * Every subscriber shares one EventSource. A node page with several hardware
+ * panels used to hold a stream each, and a browser allows only six
+ * connections to a server over HTTP/1.1, so other requests stalled behind
+ * them. The stream opens with the first subscriber and closes with the last.
  */
+const live = { subs: new Set(), es: null, pollTimer: null, pollMs: 0 };
+
+function liveStartPoll() {
+  if (live.pollTimer || !live.subs.size || document.hidden) return;
+  live.pollMs = Math.min(...[...live.subs].map((s) => s.pollMs));
+  live.pollTimer = setInterval(() => liveEach(null), live.pollMs);
+}
+function liveStopPoll() { if (live.pollTimer) { clearInterval(live.pollTimer); live.pollTimer = null; } }
+function liveEach(data) {
+  for (const s of [...live.subs]) {
+    try { s.handler(data); } catch (e) { console.error('live update handler failed', e); }
+  }
+}
+function liveConnect() {
+  if (document.hidden || !live.subs.size || live.es) return;
+  if (typeof EventSource === 'undefined') { liveStartPoll(); return; }
+  let es;
+  try {
+    es = new EventSource('/api/stream');
+  } catch {
+    liveStartPoll();
+    return;
+  }
+  live.es = es;
+  es.addEventListener('open', () => { liveStopPoll(); setConnection(true); });
+  es.addEventListener('update', (ev) => {
+    let data = null;
+    try { data = JSON.parse(ev.data); } catch { data = null; }
+    liveEach(data || {});
+  });
+  es.addEventListener('error', () => {
+    // EventSource retries by itself; keep polling meanwhile so the UI stays fresh.
+    liveStartPoll();
+  });
+}
+function liveDisconnect() {
+  liveStopPoll();
+  if (live.es) { try { live.es.close(); } catch { /* ignore */ } live.es = null; }
+}
+function liveVisibility() {
+  liveDisconnect();
+  if (!document.hidden && live.subs.size) { liveConnect(); liveEach(null); }
+}
+
 export function subscribeUpdates(handler, { pollMs = 15000 } = {}) {
-  let es = null;
-  let pollTimer = null;
-  let stopped = false;
-  let usingPoll = false;
-
-  const startPoll = () => {
-    if (pollTimer || stopped || document.hidden) return;
-    usingPoll = true;
-    pollTimer = setInterval(() => handler(null), pollMs);
-  };
-  const stopPoll = () => { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } usingPoll = false; };
-
-  const connect = () => {
-    if (document.hidden || stopped) return;
-    if (typeof EventSource === 'undefined') { startPoll(); return; }
-    try {
-      es = new EventSource('/api/stream');
-    } catch {
-      startPoll();
-      return;
-    }
-    es.addEventListener('open', () => { stopPoll(); setConnection(true); });
-    es.addEventListener('update', (ev) => {
-      let data = null;
-      try { data = JSON.parse(ev.data); } catch { data = null; }
-      handler(data || {});
-    });
-    es.addEventListener('error', () => {
-      // EventSource retries by itself; keep polling meanwhile so the UI stays fresh.
-      startPoll();
-    });
-  };
-  const visibility = () => {
-    stopPoll();
-    if (es) { es.close(); es = null; }
-    if (!document.hidden && !stopped) { connect(); handler(null); }
-  };
-  document.addEventListener('visibilitychange', visibility);
-  connect();
-
+  const sub = { handler, pollMs };
+  if (!live.subs.size) document.addEventListener('visibilitychange', liveVisibility);
+  live.subs.add(sub);
+  // A subscriber that asks for a faster poll gets it from the next fallback.
+  if (live.pollTimer && pollMs < live.pollMs) { liveStopPoll(); liveStartPoll(); }
+  liveConnect();
   return () => {
-    document.removeEventListener('visibilitychange', visibility);
-    stopped = true;
-    stopPoll();
-    if (es) { try { es.close(); } catch { /* ignore */ } es = null; }
+    if (!live.subs.delete(sub)) return;
+    if (!live.subs.size) {
+      document.removeEventListener('visibilitychange', liveVisibility);
+      liveDisconnect();
+    }
   };
 }
 

@@ -4,7 +4,7 @@
 
 import { api } from '../api.js';
 import { h, icon, clear, replace, toast, confirmDialog, promptDialog, menuButton, emptyState, skeleton, rangeChips, busy, uid } from '../components.js';
-import { chartConfigEditor, renderConfiguredChart, normalizeChartConfig, describeChartConfig, chartMetricSummary, cachedHistoryFetch, chartCsvItems } from '../chart-config.js';
+import { chartConfigEditor, renderConfiguredChart, normalizeChartConfig, describeChartConfig, chartMetricSummary, cachedHistoryFetch, expireHistory, chartCsvItems } from '../chart-config.js';
 import { debounce } from '../api.js';
 import { TIMESTACK_PERIODS } from '../chart-config.js';
 
@@ -161,7 +161,7 @@ export async function mount(root, ctx) {
   render();
 
   return {
-    refresh() { state.cache.clear(); state.view?.refresh(); },
+    refresh() { expireHistory(state.cache); state.view?.refresh(); },
     themeChanged() { renderMain(); },
     async update(params) {
       if (params.id !== state.currentId) { state.currentId = params.id || null; state.dirty = false; pickCurrent(); if (!params.id) state.cfg = state.cfg; render(); }
