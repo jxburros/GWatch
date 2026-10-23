@@ -242,6 +242,7 @@ var policies = []routePolicy{
 	{"POST", "/api/agents/{id}/rotate", levelAdmin, keyDeny},
 	{"POST", "/api/agents/{id}/rotate/cancel", levelAdmin, keyDeny},
 	{"PUT", "/api/agents/{id}/collect", levelAdmin, keyDeny},
+	{"PUT", "/api/agents/{id}/collector", levelAdmin, keyDeny},
 	// Which agent release is newest. It says nothing about this installation
 	// and changes nothing, but it sits with the other agent routes: it is only
 	// of interest to whoever installs agents.

@@ -24,6 +24,10 @@ import (
 // no way to make an agent do anything; the agent asks, the answer is data, and
 // everything in it is something the agent checks and applies on its own terms.
 
+// collectorCheckIn is how often a collector is asked to check in: often
+// enough that a check added to one of its nodes starts within a few minutes.
+const collectorCheckIn = 2 * time.Minute
+
 // maxCheckInBody bounds a check-in. The inventory is the only sizeable part: a
 // few hundred names at most, which is well under this.
 const maxCheckInBody = 512 << 10
@@ -108,14 +112,25 @@ func (s *Server) handleAgentCheckIn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "the body is not a GWatch agent check-in")
 		return
 	}
-	if err := s.Store.RecordAgentCheckIn(ctx, agent.ID, in.Inventory); err != nil {
+	if err := s.Store.RecordAgentCheckIn(ctx, agent.ID, in.Inventory, in.Collector); err != nil {
 		s.fail(w, err)
 		return
+	}
+	if agent.CollectorAllowed != in.Collector {
+		// The machine's half of the collector agreement changed; the engine
+		// words its "why is this unknown" from it.
+		s.reloadCollectors(ctx)
 	}
 
 	out := model.AgentSettings{
 		CheckInSeconds: int(model.CheckInDefault.Seconds()),
 		Collect:        agent.Collect,
+		Collector:      s.collectorAssignment(agent, in.Collector),
+	}
+	if out.Collector != nil && out.CheckInSeconds > int(collectorCheckIn.Seconds()) {
+		// A collector picks up a node moved to it, or a check changed on one,
+		// at its next check-in, so it asks more often than a plain agent.
+		out.CheckInSeconds = int(collectorCheckIn.Seconds())
 	}
 	if s.Updater != nil {
 		lctx, cancel := context.WithTimeout(ctx, 5*time.Second)

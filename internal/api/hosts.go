@@ -291,6 +291,9 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	for i := range agents {
+		agents[i] = s.withCollectorState(agents[i])
+	}
 	writeJSON(w, http.StatusOK, agents)
 }
 
@@ -397,7 +400,8 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	if !enabled {
 		s.forgetHost(updated.HostKey())
 	}
-	writeJSON(w, http.StatusOK, updated)
+	s.reloadCollectors(ctx)
+	writeJSON(w, http.StatusOK, s.withCollectorState(updated))
 }
 
 // handleRevokeAgent stops accepting readings from a machine. The registration
@@ -421,6 +425,7 @@ func (s *Server) handleRevokeAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.forgetHost(agent.HostKey())
+		s.reloadCollectors(ctx)
 		s.auditAuth(ctx, "Hardware agent deleted: "+agent.Name, "Its stored readings were deleted with it.")
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -430,6 +435,7 @@ func (s *Server) handleRevokeAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.forgetHost(agent.HostKey())
+	s.reloadCollectors(ctx)
 	s.auditAuth(ctx, "Hardware agent revoked: "+agent.Name, "Its token no longer works; its past readings are kept.")
 	w.WriteHeader(http.StatusNoContent)
 }

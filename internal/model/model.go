@@ -146,8 +146,12 @@ type Node struct {
 	DependsOnNode *int64     `json:"dependsOnNodeId"` // parent node for dependency-aware alerting
 	LinkStyle     *LinkStyle `json:"linkStyle"`       // how the line to that parent is drawn on the network map
 	Template      string     `json:"template"`        // template used when created (informational)
-	CreatedAt     time.Time  `json:"createdAt"`
-	UpdatedAt     time.Time  `json:"updatedAt"`
+	// CollectorID is where the node's network checks run from: nil for this
+	// server, or the id of a paired agent acting as a remote collector
+	// (model/collector.go). Checks of other types run here either way.
+	CollectorID *int64    `json:"collectorId"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
 
 	// Checks is populated by the API when returning a full node.
 	Checks []Check `json:"checks"`
@@ -755,6 +759,10 @@ const (
 	EventDiscovery          EventType = "discovery"       // a subnet was swept, or nodes were added from a sweep
 	EventRuleFired          EventType = "rule_fired"      // a notification rule's conditions came together
 	EventRuleCleared        EventType = "rule_cleared"    // a notification rule's conditions came apart again
+	// A remote collector stopped sending results (its checks are unknown until
+	// it is back), and came back. One pair for the collector, not one per check.
+	EventCollectorDown EventType = "collector_unreachable"
+	EventCollectorUp   EventType = "collector_back"
 )
 
 // Event is one entry in the incident/event timeline.

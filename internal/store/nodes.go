@@ -15,7 +15,7 @@ import (
 
 // group_name holds the node's first group. It stays in the row next to the
 // groups list because older binaries and the existing indexes still read it.
-const nodeCols = `id, name, host, group_name, "groups", tags, notes, importance, enabled, depends_on_node_id, link_style, template, created_at, updated_at`
+const nodeCols = `id, name, host, group_name, "groups", tags, notes, importance, enabled, depends_on_node_id, link_style, template, collector_id, created_at, updated_at`
 
 // linkStyleJSON is how a node's link style is kept in its row: the JSON of the
 // style, or an empty string when there is none. It is sanitised on the way in
@@ -40,16 +40,35 @@ func parseLinkStyle(raw string) *model.LinkStyle {
 	return ls.Sanitized()
 }
 
+// collectorPtr and collectorPtrOf keep "checked from this server" one value:
+// a NULL column and a nil pointer, never a zero or negative id that some
+// later reader would have to remember means the same thing.
+func collectorPtr(v sql.NullInt64) *int64 {
+	if !v.Valid || v.Int64 <= 0 {
+		return nil
+	}
+	id := v.Int64
+	return &id
+}
+
+func collectorPtrOf(p *int64) *int64 {
+	if p == nil || *p <= 0 {
+		return nil
+	}
+	return p
+}
+
 func scanNode(sc interface{ Scan(...any) error }) (model.Node, error) {
 	var n model.Node
 	var groups, tags, linkStyle, created, updated string
 	var enabled int
-	var dep sql.NullInt64
-	if err := sc.Scan(&n.ID, &n.Name, &n.Host, &n.Group, &groups, &tags, &n.Notes, &n.Importance, &enabled, &dep, &linkStyle, &n.Template, &created, &updated); err != nil {
+	var dep, collector sql.NullInt64
+	if err := sc.Scan(&n.ID, &n.Name, &n.Host, &n.Group, &groups, &tags, &n.Notes, &n.Importance, &enabled, &dep, &linkStyle, &n.Template, &collector, &created, &updated); err != nil {
 		return n, err
 	}
 	n.Enabled = enabled == 1
 	n.DependsOnNode = int64Ptr(dep)
+	n.CollectorID = collectorPtr(collector)
 	n.LinkStyle = parseLinkStyle(linkStyle)
 	n.CreatedAt = mustTime(created)
 	n.UpdatedAt = mustTime(updated)
@@ -130,9 +149,9 @@ func (s *Store) CreateNode(ctx context.Context, n model.Node) (model.Node, error
 		n.Importance = model.ImportanceNormal
 	}
 	err := s.writeTx(ctx, func(tx *wtx) error {
-		newID, err := tx.insertID(ctx, `INSERT INTO nodes(name, host, group_name, "groups", tags, notes, importance, enabled, depends_on_node_id, link_style, template, created_at, updated_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), linkStyleJSON(n.LinkStyle), n.Template, fmtTime(now), fmtTime(now))
+		newID, err := tx.insertID(ctx, `INSERT INTO nodes(name, host, group_name, "groups", tags, notes, importance, enabled, depends_on_node_id, link_style, template, collector_id, created_at, updated_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), linkStyleJSON(n.LinkStyle), n.Template, nullInt64(collectorPtrOf(n.CollectorID)), fmtTime(now), fmtTime(now))
 		if err != nil {
 			return err
 		}
@@ -172,8 +191,8 @@ func (s *Store) UpdateNode(ctx context.Context, n model.Node) (model.Node, []int
 	}
 	var deleted []int64
 	err := s.writeTx(ctx, func(tx *wtx) error {
-		res, err := tx.exec(ctx, `UPDATE nodes SET name=?, host=?, group_name=?, "groups"=?, tags=?, notes=?, importance=?, enabled=?, depends_on_node_id=?, link_style=?, template=?, updated_at=? WHERE id=?`,
-			n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), linkStyleJSON(n.LinkStyle), n.Template, fmtTime(now), n.ID)
+		res, err := tx.exec(ctx, `UPDATE nodes SET name=?, host=?, group_name=?, "groups"=?, tags=?, notes=?, importance=?, enabled=?, depends_on_node_id=?, link_style=?, template=?, collector_id=?, updated_at=? WHERE id=?`,
+			n.Name, n.Host, n.Group, jsonString(n.Groups), jsonString(n.Tags), n.Notes, string(n.Importance), boolInt(n.Enabled), nullInt64(n.DependsOnNode), linkStyleJSON(n.LinkStyle), n.Template, nullInt64(collectorPtrOf(n.CollectorID)), fmtTime(now), n.ID)
 		if err != nil {
 			return err
 		}

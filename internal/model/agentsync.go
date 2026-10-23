@@ -13,11 +13,13 @@ import (
 // it can do is answer, when the agent asks, a handful of questions whose
 // answers are plain data: which readings to collect, how long to wait before
 // asking again, which agent release is the newest, and — only while an
-// administrator is rotating this machine's token — the replacement token.
-// That is the whole list. There is no field here that names a URL to fetch, a
-// command to run, a file to write or a version to install, and adding one
-// would change what an agent is, so it is written as a closed set of types
-// rather than a map (docs/AGENT-DECISIONS.md, entry 12).
+// administrator is rotating this machine's token — the replacement token;
+// and, for an agent both its owner and an administrator have made a remote
+// collector, the built-in network checks to run (entry 16). That is the whole
+// list. There is no field here that names a URL to fetch code from, a command
+// to run, a file to write or a version to install, and adding one would change
+// what an agent is, so it is written as a closed set of types rather than a map
+// (docs/AGENT-DECISIONS.md, entry 12).
 
 // Collection limits. They bound what an agent will accept from a server and
 // what a server will accept from a person, so a confused client cannot make
@@ -289,6 +291,9 @@ func (i Inventory) Normalize() Inventory {
 type AgentCheckIn struct {
 	Version   string     `json:"version,omitempty"`
 	Inventory *Inventory `json:"inventory,omitempty"`
+	// Collector is whether this machine's own configuration allows it to run
+	// checks for GWatch (`"collector": true` in agent.json).
+	Collector bool `json:"collector,omitempty"`
 }
 
 // AgentSettings is GWatch's whole answer to a check-in. See the note at the
@@ -307,4 +312,11 @@ type AgentSettings struct {
 	// to be picked up, and only when the caller authenticated with the token
 	// being replaced.
 	Token string `json:"token,omitempty"`
+	// Collector is the list of network checks this agent is to run as a
+	// remote collector. It is present only when an administrator has turned
+	// collecting on for this agent and the agent said in this check-in that
+	// its own configuration allows it, so neither side alone can start it and
+	// no check's credentials go to a machine that has not opted in. See
+	// model/collector.go and docs/AGENT-DECISIONS.md, entry 16.
+	Collector *CollectorAssignment `json:"collector,omitempty"`
 }

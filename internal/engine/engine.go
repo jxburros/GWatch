@@ -100,6 +100,11 @@ type Engine struct {
 	// from every machine that reports in.
 	hosts *hostmon.Monitor
 
+	// Remote collectors (collectors.go): when each last sent anything, and
+	// the agents nodes check from, by id.
+	collectors      map[int64]*collectorWatch
+	collectorAgents map[int64]model.Agent
+
 	sem    chan struct{}
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -159,6 +164,9 @@ func New(st *store.Store, log *logging.Logger, opts Options) *Engine {
 
 		triggers:    map[int64][]model.Trigger{},
 		triggerLast: map[int64]time.Time{},
+
+		collectors:      map[int64]*collectorWatch{},
+		collectorAgents: map[int64]model.Agent{},
 	}
 	e.hosts = hostmon.New(st)
 	e.hosts.OnSample = func(key string) { e.broadcast(Update{Kind: "host"}) }
@@ -308,10 +316,15 @@ func (e *Engine) ReloadConfig(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	agents, err := e.store.ListAgents(ctx)
+	if err != nil {
+		return err
+	}
 	now := time.Now()
 	e.mu.Lock()
 	e.settings = settings
 	e.windows = windows
+	e.setCollectorAgentsLocked(agents)
 	oldNodes := e.nodes
 	oldChecks := e.checks
 	e.nodes = map[int64]model.Node{}
@@ -455,6 +468,11 @@ func (e *Engine) tick(now time.Time) {
 		if !ok || !c.Enabled || !n.Enabled || st == nil || st.NextRunAt == nil || e.running[id] {
 			continue
 		}
+		// A check a remote collector runs is not this server's to run: its
+		// results arrive from the collector (collectors.go).
+		if _, collected := n.CollectorFor(c); collected {
+			continue
+		}
 		if !st.NextRunAt.After(now) {
 			// A machine that pushes its readings has them judged as they arrive
 			// (IngestHostReading). While they keep arriving the schedule has
@@ -485,6 +503,7 @@ func (e *Engine) tick(now time.Time) {
 			}
 		}
 	}
+	collectorEvents, collectorMails := e.watchCollectorsLocked(now)
 	sem := e.sem
 	for _, c := range due {
 		select {
@@ -508,7 +527,13 @@ func (e *Engine) tick(now time.Time) {
 		}
 	}
 	e.mu.Unlock()
-	if expiredSilences {
+	for _, ev := range collectorEvents {
+		e.recordEvent(ev)
+	}
+	for _, m := range collectorMails {
+		e.sendMail(m)
+	}
+	if expiredSilences || len(collectorEvents) > 0 {
 		e.evaluateRules(e.ctx, nil)
 		e.broadcast(Update{Kind: "state"})
 	}
@@ -537,6 +562,10 @@ func (e *Engine) runAndProcess(ctx context.Context, checkID int64, depth int) (m
 	if !ok {
 		e.mu.Unlock()
 		return model.Result{}, fmt.Errorf("check %d not found", checkID)
+	}
+	if _, collected := e.collectedLocked(c); collected {
+		e.mu.Unlock()
+		return model.Result{}, ErrCollected
 	}
 	flight := &checkFlight{done: make(chan struct{})}
 	e.inflight[checkID] = flight
@@ -624,6 +653,11 @@ func (e *Engine) RunNodeChecks(ctx context.Context, nodeID int64, allow func(mod
 admit:
 	for _, c := range n.Checks {
 		if !c.Enabled || (allow != nil && !allow(c)) {
+			continue
+		}
+		// "Run now" on a node runs what this server runs; the checks a
+		// remote collector runs report on their own schedule.
+		if _, collected := n.CollectorFor(c); collected {
 			continue
 		}
 		select {

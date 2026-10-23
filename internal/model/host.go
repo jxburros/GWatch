@@ -393,6 +393,17 @@ type Agent struct {
 	Collect     CollectSelection `json:"collect"`
 	Inventory   *Inventory       `json:"inventory,omitempty"`
 	CheckedInAt *time.Time       `json:"checkedInAt,omitempty"`
+
+	// Remote collector (model/collector.go). Collector is the administrator's
+	// half of the agreement, CollectorAllowed the machine's (what it said at
+	// its last check-in), and CollectorSeenAt when it last sent results.
+	// CollectorStatus and CollectorChecks are filled in by the API: one of
+	// the Collector* states, and how many checks the agent runs.
+	Collector        bool       `json:"collector"`
+	CollectorAllowed bool       `json:"collectorAllowed"`
+	CollectorSeenAt  *time.Time `json:"collectorSeenAt,omitempty"`
+	CollectorStatus  string     `json:"collectorStatus,omitempty"`
+	CollectorChecks  int        `json:"collectorChecks"`
 }
 
 // Revoked reports whether the agent's token can no longer be used.

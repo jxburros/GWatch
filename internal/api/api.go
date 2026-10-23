@@ -233,6 +233,7 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /api/agents/{id}/rotate", s.handleRotateAgentToken)
 	s.route(mux, "POST /api/agents/{id}/rotate/cancel", s.handleCancelAgentRotation)
 	s.route(mux, "PUT /api/agents/{id}/collect", s.handleSetAgentCollect)
+	s.route(mux, "PUT /api/agents/{id}/collector", s.handleSetAgentCollector)
 
 	s.route(mux, "GET /api/agents/latest", s.handleAgentLatest)
 	s.route(mux, "GET /api/agents/pairings", s.handleListPairings)
@@ -248,6 +249,7 @@ func (s *Server) Handler() http.Handler {
 	// authorization table; see handleIngestMetrics for why.
 	s.route(mux, "/ingest/metrics", s.handleIngestMetrics)
 	s.route(mux, "/ingest/checkin", s.handleAgentCheckIn)
+	s.route(mux, "/ingest/results", s.handleIngestResults)
 
 	s.route(mux, "GET /api/charts", s.handleListCharts)
 	s.route(mux, "PUT /api/charts", s.handlePutCharts)
@@ -438,6 +440,8 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "not found")
 	case errors.Is(err, backup.ErrBadPassword):
 		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, engine.ErrCollected):
+		writeError(w, http.StatusConflict, err.Error())
 	default:
 		id := fmt.Sprintf("%x", time.Now().UnixNano())
 		s.Log.Errorf("api [%s]: %v", id, err)
@@ -1123,6 +1127,9 @@ func normalizeNodeWith(n *model.Node, settings model.Settings) error {
 	if err := n.CleanLinkStyle(); err != nil {
 		return err
 	}
+	if err := s.checkCollector(n); err != nil {
+		return err
+	}
 	if n.Checks == nil {
 		n.Checks = []model.Check{}
 	}
@@ -1378,6 +1385,13 @@ func describeNodeChange(before, after model.Node, deletedChecks int) string {
 	}
 	if !before.LinkStyle.Equal(after.LinkStyle) {
 		parts = append(parts, "link style changed")
+	}
+	if (before.CollectorID == nil) != (after.CollectorID == nil) || (before.CollectorID != nil && after.CollectorID != nil && *before.CollectorID != *after.CollectorID) {
+		if after.CollectorID == nil {
+			parts = append(parts, "checked from this server")
+		} else {
+			parts = append(parts, fmt.Sprintf("checked from collector agent %d", *after.CollectorID))
+		}
 	}
 	added := len(after.Checks) - (len(before.Checks) - deletedChecks)
 	if added > 0 {

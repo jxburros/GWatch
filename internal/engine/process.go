@@ -107,6 +107,7 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 	if threshold <= 0 {
 		threshold = 1
 	}
+	resumeFromCollector(st, threshold)
 	prev := st.Status
 	evaluateDown := false
 	ev := func(t model.EventType, title, detail string, meta any) {
@@ -537,6 +538,11 @@ func (e *Engine) probeParent(ctx context.Context, n model.Node, depth int) {
 	if n.DependsOnNode != nil {
 		if p, ok := e.nodes[*n.DependsOnNode]; ok && p.Enabled {
 			for _, pc := range p.Checks {
+				// A parent checked by a remote collector cannot be probed
+				// from here; its state is whatever the collector last sent.
+				if _, collected := p.CollectorFor(pc); collected {
+					continue
+				}
 				if pc.Enabled && (pc.Type == model.CheckPing || pc.Type == model.CheckTCP) {
 					ids = append(ids, pc.ID)
 				}
