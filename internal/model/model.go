@@ -933,6 +933,59 @@ type AlertSettings struct {
 	NotifyWarnings   bool         `json:"notifyWarnings"`
 	CertWarnDays     int          `json:"certWarnDays"` // default 14
 	SMTP             SMTPSettings `json:"smtp"`
+	// Channels are the "also notify" list: notification actions the engine
+	// sends to at exactly the moments it sends an alert e-mail (down,
+	// recovered, warning), so they inherit every suppression the e-mail has —
+	// maintenance windows, silences, dependencies, acknowledgements and the
+	// cooldown — without any rules of their own. See AlertChannel.
+	Channels []AlertChannel `json:"channels"`
+}
+
+// Alert channel severities. A channel set to "warning" receives everything
+// the e-mail would (down, recovered and warnings); one set to "down" only
+// receives outages and their recoveries, which is how "critical → SMS,
+// everything → e-mail" is spelled.
+const (
+	AlertSeverityWarning = "warning"
+	AlertSeverityDown    = "down"
+)
+
+// AlertChannel is one entry of Settings › Alerts › Also notify. Its Action
+// must be a notification type (ActionType.IsNotify); the secrets inside it
+// are sealed at rest exactly like a trigger's and masked by the API.
+type AlertChannel struct {
+	// ID is assigned by the server when the channel is first saved and never
+	// changes. It is how a save that carries masked secrets back is matched
+	// to the stored channel whose real secrets it should keep.
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
+	// MinSeverity is AlertSeverityWarning (the default) or AlertSeverityDown.
+	MinSeverity string `json:"minSeverity"`
+	// Groups limits the channel to nodes in at least one of these groups;
+	// empty means every node.
+	Groups []string `json:"groups,omitempty"`
+	Action Action   `json:"action"`
+}
+
+// Wants reports whether the channel should receive an alert of the given
+// kind ("down", "recovered", "warning", "warning_cleared") about node n.
+func (c AlertChannel) Wants(kind string, n Node) bool {
+	if !c.Enabled {
+		return false
+	}
+	if c.MinSeverity == AlertSeverityDown && kind != "down" && kind != "recovered" {
+		return false
+	}
+	if len(c.Groups) == 0 {
+		return true
+	}
+	for _, g := range c.Groups {
+		if n.InGroup(g) {
+			return true
+		}
+	}
+	return false
 }
 
 // RetentionSettings control raw retention and rollups. 0 days = keep forever.
@@ -1450,15 +1503,52 @@ const (
 	ActionTeams    ActionType = "teams"    // post an Adaptive Card to a Teams webhook
 	ActionNtfy     ActionType = "ntfy"     // publish to an ntfy topic
 	ActionPushover ActionType = "pushover" // send a Pushover notification
+
+	// The channels below arrived together (issue #122). Each talks to one
+	// provider's own API rather than to a generic webhook, so the payload is
+	// built field by field with encoding/json (or net/url for form posts) and
+	// a placeholder value can never reshape the request.
+	ActionTelegram  ActionType = "telegram"  // Telegram Bot API sendMessage
+	ActionDiscord   ActionType = "discord"   // post to a Discord channel webhook
+	ActionGotify    ActionType = "gotify"    // push a message to a Gotify server
+	ActionMatrix    ActionType = "matrix"    // send an m.room.message to a Matrix room
+	ActionTwilio    ActionType = "twilio"    // send an SMS through Twilio's Messages API
+	ActionPagerDuty ActionType = "pagerduty" // trigger/resolve a PagerDuty Events API v2 incident
+	ActionOpsgenie  ActionType = "opsgenie"  // create/close an Opsgenie alert by alias
 )
 
 // Valid reports whether the action type is known.
 func (t ActionType) Valid() bool {
 	switch t {
-	case ActionHTTP, ActionGit, ActionScript, ActionRunNode, ActionSlack, ActionTeams, ActionNtfy, ActionPushover:
+	case ActionHTTP, ActionGit, ActionScript, ActionRunNode:
+		return true
+	}
+	return t.IsNotify()
+}
+
+// IsNotify reports whether the action type is a notification channel: a
+// purpose-built integration with a messaging, push, SMS or paging service, as
+// opposed to a generic HTTP request, a git command, a script or "run a node".
+// Only notification channels may be used as the "also notify" channels of
+// Settings › Alerts, because those are sent at the same moments as alert
+// e-mails and are expected to deliver a message to a person, not to run
+// arbitrary work on the monitor's computer.
+func (t ActionType) IsNotify() bool {
+	switch t {
+	case ActionSlack, ActionTeams, ActionNtfy, ActionPushover,
+		ActionTelegram, ActionDiscord, ActionGotify, ActionMatrix, ActionTwilio, ActionPagerDuty, ActionOpsgenie:
 		return true
 	}
 	return false
+}
+
+// IsIncident reports whether the action type opens an incident that stays
+// open on the provider's side until something closes it (PagerDuty and
+// Opsgenie). For these a recovery is not a courtesy message but the only
+// thing that resolves the page, so the alert engine sends them the recovery
+// even when recovery e-mails are switched off.
+func (t ActionType) IsIncident() bool {
+	return t == ActionPagerDuty || t == ActionOpsgenie
 }
 
 // Action describes one thing to execute. String fields may contain
@@ -1505,6 +1595,33 @@ type Action struct {
 	Tags       string `json:"tags,omitempty"`
 	Token      string `json:"token,omitempty"`
 	UserKey    string `json:"userKey,omitempty"`
+
+	// The channels added for issue #122 reuse the fields above where the
+	// meaning is the same and add only what is genuinely new:
+	//
+	//	telegram   Token (bot token, secret) + ChatID
+	//	discord    WebhookURL (secret: the URL is the credential)
+	//	gotify     Server + Token (application token, secret) + Priority (0-10)
+	//	matrix     Server (homeserver) + Token (access token, secret) + RoomID
+	//	twilio     AccountSID + Token (auth token, secret) + From + To (comma-separated numbers)
+	//	pagerduty  RoutingKey (integration key, secret) + EventAction + DedupKey + Severity
+	//	opsgenie   Token (API key, secret) + Region + EventAction + DedupKey (the alias) + Priority (P1-P5)
+	//
+	// EventAction is "auto" (the default, also spelled empty), "trigger" or
+	// "resolve". In auto mode an action that runs for a recovery, a cleared
+	// warning or a cleared rule resolves the incident, and every other event
+	// opens it. DedupKey defaults to one key per check (or per rule), so the
+	// recovery resolves exactly the incident the outage opened.
+	ChatID      string `json:"chatId,omitempty"`
+	RoomID      string `json:"roomId,omitempty"`
+	AccountSID  string `json:"accountSid,omitempty"`
+	From        string `json:"from,omitempty"`
+	To          string `json:"to,omitempty"`
+	RoutingKey  string `json:"routingKey,omitempty"`
+	EventAction string `json:"eventAction,omitempty"`
+	DedupKey    string `json:"dedupKey,omitempty"`
+	Severity    string `json:"severity,omitempty"`
+	Region      string `json:"region,omitempty"`
 
 	TimeoutSeconds int `json:"timeoutSeconds,omitempty"` // default 30
 }

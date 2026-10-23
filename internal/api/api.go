@@ -174,6 +174,7 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "GET /api/settings", s.handleGetSettings)
 	s.route(mux, "PUT /api/settings", s.handlePutSettings)
 	s.route(mux, "POST /api/settings/test-email", s.handleTestEmail)
+	s.route(mux, "POST /api/settings/test-channel", s.handleTestAlertChannel)
 	s.route(mux, "GET /api/database", s.handleGetDatabase)
 	s.route(mux, "PUT /api/database", s.handlePutDatabase)
 	s.route(mux, "POST /api/database/test", s.handleTestDatabase)

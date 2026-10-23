@@ -96,8 +96,10 @@ func sameAuthorityOnly(c *http.Client) *http.Client {
 	return &cc
 }
 
-// ValidateNotify checks the fields of a slack/teams/ntfy/pushover action. It
-// is called from Validate for those action types.
+// ValidateNotify checks the fields of a notification action (every type for
+// which model.ActionType.IsNotify is true). It is called from Validate for
+// those action types; the channels added for issue #122 are checked by
+// validateChannel in channels.go.
 func ValidateNotify(a model.Action) error {
 	switch a.Type {
 	case model.ActionSlack:
@@ -132,6 +134,8 @@ func ValidateNotify(a model.Action) error {
 		if strings.TrimSpace(a.UserKey) == "" {
 			return fmt.Errorf("a Pushover user key is required")
 		}
+	default:
+		return validateChannel(a)
 	}
 	return nil
 }
@@ -210,9 +214,16 @@ type teamsCard struct {
 	Attachments []teamsAttach `json:"attachments"`
 }
 
+// teamsAttach is one attachment of the message envelope. The envelope is the
+// shape the Microsoft Teams Workflows (Power Automate) "Post to a channel when
+// a webhook request is received" template expects — the Office 365 connector
+// webhooks it replaces are retired — and contentUrl is sent as an explicit
+// null because that template's own example carries it and some flows built
+// from it fail to parse an attachment without it.
 type teamsAttach struct {
-	ContentType string `json:"contentType"`
-	Content     any    `json:"content"`
+	ContentType string  `json:"contentType"`
+	ContentURL  *string `json:"contentUrl"`
+	Content     any     `json:"content"`
 }
 
 func adaptiveCard(title, message string) map[string]any {

@@ -191,7 +191,9 @@ func Validate(a model.Action) error {
 		if a.NodeID == nil || *a.NodeID <= 0 {
 			return errors.New("a node is required")
 		}
-	case model.ActionSlack, model.ActionTeams, model.ActionNtfy, model.ActionPushover:
+	case model.ActionSlack, model.ActionTeams, model.ActionNtfy, model.ActionPushover,
+		model.ActionTelegram, model.ActionDiscord, model.ActionGotify, model.ActionMatrix,
+		model.ActionTwilio, model.ActionPagerDuty, model.ActionOpsgenie:
 		if err := ValidateNotify(a); err != nil {
 			return err
 		}
@@ -256,6 +258,20 @@ func (r *Runner) Run(ctx context.Context, a model.Action, vars Vars) (res model.
 		return r.runNtfy(ctx, a, vars, res)
 	case model.ActionPushover:
 		return r.runPushover(ctx, a, vars, res)
+	case model.ActionTelegram:
+		return r.runTelegram(ctx, a, vars, res)
+	case model.ActionDiscord:
+		return r.runDiscord(ctx, a, vars, res)
+	case model.ActionGotify:
+		return r.runGotify(ctx, a, vars, res)
+	case model.ActionMatrix:
+		return r.runMatrix(ctx, a, vars, res)
+	case model.ActionTwilio:
+		return r.runTwilio(ctx, a, vars, res)
+	case model.ActionPagerDuty:
+		return r.runPagerDuty(ctx, a, vars, res)
+	case model.ActionOpsgenie:
+		return r.runOpsgenie(ctx, a, vars, res)
 	}
 	res.Error = "unsupported action"
 	return res

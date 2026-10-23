@@ -64,7 +64,7 @@ const STEPS = [
     lead: 'Email for people, triggers for everything else.',
     body: () => [
       h('p', null, 'Point ', h('a', { href: '#/settings/alerts' }, 'Settings › Alerts'), ' at any SMTP provider and send the test email before you rely on it. Alerts fire after a number of consecutive failures, again on recovery, and respect a cooldown so one flapping check cannot fill your inbox.'),
-      h('p', null, h('a', { href: '#/settings/automation' }, 'Automation'), ' covers the rest: webhooks, Slack, Teams, ntfy, Pushover, a git command or your own script, run when a node goes down, recovers or changes status.'),
+      h('p', null, h('a', { href: '#/settings/automation' }, 'Automation'), ' covers the rest: webhooks, Slack, Teams, Discord, Telegram, ntfy, Pushover, SMS, PagerDuty, a git command or your own script, run when a node goes down, recovers or changes status.'),
       h('p', { class: 'note' }, 'When the gateway is down, the things behind it are recorded as "affected by Gateway" instead of mailing you about each one.'),
     ],
   },

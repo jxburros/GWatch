@@ -13,8 +13,17 @@ func (c *CheckConfig) TransformSecrets(f func(string) (string, error)) error {
 	return transformSecrets(c.SecretFields(), []*map[string]string{&c.Headers, &c.Env}, f)
 }
 
+// SecretFields lists the string fields of an action that hold, or may hold, a
+// credential: tokens and keys outright, and the URLs and bodies that commonly
+// carry one (a Slack or Discord webhook URL is itself the secret). Storage
+// seals exactly these, the API masks exactly these, and a save that sends a
+// mask back restores exactly these, so the three can never disagree.
+func (a *Action) SecretFields() []*string {
+	return []*string{&a.Token, &a.UserKey, &a.WebhookURL, &a.URL, &a.Body, &a.RoutingKey}
+}
+
 func (a *Action) TransformSecrets(f func(string) (string, error)) error {
-	return transformSecrets([]*string{&a.Token, &a.UserKey, &a.WebhookURL, &a.URL, &a.Body}, []*map[string]string{&a.Headers}, f)
+	return transformSecrets(a.SecretFields(), []*map[string]string{&a.Headers}, f)
 }
 
 func transformSecrets(fields []*string, dictionaries []*map[string]string, f func(string) (string, error)) error {

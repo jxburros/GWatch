@@ -169,3 +169,48 @@ test('settings Users & access offers the password hashing choice and saves it', 
   // Put the mock back the way the other tests expect it.
   await api.put('/api/settings', { ...saved, general: { ...saved.general, passwordHashing: 'argon2id' } });
 });
+
+// #122: Settings › Alerts lists the "also notify" channels, adds one through
+// the channel editor (which offers notification types only and tests through
+// /api/settings/test-channel), and saves it with the settings.
+test('settings Alerts lists, adds, tests and saves alert channels', async (t) => {
+  const { root } = await mountView(settingsView, { params: { tab: 'alerts' } }, t);
+  const panel = root.querySelector('.settings-panel');
+  const card = [...panel.querySelectorAll('.card')].find((c) => c.querySelector('h2')?.textContent === 'Also notify');
+  assert.ok(card, 'an Also notify card');
+  const names = () => [...card.querySelectorAll('.trigger-row .t-name')].map((el) => el.textContent);
+  assert.equal(names().length, 2);
+  assert.match(names()[0], /Family Telegram/);
+  assert.match(card.textContent, /Outages only · groups: Servers · SMS → \+15550002222/);
+
+  [...card.querySelectorAll('button')].find((b) => b.textContent.includes('Add channel')).click();
+  const modal = await waitFor(() => document.querySelector('.modal'));
+  const typeSel = [...modal.querySelectorAll('select')].find((s) => [...s.options].some((o) => o.value === 'pagerduty'));
+  const types = [...typeSel.options].map((o) => o.value);
+  assert.ok(!types.includes('script') && !types.includes('http') && !types.includes('git'), `only notification types (got ${types})`);
+  assert.ok(['telegram', 'discord', 'gotify', 'matrix', 'twilio', 'pagerduty', 'opsgenie'].every((v) => types.includes(v)));
+  typeSel.value = 'pagerduty';
+  typeSel.dispatchEvent(new window.Event('change'));
+  const set = (el, v) => { el.value = v; el.dispatchEvent(new window.Event('input')); };
+  set([...modal.querySelectorAll('input')].find((el) => (el.placeholder || '').startsWith('Integration key')), 'R0UTING');
+  set([...modal.querySelectorAll('input')].find((el) => (el.placeholder || '').startsWith('e.g. On-call')), 'Pager');
+
+  [...modal.querySelectorAll('button')].find((b) => b.textContent.includes('Test this action')).click();
+  await waitFor(() => modal.querySelector('.result-box.ok'));
+  assert.match(modal.querySelector('.result-box').textContent, /pagerduty → 200 OK \(mock\)/);
+
+  [...document.querySelectorAll('.modal button')].find((b) => b.textContent.trim() === 'Add channel').click();
+  await waitFor(() => names().length === 3);
+  assert.match(names()[2], /Pager/);
+
+  // An earlier test's "Settings saved" toast may still be up; clear it so the
+  // wait below is for this save.
+  document.querySelectorAll('.toast').forEach((el) => el.remove());
+  [...card.querySelectorAll('button')].find((b) => b.textContent.includes('Save changes')).click();
+  await waitFor(() => [...document.querySelectorAll('.toast')].some((el) => /Settings saved/.test(el.textContent)));
+  const saved = await api.get('/api/settings');
+  const pager = saved.alerts.channels.find((c) => c.name === 'Pager');
+  assert.ok(pager?.id, 'the saved channel has an ID');
+  assert.equal(pager.action.type, 'pagerduty');
+  assert.equal(pager.action.routingKey, '********', 'the key comes back masked');
+});

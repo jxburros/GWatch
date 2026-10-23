@@ -267,6 +267,7 @@ func maskSettings(st model.Settings) model.Settings {
 	if st.Backups.Password != "" {
 		st.Backups.Password = passwordMask
 	}
+	st.Alerts.Channels = maskAlertChannels(st.Alerts.Channels)
 	return st
 }
 
@@ -401,20 +402,32 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		recips = append(recips, rcp)
 	}
 	a.Recipients = recips
+	channels, err := s.normalizeAlertChannels(a.Channels, current.Alerts.Channels)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	a.Channels = channels
 	if a.SMTP.Security == "" {
 		a.SMTP.Security = "starttls"
 	}
 	if a.SMTP.Port <= 0 {
 		a.SMTP.Port = 587
 	}
+	// Alerts can go out by e-mail, through the "also notify" channels, or
+	// both. Whichever is configured has to work: e-mail recipients need SMTP
+	// settings that validate, and with no recipients at least one channel
+	// has to be switched on, or enabling alerts would send nothing at all.
 	if a.Enabled {
-		if err := mailer.Validate(a.SMTP); err != nil {
-			writeError(w, http.StatusBadRequest, "alerts cannot be enabled: "+err.Error())
+		if len(a.Recipients) == 0 && enabledAlertChannels(a.Channels) == 0 {
+			writeError(w, http.StatusBadRequest, "alerts cannot be enabled without at least one recipient or notification channel")
 			return
 		}
-		if len(a.Recipients) == 0 {
-			writeError(w, http.StatusBadRequest, "alerts cannot be enabled without at least one recipient")
-			return
+		if len(a.Recipients) > 0 {
+			if err := mailer.Validate(a.SMTP); err != nil {
+				writeError(w, http.StatusBadRequest, "alerts cannot be enabled: "+err.Error())
+				return
+			}
 		}
 	}
 	rt := &st.Retention
@@ -485,6 +498,9 @@ func describeSettingsChange(before, after model.Settings) string {
 	}
 	if strings.Join(before.Alerts.Recipients, ",") != strings.Join(after.Alerts.Recipients, ",") {
 		parts = append(parts, "recipients changed")
+	}
+	if alertChannelsSummary(before.Alerts.Channels) != alertChannelsSummary(after.Alerts.Channels) {
+		parts = append(parts, fmt.Sprintf("alert channels changed (%d enabled)", enabledAlertChannels(after.Alerts.Channels)))
 	}
 	if before.Retention != after.Retention {
 		parts = append(parts, "retention policy changed")
@@ -931,6 +947,7 @@ func (s *Server) handleExportConfig(w http.ResponseWriter, r *http.Request) {
 		cfg.Wallboards[i].Share.Token = ""
 	}
 	cfg.Settings.Alerts.SMTP.Password = ""
+	cfg.Settings.Alerts.Channels = blankAlertChannels(cfg.Settings.Alerts.Channels)
 	cfg.Settings.Backups.Password = ""
 	// A configuration export is meant to be readable and shareable, so the
 	// checks' credentials come out empty for the same reason the passwords do.

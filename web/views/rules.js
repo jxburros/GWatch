@@ -128,7 +128,7 @@ export function openRuleEditor(existing, { nodes = [] } = {}) {
     const removeAction = (card) => { card.remove(); };
     const addAction = (a) => { actionList.append(actionCard(a, { nodes, defaultInterpreter: meta.defaultInterpreter || 'sh', onRemove: removeAction })); };
     for (const a of r.actions) addAction(a);
-    const actionsField = field({ label: 'Actions', input: actionList, help: 'Every action runs when the rule is met. Placeholders: ' + RULE_PLACEHOLDERS.map((p) => `{{${p}}}`).join(', ') + '. In the default Slack, Teams, ntfy and Pushover text {{node.name}} is the rule\'s name and {{status}} is "met" or "cleared".' });
+    const actionsField = field({ label: 'Actions', input: actionList, help: 'Every action runs when the rule is met. Placeholders: ' + RULE_PLACEHOLDERS.map((p) => `{{${p}}}`).join(', ') + '. In the default text of the notification channels (Slack, Teams, Telegram, PagerDuty …) {{node.name}} is the rule\'s name and {{status}} is "met" or "cleared".' });
     const addActionBtn = h('button', { class: 'btn btn-sm', type: 'button', onclick: () => addAction({ type: 'http' }) }, icon('plus'), 'Add action');
 
     const cooldown = numberInput({ value: r.cooldownMinutes || '', min: 0, placeholder: '0 = none' });

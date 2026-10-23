@@ -564,7 +564,13 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   ];
   let settings = {
     general: { instanceName: 'Home monitor', defaultIntervalSeconds: 60, defaultTimeoutSeconds: 10, maxConcurrentChecks: 8, minIntervalSeconds: 10, wallboardRefreshSeconds: 15, latencyWarnMs: 0, packetLossWarnPct: 0, pingMethod: 'auto', theme: localStorage.getItem('gw.theme') || 'dark', accentColor: '#43c9c0', remoteAccess: false, accessPassword: '', requireLoginLocally: false, passwordHashing: 'argon2id', updateRepo: 'jxburros/GWatch' },
-    alerts: { enabled: true, recipients: ['jeff@example.com', 'sam@example.com'], failureThreshold: 2, cooldownMinutes: 60, notifyRecovery: true, notifyWarnings: true, certWarnDays: 14, smtp: { host: 'smtp.example.com', port: 587, username: 'gwatch@example.com', password: '********', from: 'GWatch <gwatch@example.com>', security: 'starttls' } },
+    alerts: { enabled: true, recipients: ['jeff@example.com', 'sam@example.com'], failureThreshold: 2, cooldownMinutes: 60, notifyRecovery: true, notifyWarnings: true, certWarnDays: 14, smtp: { host: 'smtp.example.com', port: 587, username: 'gwatch@example.com', password: '********', from: 'GWatch <gwatch@example.com>', security: 'starttls' },
+      // Settings › Alerts › Also notify. Secrets come back masked, as the
+      // real server sends them.
+      channels: [
+        { id: 'ch-1a2b3c', name: 'Family Telegram', enabled: true, minSeverity: 'warning', groups: [], action: { type: 'telegram', token: '********', chatId: '-1001234567890', title: '', message: '', timeoutSeconds: 30 } },
+        { id: 'ch-4d5e6f', name: 'On-call SMS', enabled: true, minSeverity: 'down', groups: ['Servers'], action: { type: 'twilio', accountSid: 'ACXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX', token: '********', from: '+15550001111', to: '+15550002222', message: '', timeoutSeconds: 30 } },
+      ] },
     retention: { rawDays: 30, fiveMinDays: 180, hourlyDays: 730, dailyDays: 0, eventDays: 730 },
     indicators: clone(DEFAULT_INDICATORS),
   };
@@ -1116,7 +1122,16 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
   on('PUT', /^\/api\/dashboards\/(\d+)$/, (m, body) => { const d = dashboards.find((x) => x.id === Number(m[1])); if (!d) throw err(404, 'dashboard not found'); d.name = body.name ?? d.name; d.widgets = body.widgets ?? d.widgets; d.updatedAt = iso(Date.now()); return clone(d); });
   on('DELETE', /^\/api\/dashboards\/(\d+)$/, (m) => { const i = dashboards.findIndex((x) => x.id === Number(m[1])); if (i < 0) throw err(404, 'dashboard not found'); dashboards.splice(i, 1); return { ok: true }; });
   on('GET', /^\/api\/settings$/, () => clone(settings));
-  on('PUT', /^\/api\/settings$/, (m, body) => { settings = clone(body); if (settings.alerts?.smtp?.password) settings.alerts.smtp.password = '********'; if (settings.general?.accessPassword) settings.general.accessPassword = '********'; if (!settings.indicators?.length) settings.indicators = clone(DEFAULT_INDICATORS); addEvent('config_changed', { title: 'Settings changed' }); return clone(settings); });
+  // Mirrors the server: a new channel gets an ID, the channel's secrets are
+  // masked on the way back, and only notification types are channels.
+  const maskChannel = (c, i) => {
+    const a = { ...c.action };
+    for (const k of ['token', 'userKey', 'webhookUrl', 'url', 'body', 'routingKey']) if (a[k]) a[k] = '********';
+    return { ...c, id: c.id || `ch-mock${Date.now().toString(36)}${i}`, name: (c.name || '').trim() || a.type, minSeverity: c.minSeverity || 'warning', action: a };
+  };
+  const NOTIFY = ['slack', 'teams', 'discord', 'telegram', 'matrix', 'ntfy', 'gotify', 'pushover', 'twilio', 'pagerduty', 'opsgenie'];
+  on('PUT', /^\/api\/settings$/, (m, body) => { if ((body.alerts?.channels || []).some((c) => !NOTIFY.includes(c.action?.type))) throw err(400, 'alert channels must be notification channels'); settings = clone(body); settings.alerts.channels = (settings.alerts.channels || []).map(maskChannel); if (settings.alerts?.smtp?.password) settings.alerts.smtp.password = '********'; if (settings.general?.accessPassword) settings.general.accessPassword = '********'; if (!settings.indicators?.length) settings.indicators = clone(DEFAULT_INDICATORS); addEvent('config_changed', { title: 'Settings changed' }); return clone(settings); });
+  on('POST', /^\/api\/settings\/test-channel$/, (m, body) => { const t = body?.channel?.action?.type; if (!NOTIFY.includes(t)) throw err(400, `"${t}" is not a notification channel`); return { ok: true, output: `${t} → 200 OK (mock)`, startedAt: iso(Date.now()), durationMs: 120, statusCode: 200 }; });
   on('POST', /^\/api\/settings\/test-email$/, (m, body) => { if (!settings.alerts.smtp.host) throw err(400, 'SMTP host is not configured'); return { ok: true, message: `Test email sent to ${body?.to || settings.alerts.recipients.join(', ')} via ${settings.alerts.smtp.host}` }; });
   on('GET', /^\/api\/retention\/status$/, () => retention);
   // Settings › Database: the connection GWatch opens at the next start
