@@ -64,6 +64,19 @@ contents:
     file_info:
       mode: 0700
 
+  # The control panel's front door on a desktop (issue #64): an application
+  # menu entry for `gwatch-agent ui`, and the agent's mark for it. On a server
+  # with no desktop both are inert files.
+  - src: packaging/nfpm/gwatch-agent.desktop
+    dst: /usr/share/applications/gwatch-agent.desktop
+    file_info:
+      mode: 0644
+
+  - src: web/agent-logo.png
+    dst: /usr/share/pixmaps/gwatch-agent.png
+    file_info:
+      mode: 0644
+
   - src: LICENSE
     dst: /usr/share/doc/gwatch-agent/copyright
     file_info:
