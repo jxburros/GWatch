@@ -69,7 +69,7 @@ func configFile() string {
 // configKeys is every setting the file knows, in the order they are written.
 var configKeys = []string{
 	"server", "token", "name", "interval", "checkIn", "buffer", "autoUpdate",
-	"insecure", "certPin", "listen", "repo", "hostRoot", "collect",
+	"insecure", "certPin", "listen", "repo", "hostRoot", "collect", "collector",
 }
 
 // configDoc is the file as it is on disk. The settings are read from it, and a
@@ -319,7 +319,7 @@ func isWindows() bool { return filepath.Separator == '\\' }
 type fileSettings struct {
 	Server, Token, Name, Listen, CertPin, Repo, HostRoot string
 	Interval, CheckIn, Buffer                            time.Duration
-	AutoUpdate, Insecure                                 *bool
+	AutoUpdate, Insecure, Collector                      *bool
 	Collect                                              model.CollectSelection
 }
 
@@ -379,6 +379,7 @@ func (d *configDoc) settings() (fileSettings, []string) {
 	dur("buffer", &fsx.Buffer)
 	flag("autoUpdate", &fsx.AutoUpdate)
 	flag("insecure", &fsx.Insecure)
+	flag("collector", &fsx.Collector)
 	if raw, ok := d.raw["collect"]; ok {
 		if err := json.Unmarshal(raw, &fsx.Collect); err != nil {
 			bad("collect", "must be an object like {\"interfaces\": [\"eth0\"]}")
@@ -534,6 +535,9 @@ func baseConfig() (c config, problems, warnings []string) {
 	if doc.has("collect") {
 		set("collect", srcFile, func() { c.collect = fsx.Collect })
 	}
+	if fsx.Collector != nil {
+		set("collector", srcFile, func() { c.collector = *fsx.Collector })
+	}
 	c.fileServer = c.server
 
 	// An agent paired by an older version kept its token and its server in two
@@ -576,6 +580,9 @@ func baseConfig() (c config, problems, warnings []string) {
 	env("hostRoot", "GWATCH_HOST_ROOT", func(v string) bool { c.hostRoot = v; return true })
 	if v, ok := envBoolSet("GWATCH_AGENT_AUTO_UPDATE"); ok {
 		c.autoUpdate, c.sources["autoUpdate"] = v, srcEnv
+	}
+	if v, ok := envBoolSet("GWATCH_AGENT_COLLECTOR"); ok {
+		c.collector, c.sources["collector"] = v, srcEnv
 	}
 	c.code = os.Getenv("GWATCH_AGENT_CODE")
 
@@ -635,6 +642,11 @@ func persistConfig(c config) error {
 	if fresh || explicit("collect") || !c.collect.IsZero() {
 		coll := c.collect.Normalize()
 		doc.set("collect", coll)
+	}
+	// Written false into a new file so that whoever opens it sees the switch
+	// is there; never turned on by anything but a person (collector.go).
+	if fresh || explicit("collector") || doc.has("collector") {
+		doc.set("collector", c.collector)
 	}
 	return doc.save()
 }
@@ -819,6 +831,7 @@ func showConfig(c config, problems, warnings []string, showToken bool) error {
 	row("repo", c.repo)
 	row("hostRoot", orNone(c.hostRoot))
 	row("collect", describeCollect(c.collect))
+	row("collector", map[bool]string{true: "allowed: runs the checks GWatch assigns, if GWatch has also turned it on", false: "off"}[c.collector])
 	tw.Flush()
 	if !showToken && c.token != "" {
 		fmt.Println("\nThe token is shortened here; run `gwatch-agent config show --show-token` to print it in full.")

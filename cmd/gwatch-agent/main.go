@@ -97,6 +97,10 @@ type config struct {
 	// collect is the machine's own limit on what it will report: a list that is
 	// empty means no limit, and GWatch narrows within whatever is set here.
 	collect model.CollectSelection
+	// collector is this machine's half of the agreement that makes it a remote
+	// collector: it may run the network checks GWatch assigns it (collector.go).
+	// Off unless agent.json (or GWATCH_AGENT_COLLECTOR) says so.
+	collector bool
 	// hostRoot is where the host's root filesystem is mounted when the agent
 	// runs in a container and is watching the machine around it rather than
 	// the container (docs/HARDWARE.md#in-a-container). Empty everywhere else.
@@ -815,6 +819,14 @@ func (p *program) report(ctx context.Context) {
 		for _, o := range ov {
 			log.Printf("note: %s", o)
 		}
+	}
+	if p.cfg.collector {
+		col := newCollectorRunner(ctx, p.cfg, rt, client)
+		rt.mu.Lock()
+		rt.collector = col
+		rt.mu.Unlock()
+		log.Print(describeCollector(p.cfg))
+		go col.sendLoop(ctx)
 	}
 	rt.writeStatus(p.cfg, queue.len())
 	go p.checkInLoop(ctx, rt, client)

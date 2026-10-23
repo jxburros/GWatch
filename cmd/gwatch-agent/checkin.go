@@ -7,10 +7,12 @@
 // configuration allows), when to ask again, which agent release is newest (a
 // hint; releases are still fetched and verified from the release feed, never
 // from here), and — only while an administrator is rotating this machine's
-// token — the replacement token. GWatch's answer has no field for a URL, a
-// command, a file or a version to install, so there is nothing in it that could
-// make this machine run something it did not choose to (docs/AGENT-DECISIONS.md,
-// entry 12).
+// token — the replacement token. For a machine whose own agent.json allows it,
+// and whose agent an administrator has made a remote collector, the answer also
+// lists built-in network checks to run (collector.go, entry 16). GWatch's
+// answer has no field for a command, a script, a file or a version to install,
+// so there is nothing in it that could make this machine run something it did
+// not choose to (docs/AGENT-DECISIONS.md, entry 12).
 package main
 
 import (
@@ -55,6 +57,9 @@ type agentRuntime struct {
 	checkIn       time.Duration
 	latestSeen    string
 	warnedToken   bool
+	// collector runs checks for GWatch when this machine allows it (collector.go);
+	// nil when it does not, and then nothing a check-in says about checks is used.
+	collector *collectorRunner
 
 	// What the control panel is told (status.go).
 	startedAt      time.Time
@@ -210,8 +215,9 @@ func writeAgentState(st agentState) error {
 
 func (c config) checkInURL() string { return c.baseURL() + "/ingest/checkin" }
 
-// maxSettingsBody bounds GWatch's answer. It is a few hundred bytes.
-const maxSettingsBody = 256 << 10
+// maxSettingsBody bounds GWatch's answer. It is a few hundred bytes, or for a
+// remote collector the definitions of up to model.MaxCollectorChecks checks.
+const maxSettingsBody = 4 << 20
 
 // askSettings makes one check-in.
 func askSettings(ctx context.Context, client *http.Client, cfg config, token string, req model.AgentCheckIn) (model.AgentSettings, error) {
@@ -304,7 +310,7 @@ func (p *program) checkInLoop(ctx context.Context, rt *agentRuntime, client *htt
 // checkInOnce asks once, applies the answer and returns when to ask again.
 func (p *program) checkInOnce(ctx context.Context, rt *agentRuntime, client *http.Client) (time.Duration, error) {
 	rt.mu.Lock()
-	req := model.AgentCheckIn{Version: version}
+	req := model.AgentCheckIn{Version: version, Collector: p.cfg.collector}
 	if rt.haveInventory {
 		inv := rt.inventory
 		req.Inventory = &inv
@@ -369,6 +375,16 @@ func (rt *agentRuntime) apply(cfg config, s model.AgentSettings) time.Duration {
 	// A replacement token.
 	if tok := strings.TrimSpace(s.Token); tok != "" {
 		rt.takeToken(cfg, tok)
+	}
+
+	// Checks to run as a remote collector. Only a machine whose own settings
+	// allow it has a runner; for any other, whatever GWatch says here is
+	// ignored (and GWatch says nothing, since the check-in told it).
+	rt.mu.Lock()
+	col := rt.collector
+	rt.mu.Unlock()
+	if col != nil {
+		col.assign(s.Collector)
 	}
 	return next
 }

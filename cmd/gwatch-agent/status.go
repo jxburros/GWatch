@@ -36,6 +36,7 @@ type agentStatus struct {
 	Collecting  model.CollectSelection `json:"collecting"`
 	FromGWatch  model.CollectSelection `json:"fromGwatch"`
 	Inventory   *model.Inventory       `json:"inventory,omitempty"`
+	Collector   *collectorStatus       `json:"collector,omitempty"`
 }
 
 func statusFile() string { return filepath.Join(filepath.Dir(configFile()), "agent-status.json") }
@@ -97,6 +98,9 @@ func (rt *agentRuntime) writeStatus(cfg config, held int) {
 	if rt.haveAll {
 		inv := rt.inventoryAll
 		st.Inventory = &inv
+	}
+	if rt.collector != nil {
+		st.Collector = rt.collector.status()
 	}
 	rt.mu.Unlock()
 

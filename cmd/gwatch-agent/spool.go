@@ -27,6 +27,11 @@
 // of the queue — delivered, or dropped to stay within a limit. A line torn by a
 // power cut is skipped when the file is read back, and the file is then
 // rewritten whole.
+//
+// The same queue, with the same limits and the same file discipline, holds a
+// remote collector's check results through an outage (collector.go), in
+// agent-results.jsonl beside the readings; it is generic over what it holds
+// so the two cannot drift apart.
 package main
 
 import (
@@ -75,24 +80,29 @@ type sendFailure struct {
 func (f *sendFailure) Error() string { return f.err.Error() }
 func (f *sendFailure) Unwrap() error { return f.err }
 
-// heldReading is a reading and its encoding, which is kept so that rewriting
-// the file, and counting bytes against the cap, never re-encodes anything.
-type heldReading struct {
-	m    model.HostMetrics
+// heldItem is a reading (or a check result) and its encoding, which is kept so
+// that rewriting the file, and counting bytes against the cap, never
+// re-encodes anything.
+type heldItem[T any] struct {
+	m    T
 	line []byte
 }
 
-func (h heldReading) size() int { return len(h.line) + 1 }
+func (h heldItem[T]) size() int { return len(h.line) + 1 }
 
-// readingQueue holds readings that could not be delivered, oldest first.
+// spool holds items that could not be delivered, oldest first. stamp says when
+// an item was taken, which is what the age limit and the file's sanity check
+// on reading back go by; noun is what the log calls one.
 //
-// It is not safe for concurrent use; the report loop is its only user.
-type readingQueue struct {
+// It is not safe for concurrent use; each queue has one loop that owns it.
+type spool[T any] struct {
 	max      int
 	maxAge   time.Duration
 	maxBytes int
-	held     []heldReading
+	held     []heldItem[T]
 	bytes    int
+	stamp    func(T) time.Time
+	noun     string
 
 	// The file, when there is one. disk is how many of the held readings, from
 	// the front, the file already has; dropped is how many lines at the front of
@@ -109,13 +119,20 @@ type readingQueue struct {
 	warned       bool
 }
 
+// readingQueue and heldReading are the spool as the report loop uses it.
+type (
+	readingQueue = spool[model.HostMetrics]
+	heldReading  = heldItem[model.HostMetrics]
+)
+
 // newReadingQueue is a queue held in memory only.
 func newReadingQueue(cfg config) *readingQueue {
 	n := 0
 	if cfg.buffer > 0 && cfg.interval > 0 {
 		n = int(cfg.buffer / cfg.interval)
 	}
-	return &readingQueue{max: max(0, min(n, maxQueued)), maxAge: cfg.buffer, maxBytes: maxQueueBytes}
+	return &readingQueue{max: max(0, min(n, maxQueued)), maxAge: cfg.buffer, maxBytes: maxQueueBytes,
+		stamp: func(m model.HostMetrics) time.Time { return m.Timestamp }, noun: "reading"}
 }
 
 // openReadingQueue is the queue the reporting agent uses: kept in path, and
@@ -123,20 +140,25 @@ func newReadingQueue(cfg config) *readingQueue {
 // limits. With no buffer configured nothing is kept, and a file left from when
 // there was one is removed.
 func openReadingQueue(cfg config, path string) *readingQueue {
-	q := newReadingQueue(cfg)
-	if cfg.buffer <= 0 {
+	return openSpool(newReadingQueue(cfg), cfg.buffer, path)
+}
+
+// openSpool gives a queue its file and reads back what an earlier run left in
+// it.
+func openSpool[T any](q *spool[T], buffer time.Duration, path string) *spool[T] {
+	if buffer <= 0 {
 		if err := os.Remove(path); err == nil {
-			log.Printf("buffer is 0s, so the readings an earlier run held in %s were discarded", path)
+			log.Printf("buffer is 0s, so the %ss an earlier run held in %s were discarded", q.noun, path)
 		}
 		return q
 	}
 	q.path = path
 	n, skipped := q.load(time.Now())
 	if n > 0 {
-		log.Printf("%d reading(s) held from before this agent started will be sent, oldest first", n)
+		log.Printf("%d %s(s) held from before this agent started will be sent, oldest first", n, q.noun)
 	}
 	if skipped > 0 {
-		log.Printf("%d held reading(s) in %s were unreadable or outside the buffer and were discarded", skipped, path)
+		log.Printf("%d held %s(s) in %s were unreadable or outside the buffer and were discarded", skipped, q.noun, path)
 	}
 	return q
 }
@@ -146,7 +168,7 @@ func openReadingQueue(cfg config, path string) *readingQueue {
 // one from the future is skipped; then the count and size limits keep the
 // newest. Anything skipped or cut means the file no longer matches the queue,
 // so it is rewritten at the next sync.
-func (q *readingQueue) load(now time.Time) (kept, skipped int) {
+func (q *spool[T]) load(now time.Time) (kept, skipped int) {
 	f, err := os.Open(q.path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -164,13 +186,16 @@ func (q *readingQueue) load(now time.Time) (kept, skipped int) {
 		if len(line) == 0 {
 			continue
 		}
-		var m model.HostMetrics
-		if err := json.Unmarshal(line, &m); err != nil || m.Timestamp.IsZero() ||
-			m.Timestamp.Before(now.Add(-q.maxAge)) || m.Timestamp.After(now.Add(time.Minute)) {
+		var m T
+		if err := json.Unmarshal(line, &m); err != nil {
 			skipped++
 			continue
 		}
-		q.held = append(q.held, heldReading{m: m, line: append([]byte(nil), line...)})
+		if ts := q.stamp(m); ts.IsZero() || ts.Before(now.Add(-q.maxAge)) || ts.After(now.Add(time.Minute)) {
+			skipped++
+			continue
+		}
+		q.held = append(q.held, heldItem[T]{m: m, line: append([]byte(nil), line...)})
 		q.bytes += len(line) + 1
 	}
 	if sc.Err() != nil {
@@ -184,19 +209,19 @@ func (q *readingQueue) load(now time.Time) (kept, skipped int) {
 	return len(q.held), skipped
 }
 
-func (q *readingQueue) len() int { return len(q.held) }
+func (q *spool[T]) len() int { return len(q.held) }
 
 // add puts a new reading at the back, dropping the oldest if the queue is full.
 // With no buffer at all the queue holds only what is about to be sent.
-func (q *readingQueue) add(m model.HostMetrics) {
+func (q *spool[T]) add(m T) {
 	line, err := json.Marshal(m)
 	if err != nil {
 		// A reading is plain data and always encodes; this is not reachable in
 		// practice, and dropping the reading is the honest answer if it were.
-		log.Printf("could not hold a reading: %v", err)
+		log.Printf("could not hold a %s: %v", q.noun, err)
 		return
 	}
-	q.held = append(q.held, heldReading{m: m, line: line})
+	q.held = append(q.held, heldItem[T]{m: m, line: line})
 	q.bytes += len(line) + 1
 	q.trim()
 }
@@ -204,7 +229,7 @@ func (q *readingQueue) add(m model.HostMetrics) {
 // trim drops the oldest readings until the queue is within its count and size
 // limits. It always keeps the newest reading, whatever its size, because that
 // one is about to be sent.
-func (q *readingQueue) trim() {
+func (q *spool[T]) trim() {
 	limit := max(q.max, 1)
 	n := 0
 	size := q.bytes
@@ -227,17 +252,17 @@ func (q *readingQueue) trim() {
 }
 
 // drop removes n readings from the front.
-func (q *readingQueue) drop(n int) {
+func (q *spool[T]) drop(n int) {
 	for i := 0; i < n; i++ {
 		q.bytes -= q.held[i].size()
-		q.held[i] = heldReading{}
+		q.held[i] = heldItem[T]{}
 	}
 	q.held = q.held[n:]
 }
 
 // delivered removes the reading at the front because it has gone (or GWatch
 // refused it for good), which the file must stop offering.
-func (q *readingQueue) delivered() {
+func (q *spool[T]) delivered() {
 	if q.disk > 0 {
 		q.stale = true
 		q.disk--
@@ -249,7 +274,7 @@ func (q *readingQueue) delivered() {
 // It reports how many were delivered, and the failure if there was one. A
 // reading the server refuses outright (not an outage, a verdict) is dropped,
 // because holding it would block everything behind it for ever.
-func (q *readingQueue) flush(ctx context.Context, sendOne func(model.HostMetrics) error) (sent int, err error) {
+func (q *spool[T]) flush(ctx context.Context, sendOne func(T) error) (sent int, err error) {
 	for len(q.held) > 0 && sent < maxFlushPerCycle {
 		if ctx.Err() != nil {
 			return sent, ctx.Err()
@@ -262,7 +287,7 @@ func (q *readingQueue) flush(ctx context.Context, sendOne func(model.HostMetrics
 		}
 		var sf *sendFailure
 		if errors.As(err, &sf) && !sf.retry {
-			log.Printf("dropping a reading GWatch refused: %v", err)
+			log.Printf("dropping a %s GWatch refused: %v", q.noun, err)
 			q.delivered()
 			continue
 		}
@@ -271,13 +296,42 @@ func (q *readingQueue) flush(ctx context.Context, sendOne func(model.HostMetrics
 	return sent, nil
 }
 
+// flushBatch is flush for a receiver that takes many at once: up to n items
+// from the front go in one call, and leave the queue together. A batch GWatch
+// refuses outright is dropped whole, for the same reason flush drops one item.
+func (q *spool[T]) flushBatch(ctx context.Context, n int, sendMany func([]T) error) (sent int, err error) {
+	if len(q.held) == 0 || ctx.Err() != nil {
+		return 0, ctx.Err()
+	}
+	k := min(n, len(q.held))
+	batch := make([]T, k)
+	for i := range batch {
+		batch[i] = q.held[i].m
+	}
+	err = sendMany(batch)
+	var sf *sendFailure
+	if err != nil && !(errors.As(err, &sf) && !sf.retry) {
+		return 0, err
+	}
+	if err != nil {
+		log.Printf("dropping %d %s(s) GWatch refused: %v", k, q.noun, err)
+	}
+	for i := 0; i < k; i++ {
+		q.delivered()
+	}
+	if err != nil {
+		return 0, nil
+	}
+	return k, nil
+}
+
 // sync makes the file match the queue, doing as little as it can: nothing
 // while nothing is held and no file exists, an append of the readings added
 // since the last sync, or — once readings have been delivered, or enough have
 // been pushed out by a limit — a rewrite of the whole queue. A failure to write
 // is logged once and otherwise ignored: the readings are still held in memory,
 // and the agent's job is to report, not to insist on a disk.
-func (q *readingQueue) sync() {
+func (q *spool[T]) sync() {
 	if q.path == "" {
 		return
 	}
@@ -309,7 +363,7 @@ func (q *readingQueue) sync() {
 	if err != nil {
 		if !q.warned {
 			q.warned = true
-			log.Printf("could not keep held readings in %s (%v); they are held in memory and lost if the agent restarts before GWatch answers", q.path, err)
+			log.Printf("could not keep held %ss in %s (%v); they are held in memory and lost if the agent restarts before GWatch answers", q.noun, q.path, err)
 		}
 		return
 	}
@@ -318,7 +372,7 @@ func (q *readingQueue) sync() {
 
 // appendLines adds readings to the end of the file, creating it privately if it
 // is not there, and flushes them to disk so a power cut keeps them.
-func (q *readingQueue) appendLines(hs []heldReading) error {
+func (q *spool[T]) appendLines(hs []heldItem[T]) error {
 	if _, err := os.Stat(q.path); errors.Is(err, os.ErrNotExist) {
 		// A new file is created the careful way, private from its first byte.
 		return writeQueueFile(q.path, encodeLines(hs))
@@ -339,7 +393,7 @@ func (q *readingQueue) appendLines(hs []heldReading) error {
 }
 
 // encodeLines is readings as the file holds them: one per line.
-func encodeLines(hs []heldReading) []byte {
+func encodeLines[T any](hs []heldItem[T]) []byte {
 	var buf bytes.Buffer
 	for _, h := range hs {
 		buf.Write(h.line)
