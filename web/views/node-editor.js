@@ -456,7 +456,7 @@ export async function mount(root, ctx) {
   /* ---------- Checks ---------- */
   const checksList = h('div', { class: 'stack' });
   const checksCard = h('section', { 'aria-label': 'Checks' },
-    h('div', { class: 'row-between', style: { marginBottom: '14px' } }, h('h2', null, 'Checks'), h('button', { class: 'btn', type: 'button', onclick: addCheck }, icon('plus'), 'Add check')),
+    h('div', { class: 'row-between u-mb-14' }, h('h2', null, 'Checks'), h('button', { class: 'btn', type: 'button', onclick: addCheck }, icon('plus'), 'Add check')),
     checksList);
 
   function renderChecks() {
@@ -498,7 +498,7 @@ export async function mount(root, ctx) {
     const retriesIn = numberInput({ value: c.retries ?? 0, min: 0, max: 10, oninput: () => { c.retries = Number(retriesIn.value); } });
     const thresholdIn = numberInput({ value: c.failureThreshold || '', min: 0, max: 50, placeholder: `Default (${state.settings?.alerts?.failureThreshold || 2})`, oninput: () => { c.failureThreshold = Number(thresholdIn.value) || 0; } });
     card.append(h('div', { class: 'form-grid-4' },
-      field({ label: 'Interval', input: h('div', { class: 'stack-sm', style: { gap: '6px' } }, intervalSel, customIn), error: err.intervalSeconds }),
+      field({ label: 'Interval', input: h('div', { class: 'stack-sm u-gap-6' }, intervalSel, customIn), error: err.intervalSeconds }),
       field({ label: 'Timeout', input: h('div', { class: 'input-with-unit' }, timeoutIn, h('span', { class: 'unit' }, 'seconds')), error: err.timeoutSeconds }),
       field({ label: 'Retries', input: retriesIn, help: 'Immediate retries inside one run before counting a failure.' }),
       field({ label: 'Failures before down', input: thresholdIn, help: 'Consecutive failed runs before the check is marked down and alerts fire.' }),
@@ -512,7 +512,7 @@ export async function mount(root, ctx) {
     // the common case — a check that is in no group of its own — looks as
     // it always has.
     const checkGroupsIn = chipInput({ values: c.config.groups || [], placeholder: 'Add a check group and press Enter', suggestions: (state.groups.checkGroups || []).map((g) => g.name), onChange: (v) => { c.config.groups = v; } });
-    card.append(h('details', { class: 'collapsible', open: !!(c.config.groups || []).length, style: { marginTop: '12px' } },
+    card.append(h('details', { class: 'collapsible u-mt-12', open: !!(c.config.groups || []).length },
       h('summary', null, icon('chevronRight'), 'Check groups', (c.config.groups || []).length ? h('span', { class: 'sub' }, ` · ${c.config.groups.join(', ')}`) : null),
       field({ label: 'Groups for this check', input: checkGroupsIn, help: 'Optional, and separate from the node’s groups: put checks from different nodes together (“HTTPS certificates”, “Plex ports”) to filter, chart and bulk-edit them as a set.' })));
 
@@ -521,7 +521,7 @@ export async function mount(root, ctx) {
 
     // Test result area
     const testArea = h('div', { class: 'test-area' });
-    if (c._test) testArea.append(h('div', { style: { marginTop: '16px' } }, h('div', { class: 'section-title' }, 'Test result'), resultInspector(c._test, c, { compact: true })));
+    if (c._test) testArea.append(h('div', { class: 'u-mt-16' }, h('div', { class: 'section-title' }, 'Test result'), resultInspector(c._test, c, { compact: true })));
     card.append(testArea);
     card._testArea = testArea;
     return card;
@@ -578,7 +578,7 @@ export async function mount(root, ctx) {
     const cfg = c.config;
     const days = numberInput({ value: cfg.certWarnDays || '', min: 1, max: 365, placeholder: `Default (${state.settings?.alerts?.certWarnDays || 14})`, oninput: () => { cfg.certWarnDays = Number(days.value) || 0; } });
     const items = [];
-    if (withToggle) items.push(field({ label: 'Certificate', input: h('div', { style: { paddingTop: '6px' } }, checkbox({ label: 'Also check the HTTPS certificate', checked: cfg.certCheck !== false, onChange: (v) => { cfg.certCheck = v; } })) }));
+    if (withToggle) items.push(field({ label: 'Certificate', input: h('div', { class: 'u-pt-6' }, checkbox({ label: 'Also check the HTTPS certificate', checked: cfg.certCheck !== false, onChange: (v) => { cfg.certCheck = v; } })) }));
     items.push(field({ label: 'Warn before expiry', input: h('div', { class: 'input-with-unit' }, days, h('span', { class: 'unit' }, 'days')) }));
     return items;
   }
@@ -596,7 +596,7 @@ export async function mount(root, ctx) {
     const jsonRow = field({ label: 'JSON path to watch', input: jpIn }); jsonRow.hidden = (cfg.contentWatch || '') !== 'json';
     return h('details', { class: 'collapsible', open: !!cfg.contentWatch },
       h('summary', null, icon('chevronRight'), 'Advanced: watch for response / content changes'),
-      h('div', { class: 'stack-sm', style: { paddingTop: '8px' } },
+      h('div', { class: 'stack-sm u-pt-8' },
         h('div', { class: 'banner banner-warn' }, icon('alert'), h('div', null,
           h('b', null, 'Expect false positives on dynamic pages. '),
           'Timestamps, adverts, rotating content, session tokens and login pages change on every request. A detected change means the response is different from last time — it is ', h('b', null, 'not'), ' a security conclusion. Raw page bodies are never stored; only a hash or the watched value.')),
@@ -610,7 +610,7 @@ export async function mount(root, ctx) {
   // so the fields say what the chart will say.
   function jsonRecordFields(c, err) {
     const cfg = c.config;
-    const details = h('div', { class: 'stack-sm', style: { paddingTop: '8px' } });
+    const details = h('div', { class: 'stack-sm u-pt-8' });
     details.hidden = !cfg.jsonRecord;
     const record = checkbox({ label: 'Record this value', checked: !!cfg.jsonRecord, onChange: (v) => { cfg.jsonRecord = v; details.hidden = !v; } });
     const name = textInput({ value: cfg.jsonMetric || '', placeholder: 'value', maxlength: 64, oninput: () => { cfg.jsonMetric = name.value; } });
@@ -626,7 +626,7 @@ export async function mount(root, ctx) {
       h('div', { class: 'form-grid-4' }, ...thresholds),
       h('p', { class: 'note' }, 'Thresholds are strict: crossing a ', h('b', null, 'Warn'), ' value marks the check degraded, crossing a ', h('b', null, 'Crit'), ' value marks it down. Leave one blank to turn it off. A value that is text rather than a number is kept in the last result and never thresholded.'));
     return h('div', { class: 'stack-sm' },
-      h('div', { style: { paddingTop: '6px' } }, record),
+      h('div', { class: 'u-pt-6' }, record),
       h('div', { class: 'help' }, 'Keeps the number the path points at on every run, so it can be charted over time and given thresholds — a temperature, a queue length, a count of blocked queries.'),
       details);
   }
@@ -653,7 +653,7 @@ export async function mount(root, ctx) {
       case 'keyword': {
         const kw = textInput({ value: cfg.keyword || '', placeholder: 'Text to look for', oninput: () => { cfg.keyword = kw.value; } });
         const absent = checkbox({ label: 'Text must be absent (alert when it appears)', checked: !!cfg.keywordAbsent, onChange: (v) => { cfg.keywordAbsent = v; } });
-        return h('div', { class: 'stack' }, h('div', { class: 'form-grid' }, field({ label: 'Keyword', input: kw, error: err.keyword, help: 'Case-sensitive text that must appear in the response body.' }), field({ label: 'Mode', input: h('div', { style: { paddingTop: '6px' } }, absent) })), httpCommon(c, err), h('div', { class: 'form-grid-3' }, ...warnFields(c)));
+        return h('div', { class: 'stack' }, h('div', { class: 'form-grid' }, field({ label: 'Keyword', input: kw, error: err.keyword, help: 'Case-sensitive text that must appear in the response body.' }), field({ label: 'Mode', input: h('div', { class: 'u-pt-6' }, absent) })), httpCommon(c, err), h('div', { class: 'form-grid-3' }, ...warnFields(c)));
       }
       case 'json': {
         const path = textInput({ value: cfg.jsonPath || '', placeholder: 'e.g. status or data.items[0].name', oninput: () => { cfg.jsonPath = path.value; } });
@@ -702,7 +702,7 @@ export async function mount(root, ctx) {
           ),
           h('details', { class: 'collapsible' },
             h('summary', null, icon('chevronRight'), 'Output contract'),
-            h('div', { class: 'stack-sm', style: { paddingTop: '8px' } },
+            h('div', { class: 'stack-sm u-pt-8' },
               h('p', { class: 'note' }, 'Exit code 0 = up, 2 = degraded, anything else = down. The check is killed and reported "timed out" if it runs past the timeout above.'),
               h('p', { class: 'note' }, 'Stdout may contain lines of the form ', h('code', null, 'key=value'), ' (case-insensitive keys): ', h('code', null, 'status=up|degraded|down'), ' overrides the exit code, ', h('code', null, 'message=...'), ' is shown as the result message, ', h('code', null, 'latency_ms=<number>'), ' sets the charted latency, and ', h('code', null, 'error=...'), ' sets the error text. Any other output (stdout and stderr, up to 8 KiB) is kept and shown with the result.'),
             )),
@@ -856,8 +856,8 @@ export async function mount(root, ctx) {
       credsWrap,
       h('div', { class: 'row' }, testBtn, h('span', { class: 'muted small' }, 'Reads the device’s name, description and uptime with the settings above.')),
       testOut,
-      h('div', { class: 'row-between', style: { marginTop: '4px' } },
-        h('div', { class: 'section-title', style: { marginBottom: 0 } }, 'Readings'),
+      h('div', { class: 'row-between u-mt-4' },
+        h('div', { class: 'section-title u-mb-0' }, 'Readings'),
         h('div', { class: 'btn-group' },
           h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: (e) => pickInterfaces(c, e.currentTarget, renderRows) }, icon('wifi'), 'Pick interfaces'),
           presets,
@@ -992,7 +992,7 @@ export async function mount(root, ctx) {
         h('div', { class: 'table-wrap', style: { maxHeight: '40vh', overflow: 'auto' } },
           h('table', { class: 'table' }, h('thead', null, h('tr', null, h('th', null, ''), h('th', { class: 'num' }, 'Index'), h('th', null, 'Name'), h('th', null, 'Description'), h('th', null, 'Link'))), tb)),
         h('div', { class: 'section-title' }, 'For each ticked port, read'),
-        h('div', { class: 'stack-sm', style: { gap: '6px' } }, wantLink, wantTraffic, wantErrors, hc)),
+        h('div', { class: 'stack-sm u-gap-6' }, wantLink, wantTraffic, wantErrors, hc)),
       footer: [h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Cancel'), go],
     });
   }
@@ -1172,8 +1172,8 @@ export async function mount(root, ctx) {
         field({ label: 'Node id', input: nodeId, error: err.matterNodeId, help: 'The number the Matter server gave the device when it was added.' })),
       h('div', { class: 'row' }, loadBtn, h('span', { class: 'muted small' }, 'Lists every device the Matter server knows, with what each one can report.')),
       loadOut,
-      h('div', { class: 'row-between', style: { marginTop: '4px' } },
-        h('div', { class: 'section-title', style: { marginBottom: 0 } }, 'Readings'),
+      h('div', { class: 'row-between u-mt-4' },
+        h('div', { class: 'section-title u-mb-0' }, 'Readings'),
         h('div', { class: 'btn-group' },
           h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { cfg.matterReadings.push({ endpoint: 1, kind: 'temperature', name: uniqueMatterName(cfg, 'Temperature'), unit: '°C' }); renderRows(); } }, icon('plus'), 'Add a reading'))),
       h('p', { class: 'note' }, 'On, open and occupied read as 1, off, shut and clear as 0, so a state becomes an alert with a threshold: ', h('b', null, 'Crit > 0'), ' on a door’s contact marks the check down while it is open. Thresholds are strict, as everywhere else. A device the Matter server cannot reach marks the check down; a sensor that reports no value right now marks it degraded.'),
@@ -1308,9 +1308,9 @@ export async function mount(root, ctx) {
     } }, icon('plus'), 'Add device');
     return h('details', { class: 'collapsible admin-only' },
       h('summary', null, icon('chevronRight'), 'Add a device to the Matter server'),
-      h('div', { class: 'stack-sm', style: { paddingTop: '8px' } },
+      h('div', { class: 'stack-sm u-pt-8' },
         h('p', { class: 'note' }, 'Use the 11-digit code or the QR code text on the device or its box. For a device already set up in another app, open it there and choose ', h('i', null, 'Turn on pairing mode'), ' or ', h('i', null, 'Linked Matter apps & services'), ' to get a fresh code — the device stays in that app as well.'),
-        h('div', { class: 'form-grid' }, field({ label: 'Pairing code', input: code }), field({ label: 'How to find it', input: h('div', { style: { paddingTop: '6px' } }, onNetwork), help: 'Untick only for a brand-new device the Matter server should find over Bluetooth, which needs a Bluetooth adapter on that machine.' })),
+        h('div', { class: 'form-grid' }, field({ label: 'Pairing code', input: code }), field({ label: 'How to find it', input: h('div', { class: 'u-pt-6' }, onNetwork), help: 'Untick only for a brand-new device the Matter server should find over Bluetooth, which needs a Bluetooth adapter on that machine.' })),
         h('div', { class: 'row' }, btn),
         out,
         h('p', { class: 'note' }, 'A Thread device needs a Thread border router (an Apple TV, a HomePod mini, a Nest hub or an OpenThread border router) on the same network as the Matter server.')));
@@ -1394,7 +1394,7 @@ export async function mount(root, ctx) {
         field({ label: 'Read hardware from', input: source }),
         field({ label: 'Report down after no reading for', input: stale, help: 'A machine that stops reporting is the signal an agent exists to give.' })),
       sourceWrap,
-      h('div', { class: 'section-title', style: { marginTop: '4px' } }, 'Warning and critical thresholds'),
+      h('div', { class: 'section-title u-mt-4' }, 'Warning and critical thresholds'),
       h('p', { class: 'note' }, 'One check, one line of history per metric, and each metric has its own verdict: crossing ', h('b', null, 'warning'), ' marks that metric — and so the check — ', h('b', null, 'degraded'), '; crossing ', h('b', null, 'critical'), ' marks it ', h('b', null, 'down'), '. A warning on the disk and a warning on memory are two incidents, not one. Leave a box blank to turn that level off.'),
       // wrap.append is the DOM's own append, which writes a null argument
       // out as the text "null" (#72) — so the error is only passed when there
@@ -1414,12 +1414,12 @@ export async function mount(root, ctx) {
     const entry = familyEntry(cfg, f.key);
     const def = SYSTEM_DEFAULTS.metricThresholds.find((t) => t.metric === f.key) || {};
     return h('div', { class: 'threshold-group', 'data-metric': f.key, style: { border: '1px solid var(--line)', padding: '10px 12px 12px' } },
-      h('div', { class: 'section-title', style: { marginBottom: '8px' } }, f.label),
+      h('div', { class: 'section-title u-mb-8' }, f.label),
       h('div', { class: 'form-grid' },
         levelField(entry, 'warn', f.below ? 'Warning at or below' : 'Warning', f, def.warn),
         levelField(entry, 'crit', f.below ? 'Critical at or below' : 'Critical', f, def.crit)),
-      f.note ? h('p', { class: 'note', style: { marginTop: '6px' } }, f.note) : null,
-      extra ? h('div', { style: { marginTop: '10px' } }, extra) : null);
+      f.note ? h('p', { class: 'note u-mt-6' }, f.note) : null,
+      extra ? h('div', { class: 'u-mt-10' }, extra) : null);
   }
 
   // familyEntry finds, or creates, the list entry for a family, so the
@@ -1448,7 +1448,7 @@ export async function mount(root, ctx) {
   function instanceOverrides(cfg, rerender) {
     const rows = cfg.metricThresholds.filter((t) => (t.metric || '').includes(':'));
     const box = h('div', { class: 'stack-sm', style: { border: '1px solid var(--line)', padding: '10px 12px 12px' } },
-      h('div', { class: 'section-title', style: { marginBottom: '4px' } }, 'One disk, interface or device'),
+      h('div', { class: 'section-title u-mb-4' }, 'One disk, interface or device'),
       h('p', { class: 'note' }, 'An entry here replaces the family’s pair above for that one instance: a media disk that is always 90% full, an uplink that is meant to run hot. Both boxes blank means that instance is never alerted on.'));
     for (const t of rows) {
       const family = METRIC_FAMILIES.find((f) => f.key === t.metric.slice(0, t.metric.indexOf(':'))) || { key: '', label: t.metric, unit: '' };
@@ -1507,11 +1507,11 @@ export async function mount(root, ctx) {
     const cooldown = numberInput({ value: a.cooldownMinutes ?? '', min: 0, placeholder: `Default (${state.settings?.alerts?.cooldownMinutes ?? 60} min)`, oninput: () => { a.cooldownMinutes = cooldown.value === '' ? null : Number(cooldown.value); } });
     const recipients = chipInput({ values: a.recipients || [], placeholder: 'Add an email and press Enter', validate: (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), onChange: (v) => { a.recipients = v; } });
     const hasOverride = a.enabled != null || a.cooldownMinutes != null || a.notifyRecovery != null || a.notifyWarnings != null || a.recipients?.length;
-    return h('details', { class: 'collapsible', open: !!hasOverride, style: { marginTop: '12px' } },
+    return h('details', { class: 'collapsible u-mt-12', open: !!hasOverride },
       h('summary', null, icon('chevronRight'), 'Alert overrides for this check', hasOverride ? h('span', { class: 'tag' }, 'customised') : null),
       // The fields, their labels and their order come from the shared table,
       // so the bulk editor's alert rows and this card cannot disagree.
-      h('div', { class: 'form-grid-4', style: { paddingTop: '8px' } },
+      h('div', { class: 'form-grid-4 u-pt-8' },
         ...ALERT_OVERRIDE_FIELDS.map((f) => {
           if (f.kind === 'tri-state') return field({ label: f.label, input: tri(f.key) });
           if (f.kind === 'chips') return field({ label: f.label, input: recipients, help: f.help, cls: 'span-2' });
@@ -1526,7 +1526,7 @@ export async function mount(root, ctx) {
     try {
       const result = await api.post('/api/checks/test', { check: cleanCheck(c), nodeHost: d.host });
       c._test = result;
-      replace(card._testArea, h('div', { style: { marginTop: '16px' } }, h('div', { class: 'section-title' }, 'Test result'), resultInspector(result, c, { compact: true })));
+      replace(card._testArea, h('div', { class: 'u-mt-16' }, h('div', { class: 'section-title' }, 'Test result'), resultInspector(result, c, { compact: true })));
       toast(result.success ? 'Test succeeded' : `Test failed: ${result.message || result.error || ''}`, { kind: result.success ? 'success' : 'error' });
     } catch (e) { toast(`Test failed: ${e.message}`, { kind: 'error' }); }
     done();

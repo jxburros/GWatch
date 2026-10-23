@@ -50,7 +50,7 @@ export async function addAgentNode(reload) {
       field({ label: 'Name', input: name, help: 'How this machine appears in the node list.' }),
       h('details', { class: 'collect-details' },
         h('summary', null, 'What to monitor'),
-        h('div', { class: 'stack-sm', style: { marginTop: '10px' } },
+        h('div', { class: 'stack-sm u-mt-10' },
           h('p', { class: 'note' }, 'Everything is on to begin with. Untick what you do not want; which network interfaces, disks and filesystems to report can be chosen on the node once the machine has reported. This can be changed at any time.'),
           picker.el)),
       field({ label: 'Node', input: nodeSel, help: 'Normally a node is made for the machine. Choose an existing node to add the machine’s hardware check to it instead.' })),
@@ -418,7 +418,7 @@ export function hardwarePanel(key, { title = 'Hardware', metricStatus = null, is
     if (host.warnings?.length) {
       // The collector could not read something. Say so rather than showing a
       // gap the reader has to guess at.
-      headEl.append(h('div', { class: 'banner banner-info', style: { marginTop: '12px' } },
+      headEl.append(h('div', { class: 'banner banner-info u-mt-12' },
         icon('info'),
         h('div', null,
           h('strong', null, 'Some readings are not available on this machine'),

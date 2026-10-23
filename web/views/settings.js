@@ -208,7 +208,7 @@ export async function mount(root, ctx) {
     return h('section', { class: 'card' }, h('h2', null, 'Guidance'),
       h('p', { class: 'lead' }, 'Tips are small hints that point at one control and explain what it does. Each one appears once and is then gone. Remembered by this browser only.'),
       h('div', { class: 'stack-sm' }, tips, seen,
-        h('div', { class: 'btn-group', style: { marginTop: '6px' } },
+        h('div', { class: 'btn-group u-mt-6' },
           h('button', { class: 'btn', type: 'button', onclick: () => { resetTips(); refresh(); toast('Tips reset', { kind: 'success' }); } }, icon('refresh'), 'Reset tips'),
           h('button', { class: 'btn', type: 'button', onclick: () => { resetOnboarding(); ctx.navigate('/onboarding'); } }, icon('play'), 'Restart onboarding'),
           h('a', { class: 'btn', href: '#/help' }, icon('help'), 'Open Help'))));
@@ -272,7 +272,7 @@ export async function mount(root, ctx) {
             render();
           } }, icon('refresh'), 'Restore defaults')));
       wrap.append(card, previewCard(), h('section', { class: 'card' }, h('h2', null, 'Notes'),
-        h('div', { class: 'stack-sm', style: { marginTop: '8px' } },
+        h('div', { class: 'stack-sm u-mt-8' },
           h('p', { class: 'note' }, h('b', null, 'Who sees them: '), 'everyone. The rules are read from settings, which only an administrator may open, so the effective list is served to every account alongside the theme — a viewer’s header shows exactly what yours does.'),
           h('p', { class: 'note' }, h('b', null, 'Where they are evaluated: '), 'in the browser, against the same status summary the header already fetches. That is why the list of conditions is short: each one has to be answerable from that one summary, without a second request on every poll.'),
           h('p', { class: 'note' }, h('b', null, 'Green and blue: '), 'neither is a rule. Green is what is left when nothing fires, and blue says GWatch has nothing to go on yet — while it is blue, only the monitor’s own health can still light a circle.'))));
@@ -473,7 +473,7 @@ export async function mount(root, ctx) {
         testMsg,
         h('hr', { class: 'divider' }), saveBar()),
       h('section', { class: 'card' }, h('h2', null, 'How suppression works'),
-        h('div', { class: 'stack-sm', style: { marginTop: '8px' } },
+        h('div', { class: 'stack-sm u-mt-8' },
           h('p', { class: 'note' }, h('b', null, 'Dependencies: '), 'when a node "depends on" another (say Plex depends on Gateway) and the parent is down, failures on the child are recorded as "affected by Gateway" and no separate email is sent for it.'),
           h('p', { class: 'note' }, h('b', null, 'Cooldown: '), 'after an alert is sent for a check, further alerts for that same check are held back for the cooldown period. A recovery email is still sent as soon as it comes back.'),
           h('p', { class: 'note' }, h('b', null, 'Maintenance and silences: '), 'checks keep running and history is kept, but alerts are suppressed and shown as such in the incident timeline.'))));
@@ -499,7 +499,7 @@ export async function mount(root, ctx) {
         const scope = ch.groups?.length ? `groups: ${ch.groups.join(', ')}` : 'all nodes';
         list.append(h('div', { class: 'trigger-row' },
           toggle({ ariaLabel: `${ch.name || 'Channel'} enabled`, checked: !!ch.enabled, onChange: (v) => { ch.enabled = v; } }),
-          h('div', { style: { minWidth: 0 } },
+          h('div', { class: 'u-min-w-0' },
             h('div', { class: 't-name' }, ch.name || ch.action?.type, actionBadge(ch.action)),
             h('div', { class: 't-sub' }, `${sev ? sev.label.split(':')[0] : ''} · ${scope} · ${actionSummary(ch.action)}`)),
           h('div', { class: 'btn-group' },
@@ -515,7 +515,7 @@ export async function mount(root, ctx) {
       h('p', { class: 'lead' }, 'Send the same alerts to Slack, Teams, Discord, Telegram, Matrix, ntfy, Gotify, Pushover, SMS (Twilio), PagerDuty or Opsgenie. A channel gets an alert exactly when the email would go out, so maintenance windows, silences, dependencies and the cooldown apply to it too. Set a channel to "outages only", or to some groups, to route only critical alerts there.'),
       h('p', { class: 'note' }, 'PagerDuty and Opsgenie incidents are resolved when the check recovers, even if recovery emails are off. Keys and webhook URLs are stored encrypted and never shown again; edit a channel without retyping them to keep the saved ones.'),
       list,
-      h('div', { class: 'btn-group', style: { marginTop: '8px' } }, add),
+      h('div', { class: 'btn-group u-mt-8' }, add),
       h('hr', { class: 'divider' }), saveBar());
   }
 
@@ -567,7 +567,7 @@ export async function mount(root, ctx) {
       }
       wrap.append(epCard, trCard,
         h('section', { class: 'card' }, h('h2', null, 'Notes'),
-          h('div', { class: 'stack-sm', style: { marginTop: '8px' } },
+          h('div', { class: 'stack-sm u-mt-8' },
             h('p', { class: 'note' }, h('b', null, 'Placeholders: '), 'URL, body, headers, git arguments and script code may contain {{node.name}}, {{status}}, {{message}}, {{latencyMs}} and more. Scripts also get GWATCH_* environment variables.'),
             h('p', { class: 'note' }, h('b', null, 'Security: '), 'actions run on the computer that runs GWatch with its permissions. Protect endpoints with a token and set an access password before enabling remote access.'),
             h('p', { class: 'note' }, h('b', null, 'History: '), 'every run is recorded in the Audit tab (event types "Trigger" and "Endpoint") together with its output.'))));
@@ -605,10 +605,10 @@ export async function mount(root, ctx) {
   }
 
   function mcpIntroCard() {
-    const item = (t, d) => h('div', null, h('b', null, t), h('div', { class: 'muted', style: { fontSize: '13px' } }, d));
+    const item = (t, d) => h('div', null, h('b', null, t), h('div', { class: 'muted u-fs-13' }, d));
     return h('section', { class: 'card' }, h('h2', null, 'AI assistants and MCP'),
       h('p', { class: 'lead' }, 'gwatch-mcp is a small companion program that lets an AI assistant — Claude Desktop, Claude Code or any other MCP client — ask this GWatch what is up, what is down and since when. It is optional, separate from GWatch itself, and off until you set it up.'),
-      h('div', { class: 'stack-sm', style: { marginTop: '8px' } },
+      h('div', { class: 'stack-sm u-mt-8' },
         item('It runs where the assistant runs', 'Usually your own computer. It talks to GWatch over the same API a browser uses, with an API key you create here. GWatch never connects out to the assistant.'),
         item('Read-only unless you say otherwise', 'A read-only key lets the assistant answer questions. Changing what is monitored takes a read & write key and a flag on gwatch-mcp — two separate decisions, both yours.'),
         item('Some things are never on offer', 'No key of any scope can reach settings, backups, accounts, other keys, automation or updates, so neither can an assistant.')),
@@ -646,9 +646,9 @@ export async function mount(root, ctx) {
   }
 
   function mcpScopeCard() {
-    const item = (t, d) => h('div', null, h('b', null, t), h('div', { class: 'muted', style: { fontSize: '13px' } }, d));
+    const item = (t, d) => h('div', null, h('b', null, t), h('div', { class: 'muted u-fs-13' }, d));
     return h('section', { class: 'card' }, h('h2', null, 'What the assistant can and cannot do'),
-      h('div', { class: 'stack-sm', style: { marginTop: '8px' } },
+      h('div', { class: 'stack-sm u-mt-8' },
         item('With a read-only key', 'The overview, nodes and their checks, recent results, history over a range, the event timeline, groups and tags, the node templates, and whether the monitor itself is healthy. Nine tools; nothing that changes anything.'),
         item('With a read & write key and --allow-write', 'Also create, change, enable, disable, run and silence nodes, add notes to the timeline, test a check without saving it, and delete a node — which additionally has to be confirmed in the tool call. Both gates have to be open: GWatch refuses a write from a read-only key whatever gwatch-mcp was started with.'),
         item('Never, whatever the key', 'Settings, backups and restores, updates, user accounts, API keys, automation triggers and endpoints, the configuration export and the service log. There are no tools for these, and a key could not use them if there were.')),
@@ -668,8 +668,8 @@ export async function mount(root, ctx) {
     } }, icon('download'), version ? `Download skill ${version}` : 'Download skill');
     const md = h('a', { class: 'btn btn-sm', href: '/api/mcp/skill?format=md', download: 'SKILL.md' }, 'SKILL.md only');
     const last = status?.lastDownloadedAt
-      ? h('p', { class: 'muted', style: { fontSize: '13px' } }, `Last downloaded ${relTime(status.lastDownloadedAt)} (version ${status.lastDownloadedVersion})${status.lastDownloadedBy ? ` by ${status.lastDownloadedBy}` : ''}.`)
-      : h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Not downloaded yet.');
+      ? h('p', { class: 'muted u-fs-13' }, `Last downloaded ${relTime(status.lastDownloadedAt)} (version ${status.lastDownloadedVersion})${status.lastDownloadedBy ? ` by ${status.lastDownloadedBy}` : ''}.`)
+      : h('p', { class: 'muted u-fs-13' }, 'Not downloaded yet.');
     return h('section', { class: 'card' },
       h('div', { class: 'card-head' }, h('h2', null, 'Agent skill'), version ? h('span', { class: 'chip' }, `Version ${version}`) : null),
       h('p', { class: 'lead' }, 'A short guide that teaches the assistant how to use GWatch well: start with the overview, how to drill into a problem, what the statuses mean, and how to be careful with the write tools. The tools describe themselves; the skill teaches judgement.'),
@@ -700,7 +700,7 @@ export async function mount(root, ctx) {
           hcard(num(st.rawRows), 'Raw results', st.oldestRaw ? `oldest ${relTime(st.oldestRaw)}` : ''),
           hcard(num(st.rollupRows5m), '5-minute rollups'), hcard(num(st.rollupRows1h), 'Hourly rollups'), hcard(num(st.rollupRows1d), 'Daily rollups'), hcard(num(st.eventRows), 'Events'),
           hcard(st.lastRunAt ? relTime(st.lastRunAt) : 'never', 'Last run', st.lastRunAt ? `${duration(st.lastDurationMs / 1000)} · removed ${num(st.deletedLastRun)} rows` : '')),
-        st.lastError ? h('div', { style: { marginTop: '10px' } }, banner('down', `Last run failed: ${st.lastError}`)) : null,
+        st.lastError ? h('div', { class: 'u-mt-10' }, banner('down', `Last run failed: ${st.lastError}`)) : null,
         st.plan?.length ? h('ul', { class: 'note', style: { marginTop: '12px', paddingLeft: '18px' } }, st.plan.map((p) => h('li', null, p))) : null);
     };
     api.get('/api/retention/status').then(renderStatus).catch((e) => replace(statusBox, h('p', { class: 'note' }, e.message)));
@@ -710,7 +710,7 @@ export async function mount(root, ctx) {
     return h('form', { class: 'stack', onsubmit: (e) => { e.preventDefault(); saveSettings(); } },
       h('section', { class: 'card' }, h('h2', null, 'History retention'), h('p', { class: 'lead' }, 'Recent data stays detailed; older data is summarised so the database never grows without limit. 0 = keep forever.'),
         summary,
-        h('div', { class: 'form-grid-3', style: { marginTop: '14px' } },
+        h('div', { class: 'form-grid-3 u-mt-14' },
           f('rawDays', 'Keep every result for'), f('fiveMinDays', 'Keep 5-minute summaries for'), f('hourlyDays', 'Keep hourly summaries for'), f('dailyDays', 'Keep daily summaries for'), f('eventDays', 'Keep events for'),
           f('hostDays', 'Keep hardware check results for', 'A hardware check\u2019s result is a whole snapshot of a machine rather than a single number, so these have a retention of their own; every other check follows the setting for individual results above.')),
         h('hr', { class: 'divider' }), saveBar()),
@@ -752,8 +752,8 @@ export async function mount(root, ctx) {
     row('Database driver', hl.databaseDriver);
     row('Key file', hl.keyPath);
     row('Backups folder', hl.backupDir);
-    return h('div', { style: { marginTop: '10px' } }, dl,
-      h('p', { class: 'note', style: { marginTop: '8px' } },
+    return h('div', { class: 'u-mt-10' }, dl,
+      h('p', { class: 'note u-mt-8' },
         'These are ordinary files on this computer’s own disk, in a permanent folder — never a temp directory the OS can clear on reboot or under disk pressure.'));
   }
   function loadDataPaths(box) {
@@ -888,7 +888,7 @@ export async function mount(root, ctx) {
     } }, icon('save'), 'Create backup');
     const createCard = h('section', { class: 'card' }, h('h2', null, 'Create a backup'), h('p', { class: 'lead' }, 'The archive is encrypted with the password you choose and includes nodes, dashboards, saved charts, triggers and endpoints. Keep the password somewhere safe.'),
       h('div', { class: 'form-grid' }, field({ label: 'Password', input: pw }), field({ label: 'Confirm password', input: pw2 }), h('div', { class: 'span-2' }, inclHist)),
-      h('div', { class: 'form-actions', style: { marginTop: '12px' } }, createBtn), createResult);
+      h('div', { class: 'form-actions u-mt-12' }, createBtn), createResult);
     const file = h('input', { type: 'file', accept: '.gwbackup,.zip,.bin,*/*' });
     const rpw = h('input', { type: 'password', autocomplete: 'off', placeholder: 'Backup password' });
     const rHist = checkbox({ label: 'Also restore history and events', checked: true });
@@ -914,7 +914,7 @@ export async function mount(root, ctx) {
     } }, icon('upload'), 'Restore from file');
     const restoreCard = h('section', { class: 'card' }, h('h2', null, 'Restore from a file'), h('p', { class: 'lead' }, 'Moving to a new computer? Install GWatch, then restore the archive you downloaded from the old one.'),
       h('div', { class: 'form-grid' }, field({ label: 'Backup file', input: file }), field({ label: 'Password', input: rpw }), h('div', { class: 'span-2' }, rHist), h('div', { class: 'span-2' }, rAccounts)),
-      h('div', { class: 'form-actions', style: { marginTop: '12px' } }, restoreBtn), restoreResult);
+      h('div', { class: 'form-actions u-mt-12' }, restoreBtn), restoreResult);
     // A restore takes a backup of what it replaces first, and leaves out the
     // accounts and agents deleted since the backup was made unless asked.
     function accountsCheckbox() { return checkbox({ label: 'Re-create accounts and agents that have been deleted since this backup', checked: false }); }
@@ -1000,11 +1000,11 @@ export async function mount(root, ctx) {
     loadDataPaths(pathsBox);
     const autoCard = h('section', { class: 'card' }, h('h2', null, 'Automatic backups'), h('p', { class: 'lead' }, 'Runs unattended in the background on the schedule below, using the same encrypted format as a manual backup. Archives older than the number to keep are deleted automatically.'),
       autoEnabled,
-      h('div', { class: 'form-grid', style: { marginTop: '12px' } },
+      h('div', { class: 'form-grid u-mt-12' },
         autoInterval, autoKeep, h('div', { class: 'span-2' }, autoHist),
         field({ label: 'Password', input: autoPw, help: bk.password ? 'A password is already saved; leave blank to keep it.' : 'Backups are always encrypted, so a password is required to enable this.' }),
         field({ label: 'Confirm password', input: autoPw2 })),
-      h('div', { class: 'form-actions', style: { marginTop: '12px' } }, autoSaveBtn), nextLine,
+      h('div', { class: 'form-actions u-mt-12' }, autoSaveBtn), nextLine,
       h('hr', { class: 'divider' }), h('p', { class: 'lead' }, 'Where archives land, alongside the database itself:'), pathsBox);
     await load();
     state.panelRefresh = load;
@@ -1125,16 +1125,16 @@ export async function mount(root, ctx) {
       h('section', { class: 'card' }, h('h2', null, 'Application updates'),
         h('p', { class: 'lead' }, 'GWatch checks the GitHub releases of the repository below, installs the version you choose, verifies its signature and restarts itself.'),
         box,
-        h('div', { class: 'btn-group', style: { marginTop: '12px' } }, checkBtn, applyBtn),
-        h('div', { class: 'stack-sm', style: { marginTop: '12px' } }, h('a', { href: `https://github.com/${g.updateRepo || 'jxburros/GWatch'}/releases`, target: '_blank', rel: 'noopener', class: 'small' }, icon('external'), ' Open the releases page'))),
+        h('div', { class: 'btn-group u-mt-12' }, checkBtn, applyBtn),
+        h('div', { class: 'stack-sm u-mt-12' }, h('a', { href: `https://github.com/${g.updateRepo || 'jxburros/GWatch'}/releases`, target: '_blank', rel: 'noopener', class: 'small' }, icon('external'), ' Open the releases page'))),
       h('section', { class: 'card' }, h('h2', null, 'Available versions'),
         h('p', { class: 'lead' }, 'Install any version newer than the one running — the most recent, or an earlier one you would rather have. An older version than the one running is not installed over it: the database has already been migrated.'),
-        h('div', { class: 'row-between', style: { marginBottom: '8px' } }, preToggle),
+        h('div', { class: 'row-between u-mb-8' }, preToggle),
         listBox),
       h('form', { class: 'card', onsubmit: (e) => { e.preventDefault(); saveSettings(); } }, h('h2', null, 'How GWatch checks'),
         h('p', { class: 'lead' }, 'Checking asks GitHub for the list of releases and nothing else — no account, no machine identity, nothing about what you monitor. Switch it off and GWatch contacts nobody unless you press Check now.'),
         h('div', { class: 'stack-sm' }, autoRow, promptRow, preSetting),
-        h('div', { class: 'form-grid', style: { marginTop: '12px' } },
+        h('div', { class: 'form-grid u-mt-12' },
           numField(u, 'checkIntervalHours', 'Check every', { unitLabel: 'hours', min: 1, help: 'Between 1 and 720 hours (30 days). The default is once a day.' }),
           field({ label: 'GitHub repository', input: repo, help: 'Release assets are expected to be named gwatch-<os>-<arch>[.exe], which is what the release job publishes.' })),
         h('hr', { class: 'divider' }), saveBar()));
@@ -1170,9 +1170,9 @@ export async function mount(root, ctx) {
     const active = status.active || {};
     const activeCard = h('section', { class: 'card' }, h('h2', null, 'Database in use'),
       h('p', { class: 'lead' }, 'Where this copy of GWatch is reading and writing right now.'),
-      h('div', { class: 'health-cards', style: { marginTop: '10px' } },
+      h('div', { class: 'health-cards u-mt-10' },
         hcard({ sqlite: 'SQLite', postgres: 'PostgreSQL', mysql: 'MySQL / MariaDB' }[active.driver] || active.driver || '—', 'Backend', active.label || ''),
-        hcard(h('span', { class: 'mono', style: { fontSize: '13px' } }, active.description || '—'), 'Location'),
+        hcard(h('span', { class: 'mono u-fs-13' }, active.description || '—'), 'Location'),
         hcard(String(active.schemaVersion ?? '—'), 'Schema version'),
         hcard(bytes(active.sizeBytes || 0), 'Size')));
 
@@ -1231,7 +1231,7 @@ export async function mount(root, ctx) {
       pending,
       h('div', { class: 'form-grid', style: { marginBottom: '12px' } }, h('div', { class: 'span-2' }, field({ label: 'Database', input: driver }))),
       sqliteNote, serverGrid,
-      h('div', { class: 'form-actions', style: { marginTop: '12px' } }, testBtn, saveBtn), result);
+      h('div', { class: 'form-actions u-mt-12' }, testBtn, saveBtn), result);
     const howCard = h('section', { class: 'card' }, h('h2', null, 'Moving existing data'),
       h('p', null, 'Saving here changes where GWatch looks, not what is there. To take the nodes, history and accounts in the SQLite file along, stop the service and run ', h('code', null, 'gwatch migrate-db'), ' once: it copies everything into the database saved here and leaves the SQLite file in place as a fallback. Backups and restores work the same on every backend.'),
       h('p', { class: 'note' }, 'Settings › Database and ', h('code', null, 'docs/DATABASE.md'), ' describe creating the database and a least-privilege user on the server, the ', h('code', null, '--db-*'), ' flags and ', h('code', null, 'GWATCH_DB_*'), ' variables that override this file, and what a server backend does not do (the pre-upgrade file copy).'));
@@ -1258,17 +1258,17 @@ export async function mount(root, ctx) {
             hcard(h('span', { class: 'mono', style: { fontSize: '14px' } }, hl.listenAddress || '—'), 'Listening on', `${hl.platform || ''} · v${hl.version || '?'}`),
             hl.ping ? pingCard(hl.ping) : null)),
         h('section', { class: 'card' }, h('h2', null, 'Storage and retention'),
-          h('div', { class: 'health-cards', style: { marginTop: '10px' } },
+          h('div', { class: 'health-cards u-mt-10' },
             hcard(bytes(hl.databaseBytes), 'Database size', h('span', { class: 'mono' }, hl.databasePath || '')),
             hcard(hl.retention?.lastRunAt ? relTime(hl.retention.lastRunAt) : 'never', 'Last retention run', hl.retention?.lastError ? h('span', { class: 'text-down' }, hl.retention.lastError) : `${num(hl.retention?.rawRows)} raw · ${num(hl.retention?.rollupRows5m)} 5-min · ${num(hl.retention?.rollupRows1h)} hourly · ${num(hl.retention?.rollupRows1d)} daily`),
             hcard(hl.backup?.lastBackupAt ? ok(hl.backup.lastBackupOk, relTime(hl.backup.lastBackupAt), `failed ${relTime(hl.backup.lastBackupAt)}`) : h('span', { class: 'muted' }, 'never'), 'Last backup', hl.backup?.lastBackupFile || hl.backup?.lastError || '')),
-          h('div', { class: 'btn-group', style: { marginTop: '12px' } }, h('a', { class: 'btn btn-sm', href: '#/settings/retention' }, 'Retention settings'), h('a', { class: 'btn btn-sm', href: '#/settings/backups' }, 'Backups'))),
+          h('div', { class: 'btn-group u-mt-12' }, h('a', { class: 'btn btn-sm', href: '#/settings/retention' }, 'Retention settings'), h('a', { class: 'btn btn-sm', href: '#/settings/backups' }, 'Backups'))),
         h('section', { class: 'card' }, h('h2', null, 'Alerting'),
-          h('div', { class: 'health-cards', style: { marginTop: '10px' } },
+          h('div', { class: 'health-cards u-mt-10' },
             hcard(ok(hl.alertsEnabled, 'Enabled', 'Disabled'), 'Email alerts'),
             hcard(ok(hl.smtpConfigured, 'Configured', 'Not configured'), 'SMTP'),
             hcard(hl.lastAlertAt ? relTime(hl.lastAlertAt) : 'never', 'Last alert sent', hl.lastAlertError ? h('span', { class: 'text-down' }, hl.lastAlertError) : '')),
-          h('div', { class: 'btn-group', style: { marginTop: '12px' } }, h('a', { class: 'btn btn-sm', href: '#/settings/alerts' }, 'Alert settings'))),
+          h('div', { class: 'btn-group u-mt-12' }, h('a', { class: 'btn btn-sm', href: '#/settings/alerts' }, 'Alert settings'))),
         h('section', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', null, 'Recent internal errors'), h('a', { class: 'btn btn-sm', href: '#/audit/log' }, 'Open service log')),
           hl.recentErrors?.length ? h('div', { class: 'event-rows' }, hl.recentErrors.map((e) => eventRow(e))) : h('div', { class: 'all-good', style: { padding: '10px' } }, icon('check'), h('strong', null, 'No internal errors recorded'))),
       );
@@ -1317,7 +1317,7 @@ export async function mount(root, ctx) {
           h('div', { class: 'a-meta' },
             h('span', null, `Added ${dateTime(u.createdAt)}`),
             h('span', null, u.lastLoginAt ? `Last signed in ${relTime(u.lastLoginAt)}` : 'Never signed in'))),
-        h('div', { class: 'row', style: { gap: '6px' } },
+        h('div', { class: 'row u-gap-6' },
           role,
           h('button', { class: 'btn btn-sm', type: 'button', onclick: () => resetPassword(u, reload) }, 'Reset password'),
           h('button', {
@@ -1492,9 +1492,9 @@ export async function mount(root, ctx) {
   }
 
   function scopesCard() {
-    const item = (t, d) => h('div', null, h('b', null, t), h('div', { class: 'muted', style: { fontSize: '13px' } }, d));
+    const item = (t, d) => h('div', null, h('b', null, t), h('div', { class: 'muted u-fs-13' }, d));
     return h('section', { class: 'card' }, h('h2', null, 'What a key can and cannot do'),
-      h('div', { class: 'stack-sm', style: { marginTop: '8px' } },
+      h('div', { class: 'stack-sm u-mt-8' },
         item('Read-only', 'Overview, status, nodes and checks, history and charts, incidents, dashboards, and the CSV exports of history, results and events.'),
         item('Read & write', 'Everything above, plus creating, changing, deleting, enabling, running and silencing nodes and checks, notes, maintenance windows, dashboards and charts.'),
         item('Never, whatever the scope', 'Settings, backups and restores, updates, user accounts, API keys, the configuration export, the service log, and anything that runs a trigger, a custom endpoint or an action on this computer.')),
@@ -1514,11 +1514,11 @@ export async function mount(root, ctx) {
           h('div', null,
             h('h2', { style: { marginBottom: '2px' } }, 'GWatch', beta),
             h('p', { class: 'lead', style: { margin: 0 } }, 'A self-hosted monitor for the machines, sites and services on your own network.'),
-            h('div', { class: 'muted', style: { marginTop: '4px' } }, `${versionText} · ${platformText}`))),
-        h('div', { class: 'health-cards', style: { marginTop: '14px' } },
+            h('div', { class: 'muted u-mt-4' }, `${versionText} · ${platformText}`))),
+        h('div', { class: 'health-cards u-mt-14' },
           hcard(versionText, 'Installed version'), hcard(platformText, 'Platform')),
         isBeta(v?.version)
-          ? h('p', { class: 'note', style: { marginTop: '12px' } }, 'This is a beta. GWatch is usable and its data is kept safely, but features and the layout can still change between releases, and a bug here is more likely than it will be at 1.0. ', h('a', { href: 'https://github.com/jxburros/GWatch/issues', target: '_blank', rel: 'noopener' }, 'Report anything that looks wrong.'))
+          ? h('p', { class: 'note u-mt-12' }, 'This is a beta. GWatch is usable and its data is kept safely, but features and the layout can still change between releases, and a bug here is more likely than it will be at 1.0. ', h('a', { href: 'https://github.com/jxburros/GWatch/issues', target: '_blank', rel: 'noopener' }, 'Report anything that looks wrong.'))
           : null),
       h('section', { class: 'card' },
         h('h2', null, 'Copyright & credit'),
@@ -1538,7 +1538,7 @@ export async function mount(root, ctx) {
       h('section', { class: 'card' },
         h('h2', null, 'Acknowledgements'),
         h('p', { class: 'lead' }, 'GWatch is written in Go and depends on a small number of open-source libraries:'),
-        h('div', { class: 'stack-sm' }, ...DEPENDENCIES.map((d) => h('div', null, h('b', null, d.name), h('span', { class: 'tag', style: { marginLeft: '8px' } }, d.license), h('div', { class: 'muted', style: { fontSize: '13px' } }, d.use))))));
+        h('div', { class: 'stack-sm' }, ...DEPENDENCIES.map((d) => h('div', null, h('b', null, d.name), h('span', { class: 'tag', style: { marginLeft: '8px' } }, d.license), h('div', { class: 'muted u-fs-13' }, d.use))))));
   }
 
   await renderTab();

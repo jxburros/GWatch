@@ -98,7 +98,7 @@ function tokenSection(agent, onChange) {
       agent.tokenViewable ? null : h('span', { class: 'dim small' }, 'This token was registered before GWatch kept a readable copy; rotate it to get one.')),
     agent.rotationPending
       ? h('div', { class: 'banner banner-info', 'data-rotation': 'pending' }, icon('info'),
-          h('div', { style: { flex: '1' } }, h('b', null, 'A new token is waiting. '),
+          h('div', { class: 'u-flex-1' }, h('b', null, 'A new token is waiting. '),
             `The agent picks it up the next time it asks for settings (${CHECK_IN_WORDS}), saves it in its file and switches over; the old token stops working when the new one is first used.`),
           h('div', { class: 'btn-group' },
             h('button', { class: 'btn btn-sm', type: 'button', onclick: () => cancelRotation(agent, onChange) }, 'Cancel rotation')))
