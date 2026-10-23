@@ -212,9 +212,11 @@ committed object would pin it to whatever it was when the object was generated.
 
 ## Known limitations
 
-- Neither setup program is Authenticode-signed, so Windows SmartScreen shows an
-  "unknown publisher" warning. See
-  [`docs/RELEASING.md`](../../docs/RELEASING.md#the-installer-artefact).
+- The release Authenticode-signs both setup programs, their uninstallers and the
+  executables inside them only once its signing account is configured; until then they
+  are unsigned and Windows SmartScreen shows an "unknown publisher" warning. A local
+  build signs when `GWATCH_SIGNING_CERT_THUMBPRINT` is set. See
+  [`docs/RELEASING.md`](../../docs/RELEASING.md#authenticode-signing).
 - On upgrade, if the port or LAN setting changes, the already-registered `GWatch`
   service keeps its original `--data-dir`/`--listen` arguments: the installer
   calls `gwatch.exe start`, not a fresh `gwatch.exe install`, when the service

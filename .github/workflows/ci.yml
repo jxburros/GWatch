@@ -114,7 +114,10 @@ jobs:
             @{ Script = "scripts\installer\gwatch.iss";       Exe = "dist\gwatch-windows-amd64.exe" },
             @{ Script = "scripts\installer\gwatch-agent.iss"; Exe = "dist\gwatch-agent-windows-amd64.exe" })) {
           $exe = Join-Path $PWD $pair.Exe
-          & $iscc "/DAppVersion=$version" "/DExePath=$exe" $pair.Script
+          # The release's unsigned path: with no signer set up this adds nothing.
+          $signArgs = @(pwsh -NoProfile -File scripts/authenticode.ps1 -Action IsccArgs)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $iscc @signArgs "/DAppVersion=$version" "/DExePath=$exe" $pair.Script
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         }
         Get-ChildItem scripts\installer\Output
@@ -136,6 +139,17 @@ jobs:
         & $iscc "/DAppVersion=$version" "/DExePath=$exe" "/Fgwatch-agent-winget-setup-$version" "scripts\installer\gwatch-agent.iss"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         if (-not (Test-Path "scripts\installer\Output\gwatch-agent-winget-setup-$version.exe")) { Write-Host "::error::ISCC did not write gwatch-agent-winget-setup-$version.exe"; exit 1 }
+    - name: Authenticode dry run (no secrets)
+      # The release's signing logic without its Azure account: the unsigned,
+      # half-configured and configured paths of the configuration step, then the
+      # signed path end to end with a throwaway certificate -- executables,
+      # setup programs, the uninstallers Inno Setup signs, and verification.
+      shell: pwsh
+      run: |
+        pwsh -NoProfile -File scripts/ci/authenticode-dry-run.ps1 `
+          -Iscc "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
+          -Monitor dist\gwatch-windows-amd64.exe -Agent dist\gwatch-agent-windows-amd64.exe
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   linux:
     name: Test (Linux)
     runs-on: ubuntu-latest
@@ -239,6 +253,12 @@ jobs:
       run: |
         shellcheck scripts/install.sh scripts/install-agent.sh scripts/test-installers.sh
         sh scripts/test-installers.sh
+    - name: Release workflow signs before it hashes
+      # Authenticode before the setup programs, the checksums, the winget hash
+      # and the ed25519 signatures; signing steps only when configured (#120).
+      run: |
+        python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+        python3 scripts/ci/check-authenticode-order.py .github/workflows/release.yml
     - name: Staticcheck
       run: |
         go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...

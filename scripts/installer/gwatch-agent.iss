@@ -67,6 +67,14 @@ UninstallDisplayName={#AppName} {#AppVersion}
 ; the executable.
 UninstallDisplayIcon={app}\gwatch-agent.exe
 SetupLogging=yes
+; Authenticode (#120). The release passes /DCodeSign plus the matching
+; /S<name>=<command> (scripts/authenticode.ps1 -Action IsccArgs prints both),
+; and Inno Setup then signs the uninstaller it embeds and the finished setup
+; program. Without them the setup program is built unsigned, as it always was.
+#ifdef CodeSign
+SignTool={#CodeSign}
+SignedUninstaller=yes
+#endif
 
 LicenseFile=license.txt
 ; The agent's own mark -- the G in a deerstalker -- rather than GWatch's, so

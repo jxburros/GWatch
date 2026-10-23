@@ -528,8 +528,12 @@ jobs:
     - linux
     - macos
     runs-on: windows-latest
+    # The Authenticode signer's OIDC federated credential trusts this
+    # environment only (docs/RELEASING.md); id-token lets azure/login use it.
+    environment: authenticode
     permissions:
       contents: read
+      id-token: write
     defaults:
       run:
         shell: bash
@@ -565,7 +569,6 @@ jobs:
           goos="${target%/*}"; goarch="${target#*/}"
           out="dist/gwatch-${goos}-${goarch}"; [ "$goos" = "windows" ] && out="$out.exe"
           CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOARM=7 go build -trimpath -ldflags "-s -w -X main.version=${version}" -o "$out" .
-          sha256sum "$out" | sed 's#dist/##' > "$out.sha256"
         done
         ls -lh dist
     - name: Cross-compile the MCP companion
@@ -576,22 +579,57 @@ jobs:
           goos="${target%/*}"; goarch="${target#*/}"
           out="../dist/gwatch-mcp-${goos}-${goarch}"; [ "$goos" = "windows" ] && out="$out.exe"
           CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOARM=7 go build -trimpath -ldflags "-s -w -X main.version=${version}" -o "$out" ./cmd/gwatch-mcp
-          sha256sum "$out" | sed 's#../dist/##' > "$out.sha256"
         done
         ls -lh ../dist
+    - name: Authenticode configuration
+      id: authenticode
+      # Signs only when the AZURE_SIGNING_* variables are set (docs/RELEASING.md);
+      # without them the release goes on unsigned, with a warning in the summary.
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Configure
+    - name: Sign in to Azure for Authenticode
+      if: steps.authenticode.outputs.enabled == 'true'
+      uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+      with:
+        client-id: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
+        tenant-id: ${{ vars.AZURE_SIGNING_TENANT_ID }}
+        subscription-id: ${{ vars.AZURE_SIGNING_SUBSCRIPTION_ID }}
+        allow-no-subscriptions: ${{ vars.AZURE_SIGNING_SUBSCRIPTION_ID == '' }}
+    - name: Install the Authenticode signing client
+      if: steps.authenticode.outputs.enabled == 'true'
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Install
+    - name: Authenticode-sign the Windows executables
+      if: steps.authenticode.outputs.enabled == 'true'
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Sign dist/gwatch-windows-amd64.exe dist/gwatch-windows-arm64.exe
     - name: Install Inno Setup
       run: choco install innosetup --version=6.7.1 --allow-downgrade --no-progress -y
       shell: pwsh
     - name: Build Windows installers
+      # Packages the already-signed gwatch.exe; with signing on, Inno Setup also
+      # signs the uninstaller it embeds and the setup program itself.
       shell: pwsh
       run: |
         $version = $env:RELEASE_TAG -replace '^v', ''
         $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
         $exe = Join-Path $PWD "dist\gwatch-windows-amd64.exe"
-        & $iscc "/DAppVersion=$version" "/DExePath=$exe" "scripts\installer\gwatch.iss"
+        $signArgs = @(pwsh -NoProfile -File scripts/authenticode.ps1 -Action IsccArgs)
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & $iscc @signArgs "/DAppVersion=$version" "/DExePath=$exe" "scripts\installer\gwatch.iss"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         Copy-Item scripts\installer\Output\gwatch-setup-*.exe dist\
         Get-ChildItem dist
+    - name: Verify the Authenticode signatures
+      if: steps.authenticode.outputs.enabled == 'true'
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Verify dist/gwatch-windows-amd64.exe dist/gwatch-windows-arm64.exe dist/gwatch-setup-*.exe
+    - name: Checksum the final bytes
+      # Only now: Authenticode rewrites the .exe files, and the .sha256 here and
+      # the .sig the signing job adds must describe the bytes that are published.
+      run: |
+        cd dist
+        for f in gwatch-*; do
+          case "$f" in *.sha256|*.sig|*-setup-*) continue ;; esac
+          sha256sum "$f" > "$f.sha256"
+        done
+        ls -lh
     - name: Include verified installer
       run: cp scripts/install.sh dist/install.sh
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -603,6 +641,11 @@ jobs:
       RELEASE_TAG: ${{ fromJSON(needs.plan.outputs.apps)['gwatch'].tag }}
       RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch'].version }}
       RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+      AUTHENTICODE_CLIENT_ID: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
+      AUTHENTICODE_TENANT_ID: ${{ vars.AZURE_SIGNING_TENANT_ID }}
+      AUTHENTICODE_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+      AUTHENTICODE_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+      AUTHENTICODE_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
   gwatch-sign:
     runs-on: ubuntu-latest
     needs:
@@ -702,8 +745,12 @@ jobs:
     - linux
     - macos
     runs-on: windows-latest
+    # The Authenticode signer's OIDC federated credential trusts this
+    # environment only (docs/RELEASING.md); id-token lets azure/login use it.
+    environment: authenticode
     permissions:
       contents: read
+      id-token: write
     defaults:
       run:
         shell: bash
@@ -740,22 +787,57 @@ jobs:
           goos="${target%/*}"; goarch="${target#*/}"
           out="dist/gwatch-agent-${goos}-${goarch}"; [ "$goos" = "windows" ] && out="$out.exe"
           CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOARM=7 go build -trimpath -ldflags "-s -w -X main.version=${version}" -o "$out" ./cmd/gwatch-agent
-          sha256sum "$out" | sed 's#dist/##' > "$out.sha256"
         done
         ls -lh dist
+    - name: Authenticode configuration
+      id: authenticode
+      # Signs only when the AZURE_SIGNING_* variables are set (docs/RELEASING.md);
+      # without them the release goes on unsigned, with a warning in the summary.
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Configure
+    - name: Sign in to Azure for Authenticode
+      if: steps.authenticode.outputs.enabled == 'true'
+      uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+      with:
+        client-id: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
+        tenant-id: ${{ vars.AZURE_SIGNING_TENANT_ID }}
+        subscription-id: ${{ vars.AZURE_SIGNING_SUBSCRIPTION_ID }}
+        allow-no-subscriptions: ${{ vars.AZURE_SIGNING_SUBSCRIPTION_ID == '' }}
+    - name: Install the Authenticode signing client
+      if: steps.authenticode.outputs.enabled == 'true'
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Install
+    - name: Authenticode-sign the Windows executables
+      if: steps.authenticode.outputs.enabled == 'true'
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Sign dist/gwatch-agent-windows-amd64.exe dist/gwatch-agent-windows-arm64.exe
     - name: Install Inno Setup
       run: choco install innosetup --version=6.7.1 --allow-downgrade --no-progress -y
       shell: pwsh
     - name: Build the agent installer
+      # Packages the already-signed gwatch-agent.exe; with signing on, Inno Setup
+      # also signs the uninstaller it embeds and the setup program itself.
       shell: pwsh
       run: |
         $version = $env:RELEASE_TAG -replace '^agent-v', ''
         $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
         $exe = Join-Path $PWD "dist\gwatch-agent-windows-amd64.exe"
-        & $iscc "/DAppVersion=$version" "/DExePath=$exe" "scripts\installer\gwatch-agent.iss"
+        $signArgs = @(pwsh -NoProfile -File scripts/authenticode.ps1 -Action IsccArgs)
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & $iscc @signArgs "/DAppVersion=$version" "/DExePath=$exe" "scripts\installer\gwatch-agent.iss"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         Copy-Item scripts\installer\Output\gwatch-agent-setup-*.exe dist\
         Get-ChildItem dist
+    - name: Verify the Authenticode signatures
+      if: steps.authenticode.outputs.enabled == 'true'
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Verify dist/gwatch-agent-windows-amd64.exe dist/gwatch-agent-windows-arm64.exe dist/gwatch-agent-setup-*.exe
+    - name: Checksum the final bytes
+      # Only now: Authenticode rewrites the .exe files, and the .sha256 here and
+      # the .sig the signing job adds must describe the bytes that are published.
+      run: |
+        cd dist
+        for f in gwatch-agent-*; do
+          case "$f" in *.sha256|*.sig|*-setup-*) continue ;; esac
+          sha256sum "$f" > "$f.sha256"
+        done
+        ls -lh
     - name: Include verified installer
       run: cp scripts/install-agent.sh dist/install-agent.sh
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -767,6 +849,11 @@ jobs:
       RELEASE_TAG: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].tag }}
       RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].version }}
       RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+      AUTHENTICODE_CLIENT_ID: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
+      AUTHENTICODE_TENANT_ID: ${{ vars.AZURE_SIGNING_TENANT_ID }}
+      AUTHENTICODE_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+      AUTHENTICODE_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+      AUTHENTICODE_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
   gwatch-agent-sign:
     runs-on: ubuntu-latest
     needs:
@@ -916,8 +1003,12 @@ jobs:
     - gwatch-agent-build
     - agent-packaging
     runs-on: windows-latest
+    # The Authenticode signer's OIDC federated credential trusts this
+    # environment only (docs/RELEASING.md); id-token lets azure/login use it.
+    environment: authenticode
     permissions:
       contents: read
+      id-token: write
     defaults:
       run:
         shell: bash
@@ -944,6 +1035,25 @@ jobs:
         echo "AGENT_VERSION=$file" >> "$GITHUB_ENV"
     - name: Build the packaged agent
       run: sh packaging/build-agent.sh winget "$AGENT_VERSION" dist/packaged windows/amd64
+    - name: Authenticode configuration
+      id: authenticode
+      # Signs only when the AZURE_SIGNING_* variables are set (docs/RELEASING.md);
+      # without them the release goes on unsigned, with a warning in the summary.
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Configure
+    - name: Sign in to Azure for Authenticode
+      if: steps.authenticode.outputs.enabled == 'true'
+      uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+      with:
+        client-id: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
+        tenant-id: ${{ vars.AZURE_SIGNING_TENANT_ID }}
+        subscription-id: ${{ vars.AZURE_SIGNING_SUBSCRIPTION_ID }}
+        allow-no-subscriptions: ${{ vars.AZURE_SIGNING_SUBSCRIPTION_ID == '' }}
+    - name: Install the Authenticode signing client
+      if: steps.authenticode.outputs.enabled == 'true'
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Install
+    - name: Authenticode-sign the packaged agent
+      if: steps.authenticode.outputs.enabled == 'true'
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Sign dist/packaged/winget/windows-amd64/gwatch-agent.exe
     - name: Install Inno Setup
       run: choco install innosetup --version=6.7.1 --allow-downgrade --no-progress -y
       shell: pwsh
@@ -953,11 +1063,18 @@ jobs:
         $version = $env:AGENT_VERSION
         $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
         $exe = Join-Path $PWD "dist\packaged\winget\windows-amd64\gwatch-agent.exe"
-        & $iscc "/DAppVersion=$version" "/DExePath=$exe" "/Fgwatch-agent-winget-setup-$version" "scripts\installer\gwatch-agent.iss"
+        $signArgs = @(pwsh -NoProfile -File scripts/authenticode.ps1 -Action IsccArgs)
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & $iscc @signArgs "/DAppVersion=$version" "/DExePath=$exe" "/Fgwatch-agent-winget-setup-$version" "scripts\installer\gwatch-agent.iss"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         New-Item -ItemType Directory -Force dist\winget | Out-Null
         Copy-Item "scripts\installer\Output\gwatch-agent-winget-setup-$version.exe" dist\winget\
+    - name: Verify the Authenticode signatures
+      if: steps.authenticode.outputs.enabled == 'true'
+      run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Verify dist/packaged/winget/windows-amd64/gwatch-agent.exe dist/winget/gwatch-agent-winget-setup-*.exe
     - name: Render the manifests
+      # After signing: the manifest pins the SHA-256 of the setup program as
+      # published, so it must hash the signed file.
       run: |
         sh packaging/winget/render.sh "$AGENT_VERSION" "dist/winget/gwatch-agent-winget-setup-${AGENT_VERSION}.exe" "dist/winget/manifests/GWatch.Agent/${AGENT_VERSION}"
     - name: Zip the manifests
@@ -979,6 +1096,11 @@ jobs:
       RELEASE_TAG: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].tag }}
       RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].version }}
       RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+      AUTHENTICODE_CLIENT_ID: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
+      AUTHENTICODE_TENANT_ID: ${{ vars.AZURE_SIGNING_TENANT_ID }}
+      AUTHENTICODE_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+      AUTHENTICODE_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+      AUTHENTICODE_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
   assemble-gwatch:
     runs-on: ubuntu-latest
     needs:

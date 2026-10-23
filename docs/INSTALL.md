@@ -215,8 +215,8 @@ your history and settings; choose **Yes** to remove everything.
 ## Known limitations
 
 - Neither installer is Authenticode-signed yet, hence the SmartScreen warning in step 1.
-  Signing is tracked as a follow-up — see
-  [`docs/RELEASING.md`](RELEASING.md#the-installer-artefact).
+  The release workflow signs them as soon as its signing account is set up — see
+  [`docs/RELEASING.md`](RELEASING.md#authenticode-signing).
 - The in-app updater (**Settings › Updates**) does not download or install the
   setup program itself; it manages the `gwatch.exe` program file directly, in place. Both
   work fine, and either one applies as an upgrade path.

@@ -25,6 +25,11 @@
 #      paren is not removed with it.
 #   5. A {code:...} reference with no matching function.
 #   6. A Source/LicenseFile/icon/bitmap that is not actually there.
+#   7. A setup script that cannot be Authenticode-signed: every script that
+#      builds a setup program (it has an OutputBaseFilename) must carry the
+#      "#ifdef CodeSign / SignTool={#CodeSign} / SignedUninstaller=yes" block,
+#      or the release would sign the executables and quietly ship an unsigned
+#      setup program and uninstaller around them (#120).
 $ErrorActionPreference = "Stop"
 $dir = $PSScriptRoot
 $failed = $false
@@ -115,6 +120,10 @@ foreach ($iss in Get-ChildItem -Path $dir -Filter *.iss) {
                 Fail $iss.Name 0 "references '$ref', which does not exist."
             }
         }
+    }
+    if ($raw -match '(?m)^\s*OutputBaseFilename=' -and
+        $raw -notmatch '(?ms)^#ifdef CodeSign\s*$\s*^SignTool=\{#CodeSign\}\s*$\s*^SignedUninstaller=yes\s*$\s*^#endif') {
+        Fail $iss.Name 0 "builds a setup program but has no '#ifdef CodeSign / SignTool={#CodeSign} / SignedUninstaller=yes / #endif' block in [Setup], so the release could not Authenticode-sign it or its uninstaller."
     }
     if (-not $failed) { Write-Host "ok $($iss.Name)" }
 }

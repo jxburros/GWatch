@@ -44,7 +44,7 @@ request with the following jobs:
 
 | Job | Runner | What it does |
 |---|---|---|
-| `ci` ("Lint, build, test (Windows)") | `windows-latest` | gofmt, vet, `go mod tidy`/`verify`, build + full test suite, the mcp/ module, web-asset `node --check` plus the jsdom suite (`npm test`, `tests/web/`), PowerShell script parsing, and compiles both Inno Setup installers |
+| `ci` ("Lint, build, test (Windows)") | `windows-latest` | gofmt, vet, `go mod tidy`/`verify`, build + full test suite, the mcp/ module, web-asset `node --check` plus the jsdom suite (`npm test`, `tests/web/`), PowerShell script parsing, compiles both Inno Setup installers, and dry-runs the release's Authenticode signing with a throwaway certificate ([below](#authenticode-signing)) |
 | `linux` ("Test (Linux)") | `ubuntu-latest` | gofmt, vet, staticcheck, build, full test and race suites (root and mcp/), the migration/store/backup/api/engine/hostmon suites against PostgreSQL 16 and MySQL 8 service containers ([`DATABASE.md`](DATABASE.md#for-developers)), `govulncheck` for both modules, and the browser accessibility suite (`npm run test:e2e` — Playwright drives Chromium through every route with an axe-core scan) |
 | `macos` ("Test (macOS)") | `macos-latest` | vet + test only — deliberately lean, but this is what actually compiles and exercises `internal/sysmetrics/collect_darwin.go` |
 | `docker` ("Container image") | `ubuntu-latest` | builds the `Dockerfile` for `linux/amd64` and `linux/arm/v7`, checks `gwatch version` inside it, then starts the container and waits for `/api/health` to answer 200 |
@@ -167,8 +167,10 @@ The `release` job in `.github/workflows/ci.yml` then:
 2. fails immediately if `GWATCH_SIGNING_KEY` is unset, or if its public key is
    not listed in `release_keys.txt` — that combination would publish binaries
    that reject their own updates;
-3. cross-compiles `gwatch-<os>-<arch>[.exe]` for Windows, Linux and macOS and
-   writes a `.sha256` next to each;
+3. cross-compiles `gwatch-<os>-<arch>[.exe]` for Windows, Linux and macOS,
+   Authenticode-signs the Windows executables when that is configured (see
+   ["Authenticode signing"](#authenticode-signing)), and then writes a `.sha256` next to
+   each;
 4. cross-compiles the MCP companion (`gwatch-mcp-<os>-<arch>`, versioned from
    `mcp/VERSION`) and the hardware agent (`gwatch-agent-<os>-<arch>`, which adds
    `linux/arm` for Raspberry Pi class machines). Both names sit inside the
@@ -273,19 +275,17 @@ Both are compiled with `iscc /DAppVersion=<tag> /DExePath=<exe>` — see
 [`scripts/installer/README.md`](../scripts/installer/README.md) for what they do and how
 to build them locally. Three things to keep in mind:
 
-- Neither is **Authenticode-signed**. That's a real follow-up (Windows SmartScreen shows
-  an "unknown publisher" warning until it is), separate from the ed25519 release
-  signing described above — signing an `.exe` with a code-signing certificate is a
-  different mechanism with its own cost/process, tracked but not yet done.
+- Both are **Authenticode-signed**, with the executables inside them and their
+  uninstallers, once the release's signing account is configured — and built unsigned,
+  with a warning, until then. See ["Authenticode signing"](#authenticode-signing).
 - Neither is picked up by the in-app self-updater. `pickAsset` (in
   `internal/update`) only matches `gwatch-<os>-<arch>[.exe]`, so `*-setup-*.exe`
   is invisible to it by design — an installer is a first-install/reinstall path, not an
   update payload. The updater keeps managing the plain `gwatch.exe` binary in place as
   it does today.
-- They are built **after** the signing step, so they carry no `.sig` or `.sha256` of
-  their own. That is deliberate — they are outside the signed self-update chain — but it
-  means the release notes should point people at the raw binaries if they want something
-  they can verify.
+- They have no `.sha256` of their own. They are outside the self-update chain, though
+  the signing job's `dist/gwatch-*` glob does give them an ed25519 `.sig`, made over the
+  Authenticode-signed file like everything else.
 
 The wizard artwork under `scripts/installer/assets/` is committed, not generated at
 release time, so a release needs no image tooling on the runner. Both marks come
@@ -294,6 +294,148 @@ kit, copy its files into `web/` and the masters into `scripts/installer/assets/`
 then run `python3 scripts/installer/make-assets.py` and `make rsrc` (see
 [`scripts/installer/README.md`](../scripts/installer/README.md#branding-assets)).
 Both installers are light-themed only.
+
+## Authenticode signing
+
+Windows checks a second kind of signature that has nothing to do with the updater's: an
+**Authenticode** signature from a code-signing certificate, which is what SmartScreen and
+managed machines' application-control policies look at. Without one, SmartScreen says
+"unknown publisher" and plenty of company machines refuse to run the setup program at all.
+The release workflow adds one with
+[Azure Artifact Signing](https://learn.microsoft.com/azure/artifact-signing/) (called
+*Trusted Signing* until late 2025), when it is configured, and builds exactly as before
+when it is not. The ed25519 update signatures are unchanged and still required; Authenticode
+is in addition to them.
+
+### What is signed, and in what order
+
+| File | Job |
+|---|---|
+| `gwatch-windows-amd64.exe`, `gwatch-windows-arm64.exe` | `gwatch-build` |
+| `gwatch-setup-<v>.exe`, and the uninstaller it installs (`unins000.exe`) | `gwatch-build` |
+| `gwatch-agent-windows-amd64.exe`, `gwatch-agent-windows-arm64.exe` | `gwatch-agent-build` |
+| `gwatch-agent-setup-<v>.exe`, and its uninstaller | `gwatch-agent-build` |
+| the winget build of `gwatch-agent.exe`, `gwatch-agent-winget-setup-<v>.exe` and its uninstaller | `agent-winget` |
+
+(`gwatch-mcp-windows-*.exe` is not signed yet. Adding it is one more path on the signing
+step's command line.)
+
+Signing an `.exe` changes its bytes, so **the order matters**. Each Windows job:
+
+1. builds the executables;
+2. **Authenticode-signs** them (`scripts/authenticode.ps1 -Action Sign`);
+3. compiles the setup program with Inno Setup, which packages the *signed* executable and,
+   through `SignTool=` and `SignedUninstaller=yes` in the `.iss`, signs the uninstaller it
+   embeds and then the finished setup program;
+4. **verifies** every one of those files with `signtool verify /pa /v` *and*
+   `Get-AuthenticodeSignature` (status `Valid`). Either one failing fails the release;
+5. only then writes the `.sha256` files (and, in `agent-winget`, renders the winget
+   manifest, whose `InstallerSha256` is the signed setup program's).
+
+The ed25519 `.sig` files come later still, in `gwatch-sign` / `gwatch-agent-sign`, from the
+artifact those jobs upload, and the release's `SHA256SUMS.txt` is computed when the bundle
+is staged. Everything that describes a file therefore describes the signed file. Never
+re-sign a file after that point — not by hand after a release is published either: its
+checksum and `.sig` would stop matching and installed copies would refuse the update. CI's
+`linux` job runs `scripts/ci/check-authenticode-order.py` over the release workflow to keep
+this order from being rearranged by accident.
+
+### When it is not configured
+
+The `Authenticode configuration` step of each Windows job reads the variables below.
+
+- **None set** (forks, and this repository until the account exists): the release goes on
+  unsigned, byte for byte as before, with a `::warning` annotation and a
+  "Windows binaries are not Authenticode-signed" section in that job's summary.
+- **Some set and some not:** the release fails at that step and names the missing ones. A
+  half-configured signer is a mistake, not a decision to ship unsigned.
+- **All set:** the files above are signed and verified, and the job summary names the
+  signer of each. A signing or verification failure fails the release.
+
+CI's Windows job runs `scripts/ci/authenticode-dry-run.ps1`, with no secrets: it takes the
+configuration step through all three cases, then runs the signed path end to end with a
+throwaway self-signed certificate — both executables, both setup programs (checking that
+Inno really called the signer for the uninstaller), and the same verification the release
+does.
+
+### The variables
+
+There are **no secrets**: the workflow signs in to Azure with GitHub's OIDC token
+(`azure/login`, pinned by commit), so there is no password or certificate to store or
+rotate. These are Actions **variables**, set on the `authenticode` environment
+(*Settings → Environments → authenticode → Environment variables*) or, less tightly, on the
+repository.
+
+| Variable | What goes in it | Where to find it |
+|---|---|---|
+| `AZURE_SIGNING_CLIENT_ID` | The *Application (client) ID* of the Entra ID app registration the workflow signs in as | Entra ID → App registrations → the app → Overview |
+| `AZURE_SIGNING_TENANT_ID` | The *Directory (tenant) ID* | The same page |
+| `AZURE_SIGNING_ENDPOINT` | The Artifact Signing account's regional endpoint, e.g. `https://eus.codesigning.azure.net` (it must match the account's region, or signing fails with 403) | The signing account → Overview → *Account URI* |
+| `AZURE_SIGNING_ACCOUNT` | The Artifact Signing account's name | The signing account → Overview |
+| `AZURE_SIGNING_PROFILE` | The certificate profile's name | The signing account → Certificate profiles |
+| `AZURE_SIGNING_SUBSCRIPTION_ID` | Optional: the subscription that holds the account. Leave it unset and `azure/login` signs in to the tenant without one | Subscriptions |
+
+### One-time setup
+
+1. **An Azure subscription with the provider registered.** In the subscription,
+   *Settings → Resource providers*, register `Microsoft.CodeSigning`.
+2. **Create the signing account.** In the portal, create an *Artifact Signing account*
+   (the Basic SKU is enough for this volume) in a region near you; its region decides the
+   endpoint.
+3. **Validate the publisher's identity.** Give yourself the *Artifact Signing Identity
+   Verifier* role on the account (it was *Trusted Signing Identity Verifier* before the
+   rename), then under *Identity validations* create a **Public Trust** validation —
+   *Organization* for JX Holdings, LLC, which needs the company's registration details and
+   can take several business days. The certificate's subject, and so the "Verified
+   publisher" Windows shows, is the validated name.
+4. **Create a certificate profile** of type *Public Trust* on that validation. Its name is
+   `AZURE_SIGNING_PROFILE`. Microsoft issues the actual certificates from it, each valid for
+   a few days and rotated automatically; the workflow timestamps every signature
+   (`http://timestamp.acs.microsoft.com`), so signatures stay valid after the certificate
+   that made them expires.
+5. **Create the identity the workflow signs in as.** In Entra ID, register an application
+   (for example `gwatch-release-signing`; no redirect URI, no client secret). Under
+   *Certificates & secrets → Federated credentials*, add one for *GitHub Actions deploying
+   Azure resources*: organisation `jxburros`, repository `GWatch`, entity type
+   **Environment**, environment `authenticode`. That makes the subject
+   `repo:jxburros/GWatch:environment:authenticode` with audience
+   `api://AzureADTokenExchange`, so only jobs of this repository that run in that
+   environment can sign in as it. (A fork does this with its own names.)
+6. **Let it sign.** On the certificate profile (or the account), give that application the
+   *Artifact Signing Certificate Profile Signer* role (*Trusted Signing Certificate Profile
+   Signer* before the rename). It needs nothing else.
+7. **Create the `authenticode` environment** in GitHub (*Settings → Environments*), restrict
+   its deployment branches to `main` (releases are dispatched from `main`), and add the
+   variables above to it. A required reviewer is possible but makes every Windows build job
+   wait for approval, on top of the `release` environment's approval of the ed25519
+   signing jobs; the federated credential and the branch restriction are what keep other
+   workflows out.
+8. **Dry-run it.** Dispatch the Release workflow with `dry_run` on. Each Windows job's
+   summary should list its files and their signer; download a setup program from the run's
+   artifacts and check *Properties → Digital Signatures* on Windows.
+
+The jobs use the runner's Windows SDK `signtool.exe` and the Artifact Signing client
+("dlib") from NuGet, pinned by version and SHA-256 in `scripts/authenticode.ps1`; it needs
+the .NET 8 runtime, which `windows-latest` has. To move the client to a newer version,
+change the version and hash there together.
+
+SmartScreen reputation is earned per publisher over time: the first signed releases may
+still show a (milder) prompt until enough people have run them, but they name the publisher
+instead of "unknown", and managed machines that allow by publisher will run them.
+
+**winget.** The manifest's `InstallerSha256` is computed in `agent-winget` after the setup
+program is signed, so the published hash and the published file agree; nothing in the
+manifest names the certificate, so the first signed release needs no manifest change. The
+winget-pkgs validation pipeline scans submitted installers, and a signed one is less likely
+to be held for manual review. If a signed setup program is ever replaced on the release
+page, the manifest's hash must be updated with it, or `winget install` refuses the file.
+
+**Signing locally.** `scripts/build-installer.ps1` signs too when
+`GWATCH_SIGNING_CERT_THUMBPRINT` names a code-signing certificate in
+`Cert:\CurrentUser\My` (set `GWATCH_SIGNING_TIMESTAMP_URL` to timestamp it). That is for a
+certificate you hold yourself, an OV/EV certificate on a token for example; a cloud HSM
+service such as SSL.com eSigner or DigiCert KeyLocker would replace the Artifact Signing
+branch of `scripts/authenticode.ps1` the same way.
 
 ## Releasing the agent
 
