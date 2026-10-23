@@ -732,6 +732,10 @@ func (p *program) run(ctx context.Context) {
 		}
 	}()
 
+	if p.cfg.configPath != "" {
+		keepConfigBackup(p.cfg.configPath)
+	}
+
 	// Keeping itself current is only the reporting agent's job. serve mode is
 	// driven by GWatch asking for readings, and an agent that restarted itself
 	// mid-request would be a worse neighbour than an old one.
@@ -1174,11 +1178,35 @@ func (p *program) serve(ctx context.Context) {
 		_ = srv.Shutdown(shutdown)
 	}()
 
-	log.Printf("gwatch-agent %s serving readings on http://%s/metrics", version, p.cfg.listen)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Printf("cannot listen on %s: %v", p.cfg.listen, err)
+	// The address to listen on may not exist yet: a machine coming back from
+	// a power cut starts its services before the network has handed it its
+	// address. Giving up here would leave a running service that serves
+	// nothing until someone restarts it, so the agent keeps trying instead.
+	backoff := time.Duration(0)
+	for {
+		ln, err := listen("tcp", p.cfg.listen)
+		if err == nil {
+			log.Printf("gwatch-agent %s serving readings on http://%s/metrics", version, p.cfg.listen)
+			if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("stopped serving on %s: %v", p.cfg.listen, err)
+			}
+			return
+		}
+		backoff = min(max(2*backoff, listenRetry), time.Minute)
+		log.Printf("cannot listen on %s yet (trying again in %s): %v", p.cfg.listen, backoff, err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
 	}
 }
+
+// listen is net.Listen; tests replace it.
+var listen = net.Listen
+
+// listenRetry is the first wait before serve mode tries its address again.
+var listenRetry = 5 * time.Second
 
 // metricsHandler is everything serve mode exposes: one route, behind the
 // token. It is separate from serve so that what is reachable can be tested

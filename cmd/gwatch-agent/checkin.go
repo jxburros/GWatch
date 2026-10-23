@@ -164,7 +164,7 @@ func writeAgentState(st agentState) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, append(b, '\n'), 0o600); err != nil {
+	if err := writeFileAtomic(path, append(b, '\n')); err != nil {
 		return err
 	}
 	restrictWindowsACL(path)
