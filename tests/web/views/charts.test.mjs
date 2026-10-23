@@ -31,3 +31,48 @@ test('a saved chart mixing a latency with a machine’s readings draws two axes 
   assert.match(text[1], /% · right axis$/);
   assert.equal(root.querySelector('.chart-card .card-head .tag').textContent, '3 metrics');
 });
+
+// #184: a node watched several ways is one item in the picker, with its checks
+// inside it, and "One chart per node" puts all of a node's series together.
+test('the metric picker groups checks under their node, and charts can split per node', async () => {
+  const { metricPicker, normalizeChartConfig } = await import('../../../web/chart-config.js');
+  const nodes = [
+    { id: 1, name: 'Router', checks: [{ id: 11, name: 'Ping', type: 'ping' }, { id: 12, name: 'SNMP', type: 'snmp' }] },
+    { id: 2, name: 'NAS', checks: [{ id: 21, name: 'HTTP', type: 'http' }] },
+  ];
+  const picker = metricPicker(nodes, []);
+  const groups = picker.querySelectorAll('.metric-node');
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].querySelectorAll('.metric-check').length, 2, 'both of the router’s checks sit under it');
+  const filter = picker.querySelector('input[type="search"]');
+  if (filter) {
+    filter.value = 'router';
+    filter.dispatchEvent(new window.Event('input'));
+    assert.equal(groups[1].hidden, true);
+    assert.equal(groups[0].hidden, false);
+  }
+  assert.equal(normalizeChartConfig({ split: true }).splitBy, 'check', 'the older split flag still means per check');
+  assert.equal(normalizeChartConfig({ splitBy: 'node' }).splitBy, 'node');
+  assert.equal(normalizeChartConfig({ splitBy: 'bogus' }).splitBy, '');
+});
+
+test('"One chart per node" draws one chart for each node, headed by its name', async () => {
+  const { renderConfiguredChart } = await import('../../../web/chart-config.js');
+  const now = Date.now();
+  const series = (checkId, nodeId, nodeName, checkName) => ({
+    checkId, nodeId, nodeName, checkName, checkType: 'ping', range: '24h', bucketSeconds: 300,
+    from: new Date(now - 864e5).toISOString(), to: new Date(now).toISOString(),
+    points: [{ t: new Date(now - 6e5).toISOString(), avg: 3, count: 1, failures: 0 }], summary: { availability: 100 },
+  });
+  const all = [series(11, 1, 'Router', 'Ping'), series(12, 1, 'Router', 'SNMP'), series(21, 2, 'NAS', 'HTTP')];
+  const host = document.createElement('div');
+  document.body.append(host);
+  const view = renderConfiguredChart(host, {
+    splitBy: 'node', series: [{ checkId: 11, metric: 'avg' }, { checkId: 12, metric: 'avg' }, { checkId: 21, metric: 'avg' }],
+  }, { fetch: async (ids) => all.filter((s) => ids.includes(s.checkId)) });
+  await waitFor(() => host.querySelectorAll('.chart-host').length === 2);
+  const headings = [...host.querySelectorAll('.chart-host .section-title')].map((e) => e.textContent);
+  assert.deepEqual(headings, ['Router', 'NAS']);
+  view.destroy?.();
+  host.remove();
+});

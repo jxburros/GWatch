@@ -135,11 +135,22 @@ export function normalizeChartConfig(cfg = {}) {
   c.yMax = c.yMax === '' || c.yMax == null || isNaN(Number(c.yMax)) ? null : Number(c.yMax);
   c.threshold = c.threshold === '' || c.threshold == null || isNaN(Number(c.threshold)) ? null : Number(c.threshold);
   c.height = Math.min(800, Math.max(120, Number(c.height) || 260));
-  c.split = !!c.split;
+  // How the series are split into charts: all on one ('' — two units a chart
+  // still apply), one chart per node (a node's ping, SNMP and hardware
+  // readings together), or one per check. `split: true` is the older spelling
+  // of "per check" and is still read.
+  c.splitBy = SPLITS.some((o) => o.value === c.splitBy) ? c.splitBy : (c.split ? 'check' : '');
+  c.split = c.splitBy === 'check';
   c.uptime = !!c.uptime;
   c.timestack = normalizeTimestack(c.timestack);
   return c;
 }
+
+export const SPLITS = [
+  { value: '', label: 'Everything on one chart' },
+  { value: 'node', label: 'One chart per node' },
+  { value: 'check', label: 'One chart per check' },
+];
 
 /* ---------- What a check can be charted by ---------- */
 
@@ -245,14 +256,23 @@ export function metricPicker(nodes, selected = [], { onChange, loadNode = (id) =
   const badges = [];
   let total = 0;
 
+  // Checks are listed under their node, so a node watched several ways (ping
+  // and SNMP, say) reads as one item with its checks inside it, as it does in
+  // the Nodes list. Each check is still ticked on its own.
   for (const n of nodes || []) {
+    if (!(n.checks || []).length) continue;
+    const nodeChecks = h('div', { class: 'metric-node-checks' });
+    const nodeEl = h('section', { class: 'metric-node', 'data-node': n.id, 'aria-label': n.name },
+      h('div', { class: 'metric-node-name' }, n.name, h('span', { class: 'sub' }, ` · ${plural(n.checks.length, 'check')}`)), nodeChecks);
+    nodeEl.dataset.search = n.name.toLowerCase();
+    list.append(nodeEl);
     for (const c of n.checks || []) {
       total++;
       const name = `${n.name} › ${c.name}`;
       const opts = h('div', { class: 'metric-options', role: 'group', 'aria-label': `Metrics for ${name}` });
       const badge = h('span', { class: 'metric-count' });
       const det = h('details', { class: 'metric-check', 'data-check': c.id },
-        h('summary', null, icon('chevronRight'), h('span', { class: 'truncate', style: { flex: '1', minWidth: '0' } }, name), badge, h('span', { class: 'tag' }, c.type)),
+        h('summary', null, icon('chevronRight'), h('span', { class: 'truncate', style: { flex: '1', minWidth: '0' }, title: name }, c.name), badge, h('span', { class: 'tag' }, c.type)),
         opts);
       det.dataset.search = name.toLowerCase();
       const picked = () => [...sel.values()].filter((s) => s.checkId === Number(c.id)).length;
@@ -288,14 +308,23 @@ export function metricPicker(nodes, selected = [], { onChange, loadNode = (id) =
       };
       det.addEventListener('toggle', () => { if (det.open && !filled) fill(); });
       if (picked()) { det.open = true; fill(); }
-      list.append(det);
+      nodeChecks.append(det);
     }
   }
   if (!total) list.append(h('div', { class: 'note' }, 'No checks yet.'));
 
   function applyFilter() {
     const q = filter.value.trim().toLowerCase();
-    for (const det of list.querySelectorAll('.metric-check')) det.hidden = !!q && !det.dataset.search.includes(q);
+    for (const nodeEl of list.querySelectorAll('.metric-node')) {
+      // A node that matches shows all its checks; otherwise only those that do.
+      const nodeHit = !q || nodeEl.dataset.search.includes(q);
+      let any = false;
+      for (const det of nodeEl.querySelectorAll('.metric-check')) {
+        det.hidden = !nodeHit && !det.dataset.search.includes(q);
+        any = any || !det.hidden;
+      }
+      nodeEl.hidden = !any;
+    }
   }
   function updateCount() {
     const k = sel.size;
@@ -332,7 +361,7 @@ export function chartConfigEditor(cfg, { nodes = [], onChange, compact = false, 
   const shade = checkbox({ label: 'Shade failures', checked: c.shadeFailures, onChange: emit });
   const legend = checkbox({ label: 'Show legend', checked: c.legend, onChange: emit });
   const grid = checkbox({ label: 'Show grid lines', checked: c.grid, onChange: emit });
-  const split = checkbox({ label: 'One chart per check', checked: c.split, onChange: emit });
+  const split = selectInput({ 'aria-label': 'Split into charts', value: c.splitBy, options: SPLITS, onchange: emit });
   const uptime = checkbox({ label: 'Show availability bars underneath', checked: c.uptime, onChange: emit });
   // Timestack: lay the metric over itself, one layer per earlier period.
   const stackOn = checkbox({ label: 'Timestack: overlay this metric against itself over time', checked: !!c.timestack, onChange: () => { syncStack(); emit(); } });
@@ -391,12 +420,12 @@ export function chartConfigEditor(cfg, { nodes = [], onChange, compact = false, 
       field({ label: 'Y axis maximum', input: yMax }),
       field({ label: 'Threshold line', input: threshold, help: 'Draws a dashed warning line at this value on the left axis.' }),
     ),
-    h('div', { class: 'stack-sm', style: { gap: '6px' } }, smooth, points, shade, legend, grid, split, uptime),
+    h('div', { class: 'stack-sm', style: { gap: '6px' } }, smooth, points, shade, legend, grid, field({ label: 'Charts', input: split }), uptime),
   );
   Object.defineProperty(wrap, 'value', { get: () => normalizeChartConfig({
     series: picker.value, metric: autoMetric.value, range: range.value, style: style.value, lineWidth: width.value, height: height.value,
     yMin: yMin.value, yMax: yMax.value, threshold: threshold.value, smooth: smooth.input.checked, points: points.input.checked, shadeFailures: shade.input.checked,
-    legend: legend.input.checked, grid: grid.input.checked, split: split.input.checked, uptime: uptime.input.checked, colors,
+    legend: legend.input.checked, grid: grid.input.checked, splitBy: split.value, uptime: uptime.input.checked, colors,
     timestack: stackOn.input.checked ? { period: stackPeriod.value, layers: stackLayers.value } : null,
   }) });
   return wrap;
@@ -633,12 +662,15 @@ export function renderConfiguredChart(host, cfg, { title = 'Chart', fetch: fetch
       };
     };
     // One chart per check when asked, then no more than two units a chart.
+    // One chart per check or per node when asked, then no more than two
+    // units a chart. A node is known by its id where the series carries one.
+    const groupKey = c.splitBy === 'check' ? (s) => `c${s.entry.hs.checkId}`
+      : c.splitBy === 'node' ? (s) => (s.entry.hs.nodeId ? `n${s.entry.hs.nodeId}` : `n:${s.entry.hs.nodeName || ''}`)
+        : () => '';
     const byCheck = [];
-    if (c.split) {
-      const ids = [...new Set(all.map((s) => Number(s.entry.hs.checkId)))];
-      for (const id of ids) byCheck.push(all.filter((s) => Number(s.entry.hs.checkId) === id));
-    } else byCheck.push(all);
-    const plan = byCheck.flatMap((list) => groupByUnits(list, primaryUnit).map((g) => ({ ...g, check: c.split ? list[0].entry.hs : null })));
+    for (const k of [...new Set(all.map(groupKey))]) byCheck.push(all.filter((s) => groupKey(s) === k));
+    const heading = (hs) => (c.splitBy === 'node' ? hs.nodeName || '' : `${hs.nodeName || ''} › ${hs.checkName}`);
+    const plan = byCheck.flatMap((list) => groupByUnits(list, primaryUnit).map((g) => ({ ...g, check: c.splitBy ? list[0].entry.hs : null, heading: c.splitBy ? heading(list[0].entry.hs) : '' })));
     const key = JSON.stringify(plan.map((g) => [g.units, g.series.map((s) => [seriesKey(s.entry.spec), s.name])]));
     const reuse = key === renderKey && charts.length === plan.length && body.querySelectorAll('.chart-host').length === plan.length;
     if (!reuse) resetCharts();
@@ -646,20 +678,20 @@ export function renderConfiguredChart(host, cfg, { title = 'Chart', fetch: fetch
     renderKey = key;
     const unitCount = new Set(all.map((s) => s.unit)).size;
     if (plan.length > byCheck.length) {
-      body.append(h('p', { class: 'note chart-split-note' }, c.split
-        ? `A chart has two axes, so a check measured here in more than two units is drawn as more than one chart (${plan.length} in all).`
+      body.append(h('p', { class: 'note chart-split-note' }, c.splitBy
+        ? `A chart has two axes, so a ${c.splitBy} measured here in more than two units is drawn as more than one chart (${plan.length} in all).`
         : `These metrics are in ${unitCount} different units and a chart has two axes, so they are drawn as ${plan.length} charts.`));
     }
     plan.forEach((group, gi) => {
       let chart = reuse ? charts[gi] : null;
       if (!chart) {
         const hostEl = h('div', { class: 'chart-host', style: fill ? { flex: '1', minHeight: '0', display: 'flex', flexDirection: 'column' } : { marginBottom: plan.length > 1 ? '12px' : '0' } });
-        if (group.check && (gi === 0 || plan[gi - 1].check !== group.check)) hostEl.append(h('div', { class: 'section-title', style: { marginBottom: '4px' } }, `${group.check.nodeName || ''} › ${group.check.checkName}`));
+        if (group.check && (gi === 0 || plan[gi - 1].heading !== group.heading)) hostEl.append(h('div', { class: 'section-title', style: { marginBottom: '4px' } }, group.heading));
         body.append(hostEl);
         // A legend whenever a line needs naming: more than one on the chart, or
         // one of several charts that the units split apart. A chart of its own
         // per check is named by its heading instead, unless it mixes metrics.
-        const named = group.series.length > 1 || (!c.split && plan.length > 1) || (c.split && mixedMetrics);
+        const named = group.series.length > 1 || (!c.splitBy && plan.length > 1) || (c.splitBy === 'check' && mixedMetrics);
         chart = new LineChart(hostEl, opts(group, named));
         charts.push(chart);
       }

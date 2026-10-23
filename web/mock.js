@@ -631,7 +631,7 @@ import { normalizeLineColor, normalizeLineDash, normalizeLinkStyle } from './net
       fails += failures;
     }
     const total = points.reduce((a, q) => a + q.count, 0);
-    return { checkId: c.id, checkName: c.name, nodeName: n.name, checkType: c.type, range, source, bucketSeconds: source === 'raw' ? 0 : bucketSec, from: iso(from), to: iso(to), points,
+    return { checkId: c.id, checkName: c.name, nodeId: n.id, nodeName: n.name, checkType: c.type, range, source, bucketSeconds: source === 'raw' ? 0 : bucketSec, from: iso(from), to: iso(to), points,
       summary: { availability: total ? +((1 - fails / total) * 100).toFixed(3) : 0, avgMs: cnt ? +(sum / cnt).toFixed(2) : null, minMs: cnt ? min : null, maxMs: cnt ? max : null, count: total, failures: fails } };
   }
 

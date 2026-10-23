@@ -1077,6 +1077,10 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .metric-fieldset { border: 0; margin: 0; padding: 0; min-inline-size: 0; }
 .metric-fieldset > legend { padding: 0; margin-bottom: 5px; }
 .metric-picker { display: flex; flex-direction: column; max-height: 20rem; overflow: auto; border: 1px solid var(--line); background: var(--elev); }
+.metric-node + .metric-node { border-top: 1px solid var(--line); }
+.metric-node-name { padding: 8px 0.5rem 2px; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.02em; color: var(--muted); }
+.metric-node-name .sub { font-weight: 400; }
+.metric-node-checks { padding-left: 0.5rem; }
 .metric-check { border-bottom: 1px solid var(--line); }
 .metric-check:last-child { border-bottom: 0; }
 .metric-check > summary { display: flex; align-items: center; gap: 6px; padding: 6px 0.5rem; cursor: pointer; list-style: none; font-size: 0.8125rem; min-width: 0; }

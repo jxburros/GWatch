@@ -334,6 +334,7 @@ func (s *Store) HistoryMetric(ctx context.Context, check model.Check, nodeName s
 	series := model.HistorySeries{
 		CheckID:   check.ID,
 		CheckName: check.Name,
+		NodeID:    check.NodeID,
 		NodeName:  nodeName,
 		CheckType: check.Type,
 		Range:     rng.Name,
@@ -373,6 +374,7 @@ func (s *Store) History(ctx context.Context, check model.Check, nodeName string,
 	series := model.HistorySeries{
 		CheckID:   check.ID,
 		CheckName: check.Name,
+		NodeID:    check.NodeID,
 		NodeName:  nodeName,
 		CheckType: check.Type,
 		Range:     rng.Name,

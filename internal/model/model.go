@@ -1202,6 +1202,7 @@ type HistoryPoint struct {
 type HistorySeries struct {
 	CheckID    int64          `json:"checkId"`
 	CheckName  string         `json:"checkName"`
+	NodeID     int64          `json:"nodeId,omitempty"`
 	NodeName   string         `json:"nodeName"`
 	CheckType  CheckType      `json:"checkType"`
 	Range      string         `json:"range"`
