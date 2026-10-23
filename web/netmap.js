@@ -378,7 +378,9 @@ function layoutClusters(forest, trees, isolated, linked, { onlyLinked, isolatedP
     const sketched = new Map([...at].map(([id, p]) => [id, { ...p }]));
 
     // ---- 2. forces ----
-    const rounds = ids.length > 300 ? 40 : ids.length > 120 ? 80 : 220;
+    // A big tree is mostly one or two great fans, which the sketch already
+    // lays out well and the forces only scramble; it skips them.
+    const rounds = ids.length > 120 ? 0 : 220;
     for (let t = 0; t < rounds; t++) {
       const cool = 1 - t / rounds;
       const move = new Map(ids.map((id) => [id, { x: 0, y: 0 }]));
@@ -421,7 +423,7 @@ function layoutClusters(forest, trees, isolated, linked, { onlyLinked, isolatedP
 
     // ---- 3. the rules, exactly ----
     // Both are made to keep the rules; the more compact of the two is used.
-    const forcedOK = settle(at, ids, edges, subtree, 3);
+    const forcedOK = rounds > 0 && settle(at, ids, edges, subtree, 3);
     settle(sketched, ids, edges, subtree, 40);
     const area = (m) => {
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
