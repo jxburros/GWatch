@@ -908,10 +908,11 @@ func restoresStoredSecret(incoming, stored model.CheckConfig) bool {
 // somewhere new while leaving its stored credentials to be filled back in. A
 // key never reads those credentials — they come back masked or stripped — so
 // "keep the stored value" is its only way to send them, and allowing that
-// after a change of host, target, port, scheme, method or Host header would
-// hand an administrator's secret to an address the key chose. A key that sends
-// every credential afresh relies on nothing stored and may retarget. It returns
-// true when it has written the response, so the caller stops.
+// after a change of host, target, port, scheme, method, Host header or the
+// collector that runs it would hand an administrator's secret to an address
+// the key chose. A key that sends every credential afresh relies on nothing
+// stored and may retarget. It returns true when it has written the response,
+// so the caller stops.
 func (s *Server) denyKeyRetarget(w http.ResponseWriter, r *http.Request, n, existing model.Node) bool {
 	if auth.FromContext(r.Context()).Kind != auth.KindAPIKey {
 		return false
@@ -922,11 +923,18 @@ func (s *Server) denyKeyRetarget(w http.ResponseWriter, r *http.Request, n, exis
 	}
 	for _, c := range n.Checks {
 		prev, ok := stored[c.ID]
-		if !ok || destinationOf(c, n.Host) == destinationOf(prev, existing.Host) {
+		if !ok {
+			continue
+		}
+		// Which collector runs the check is part of where it goes: moving it
+		// to another agent hands that machine the credentials too.
+		was, _ := existing.CollectorFor(prev)
+		now, _ := n.CollectorFor(c)
+		if destinationOf(c, n.Host) == destinationOf(prev, existing.Host) && was == now {
 			continue
 		}
 		if restoresStoredSecret(c.Config, prev.Config) {
-			s.deny(w, r, http.StatusForbidden, fmt.Sprintf("check %q keeps stored credentials, and an API key cannot point it at a new host, target, port, scheme, method or Host header while relying on them; send every credential again, or have an administrator signed in to the web interface retarget it", prev.Name), true)
+			s.deny(w, r, http.StatusForbidden, fmt.Sprintf("check %q keeps stored credentials, and an API key cannot point it at a new host, target, port, scheme, method, Host header or collector while relying on them; send every credential again, or have an administrator signed in to the web interface retarget it", prev.Name), true)
 			return true
 		}
 	}

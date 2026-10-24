@@ -334,3 +334,29 @@ func TestCSVExportsNeutralizeFormulas(t *testing.T) {
 		t.Fatalf("unexpected results row: %q", last)
 	}
 }
+
+// A collector is part of a check's destination: a read-write key may not hand
+// a credentialed node to an agent while relying on the stored credentials.
+func TestAPIKeyCannotMoveStoredCredentialsToACollector(t *testing.T) {
+	ts, _ := newTestServer(t)
+	admin := bootstrapAdmin(t, ts, "admin", "correct horse battery")
+	key := mintKey(t, ts, admin, "integration", "readwrite")
+	var agent registered
+	if code, body, _ := as(t, ts, creds{Cookie: admin}, "POST", "/api/agents", map[string]any{"name": "elsewhere"}, &agent); code != 201 {
+		t.Fatalf("register agent: %d %s", code, body)
+	}
+	var created nodeDoc
+	if code, body, _ := as(t, ts, creds{Cookie: admin}, "POST", "/api/nodes", credentialedNode(), &created); code != 201 {
+		t.Fatalf("create: %d %s", code, body)
+	}
+	path := fmt.Sprintf("/api/nodes/%d", created.ID)
+	var doc nodeDoc
+	if code, body, _ := as(t, ts, creds{APIKey: key}, "GET", path, nil, &doc); code != 200 {
+		t.Fatalf("key read: %d %s", code, body)
+	}
+	id := agent.Agent.ID
+	doc.Node.CollectorID = &id
+	if code, body, _ := as(t, ts, creds{APIKey: key}, "PUT", path, doc.Node, nil); code != 403 || !strings.Contains(body, "collector") {
+		t.Fatalf("a key moving a credentialed node to a collector should be refused, got %d %s", code, body)
+	}
+}
