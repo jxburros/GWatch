@@ -576,7 +576,11 @@ export async function mount(root, ctx) {
       await Promise.all(checks.map((c) => api.post(`/api/checks/${c.id}/silence`, { minutes })));
       toast(minutes ? `Alerts silenced for ${interval(minutes * 60)}` : 'Alerts unsilenced', { kind: 'success' });
       await load({ quiet: true });
-    } catch (e) { toast(e.message, { kind: 'error' }); }
+    } catch (e) {
+      toast(e.message, { kind: 'error' });
+      // One request per check: the others may have taken, so show what stands.
+      await load({ quiet: true }).catch(() => {});
+    }
   }
   async function silenceCheck(c, minutes) {
     try { await api.post(`/api/checks/${c.id}/silence`, { minutes }); toast(minutes ? `${c.name} silenced for ${interval(minutes * 60)}` : `${c.name} unsilenced`, { kind: 'success' }); await load({ quiet: true }); } catch (e) { toast(e.message, { kind: 'error' }); }
