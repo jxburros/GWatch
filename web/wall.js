@@ -24,7 +24,8 @@ const id = params.get('id') || params.get('board') || '';
 const token = params.get('token') || '';
 
 // A projected board may be opened on a screen nobody has configured, so the
-// address may carry the look with it: ?theme=contrast&accent=ff9f6e.
+// address may carry the look with it: ?mode=light&accent=ff9f6e. (The
+// board's own theme is part of its layout, not of the address.)
 applyTheme(params.get('mode') === 'light' ? 'light' : 'dark');
 const accent = params.get('accent');
 if (accent && /^#?[0-9a-f]{6}$/i.test(accent)) applyAccent(accent.startsWith('#') ? accent : `#${accent}`);
@@ -55,8 +56,8 @@ function start() {
       failures += 1;
       // 401 is the one failure that will not fix itself: the address is wrong
       // or projection was switched off. Everything else — the service
-      // restarting, the network blinking — is worth waiting out quietly, and
-      // only worth saying anything about once it has happened twice running.
+      // restarting, the network blinking — is worth waiting out: the overlay
+      // says it is waiting and the last good board stays behind it.
       if (e.status === 401) {
         showProblem('This wallboard is not available at this address.',
           'Its projection may have been switched off, or the address may have been changed. Get a fresh one from Wallboards in GWatch.');
