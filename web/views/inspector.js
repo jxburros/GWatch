@@ -282,7 +282,9 @@ export function resultInspector(result, check, { compact = false } = {}) {
     ])));
     right.push(h('div', null, h('div', { class: 'section-title' }, 'Readings'), kv([
       ['Processor', m.cpu?.usagePct != null ? `${pct(m.cpu.usagePct, 0)} of ${num(m.cpu.cores)} cores` : null, { mono: true }],
-      ['Load (1/5/15)', m.cpu?.load1 != null ? `${m.cpu.load1.toFixed(2)} / ${m.cpu.load5.toFixed(2)} / ${m.cpu.load15.toFixed(2)}` : null, { mono: true }],
+      // Each average is optional on the wire: a metrics URL or an agent may
+      // send the one-minute figure alone.
+      ['Load (1/5/15)', m.cpu?.load1 != null ? [m.cpu.load1, m.cpu.load5, m.cpu.load15].map((v) => (v != null ? Number(v).toFixed(2) : '—')).join(' / ') : null, { mono: true }],
       ['Memory', m.memory?.totalBytes ? `${pct(m.memory.usedPct, 0)} — ${bytes(m.memory.usedBytes)} of ${bytes(m.memory.totalBytes)}` : null, { mono: true }],
       ['Swap', m.memory?.swapTotalBytes ? `${pct(m.memory.swapUsedPct, 0)} — ${bytes(m.memory.swapUsedBytes)} of ${bytes(m.memory.swapTotalBytes)}` : null, { mono: true }],
       ['Network', rx != null || tx != null ? `\u2193 ${rate(rx) || '\u2014'}  \u2191 ${rate(tx) || '\u2014'}` : null, { mono: true }],
