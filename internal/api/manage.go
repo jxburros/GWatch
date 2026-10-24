@@ -1058,9 +1058,12 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 	keepalive := time.NewTicker(25 * time.Second)
 	defer keepalive.Stop()
+	done := s.streams()
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-done:
 			return
 		case <-keepalive.C:
 			fmt.Fprint(w, ": keepalive\n\n")
@@ -1074,6 +1077,20 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 }
 
 var _ = engine.Update{}
+
+func (s *Server) streams() chan struct{} {
+	s.streamsOnce.Do(func() { s.streamsDone = make(chan struct{}) })
+	return s.streamsDone
+}
+
+// CloseStreams ends every open /api/stream response, now and from then on.
+// http.Server.Shutdown waits for responses to finish and a stream never does,
+// so without this one open browser tab held every stop up for the whole
+// shutdown timeout. Register it with http.Server.RegisterOnShutdown.
+func (s *Server) CloseStreams() {
+	ch := s.streams()
+	s.streamsClose.Do(func() { close(ch) })
+}
 
 // sameIndicators compares two indicator lists. IndicatorRule is comparable
 // all the way down, so this is == over the slice rather than reflection.

@@ -188,6 +188,13 @@ type ruleOutcome struct {
 // runs the actions in the background. A disabled rule is put back to
 // not-met without a word.
 func (e *Engine) evaluateRules(ctx context.Context, changedCheck *int64) {
+	// One evaluation at a time, decision and save together: two that
+	// overlapped (two checks finishing at once) could otherwise save their
+	// decisions in the opposite order to the one they made them in, leaving
+	// the stored state — what a restart reads back — contradicting memory,
+	// and the fired and cleared events out of order.
+	e.rulesEvalMu.Lock()
+	defer e.rulesEvalMu.Unlock()
 	e.mu.Lock()
 	now := time.Now()
 	instance := e.settings.General.InstanceName

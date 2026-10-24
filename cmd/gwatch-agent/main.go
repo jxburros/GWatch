@@ -890,6 +890,12 @@ func (p *program) report(ctx context.Context) {
 	queue := openReadingQueue(p.cfg, queueFile())
 	// Whatever is still held when the agent stops is on disk for the next run.
 	defer queue.sync()
+	// The collector's sender and the check-in run beside this loop. Stopping
+	// waits for them too: the sender writes the results it holds to disk as
+	// it leaves, and a check-in may be saving a replacement token, and the
+	// service manager ends the process as soon as this returns.
+	var side sync.WaitGroup
+	defer side.Wait()
 	log.Printf("gwatch-agent %s reporting to %s every %s (settings: %s)", version, p.cfg.server, p.cfg.interval, p.cfg.configPathOrDefault())
 	if ov := overrides(p.cfg); len(ov) > 0 {
 		for _, o := range ov {
@@ -902,10 +908,12 @@ func (p *program) report(ctx context.Context) {
 		rt.collector = col
 		rt.mu.Unlock()
 		log.Print(describeCollector(p.cfg))
-		go col.sendLoop(ctx)
+		side.Add(1)
+		go func() { defer side.Done(); col.sendLoop(ctx) }()
 	}
 	rt.writeStatus(p.cfg, queue.len())
-	go p.checkInLoop(ctx, rt, client)
+	side.Add(1)
+	go func() { defer side.Done(); p.checkInLoop(ctx, rt, client) }()
 
 	// Taking readings and delivering them are two clocks. Readings are taken
 	// every interval, always, so that what is held through an outage is a
