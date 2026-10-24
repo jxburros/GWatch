@@ -925,6 +925,20 @@ func (s *Server) handleExportHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cw := csvWriter(w, fmt.Sprintf("gwatch-%s-%s-%s.csv", slug(series.NodeName), slug(series.CheckName), series.Range))
+	if series.Metric != "" {
+		// A named metric is in its own unit, not milliseconds: its values go
+		// under "value", with the unit beside them.
+		_ = cw.Write([]string{"timestamp", "value", "unit", "availability_pct"})
+		for _, p := range series.Points {
+			value := ""
+			if p.Value != nil {
+				value = strconv.FormatFloat(*p.Value, 'f', -1, 64)
+			}
+			_ = cw.Write([]string{p.Timestamp.Format(time.RFC3339), value, csvText(series.MetricUnit), strconv.FormatFloat(p.Availability, 'f', 2, 64)})
+		}
+		cw.Flush()
+		return
+	}
 	_ = cw.Write([]string{"timestamp", "avg_ms", "min_ms", "max_ms", "jitter_ms", "loss_pct", "availability_pct", "count", "failures"})
 	for _, p := range series.Points {
 		_ = cw.Write([]string{p.Timestamp.Format(time.RFC3339), fmtFloat(p.AvgMS), fmtFloat(p.MinMS), fmtFloat(p.MaxMS), fmtFloat(p.JitterMS), fmtFloat(p.LossPct), strconv.FormatFloat(p.Availability, 'f', 2, 64), strconv.Itoa(p.Count), strconv.Itoa(p.Failures)})
