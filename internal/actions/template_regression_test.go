@@ -1,6 +1,7 @@
 package actions
 
 import (
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -47,7 +48,11 @@ func TestPythonPlaceholderCannotEscapeAuthorLiteral(t *testing.T) {
 	for _, v := range values {
 		for _, tpl := range templates {
 			code := expandScriptCode(tpl, Vars{"message": v}, "python")
-			out, err := exec.Command(python, "-c", code).CombinedOutput()
+			cmd := exec.Command(python, "-c", code)
+			// Windows Python writes to a pipe in the ANSI code page, which
+			// cannot encode the test's non-ASCII value.
+			cmd.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8")
+			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("%q: %v: %s", code, err, out)
 			}
