@@ -153,8 +153,10 @@ which a correct password does not clear. They are refused before the password is
 and at most two run at once; when both are busy the answer is `429` with `Retry-After: 1`.
 All of these answer `429` with `Retry-After` in seconds. The client IP is the connecting
 address, or, when that address is listed in `--trusted-proxies`, the client the proxy
-names in `X-Forwarded-For` / `X-Real-IP` (see [REMOTE-ACCESS.md](REMOTE-ACCESS.md#rate-limiting)). A `/hook/` call that presents the right token gives its budget
-back, so an endpoint called on a schedule is never throttled by its own traffic; an
+names in `X-Forwarded-For` / `X-Real-IP` (see [REMOTE-ACCESS.md](REMOTE-ACCESS.md#rate-limiting)). A `/hook/` call that presents the right token (or reaches an
+endpoint that allows calls without one) is given back the attempt it was charged, so an
+endpoint called on a schedule is never throttled by its own traffic — but earlier failures
+from the same client still count; an
 unknown slug still answers `404`, but it is charged for, so slugs cannot be enumerated.
 
 **Response headers.** Every response, the static UI included, carries:

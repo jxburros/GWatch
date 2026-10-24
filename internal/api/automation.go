@@ -455,9 +455,12 @@ func (s *Server) handleHook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// The caller got in, so give its budget back: an endpoint called on a
-	// schedule must never talk itself into a 429.
-	s.failLimiter.Reset(limiterKey(limiterHook, ip))
+	// The caller got in, so hand back the attempt this call was charged: an
+	// endpoint called on a schedule must never talk itself into a 429. Only
+	// that one attempt, not the whole budget: a Reset here let anyone who can
+	// call one endpoint — any endpoint that allows calls without a token, say —
+	// wipe their failures between guesses at another endpoint's token.
+	s.failLimiter.Refund(limiterKey(limiterHook, ip))
 	vars := actions.Vars{"method": r.Method, "remote": r.RemoteAddr}
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	vars["body"] = string(body)
