@@ -70,7 +70,11 @@ func run(argv []string, stdout, stderr io.Writer) error {
 	var opt options
 	fs.StringVar(&opt.url, "url", envOr("GWATCH_URL", defaultURL),
 		"base URL of the GWatch instance (env GWATCH_URL)")
-	fs.StringVar(&opt.apiKey, "api-key", os.Getenv("GWATCH_API_KEY"),
+	// The environment is read after parsing rather than as the flag's
+	// default: the usage text prints every default, and a parse error (an
+	// MCP host passing a flag this build does not know) would write the key
+	// into whatever log keeps the server's stderr.
+	fs.StringVar(&opt.apiKey, "api-key", "",
 		"GWatch API key, gw_… (env GWATCH_API_KEY); required")
 	fs.BoolVar(&opt.allowWrite, "allow-write", envBool("GWATCH_MCP_ALLOW_WRITE"),
 		"register the write tools as well (env GWATCH_MCP_ALLOW_WRITE=1); off by default, and still refused by GWatch unless the key's scope is readwrite")
@@ -79,6 +83,9 @@ func run(argv []string, stdout, stderr io.Writer) error {
 	fs.Usage = func() { usage(stderr, fs) }
 	if err := fs.Parse(argv); err != nil {
 		return err
+	}
+	if opt.apiKey == "" {
+		opt.apiKey = os.Getenv("GWATCH_API_KEY")
 	}
 	if rest := fs.Args(); len(rest) > 0 && cmd == "" {
 		cmd = rest[0]

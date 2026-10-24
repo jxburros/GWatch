@@ -157,3 +157,25 @@ func TestPlainHTTPWarnings(t *testing.T) {
 		}
 	}
 }
+
+// TestUsageDoesNotPrintTheKey: the usage text lists every flag's default, and
+// an MCP host that passes an unknown flag gets it on stderr, which hosts keep
+// in their logs. A key from the environment must not be one of those defaults,
+// and must still be the key the server uses.
+func TestUsageDoesNotPrintTheKey(t *testing.T) {
+	t.Setenv("GWATCH_API_KEY", "gw_fromtheenvironment")
+	var out, errOut bytes.Buffer
+	_ = run([]string{"--no-such-flag"}, &out, &errOut)
+	_ = run([]string{"help"}, &out, &errOut)
+	if strings.Contains(out.String()+errOut.String(), "gw_fromtheenvironment") {
+		t.Fatalf("usage printed the API key:\n%s%s", out.String(), errOut.String())
+	}
+
+	fake := fakegwatch.New()
+	defer fake.Close()
+	fake.AddKey("gw_fromtheenvironment", "Assistant", fakegwatch.ScopeRead)
+	out.Reset()
+	if err := run([]string{"check", "--url", fake.URL}, &out, &errOut); err != nil {
+		t.Fatalf("the key from the environment was not used: %v", err)
+	}
+}
