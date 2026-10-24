@@ -107,8 +107,11 @@ func (s *Server) handleSaveMaintenance(w http.ResponseWriter, r *http.Request) {
 			m.EndAt = m.StartAt.AddDate(10, 0, 0)
 		}
 	}
+	// A node id that is not a node is a narrow scope that lost its node, not
+	// a request for every node; widening it silently would silence them all.
 	if m.NodeID != nil && *m.NodeID <= 0 {
-		m.NodeID = nil
+		writeError(w, http.StatusBadRequest, "nodeId must be a node's id, or null for a window over all nodes")
+		return
 	}
 	if m.NodeID != nil {
 		if _, err := s.Store.GetNode(r.Context(), *m.NodeID); err != nil {

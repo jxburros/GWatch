@@ -1120,7 +1120,7 @@ every other event.
 ## Maintenance windows
 
 - `GET /api/maintenance` → `[MaintenanceWindow]` (each with extra `"active": bool`).
-- `POST /api/maintenance` body MaintenanceWindow → created.
+- `POST /api/maintenance` body MaintenanceWindow → created. `nodeId` is a node's id or `null` (with an empty `group`, every node); `0` or a negative id is a 400.
 - `PUT /api/maintenance/{id}` → updated. `DELETE /api/maintenance/{id}` → `{ok:true}`.
 
 Weekly maintenance windows accept `weekdays` (0 = Sunday), `startTime` (`HH:MM`),
