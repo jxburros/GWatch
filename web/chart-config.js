@@ -592,14 +592,22 @@ export async function loadTimestackSeries(cfg, fetchFn = historyFetch, now = Dat
   }
   const named = !isBuiltinMetric(spec);
   const end = Math.floor(now / 60e3) * 60e3;
+  // A layer of whole days ends at the same time of day i periods back, so
+  // across a daylight-saving change yesterday's 09:00 still sits on today's.
+  const layerEnd = (i) => {
+    if (period.ms < DAY_MS) return end - i * period.ms;
+    const d = new Date(end);
+    d.setDate(d.getDate() - i * (period.ms / DAY_MS));
+    return d.getTime();
+  };
   const lists = await Promise.all(Array.from({ length: ts.layers }, (_, i) => Promise.resolve()
-    .then(() => fetchFn([spec.checkId], ts.period, named ? spec.metric : undefined, i === 0 ? undefined : end - i * period.ms))
+    .then(() => fetchFn([spec.checkId], ts.period, named ? spec.metric : undefined, i === 0 ? undefined : layerEnd(i)))
     .then(asList).catch(() => [])));
   /** @type {StackList} */
   const out = [];
   lists.forEach((list, i) => {
     const hs = list[0];
-    if (hs && !(spec.metric === 'loss' && !named && hs.checkType !== 'ping')) out.push({ spec, hs, layer: i, shift: i * period.ms });
+    if (hs && !(spec.metric === 'loss' && !named && hs.checkType !== 'ping')) out.push({ spec, hs, layer: i, shift: end - layerEnd(i) });
   });
   out.spec = spec;
   return out;
