@@ -64,6 +64,20 @@ test('a refused delete keeps the chart in the list', async (t) => {
   assert.notEqual(ctx.setTitleCalls.at(-1).title, 'Charts', 'still on the chart that was not deleted');
 });
 
+// The dashboard select in the pin dialog sat beside a <label> that was not
+// tied to it, so a screen reader announced an unnamed combo box.
+test('the pin-to-dashboard dialog names its dashboard select', async (t) => {
+  const { ctx } = await mountView(chartsView, { params: { id: 'chart-2' } }, t);
+  ctx.setTitleCalls.at(-1).opts.actions.find((a) => a.getAttribute('aria-label') === 'Chart options').click();
+  [...document.querySelectorAll('.menu-item')].find((b) => b.textContent.includes('Pin to a dashboard')).click();
+  const dialog = await waitFor(() => document.querySelector('[role="dialog"]'));
+  const sel = await waitFor(() => dialog.querySelector('select'));
+  const label = sel.id && dialog.querySelector(`label[for="${sel.id}"]`);
+  assert.ok(label, 'the select has a label');
+  assert.equal(label.textContent, 'Dashboard');
+  [...dialog.querySelectorAll('button')].find((b) => b.textContent === 'Cancel').click();
+});
+
 // #184: a node watched several ways is one item in the picker, with its checks
 // inside it, and "One chart per node" puts all of a node's series together.
 test('the metric picker groups checks under their node, and charts can split per node', async () => {
