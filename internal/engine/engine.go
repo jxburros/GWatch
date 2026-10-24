@@ -560,10 +560,15 @@ func (e *Engine) runAndProcess(ctx context.Context, checkID int64, depth int) (m
 	}
 	c, ok := e.checks[checkID]
 	if !ok {
+		e.clearRunningLocked(checkID)
 		e.mu.Unlock()
 		return model.Result{}, fmt.Errorf("check %d not found", checkID)
 	}
 	if _, collected := e.collectedLocked(c); collected {
+		// A reload can hand the check to a collector between tick marking
+		// it running and this run starting; without clearing the mark it
+		// would never be scheduled again.
+		e.clearRunningLocked(checkID)
 		e.mu.Unlock()
 		return model.Result{}, ErrCollected
 	}
@@ -606,12 +611,18 @@ func (e *Engine) runAndProcess(ctx context.Context, checkID int64, depth int) (m
 	flight.result, flight.err = stored, err
 	delete(e.inflight, checkID)
 	close(flight.done)
+	e.clearRunningLocked(checkID)
+	e.mu.Unlock()
+	return stored, err
+}
+
+// clearRunningLocked drops the running mark tick or runAndProcess set on a
+// check. The caller holds e.mu.
+func (e *Engine) clearRunningLocked(checkID int64) {
 	delete(e.running, checkID)
 	if st := e.states[checkID]; st != nil {
 		st.Running = false
 	}
-	e.mu.Unlock()
-	return stored, err
 }
 
 // RunNow executes a check immediately, records the result and returns it.

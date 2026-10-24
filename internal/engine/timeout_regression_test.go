@@ -35,3 +35,21 @@ func TestRunBoundAllowsDefaultAttemptTimeout(t *testing.T) {
 		t.Fatalf("run bounded to %s; four 10 s attempts need at least 40 s", left)
 	}
 }
+
+// tick marks a check running before its goroutine reaches runAndProcess; a
+// run that then finds the check gone (or handed to a collector) must drop the
+// mark, or the check is never scheduled again.
+func TestEarlyReturnClearsRunningMark(t *testing.T) {
+	e, _, _, _ := setup(t)
+	e.mu.Lock()
+	e.running[987654] = true
+	e.mu.Unlock()
+	if _, err := e.runAndProcess(context.Background(), 987654, 0); err == nil {
+		t.Fatal("expected an error for a missing check")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.running[987654] {
+		t.Fatal("running mark left set after an early return")
+	}
+}
