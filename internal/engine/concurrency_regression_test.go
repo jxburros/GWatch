@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -87,4 +88,32 @@ func TestConcurrentRuleEvaluationsPersistTheLastDecision(t *testing.T) {
 		}
 	}
 	f.e.wg.Wait()
+}
+
+// A pushed reading that could not be recorded is not answered as accepted:
+// the agent drops a reading GWatch accepted, and this one is in no history.
+// Sent again, it is recorded.
+func TestAPushedReadingThatIsNotRecordedIsAnError(t *testing.T) {
+	e, st, _, _ := setup(t)
+	ctx := context.Background()
+	_, check, agent := pushedMachine(t, st, 2)
+	if err := e.ReloadConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	save := e.recordResult
+	e.recordResult = func(context.Context, model.Result, model.CheckState) (model.Result, error) {
+		return model.Result{}, errors.New("database is locked")
+	}
+	reading := machineReading("nas.local", 10, 40, time.Now())
+	if _, err := e.IngestHostReading(ctx, agent, reading, ""); err == nil {
+		t.Fatal("a reading that was not recorded was reported as accepted")
+	}
+	e.recordResult = save
+	if _, err := e.IngestHostReading(ctx, agent, reading, ""); err != nil {
+		t.Fatal(err)
+	}
+	if rs := resultsOf(t, st, check.ID); len(rs) != 1 {
+		t.Fatalf("the reading sent again should be recorded once, got %d", len(rs))
+	}
+	e.wg.Wait()
 }

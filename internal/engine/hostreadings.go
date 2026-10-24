@@ -65,14 +65,25 @@ func (e *Engine) IngestHostReading(ctx context.Context, agent model.Agent, metri
 		targets = append(targets, target{c, n, last})
 	}
 	e.mu.Unlock()
+	// A reading that could not be recorded is an error for the agent, which
+	// then holds it and sends it again; answering "accepted" had it drop a
+	// reading that is in no history. Sending it again is safe: a check that
+	// did record it skips it as too close to its last result.
+	var firstErr error
 	for _, t := range targets {
-		e.judgeReading(ctx, t.check, t.node, t.last, stored)
+		if err := e.judgeReading(ctx, t.check, t.node, t.last, stored); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if firstErr != nil {
+		return model.HostMetrics{}, firstErr
 	}
 	return stored, nil
 }
 
-// judgeReading has one check judge one pushed reading.
-func (e *Engine) judgeReading(ctx context.Context, c model.Check, n model.Node, last *time.Time, m model.HostMetrics) {
+// judgeReading has one check judge one pushed reading, and reports an error
+// when the reading could not be recorded.
+func (e *Engine) judgeReading(ctx context.Context, c model.Check, n model.Node, last *time.Time, m model.HostMetrics) error {
 	interval := time.Duration(c.IntervalSeconds) * time.Second
 	// Results are recorded about as often as the check's interval, whatever
 	// the machine's own: one that reports every ten seconds does not turn a
@@ -84,24 +95,27 @@ func (e *Engine) judgeReading(ctx context.Context, c model.Check, n model.Node, 
 
 	if time.Since(m.Timestamp) <= checks.StaleAfter(c) {
 		if last != nil && !m.Timestamp.Before(*last) && m.Timestamp.Sub(*last) < spacing {
-			return
+			return nil
 		}
 		if _, err := e.process(ctx, c, n, res, 0); err != nil {
 			e.RecordError("judge a pushed hardware reading", err)
+			return err
 		}
-		return
+		return nil
 	}
 	near, err := e.store.CountResultsNear(ctx, c.ID, m.Timestamp, spacing)
 	if err != nil {
 		e.RecordError("judge a held-back hardware reading", err)
-		return
+		return err
 	}
 	if near > 0 {
-		return
+		return nil
 	}
 	if _, err := e.store.InsertResult(ctx, res); err != nil {
 		e.RecordError("record a held-back hardware reading", err)
+		return err
 	}
+	return nil
 }
 
 // hostReadingFreshLocked reports whether a push-fed check has a reading recent
