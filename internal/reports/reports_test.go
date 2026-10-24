@@ -130,3 +130,31 @@ func TestReportNodeTarget(t *testing.T) {
 		}
 	}
 }
+
+// A report asked for while an incident is still open, over a range that runs
+// on into the future (this week, say), counts the incident up to now: the
+// hours that have not happened yet are not downtime.
+func TestReportOpenIncidentLastsUntilNow(t *testing.T) {
+	s := storetest.Open(t)
+	ctx := context.Background()
+	n, err := s.CreateNode(ctx, model.Node{Name: "router", Host: "localhost"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if err := s.RestoreIncidents(ctx, []model.Incident{{NodeID: n.ID, State: "open", OpenedAt: now.Add(-time.Hour)}}); err != nil {
+		t.Fatal(err)
+	}
+	html, err := Generate(ctx, s, model.ReportDefinition{}, now.Add(-2*time.Hour), now.Add(48*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(html, "No recorded incidents overlap this range") {
+		t.Fatal("the open incident is missing")
+	}
+	// About an hour (3600 s, give or take the test's own running time), not
+	// the 49 hours to the end of the range.
+	if !strings.Contains(html, "<td>360") {
+		t.Fatalf("an open incident should last until now: %s", html)
+	}
+}

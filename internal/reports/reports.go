@@ -152,14 +152,23 @@ func Generate(ctx context.Context, st *store.Store, d model.ReportDefinition, fr
 		}
 		out.Nodes = append(out.Nodes, r)
 	}
+	// An incident still open has lasted until now, not until the end of a
+	// range that reaches into the future (an on-demand report for this week).
+	now := time.Now()
 	for _, i := range incs {
 		if selected[i.NodeID] && i.OpenedAt.Before(to) && (i.ResolvedAt == nil || i.ResolvedAt.After(from)) {
 			start, end := i.OpenedAt, to
+			if i.ResolvedAt == nil && now.Before(end) {
+				end = now
+			}
 			if start.Before(from) {
 				start = from
 			}
 			if i.ResolvedAt != nil && i.ResolvedAt.Before(end) {
 				end = *i.ResolvedAt
+			}
+			if end.Before(start) {
+				end = start
 			}
 			i.DurationSeconds = end.Sub(start).Seconds()
 			out.Incidents = append(out.Incidents, i)
