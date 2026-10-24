@@ -698,7 +698,9 @@ export class LineChart {
       c.toBlob((blob) => {
         if (!blob) { resolve(false); return; }
         const url = URL.createObjectURL(blob);
-        const a = h('a', { href: url, download: filename });
+        // `h` is the chart's height in this method, not the element builder.
+        const a = document.createElement('a');
+        a.href = url; a.download = filename;
         document.body.append(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 2000);
         resolve(true);
