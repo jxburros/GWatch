@@ -783,6 +783,11 @@ func restoreConfigTx(ctx context.Context, st *store.Store, cfg Config, sum *Summ
 			sum.Agents++
 		}
 	}
+	// The nodes and checks were written with the archive's agent ids; point
+	// each reference at the same machine under the id it has here.
+	if err := st.RemapAgentReferences(ctx, cfg.Agents); err != nil {
+		return fmt.Errorf("restore agent references: %w", err)
+	}
 	for _, u := range cfg.Users {
 		if !recreateAccounts {
 			if _, _, err := st.GetUserByName(ctx, u.Username); errors.Is(err, store.ErrNotFound) {
