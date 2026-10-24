@@ -17,6 +17,23 @@ func protectDir(path string) error {
 	if !token.IsElevated() {
 		dacl += "(A;OICI;FA;;;" + user.User.Sid.String() + ")"
 	}
+	return setProtectedDACL(path, dacl)
+}
+
+// serviceDirSDDL is the access list of the directory a service's program is
+// installed in: SYSTEM and the administrators may change it, and every user
+// may read and run what is in it (0x1200a9 is FILE_GENERIC_READ |
+// FILE_GENERIC_EXECUTE, what Program Files grants Users). The program is not
+// a secret, and the agent's notification-area icon, its control panel and
+// `status` are started from it by people who are not elevated; the private
+// access list the data directory gets would refuse to start them at all.
+const serviceDirSDDL = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)"
+
+// setProtectedDACL gives path the access list dacl, protected from what its
+// parent would pass down, and, in an elevated process, makes the
+// administrators its owner.
+func setProtectedDACL(path, dacl string) error {
+	token := windows.GetCurrentProcessToken()
 	sd, err := windows.SecurityDescriptorFromString(dacl)
 	if err != nil {
 		return err
@@ -85,5 +102,18 @@ func EnsureServiceDir(path string) error {
 	if !windows.GetCurrentProcessToken().IsElevated() {
 		return fmt.Errorf("service installation requires Administrator permissions")
 	}
-	return EnsurePrivateDir(path)
+	if err := os.MkdirAll(path, 0700); err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("service installation directory must be a real directory: %s", path)
+	}
+	if err := validateOwner(path); err != nil {
+		return err
+	}
+	return setProtectedDACL(path, serviceDirSDDL)
 }
