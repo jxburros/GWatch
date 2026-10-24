@@ -86,8 +86,8 @@ release is published as `v<VERSION>` by the Release workflow, dispatched from
   Windows the program a service install puts in Program Files can be run by ordinary
   users. A correct `/hook/` token gives back the attempt it was charged instead of
   clearing the whole failure budget.
-- **Checks.** An AAAA check (set through the API) resolves IPv6 addresses only; a JSON content watch no longer reads a
-  non-JSON body as `null`; a check with no saved timeout is bounded by the default one;
+- **Checks.** An AAAA check (set through the API) resolves IPv6 addresses only; a JSON
+  content watch no longer reads a non-JSON body as `null`; a check with no saved timeout is bounded by the default one;
   a check moved to a collector or deleted just as it fell due is no longer left marked
   as running and never scheduled again; a hardware
   reading that carries only the one-minute load is judged correctly; and a collector's
