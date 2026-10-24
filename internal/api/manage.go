@@ -128,6 +128,11 @@ func (s *Server) handleSaveMaintenance(w http.ResponseWriter, r *http.Request) {
 
 func maintenanceSummary(m model.MaintenanceWindow) string {
 	if len(m.Weekdays) > 0 {
+		// A window with its own start time runs at that time in its own
+		// zone; StartAt is only when it was saved.
+		if m.StartTime != "" {
+			return fmt.Sprintf("Weekly on %d day(s) at %s %s for %d minutes.", len(m.Weekdays), m.StartTime, m.TimeZone, m.DurationMinutes)
+		}
 		return fmt.Sprintf("Weekly on %d day(s) at %s for %d minutes.", len(m.Weekdays), m.StartAt.Local().Format("15:04"), m.DurationMinutes)
 	}
 	return fmt.Sprintf("From %s to %s.", m.StartAt.Local().Format("2006-01-02 15:04"), m.EndAt.Local().Format("2006-01-02 15:04"))
