@@ -240,6 +240,7 @@ func (e *Engine) IngestCollectorResults(ctx context.Context, agent model.Agent, 
 				if _, err := e.store.InsertResult(ctx, it.res); err != nil {
 					return reply, err
 				}
+				e.noteHeldResult(it.res.Timestamp)
 			}
 			reply.Accepted++
 			continue

@@ -201,6 +201,16 @@ func chunked(ctx context.Context, from, to time.Time, step time.Duration, fn fun
 	return nil
 }
 
+// noteHeldResult records that a result taken at ts was stored late, so the
+// next retention pass rolls its buckets up again.
+func (e *Engine) noteHeldResult(ts time.Time) {
+	e.mu.Lock()
+	if e.heldSince.IsZero() || ts.Before(e.heldSince) {
+		e.heldSince = ts
+	}
+	e.mu.Unlock()
+}
+
 func (e *Engine) runRetention(ctx context.Context, backfill, cleanup bool) error {
 	return e.runRetentionSince(ctx, backfill, cleanup, time.Time{})
 }
@@ -264,8 +274,18 @@ func (e *Engine) runRetentionSince(ctx context.Context, backfill, cleanup bool, 
 			}
 		}
 	} else {
+		// A held-back result lands hours in the past, before the two hours
+		// a routine pass re-reads, so its buckets are rolled up again here.
+		e.mu.Lock()
+		held := e.heldSince
+		e.heldSince = time.Time{}
+		e.mu.Unlock()
+		if !held.IsZero() && held.Before(from5) {
+			from5 = held
+		}
 		if _, err := st.RollupFromRaw(ctx, from5, now); err != nil {
 			runErr = fmt.Errorf("5-minute rollup: %w", err)
+			e.noteHeldResult(from5)
 		}
 		if runErr == nil {
 			if _, err := st.RollupUp(ctx, store.Bucket5m, store.Bucket1h, from1h, now); err != nil {

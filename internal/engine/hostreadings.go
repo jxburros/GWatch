@@ -101,7 +101,9 @@ func (e *Engine) judgeReading(ctx context.Context, c model.Check, n model.Node, 
 	}
 	if _, err := e.store.InsertResult(ctx, res); err != nil {
 		e.RecordError("record a held-back hardware reading", err)
+		return
 	}
+	e.noteHeldResult(res.Timestamp)
 }
 
 // hostReadingFreshLocked reports whether a push-fed check has a reading recent
