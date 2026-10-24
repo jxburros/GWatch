@@ -220,7 +220,7 @@ GWatch version, or want more control over the exact payload).
 - **Action type**: `Custom code`, interpreter `sh` (or `bash`).
 - **Code**:
   ```sh
-  docker restart "$GWATCH_NODE_NAME_CONTAINER" || docker restart plex
+  docker restart "$GWATCH_NODE_NAME"
   ```
   In practice, hardcode the container name (it rarely matches the GWatch node
   name exactly) — put it directly in the script rather than deriving it from
