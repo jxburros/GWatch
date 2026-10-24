@@ -3,7 +3,6 @@
 package store
 
 import (
-	"fmt"
 	"path/filepath"
 
 	_ "modernc.org/sqlite"
@@ -21,5 +20,9 @@ const (
 // the same string: the writer is a single connection and serialises itself,
 // so there is nothing to ask the driver for.
 func dataSourceName(path string, writer bool) string {
-	return fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=temp_store(MEMORY)", filepath.ToSlash(path))
+	// sqliteFileURI escapes the characters SQLite's URI parser (and modernc,
+	// which splits its own options off at the first "?") would otherwise
+	// read as syntax: unescaped, a data directory named "site#2" would open
+	// the file "site", and one with a "?" in it would lose the pragmas.
+	return sqliteFileURI(filepath.ToSlash(path)) + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=temp_store(MEMORY)"
 }
