@@ -10,7 +10,19 @@ release is published as `v<VERSION>` by the Release workflow, dispatched from
 `main`. It refuses to publish a tag that disagrees with the file — see
 [`docs/RELEASING.md`](docs/RELEASING.md).
 
-## 0.8.1 (not yet released)
+## 0.8.2 (not yet released)
+
+0.8.1 was never published, so everything under it below ships in 0.8.2. Agent
+0.8.2 is released alongside.
+
+### Changed
+
+- **Test robustness.** The test database helper tolerates Windows holding a closed
+  database file a little longer, and a remote-collector test waits for the agent to
+  let go of delivered results; the 0.8.1 release run stopped on those two tests.
+  No change to GWatch or the agent themselves.
+
+## 0.8.1 — 2026-10-24 (not published)
 
 ### Fixed
 

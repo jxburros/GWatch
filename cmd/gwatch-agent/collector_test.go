@@ -198,15 +198,15 @@ func TestCollectorResultsAreHeldThroughAnOutage(t *testing.T) {
 		defer mu.Unlock()
 		return len(got) >= 2
 	})
+	// The server has the results before the agent reads its answer; the
+	// agent lets go of them only once it has.
+	waitUntil(t, "delivered results to be let go", func() bool { return col.status().Held == 0 })
 	cancel()
 	<-done
 	mu.Lock()
 	defer mu.Unlock()
 	if !got[0].Held || got[1].Held || got[0].Result.CheckID != 7 || !got[0].Result.Timestamp.Before(got[1].Result.Timestamp) {
 		t.Fatalf("delivered %+v", got)
-	}
-	if col.status().Held != 0 {
-		t.Fatal("results still held after delivery")
 	}
 }
 
