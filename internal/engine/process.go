@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -82,6 +83,7 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 	live := st
 	staged := *st
 	st = &staged
+	before := staged
 	settings := e.settings
 	var events []model.Event
 	var mails []mailTask
@@ -299,7 +301,15 @@ func (e *Engine) process(ctx context.Context, c model.Check, n model.Node, r mod
 				e.mu.Unlock()
 				return r, nil
 			}
-			st.SilencedUntil = live.SilencedUntil
+			if !reflect.DeepEqual(*live, before) {
+				// Something else committed to this check while the probe ran
+				// — a pushed hardware reading, a silence, a failed alert
+				// re-arming. Committing what was staged before it would undo
+				// that, so this result is applied again on top of it, with
+				// the parent now known (depth 3 probes no further).
+				e.mu.Unlock()
+				return e.process(ctx, c, n, r, 3)
+			}
 			d = e.evaluateDownLocked(c, n, st, settings, now, false)
 		}
 		if d.send {
