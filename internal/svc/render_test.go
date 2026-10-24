@@ -53,6 +53,16 @@ func TestSystemdUnitQuoting(t *testing.T) {
 	if !strings.Contains(got, want+"\n") {
 		t.Errorf("ExecStart:\n%s\nwant line %s", got, want)
 	}
+	// systemd expands $NAME and ${NAME} in ExecStart='s arguments, so a
+	// literal dollar there must be doubled or the service is started with
+	// another path. The program path itself is not expanded.
+	got, err = SystemdUnit(Config{Name: "x", Arguments: []string{"--config", `/srv/$HOME/${X}.json`}}, "/opt/$x/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `ExecStart=/opt/$x/app "--config" "/srv/$$HOME/$${X}.json"`; !strings.Contains(got, want+"\n") {
+		t.Errorf("ExecStart:\n%s\nwant line %s", got, want)
+	}
 	if _, err := SystemdUnit(Config{Name: "x", SystemdUnit: "{{.Nope"}, "/x"); err == nil {
 		t.Error("a broken template rendered without an error")
 	}

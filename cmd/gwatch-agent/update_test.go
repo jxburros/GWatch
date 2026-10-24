@@ -151,6 +151,29 @@ func TestInstallRefusesABinaryThatCannotReport(t *testing.T) {
 	}
 }
 
+// The trial reading is taken under the agent's own configuration file, so an
+// agent run with --config has its limit and host root applied to it too.
+func TestTheTrialReadingUsesTheAgentsConfigFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in executable is a shell script")
+	}
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args")
+	bin := filepath.Join(dir, "new-agent")
+	script := "#!/bin/sh\necho \"$@\" > " + argsFile + "\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config{server: "https://g", token: "gwa_x", configPath: "/etc/custom/agent.json"}
+	if err := verifyReports(context.Background(), bin, cfg); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(argsFile)
+	if !strings.Contains(string(got), "--config /etc/custom/agent.json") {
+		t.Errorf("the new binary was run as %q, without the agent's configuration file", got)
+	}
+}
+
 // TestInstallRollsBackWhenTheSwappedBinaryWillNotRun is the last net: the new
 // binary passed everything, was moved into place, and is broken there anyway
 // (a path it cannot run from, permissions it did not inherit). The previous

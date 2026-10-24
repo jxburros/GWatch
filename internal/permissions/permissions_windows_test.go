@@ -3,6 +3,7 @@ package permissions
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -62,5 +63,31 @@ func TestWindowsProtectedStateOwnerAndDACL(t *testing.T) {
 	}
 	if got, err := os.ReadFile(path); err != nil || string(got) != "private" {
 		t.Fatalf("protected state not readable: %q, %v", got, err)
+	}
+}
+
+// The program directory must stay readable and runnable by everyone: the
+// tray icon, the control panel and `status` are started from it unelevated.
+func TestWindowsServiceDirLetsUsersRunTheProgram(t *testing.T) {
+	sd, err := windows.SecurityDescriptorFromString(serviceDirSDDL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sd.String(); !strings.Contains(got, ";;;BU)") || !strings.Contains(got, ";;;BA)") {
+		t.Fatalf("service directory access list %s", got)
+	}
+	if !windows.GetCurrentProcessToken().IsElevated() {
+		t.Skip("EnsureServiceDir needs an elevated process")
+	}
+	dir := filepath.Join(t.TempDir(), "svc")
+	if err := EnsureServiceDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	got, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got.String(), ";;;BU)") {
+		t.Fatalf("users cannot run the installed program: %s", got)
 	}
 }

@@ -257,6 +257,13 @@ func verifyReports(ctx context.Context, path string, cfg config) error {
 	if n := strings.TrimSpace(cfg.name); n != "" {
 		args = append(args, "--name", n)
 	}
+	// The same file, so that the reading is taken under the same limit
+	// (collect) and from the same machine (hostRoot) as the agent's own; an
+	// agent run with --config would otherwise have the new binary read the
+	// default file, or none.
+	if p := strings.TrimSpace(cfg.configPath); p != "" {
+		args = append(args, "--config", p)
+	}
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Env = append(os.Environ(),
 		"GWATCH_SERVER="+cfg.server,

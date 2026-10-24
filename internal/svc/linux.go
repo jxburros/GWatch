@@ -290,3 +290,7 @@ func (m sysvManager) status(c Config) (Status, error) {
 }
 
 func (m sysvManager) run(s *Service) error { return runForeground(s) }
+
+// restartsOnExit: the System V script starts the program once and nothing
+// watches it after that (SysVScript).
+func (sysvManager) restartsOnExit() bool { return false }

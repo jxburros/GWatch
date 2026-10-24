@@ -51,6 +51,7 @@ import (
 	"github.com/jxburros/GWatch/internal/serviceinstall"
 	"github.com/jxburros/GWatch/internal/svc"
 	"github.com/jxburros/GWatch/internal/sysmetrics"
+	"github.com/jxburros/GWatch/internal/update"
 )
 
 // version is set at build time with -ldflags "-X main.version=1.2.3".
@@ -795,8 +796,20 @@ func (p *program) run(ctx context.Context) {
 // fragile on every platform in a different way. Reporting is stopped first, so
 // nothing is half-sent, and the exit status is non-zero because a Windows
 // service that exits cleanly is left stopped (see exitUpdated).
+//
+// The exception is a machine whose service manager starts the agent once and
+// never again (a System V init script): exiting there would leave it stopped
+// until the next boot. There the new program replaces this process in place
+// instead, keeping its process ID, which is what the script's pid file names.
 func (p *program) restartForUpdate() {
 	_ = p.Stop(nil)
+	if !svc.RestartsOnExit() {
+		if exe, err := update.Executable(); err == nil {
+			log.Printf("restarting into the newly installed agent in place (nothing on this machine starts the agent again when it exits)")
+			err = reexec(exe, os.Args, os.Environ())
+			log.Printf("could not restart in place (%v); start the agent again to run the new version", err)
+		}
+	}
 	log.Printf("restarting into the newly installed agent")
 	os.Exit(exitUpdated)
 }
@@ -1296,6 +1309,7 @@ var listenRetry = 5 * time.Second
 // without opening a port.
 func (p *program) metricsHandler() http.Handler {
 	collector := newCollector(p.cfg)
+	ceiling := p.cfg.collect.Normalize()
 	want := []byte(p.cfg.token)
 	limiter := newServeLimiter()
 
@@ -1312,11 +1326,14 @@ func (p *program) metricsHandler() http.Handler {
 			http.Error(w, "a token is required", http.StatusUnauthorized)
 			return
 		}
-		metrics, err := collect(r.Context(), p.cfg, collector)
+		metrics, err := takeReading(r.Context(), p.cfg, collector)
 		if err != nil {
 			http.Error(w, "cannot read this computer's hardware", http.StatusServiceUnavailable)
 			return
 		}
+		// The machine's own limit holds here as it does for a pushed reading:
+		// what agent.json leaves out is not handed to whoever holds the token.
+		metrics = sysmetrics.Apply(metrics, ceiling, true)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(metrics)

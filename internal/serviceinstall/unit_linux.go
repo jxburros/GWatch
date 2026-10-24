@@ -147,15 +147,23 @@ func NeedsBindCapability(addr string) bool {
 // CheckUnitPath refuses paths the unit cannot carry or the service could not
 // use. Whitespace and quotes are refused rather than escaped: ReadWritePaths=
 // splits on spaces, and a data directory nobody can type without quoting is
-// one nobody will get right in a drop-in later either. A directory under /home
-// or /root is refused because ProtectHome= hides those from the service — it
-// would start, find nothing, and fail.
+// one nobody will get right in a drop-in later either. A system directory
+// (/var, /etc, /usr/local and the rest of purgeRefused) is refused because
+// install gives the data directory, recursively, to the service user. A
+// directory under /home or /root is refused because ProtectHome= hides those
+// from the service — it would start, find nothing, and fail.
 func CheckUnitPath(what, p string) error {
 	if !filepath.IsAbs(p) {
 		return fmt.Errorf("%s must be an absolute path, not %q", what, p)
 	}
 	if strings.ContainsAny(p, " \t\r\n\"'\\;") {
 		return fmt.Errorf("%s %q contains a space, quote, backslash or semicolon; choose a plainer path such as %s", what, p, DefaultDataDir)
+	}
+	if purgeRefused[filepath.Clean(p)] {
+		// Install hands the data directory, and everything in it, to the
+		// service user; given /var or /etc by a slip of the keyboard, that
+		// would be the system's own files.
+		return fmt.Errorf("%s %s is a system directory, which the service would be given ownership of; use %s (the default) or a directory of its own", what, p, DefaultDataDir)
 	}
 	if UnderProtectedHome(p) {
 		return fmt.Errorf("%s %s is inside a home directory, which the service is not allowed to see; use %s (the default) or another directory outside /home and /root", what, p, DefaultDataDir)

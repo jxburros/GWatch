@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -300,6 +301,30 @@ func TestStatusFileCarriesNoSecretsAndNoReadings(t *testing.T) {
 	st, err := readAgentStatus()
 	if err != nil || st.Held != 2 || !st.ReportOK || st.Inventory == nil || len(st.Inventory.Interfaces) != 1 {
 		t.Errorf("status %+v err %v", st, err)
+	}
+}
+
+// A check-in that names a newer agent is applied on the check-in goroutine
+// while the reporting loop writes the status file, which shows that version;
+// under -race this caught the unlocked write.
+func TestLatestAgentIsRecordedWithoutRacingTheStatusFile(t *testing.T) {
+	rt, cfg := runtimeFor(t, true)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 20; i++ {
+			rt.writeStatus(cfg, -1)
+		}
+	}()
+	for i := 0; i < 20; i++ {
+		rt.apply(cfg, model.AgentSettings{CheckInSeconds: 900, LatestAgent: fmt.Sprintf("999.0.%d", i)})
+	}
+	wg.Wait()
+	rt.writeStatus(cfg, -1)
+	st, err := readAgentStatus()
+	if err != nil || st.LatestAgent != "999.0.19" {
+		t.Fatalf("status %+v err %v", st, err)
 	}
 }
 
