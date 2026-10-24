@@ -623,7 +623,7 @@ function entryFigure({ spec, hs }) {
     case 'max': return s.maxMs;
     case 'jitter': return mean('jitterMs');
     case 'loss': return mean('lossPct');
-    case 'availability': return s.availability;
+    case 'availability': return s.count > 0 ? s.availability : null;
     default: return s.avgMs;
   }
 }
@@ -766,7 +766,8 @@ export function renderConfiguredChart(host, cfg, { title = 'Chart', fetch: fetch
       for (const { hs } of entries) {
         if (seen.has(Number(hs.checkId))) continue;
         seen.add(Number(hs.checkId));
-        const avail = hs.summary?.availability;
+        // No samples is no figure, not 0% available.
+        const avail = hs.summary?.count > 0 ? hs.summary.availability : null;
         const cls = avail == null ? '' : avail >= 99.9 ? 'text-up' : avail >= 95 ? 'text-degraded' : 'text-down';
         up.append(h('div', { class: 'uptime-row' }, h('div', { class: 'uptime-name truncate' }, hs.nodeName || '', h('div', { class: 'sub' }, hs.checkName)), uptimeBar(hs.points, { bucketSeconds: hs.bucketSeconds, from: hs.from, to: hs.to, label: `${hs.nodeName || ''} › ${hs.checkName}` }), h('div', { class: `uptime-pct ${cls}` }, pct(avail, 2))));
       }

@@ -822,7 +822,7 @@ export async function mount(root, ctx) {
       if (!arr.length) { replace(list, emptyState({ icon: 'activity', title: 'Nothing to show yet', compact: true })); return; }
       const rows = [];
       for (const hs of arr) {
-        const avail = hs.summary?.availability;
+        const avail = hs.summary?.count > 0 ? hs.summary.availability : null;
         const cls = avail == null ? '' : avail >= 99.9 ? 'text-up' : avail >= 95 ? 'text-degraded' : 'text-down';
         rows.push(h('div', { class: 'uptime-row' },
           h('div', { class: 'uptime-name truncate' }, h('a', { class: 'u-color-inherit', href: `#/nodes/${findCheck(hs.checkId)?.node.id ?? ''}` }, hs.nodeName || ''), h('div', { class: 'sub' }, hs.checkName)),
