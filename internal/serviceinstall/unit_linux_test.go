@@ -131,7 +131,7 @@ func TestCheckUnitPath(t *testing.T) {
 			t.Errorf("%s refused: %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"relative/dir", "/srv/my data", "/home/pat/gwatch", "/root/.local/share/gwatch", "/root", "/run/user/1000/x", `/srv/a"b`} {
+	for _, bad := range []string{"relative/dir", "/srv/my data", "/home/pat/gwatch", "/root/.local/share/gwatch", "/root", "/run/user/1000/x", `/srv/a"b`, "/var", "/var/lib", "/etc/", "/usr/local", "/"} {
 		if err := CheckUnitPath("data", bad); err == nil {
 			t.Errorf("%s accepted", bad)
 		}
