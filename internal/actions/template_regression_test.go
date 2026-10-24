@@ -50,13 +50,14 @@ func TestPythonPlaceholderCannotEscapeAuthorLiteral(t *testing.T) {
 			code := expandScriptCode(tpl, Vars{"message": v}, "python")
 			cmd := exec.Command(python, "-c", code)
 			// Windows Python writes to a pipe in the ANSI code page, which
-			// cannot encode the test's non-ASCII value.
+			// cannot encode the test's non-ASCII value, and turns \n into \r\n.
 			cmd.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8")
-			out, err := cmd.CombinedOutput()
+			raw, err := cmd.CombinedOutput()
+			out := strings.ReplaceAll(string(raw), "\r\n", "\n")
 			if err != nil {
 				t.Fatalf("%q: %v: %s", code, err, out)
 			}
-			if !strings.Contains(string(out), v) {
+			if !strings.Contains(out, v) {
 				t.Fatalf("%q: value changed: got %q want %q", code, out, v)
 			}
 		}
