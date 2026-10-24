@@ -136,7 +136,7 @@ That data directory is always a normal, permanent folder on this computer's disk
 never a temp directory that the OS can clear on reboot or under disk pressure. The
 Windows installer and `scripts/install.ps1` both point the service at
 `C:\ProgramData\GWatch`; running GWatch directly (any OS, see the
-[README](../README.md#run-without-installing-any-os)) picks a per-platform default
+[README](../README.md#install)) picks a per-platform default
 unless you override it:
 
 | Platform | Default data directory |

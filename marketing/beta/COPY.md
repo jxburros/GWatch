@@ -2,7 +2,7 @@
 
 Text to go with the images in this kit. Every claim here comes from GWatch 0.6.0's README,
 CHANGELOG and `docs/`. If a fact changes, update it here and in `build.py` (see
-[README.md](README.md#facts-in-the-copy)).
+[README.md](README.md#how-its-built)).
 
 Links used throughout:
 
