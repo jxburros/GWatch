@@ -88,7 +88,8 @@ func (e *Engine) deliverReport(ctx context.Context, d model.ReportDefinition, no
 	if err != nil {
 		return err
 	}
-	msg := mailer.Message{To: d.Recipients, Subject: d.Name + " — " + from.Format("2006-01-02") + " to " + to.Format("2006-01-02"), TextBody: "Your GWatch availability report is attached as printable HTML.", HTMLBody: html, HTMLAttachment: html}
+	// The period ends at midnight on to, so its last day is the one before.
+	msg := mailer.Message{To: d.Recipients, Subject: d.Name + " — " + from.Format("2006-01-02") + " to " + to.AddDate(0, 0, -1).Format("2006-01-02"), TextBody: "Your GWatch availability report is attached as printable HTML.", HTMLBody: html, HTMLAttachment: html}
 	sendCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	if err := e.opts.Send(sendCtx, e.Settings().Alerts.SMTP, msg); err != nil {
