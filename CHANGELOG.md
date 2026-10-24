@@ -6,8 +6,9 @@ your data, but the interface and the JSON API can still change between releases.
 1.0.0 is reserved for the first public, stable release.
 
 The version a build reports comes from the [`VERSION`](VERSION) file, and a
-release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
-disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
+release is published as `v<VERSION>` by the Release workflow, dispatched from
+`main`. It refuses to publish a tag that disagrees with the file — see
+[`docs/RELEASING.md`](docs/RELEASING.md).
 
 ## 0.8.0 (not yet released)
 
@@ -66,6 +67,10 @@ disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
 - **The network map's clusters layout** no longer puts nodes on perfect rings: each
   node's dependents branch off it in whatever direction has room, with longer lines to
   bigger branches, and nothing overlaps.
+- **gwatch-mcp 0.1.2.** It no longer follows a redirect to another host or scheme,
+  which would have handed the API key to that address; and `gwatch_update_node` keeps
+  the settings of an existing check the caller left out (enabled, interval, timeout,
+  retries, alert override) instead of resetting them to a new check's defaults.
 - **Documentation accuracy** (#165): API routes, the config export, Settings tabs,
   retention, privacy (what is encrypted, what GWatch contacts), ROADMAP and the brief.
 

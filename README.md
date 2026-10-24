@@ -18,27 +18,26 @@ product brief is [`local-network-monitoring-product-brief.md`](local-network-mon
 some of its non-goals have since shipped in a narrow form, and [`ROADMAP.md`](ROADMAP.md)
 is where the current scope and its limits are kept.
 
-> **GWatch is in beta (0.5.0).** It works and it looks after your data, but the
+> **GWatch is in beta (0.8.0).** It works and it looks after your data, but the
 > interface and the JSON API can still change between releases, and bugs are likelier
 > now than they will be at 1.0 — which is reserved for the first public, stable
 > release. [`CHANGELOG.md`](CHANGELOG.md) lists what is in each version, and
 > [`ROADMAP.md`](ROADMAP.md#known-gaps) the known gaps it still ships with. Please [report anything that looks wrong](https://github.com/jxburros/GWatch/issues).
 
-## What's new in 0.5.0
+## What's new in 0.8.0
 
-Since 0.4.0: a **network map** draws every node under the node it depends on —
-the firewall at the top, everything an outage there would silence beneath it —
-laid out three ways, styled to taste, editable in place and pinnable to a
-dashboard; **timestacked charts** lay a metric over its own yesterday, last
-week or last month on one axis, the way Nagios XI's timestacked performance
-graphs do; **SNMP is much quicker to set up** — an *SNMP device* template,
-**Test connection**, and **Pick interfaces** to tick ports by name instead of
-hunting for SNMP indexes; node lists **sort alphabetically** (or by address or
-importance) and can drop the group sections; and dragging a **dashboard
-widget** puts it where you let go instead of pages further down.
+Since 0.7.2: on Linux, **`gwatch install` creates a hardened systemd service**
+running as its own `gwatch` user, and the server now comes as **`.deb` and `.rpm`
+packages** too; **remote collectors** let a paired agent check the nodes at a
+second site; **Matter devices**, **services and programs** (`service:` and
+`process:` readings) and more **alert channels** (Telegram, Discord, Gotify,
+Matrix, Twilio SMS, PagerDuty, Opsgenie) can be watched and alerted on;
+**restores are atomic, validated and previewed**, and take a safety backup
+first; and alerts can be **grouped per node** or sent as a **warning digest**.
 
-The agent is unchanged and stays at **gwatch-agent 0.5.0**. Full detail in
-[`CHANGELOG.md`](CHANGELOG.md).
+The agent moves to **gwatch-agent 0.8.0** alongside it: it keeps held readings
+through a restart, comes back after a power cut, and has a control panel.
+0.8.0 is not yet released. Full detail in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## What it does
 
@@ -99,7 +98,7 @@ uninstalling): [`docs/INSTALL.md`](docs/INSTALL.md).
 then create the first administrator account with one `docker exec` (a request from your
 browser does not arrive over loopback, so the no-password local shortcut does not apply
 in a container) and open `http://<the docker host>:7230`. Multi-arch (`linux/amd64`,
-`linux/arm64`), a `docker-compose.yml` in the repository root, the exact first-run
+`linux/arm64`, `linux/arm/v7`), a `docker-compose.yml` in the repository root, the exact first-run
 command, and what else changes inside a container (ping, discovery, hardware readings,
 upgrades): [`docs/DOCKER.md`](docs/DOCKER.md).
 

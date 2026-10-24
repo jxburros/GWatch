@@ -55,18 +55,24 @@ request with the following jobs:
 
 Windows builds the Inno Setup installers and validates PowerShell scripts. Linux tests
 the installed systemd service and journal output; Linux and macOS both exercise their
-native collectors. `release` needs `ci`, `linux` and `macos`; the `docker` test job is
-independent of it, while `docker-publish` also waits for `docker` and `release`.
+native collectors.
 
 The `ci` job also compiles the winget variant of the agent setup program, so a change to
 `scripts/installer/gwatch-agent.iss` that breaks it fails a pull request rather than a tag.
 
-Pushing a tag such as `v0.1.0` additionally runs the `release` job (below) and the
-`docker-publish` job (["The container image"](#the-container-image)); pushing
-`agent-v0.5.0` runs `agent-release` and then the four agent packaging jobs
-(["The agent packages"](#the-agent-packages)); and pushing
-`mcp/v0.1.0` runs `mcp-tag`, a guard job — see
-["Releasing the MCP companion"](#releasing-the-mcp-companion).
+Releases are no longer started by pushing a `v*` or `agent-v*` tag. They are built by
+[`.github/workflows/release.yml`](../.github/workflows/release.yml), dispatched by hand
+from `main` (**Actions → Release → Run workflow**, a dry run first — see the
+[README](../README.md#unified-release-procedure) and
+[`.release/README.md`](../.release/README.md)). It re-runs the `ci`, `linux` and `macos`
+jobs above, then builds, signs and publishes each app that `release.json` puts ahead of
+its published version: `gwatch-build`/`gwatch-sign` for GWatch (the steps below), the
+`gwatch-agent-*` and agent packaging jobs for the agent
+(["The agent packages"](#the-agent-packages)), and the container images only after the
+release they belong to is published (["The container image"](#the-container-image)).
+Where the sections below tag a commit and push the tag, dispatch that workflow instead;
+the tag it releases under comes from the version file. Pushing `mcp/v0.1.0` still runs `mcp-tag` in `ci.yml`, a guard
+job — see ["Releasing the MCP companion"](#releasing-the-mcp-companion).
 
 ## Repository layout
 
@@ -144,21 +150,19 @@ Do this once, on a machine you trust, before the first signed release.
 The version lives in the [`VERSION`](../VERSION) file at the repository root.
 That is what a local `make build`, `scripts\build.ps1` and both setup programs
 read, so a build always reports the version of the commit it came from. A
-release is that file plus a matching tag:
+release is that file (and `release.json`, which repeats it) plus a matching tag:
 
 ```sh
-# 1. Set the version and write the changelog entry
-echo 0.2.0 > VERSION
-$EDITOR CHANGELOG.md
+# 1. Set the version and write the changelog entry and release notes
+echo 0.2.0 > VERSION              # and gwatch's "version" in release.json
+$EDITOR CHANGELOG.md .release/notes/gwatch/0.2.0.md
 git commit -am "Release 0.2.0"
-git push
+git push                          # and merge it into main
 
-# 2. Tag it
-git tag v0.2.0
-git push origin v0.2.0
+# 2. Release it: Actions → Release → Run workflow, from main (dry run first)
 ```
 
-The tag must match `VERSION` exactly, `v` prefix aside. CI checks this first and
+The tag (`v0.2.0`) must match `VERSION` exactly, `v` prefix aside. The workflow checks this first and
 refuses the release otherwise, because a mismatch ships binaries whose own
 `gwatch version` output contradicts the file they were downloaded from.
 
@@ -166,9 +170,9 @@ GWatch is pre-1.0 while it is in beta. A `0.x` version switches on the beta
 notices in the web interface and on the installers' welcome page; they turn
 themselves off at `1.0.0`, with nothing to remember to remove.
 
-The `release` job in `.github/workflows/ci.yml` then:
+The `gwatch-build` and `gwatch-sign` jobs in `.github/workflows/release.yml` then:
 
-1. fails immediately if the tag and `VERSION` disagree;
+1. fail immediately if the commit is not on `main`, or if the tag and `VERSION` disagree;
 2. fails immediately if `GWATCH_SIGNING_KEY` is unset, or if its public key is
    not listed in `release_keys.txt` — that combination would publish binaries
    that reject their own updates;
@@ -177,21 +181,20 @@ The `release` job in `.github/workflows/ci.yml` then:
    ["Authenticode signing"](#authenticode-signing)), and then writes a `.sha256` next to
    each;
 4. cross-compiles the MCP companion (`gwatch-mcp-<os>-<arch>`, versioned from
-   `mcp/VERSION`) and the hardware agent (`gwatch-agent-<os>-<arch>`, which adds
-   `linux/arm` for Raspberry Pi class machines). Both names sit inside the
-   `dist/gwatch-*` glob so they are signed and checksummed like everything else,
-   and both stay invisible to the in-app updater, which matches only the exact
-   names `gwatch-<os>-<arch>[.exe]`;
+   `mcp/VERSION`). The name sits inside the `dist/gwatch-*` glob so it is signed
+   and checksummed like everything else, and stays invisible to the in-app
+   updater, which matches only the exact names `gwatch-<os>-<arch>[.exe]` (the
+   agent has a release of its own, [below](#releasing-the-agent));
 5. signs every binary (`gwatch-sign sign`) and verifies the result against the
    pinned keys (`gwatch-sign verify`) — the same check the updater runs on the
    user's machine;
-6. publishes all of `dist/*`, binaries plus `.sha256` plus `.sig`, as the
-   release.
+6. hands all of `dist/*`, binaries plus `.sha256` plus `.sig`, with the server
+   packages, to the shared `publish-gwatch` job, which publishes them as the release.
 
 To do the same by hand:
 
 ```sh
-make build                     # or the cross-compile loop from ci.yml
+make build                     # or the cross-compile loop from release.yml
 make sign KEY=release.key      # writes dist/<asset>.sig, for release VERSION
 make verify-release            # checks them against release_keys.txt
 # an agent release: add RELEASE_VERSION=$(cat cmd/gwatch-agent/VERSION) to both
@@ -318,13 +321,13 @@ service reads `/etc/gwatch/gwatch.env`.
 
 ## The installer artefacts
 
-The `release` job also compiles both Inno Setup scripts and publishes the results
-alongside the raw binaries:
+The release workflow's build jobs also compile both Inno Setup scripts and publish the
+results alongside the raw binaries:
 
 | Script | Built by | From | Published as |
 |---|---|---|---|
-| `scripts/installer/gwatch.iss` | `release` (`v*`) | `dist/gwatch-windows-amd64.exe` | `gwatch-setup-<version>.exe` |
-| `scripts/installer/gwatch-agent.iss` | `agent-release` (`agent-v*`) | `dist/gwatch-agent-windows-amd64.exe` | `gwatch-agent-setup-<version>.exe` |
+| `scripts/installer/gwatch.iss` | `gwatch-build` (`v*`) | `dist/gwatch-windows-amd64.exe` | `gwatch-setup-<version>.exe` |
+| `scripts/installer/gwatch-agent.iss` | `gwatch-agent-build` (`agent-v*`) | `dist/gwatch-agent-windows-amd64.exe` | `gwatch-agent-setup-<version>.exe` |
 
 The two are built by different jobs because the agent releases on its own
 ([below](#releasing-the-agent)); every push and pull request still compiles
@@ -523,14 +526,17 @@ git tag agent-v0.5.0
 git push origin agent-v0.5.0
 ```
 
-Pushing an `agent-v*` tag runs the `agent-release` job in
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml). It fails if the tag
+(As with the server, step 2 is now a dispatch of the Release workflow from `main`, with
+`cmd/gwatch-agent/VERSION` and gwatch-agent's `version` in `release.json` bumped and
+`.release/notes/gwatch-agent/<version>.md` written in step 1.) Its `gwatch-agent-build`
+and `gwatch-agent-sign` jobs in
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) fail if the tag
 does not match `cmd/gwatch-agent/VERSION`, fails if the signing key is missing
 or is not one the shipped agents trust, then cross-compiles seven targets
 (the six the server is built for, plus `linux/arm` for the Raspberry Pi class
 of machine), signs and checksums each one, builds the Windows agent installer,
-and publishes a GitHub release of its own. Once it has, four more jobs add the
-agent's packages to that release — see ["The agent packages"](#the-agent-packages).
+and the shared `publish-gwatch-agent` job publishes a GitHub release of its own. Four
+more jobs build the agent's packages for that release — see ["The agent packages"](#the-agent-packages).
 
 ### The two release trains must never cross
 
@@ -572,16 +578,17 @@ own machines, and look at them before you expect anyone else to take it.
 
 The agent is also published as a `.deb`, an `.rpm`, a Homebrew formula, a winget package
 and a container image ([`HARDWARE.md`](HARDWARE.md#installing-from-a-package-manager)).
-Each is a job on the `agent-v*` tag that runs after `agent-release` (so the release exists
-to attach to, and a failed release publishes no packages) and after `agent-packaging`, the
-pull-request job that built and exercised the same packages:
+Each is a job in the release workflow that runs after `gwatch-agent-build` and after
+`agent-packaging`, the pull-request job that built and exercised the same packages; the
+files are published with the agent release, and the tap, winget and container jobs run
+only once it is published (so a failed release publishes no packages):
 
 | Job | Runner | Publishes | Needs |
 |---|---|---|---|
 | `agent-linux-packages` | `ubuntu-latest` | `gwatch-agent_<v>-1_{amd64,arm64,armhf}.deb`, `gwatch-agent-<v>-1.{x86_64,aarch64,armv7hl}.rpm` and `gwatch-agent-linux-packages-<v>.sha256` on the agent release | nothing |
 | `agent-homebrew` | `ubuntu-latest` | `gwatch-agent-homebrew-<v>-{darwin,linux}-{arm64,amd64}.tar.gz` (+ `.sha256`) on the release; `Formula/gwatch-agent.rb` to the tap | `HOMEBREW_TAP_TOKEN` to push the formula |
 | `agent-winget` | `windows-latest` | `gwatch-agent-winget-setup-<v>.exe` and `gwatch-agent-winget-manifests-<v>.zip` on the release; a pull request to `microsoft/winget-pkgs` | `WINGET_TOKEN` to open the pull request |
-| `agent-docker-publish` | `ubuntu-latest` | `ghcr.io/jxburros/gwatch-agent:<v>`, `:<major.minor>`, `:latest` for `linux/amd64`, `linux/arm64`, `linux/arm/v7` | nothing beyond `GITHUB_TOKEN` |
+| `agent-docker-publish` | `ubuntu-latest` | `ghcr.io/jxburros/gwatch-agent:<v>` and, for a stable release, `:latest` for `linux/amd64`, `linux/arm64`, `linux/arm/v7` | nothing beyond `GITHUB_TOKEN` |
 
 Each repeats the tag-matches-`cmd/gwatch-agent/VERSION` guard. The two jobs with an
 optional secret **skip that one step, with a notice, when the secret is not set** — the
@@ -592,7 +599,7 @@ so the packages can ship before the tap or the winget listing exists.
 `-X main.packagedBy=<deb|rpm|homebrew|winget|docker>` by `packaging/build-agent.sh`, which
 makes the agent leave updating to its package manager (it refuses to replace itself and
 says which command to run — [`AGENT-DECISIONS.md`](AGENT-DECISIONS.md#10-a-packaged-agent-belongs-to-its-package-manager-it-does-not-update-itself)).
-So the jobs build the agent again rather than reusing `agent-release`'s binaries, and no
+So the jobs build the agent again rather than reusing `gwatch-agent-build`'s binaries, and no
 package, and no binary inside one, is ever uploaded under a `gwatch-agent-<os>-<arch>` name
 — the only names the self-updater takes. That is tested
 (`TestPackagedAssetsAreInvisibleToTheUpdater`) and checked on every PR.
@@ -650,12 +657,12 @@ and is a follow-up.
 
 ## The container image
 
-The same `v*` tag also runs `docker-publish`, which builds the `Dockerfile` for
-`linux/amd64`, `linux/arm64` and `linux/arm/v7` and pushes the result to GitHub's registry as
-`ghcr.io/jxburros/gwatch`, tagged `X.Y.Z`, `X.Y` and `latest`. It runs beside `release`
-rather than inside it — a separate runner (Linux, with buildx and QEMU), a separate
-permission (`packages: write`, granted to that job only) and the same tag-matches-VERSION
-guard, so a mismatch stops both. Nothing else needs setting up: it authenticates with
+Once a GWatch release is published (not on a dry run), `docker-publish` builds the
+`Dockerfile` for `linux/amd64`, `linux/arm64` and `linux/arm/v7` and pushes the result to
+GitHub's registry as `ghcr.io/jxburros/gwatch`, tagged `X.Y.Z` and, on the stable channel,
+`latest`. It is a job of its own — a separate runner (Linux, with buildx and QEMU), a
+separate permission (`packages: write`, granted to that job only) and the same
+tag-matches-VERSION guard. Nothing else needs setting up: it authenticates with
 the workflow's own `GITHUB_TOKEN`, and the first push creates the package. After that
 first push, make the package public in the repository's Packages settings, or a
 `docker pull` without a login fails.
@@ -699,9 +706,9 @@ Pushing an `mcp/v*` tag runs the `mcp-tag` job in
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml): it fails if the
 tag does not match `mcp/VERSION`, and builds the module, but it does **not**
 publish a separate GitHub release. `gwatch-mcp` binaries ship inside the
-*core* release instead — the `release` job's "Cross-compile the MCP
+*core* release instead — the `gwatch-build` job's "Cross-compile the MCP
 companion" step builds `gwatch-mcp-<os>-<arch>[.exe]` from whatever
-`mcp/VERSION` says at the time a core `v*` tag is pushed, signs and
+`mcp/VERSION` says at the time a core release is run, signs and
 checksums it alongside everything else, and attaches it to that release. In
 practice this means: bump `mcp/VERSION` and push an `mcp/v*` tag whenever
 `mcp/` changes and you want `go install ...@latest` to see it, and expect the
@@ -748,7 +755,7 @@ and says so.
 
 ## Protected publishing
 
-Signing jobs require the `release` GitHub Environment, verify their commit is an ancestor of `origin/main`, disable build-cache restores and use actions pinned to commits. Configure that environment to require a reviewer and restrict deployment tags to `v*` and `agent-v*`. Move `GWATCH_SIGNING_KEY` from repository secrets into this environment and remove the repository copy; an environment declaration alone cannot protect a remaining repository secret. GitHub never reveals an existing secret. If the offline seed is unavailable, the main-only `Migrate release signing secret` workflow seals it directly to the release Environment public key, producing only a ciphertext envelope. Apply that JSON through the Environment secrets API, confirm the destination exists, then delete the repository secret. The environment reviewer must verify the destination public key and key id against the API before approving. Optional Homebrew/winget tokens are available only to their publishing steps, and checkouts do not persist credentials. Container publication waits for the signed release. Weekly CI includes vulnerability scans.
+Signing jobs require the `release` GitHub Environment, verify their commit is an ancestor of `origin/main`, disable build-cache restores and use actions pinned to commits. Configure that environment to require a reviewer and restrict its deployment branches to `main`: releases are dispatched from `main`, so a `v*`/`agent-v*` tag restriction alone would refuse every release job. Move `GWATCH_SIGNING_KEY` from repository secrets into this environment and remove the repository copy; an environment declaration alone cannot protect a remaining repository secret. GitHub never reveals an existing secret. If the offline seed is unavailable, the main-only `Migrate release signing secret` workflow seals it directly to the release Environment public key, producing only a ciphertext envelope. Apply that JSON through the Environment secrets API, confirm the destination exists, then delete the repository secret. The environment reviewer must verify the destination public key and key id against the API before approving. Optional Homebrew/winget tokens are available only to their publishing steps, and checkouts do not persist credentials. Container publication waits for the signed release. Weekly CI includes vulnerability scans.
 
 The Linux job runs staticcheck, all root race tests, real-server browser tests and shell installer lint. `make ci` is the local subset; use `make test-postgres`, `make test-mysql` and the alternative SQLite build/test targets for backend coverage. Installers are published with their respective core/agent releases.
 
@@ -756,7 +763,7 @@ The Linux job runs staticcheck, all root race tests, real-server browser tests a
 ### Protected signing-key migration
 
 Create the `release` Environment with required maintainer review and selected deployment
-branches/tags (`main` for this one-time migration, `v*` and `agent-v*` for releases).
+branches (`main`, which both this one-time migration and releases are dispatched from).
 Get its secrets public key and key ID from the GitHub API. Dispatch
 `migrate-signing-secret.yml` on main with those two public values. Approve the Environment
 job after checking that the values name this repository's Environment. The artifact

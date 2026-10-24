@@ -82,7 +82,7 @@ exits, which is the quickest way to prove the settings work.
 the token *and* the server address on the machine, so afterwards
 `gwatch-agent run` needs no arguments at all. That is how the packages below
 run it. (For a rollout you are scripting, `POST /api/agents` registers a machine
-with a token instead of a code — see [`API.md`](API.md#agents).)
+with a token instead of a code — see [`API.md`](API.md#hardware-health).)
 
 ### The agent's configuration file
 

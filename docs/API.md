@@ -90,8 +90,8 @@ administrator, whatever its scope:
   blanked for a key, since they routinely carry credentials; the SNMP and metrics
   secrets come back masked, the same as for a browser.
 - `readwrite` — the same, plus creating, updating, deleting, enabling, running and
-  silencing nodes and checks, notes, maintenance windows, dashboards, wallboards and
-  charts. A key may lay a wallboard out; it may not project one. It may **not**
+  silencing nodes and checks, notes, acknowledging, resolving and annotating incidents,
+  maintenance windows, dashboards, wallboards and charts. A key may lay a wallboard out; it may not project one. It may **not**
   create, edit or test a `custom` check, or a `system` check that reads an
   agentless URL: both run code or carry a stored token to a chosen address, so an
   administrator must create them in the web interface (403, not 401). The same goes
@@ -114,7 +114,13 @@ administrator, whatever its scope:
 everything under `/api/endpoints` (including `GET`), `POST /api/actions/test`,
 `GET /api/automation/meta`, `GET /api/retention/status`, `POST /api/retention/run`,
 `GET|POST /api/update/…`, `GET /api/mcp/status`, `GET /api/mcp/skill`, everything under
-`/api/users` and `/api/apikeys`, and `POST /api/auth/change-password`.
+`/api/users` and `/api/apikeys`, and `POST /api/auth/change-password`; also
+`POST /api/restart`, `POST /api/settings/test-channel`, `GET|PUT /api/reports`,
+everything under `/api/rules` (including `GET`), `/api/discovery` and `/api/agents`
+(pairing codes and `POST /api/agents/pair` included), `GET /api/hosts/local/watchable`,
+`PUT /api/hosts/local/watch`, `POST /api/snmp/walk`, `POST /api/matter/nodes`,
+`POST /api/matter/commission`, `POST /api/wallboards/{id}/share`, the sign-in routes
+`POST /api/auth/login`/`logout`, and any `/api/` route not listed as open to keys.
 
 That list is deliberate and tested: a key is for reading a monitor from elsewhere, not
 for administering the machine it runs on. It is the same boundary `gwatch-mcp`, the Model
@@ -222,6 +228,7 @@ companion that lets an AI assistant use this API with a key, is documented in
 - `GET /api/status` → header summary: `{ "down", "degraded", "unknown", "up", "total", "certWarnings", "maintenance", "attention", "serviceOk", "serviceIssues": [..] }`.
   This one document is also what the header indicators are evaluated against, in the browser (see Indicators).
 - `GET /api/network` → `NetworkInfo`: effective listen address, whether other devices can reach it, LAN URLs, whether a password is set.
+- `POST /api/restart` (admin) → 202 `{ "restarting": true }`, then restarts GWatch about a second later; 503 when this process has no way to restart itself.
 
 ## Nodes and checks
 

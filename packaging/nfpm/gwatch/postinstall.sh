@@ -70,7 +70,7 @@ if [ "$first" = yes ]; then
 
 From another computer, open an SSH tunnel first (ssh -L 7230:127.0.0.1:7230
 this-server) and browse to the same address. Create the first account -- it
-is always an administrator -- in Settings > Accounts, or from a shell here:
+is always an administrator -- in Settings > Users & access, or from a shell here:
 
   curl -fsS -H 'Content-Type: application/json' \
     --data '{"username":"admin","password":"choose-a-good-one","role":"admin"}' \

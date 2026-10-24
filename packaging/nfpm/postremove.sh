@@ -5,7 +5,8 @@
 # server address, which is what purging is for. A plain remove, and an rpm
 # erase, leave them in /var/lib/gwatch-agent, so reinstalling does not mean
 # pairing again; delete the directory to forget the machine's credential, and
-# revoke the machine in GWatch (Settings > Hardware) to make it worthless.
+# revoke its token in GWatch (Revoke token, on the machine's node) to make it
+# worthless.
 set -e
 
 case "$1" in
