@@ -23,6 +23,7 @@ func (unsupported) stop(Config) error             { return errUnsupported }
 func (unsupported) restart(Config) error          { return errUnsupported }
 func (unsupported) status(Config) (Status, error) { return StatusUnknown, errUnsupported }
 func (unsupported) run(s *Service) error          { return runForeground(s) }
+func (unsupported) restartsOnExit() bool          { return false }
 
 // Interactive is always true where there is no service manager to start us.
 func Interactive() bool { return true }
