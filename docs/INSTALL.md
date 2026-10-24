@@ -70,8 +70,8 @@ things out as you go. Tips are off until you turn them on.
 - A **GWatch Monitor** shortcut in your Start Menu (and on the desktop, if you chose
   that option) reopens the interface any time.
 - **If you allowed other devices on your network to connect**: go to
-  **Settings › Users & access** in the web interface and set an access password (or
-  create individual user accounts) right away. Without one, anyone who can reach that
+  **Settings › Users & access** in the web interface and create user accounts (or set
+  the legacy shared access password under **Settings › Network access**) right away. Without one, anyone who can reach that
   port on your network can see and change everything.
 
 ## Installing the agent on other machines

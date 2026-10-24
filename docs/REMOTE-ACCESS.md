@@ -89,7 +89,9 @@ proxy's HTTPS still keeps it out of sight on the way. That is deliberate: a `Sec
 cookie set through `https://` would be withheld from the same host name over plain
 HTTP, and could not then be replaced from there, so signing in over the LAN address
 would bounce straight back to the sign-in screen. If the host name is only ever reached
-over HTTPS, nothing is lost.
+over HTTPS, nothing is lost — and you can tick **GWatch is behind an HTTPS reverse
+proxy** in Settings › Network access to have the cookie marked `Secure` after all. Leave
+it off if anyone still opens GWatch over plain HTTP.
 
 Three things to do if you go this way:
 
