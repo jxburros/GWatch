@@ -795,7 +795,10 @@ export function uptimeBar(points, { maxSegments = 90, bucketSeconds = 0, from, t
     const b = buckets[i];
     if (p.avail == null) continue;
     b.min = b.min == null ? p.avail : Math.min(b.min, p.avail);
-    b.sum += p.avail; b.n++;
+    // A bucket weighs as many samples as it holds: an hour with two failed
+    // runs does not cancel out one with sixty good ones.
+    const w = p.count > 0 ? p.count : 1;
+    b.sum += p.avail * w; b.n += w;
   }
   const tally = { up: 0, partial: 0, down: 0, none: 0 };
   let firstTrouble = null;
