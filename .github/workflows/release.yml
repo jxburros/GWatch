@@ -550,7 +550,7 @@ jobs:
         fetch-depth: 0
         ref: ${{ needs.plan.outputs.sha }}
     - name: Tagged commit is reviewed on main
-      run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      run: git merge-base --is-ancestor "$RELEASE_SOURCE_SHA" origin/main
     - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
       with:
         go-version: 1.26.x
@@ -668,6 +668,8 @@ jobs:
         ref: ${{ needs.plan.outputs.sha }}
         persist-credentials: false
         fetch-depth: 0
+    - name: Signed commit is reviewed on main
+      run: git merge-base --is-ancestor "$RELEASE_SOURCE_SHA" origin/main
     - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
       with:
         go-version: 1.26.x
@@ -767,7 +769,7 @@ jobs:
         fetch-depth: 0
         ref: ${{ needs.plan.outputs.sha }}
     - name: Tagged commit is reviewed on main
-      run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      run: git merge-base --is-ancestor "$RELEASE_SOURCE_SHA" origin/main
     - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
       with:
         go-version: 1.26.x
@@ -876,6 +878,8 @@ jobs:
         ref: ${{ needs.plan.outputs.sha }}
         persist-credentials: false
         fetch-depth: 0
+    - name: Signed commit is reviewed on main
+      run: git merge-base --is-ancestor "$RELEASE_SOURCE_SHA" origin/main
     - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
       with:
         go-version: 1.26.x
