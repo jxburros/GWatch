@@ -78,7 +78,7 @@ Inside the database:
   recorded with the IP address they came from, and every change carries the name
   of whoever made it.
 - **User accounts** — usernames, roles, and passwords stored only as argon2id
-  hashes. A hash cannot be turned back into a password.
+  hashes (or PBKDF2 ones, if you choose that under Password hashing). A hash cannot be turned back into a password.
 - **Sessions** — stored as sha256 digests of the session token, with the client
   address the session was last seen from.
 - **API keys** — stored only as a sha256 digest plus a short display prefix. A
@@ -89,9 +89,10 @@ Inside the database:
   are stored only as a hash. See [`HARDWARE.md`](HARDWARE.md) for why an agent
   token is worth very little even if it leaks.
 - **Settings**, including your SMTP host, username and password, the legacy
-  shared access password, and your scheduled-backup password. Those three
-  passwords are encrypted in the database with the `gwatch.key` key file; the
-  rest of the settings are stored as-is.
+  shared access password, your scheduled-backup password, and the *Also notify*
+  alert channels with their tokens, keys and webhook URLs. Those three passwords
+  and the channels' credentials are encrypted in the database with the
+  `gwatch.key` key file; the rest of the settings are stored as-is.
 - **Check credentials** — an SNMP community string and SNMPv3 passphrases, the
   bearer token for a hardware metrics endpoint, an HTTP check's request headers
   and body, and a custom script's environment values. These are encrypted with
@@ -121,7 +122,9 @@ Only what you configure, and only to destinations you chose.
    HTTPS requests, DNS queries, TLS handshakes and SNMP queries (UDP, port 161
    unless you choose another, with the community string or SNMPv3 credentials
    you gave it) to the hosts you told GWatch to watch, and, for a hardware check
-   reading a metrics endpoint, an HTTP request to that endpoint with its token.
+   reading a metrics endpoint, an HTTP request to that endpoint with its token,
+   and, for a Matter check, a WebSocket connection to the python-matter-server
+   you named (adding a device there sends it the pairing code you pasted).
    **Walk this device** in an SNMP check's editor sends the same SNMP queries,
    once, when you press it. This is the product doing its job. The corollary is
    in [`TERMS.md`](TERMS.md): only point it at things you are allowed to probe.
@@ -166,7 +169,10 @@ Only what you configure, and only to destinations you chose.
    one-directional: GWatch never connects back to the agent and holds no
    credential for the machine. (Serve mode reverses this and is off unless you
    ask for it: GWatch then polls the agent, with the token you gave the check.)
-   Separately, the agent on each machine checks GitHub for its own releases
+   An agent you have made a [remote collector](COLLECTORS.md) on both sides is
+   also sent, in the answer to its own check-in, the network checks of the nodes
+   pointed at it — including their SNMP credentials and request headers and
+   bodies — and posts their results back. Separately, the agent on each machine checks GitHub for its own releases
    every few hours and updates itself — see
    [`HARDWARE.md`](HARDWARE.md#keeping-agents-up-to-date). That is the agent's
    traffic, from that machine; GWatch is not involved in it.
