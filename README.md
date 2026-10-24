@@ -18,11 +18,19 @@ product brief is [`local-network-monitoring-product-brief.md`](local-network-mon
 some of its non-goals have since shipped in a narrow form, and [`ROADMAP.md`](ROADMAP.md)
 is where the current scope and its limits are kept.
 
-> **GWatch is in beta (0.8.0).** It works and it looks after your data, but the
+> **GWatch is in beta (0.8.1).** It works and it looks after your data, but the
 > interface and the JSON API can still change between releases, and bugs are likelier
 > now than they will be at 1.0 — which is reserved for the first public, stable
 > release. [`CHANGELOG.md`](CHANGELOG.md) lists what is in each version, and
 > [`ROADMAP.md`](ROADMAP.md#known-gaps) the known gaps it still ships with. Please [report anything that looks wrong](https://github.com/jxburros/GWatch/issues).
+
+## What's new in 0.8.1
+
+0.8.1 is a fixes release for GWatch and gwatch-agent, from a full review of both:
+tighter handling of stored credentials (API keys, redirects, the timeline), restores
+that keep agents and check states straight, charts and maintenance windows that keep
+to local time across daylight-saving changes, sturdier installs and command lines, and
+editors that no longer drop settings on save. Full detail in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## What's new in 0.8.0
 
@@ -36,8 +44,7 @@ Matrix, Twilio SMS, PagerDuty, Opsgenie) can be watched and alerted on;
 first; and alerts can be **grouped per node** or sent as a **warning digest**.
 
 The agent moves to **gwatch-agent 0.8.0** alongside it: it keeps held readings
-through a restart, comes back after a power cut, and has a control panel.
-0.8.0 is not yet released. Full detail in [`CHANGELOG.md`](CHANGELOG.md).
+through a restart, comes back after a power cut, and has a control panel. Full detail in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## What it does
 
