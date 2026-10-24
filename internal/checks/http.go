@@ -278,10 +278,10 @@ func runHTTPCheck(ctx context.Context, check model.Check, target string, opts Op
 
 	// JSON.
 	var jsonDoc any
-	jsonParsed := false
+	jsonParsed, jsonOK := false, false
 	parseJSON := func() bool {
 		if jsonParsed {
-			return jsonDoc != nil || len(bodyBytes) > 0
+			return jsonOK
 		}
 		jsonParsed = true
 		dec := json.NewDecoder(strings.NewReader(bodyText))
@@ -290,6 +290,7 @@ func runHTTPCheck(ctx context.Context, check model.Check, target string, opts Op
 			jsonDoc = nil
 			return false
 		}
+		jsonOK = true
 		return true
 	}
 	if check.Type == model.CheckJSON {
