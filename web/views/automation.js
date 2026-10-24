@@ -125,7 +125,9 @@ export function actionEditor(action = {}, { nodes = [], defaultInterpreter = 'sh
       const vIn = textInput({ value: v, placeholder: 'Value', 'aria-label': 'Header value' });
       const commit = () => { const next = {}; headersWrap.querySelectorAll('.kv-row').forEach((r) => { const [x, y] = r.querySelectorAll('input'); if (x.value.trim()) next[x.value.trim()] = y.value; }); a.headers = next; };
       kIn.addEventListener('change', commit); vIn.addEventListener('input', commit);
-      headersWrap.append(h('div', { class: 'kv-row' }, kIn, vIn, h('button', { class: 'btn btn-sm icon-btn', type: 'button', 'aria-label': 'Remove header', onclick: () => { const nh = { ...a.headers }; delete nh[k]; a.headers = nh; renderHeaders(); } }, icon('x'))));
+      // Drop the row and read the rest back: `k` is stale once the name is edited.
+      const row = h('div', { class: 'kv-row' }, kIn, vIn, h('button', { class: 'btn btn-sm icon-btn', type: 'button', 'aria-label': 'Remove header', onclick: () => { row.remove(); commit(); renderHeaders(); } }, icon('x')));
+      headersWrap.append(row);
     });
     headersWrap.append(h('div', null, h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { a.headers = { ...(a.headers || {}), [`Header-${entries.length + 1}`]: '' }; renderHeaders(); } }, icon('plus'), 'Add header')));
   };

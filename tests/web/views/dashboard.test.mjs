@@ -8,7 +8,7 @@ import '../../../web/mock.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as dashboardView from '../../../web/views/dashboard.js';
-import { mountView, settle } from '../view-harness.mjs';
+import { mountView, settle, waitFor } from '../view-harness.mjs';
 
 test('dashboard view renders the default dashboard\'s widgets', async (t) => {
   const { root, ctx } = await mountView(dashboardView, undefined, t);
@@ -22,6 +22,26 @@ test('dashboard view renders the default dashboard\'s widgets', async (t) => {
   assert.deepEqual(tabNames, window.__gwatchMock.dashboards.map((d) => d.name));
 
   await settle(); // chart widgets fetch their history asynchronously after first paint
+});
+
+// A refused save left the grid showing the edit anyway — a removed widget
+// gone until the next reload brought it back. The grid now goes back to what
+// is stored.
+test('a refused dashboard save puts the removed widget back', async (t) => {
+  const { root } = await mountView(dashboardView, undefined, t);
+  const before = root.querySelectorAll('.widget').length;
+  const realFetch = window.fetch;
+  window.fetch = async (url, init) => (init?.method === 'PUT' && /^\/api\/dashboards\/\d+$/.test(String(url))
+    ? new Response(JSON.stringify({ error: 'dashboards are read-only right now' }), { status: 409, headers: { 'Content-Type': 'application/json' } })
+    : realFetch(url, init));
+  t.after(() => { window.fetch = realFetch; });
+  root.querySelector('.widget [aria-label="Widget options"]').click();
+  [...document.querySelectorAll('[role="menuitem"]')].find((el) => el.textContent.includes('Remove')).click();
+  const confirm = await waitFor(() => [...document.querySelectorAll('.modal-foot button')].find((b) => b.textContent === 'Remove'));
+  confirm.click();
+  await waitFor(() => [...document.querySelectorAll('.toast-error')].find((el) => /read-only right now/.test(el.textContent)));
+  await waitFor(() => root.querySelectorAll('.widget').length === before);
+  await settle();
 });
 
 // A widget dropped below the others floats up under them instead of staying

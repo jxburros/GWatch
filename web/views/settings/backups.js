@@ -153,10 +153,13 @@ export function create(shell) {
     const autoInterval = numField(bk, 'intervalHours', 'Every', { unitLabel: 'hours', min: 1 });
     const autoKeep = numField(bk, 'keep', 'Keep the newest', { unitLabel: 'archives', min: 1 });
     const autoHist = checkbox({ label: 'Include performance history and events (bigger archives)', checked: !!bk.includeHistory, onChange: (v) => { bk.includeHistory = v; } });
-    const autoPw = h('input', { type: 'password', value: bk.password || '', autocomplete: 'new-password', placeholder: bk.password ? '' : 'Required to enable automatic backups', oninput: () => { bk.password = autoPw.value; } });
+    const savedPw = bk.password || '';
+    const autoPw = h('input', { type: 'password', value: savedPw, autocomplete: 'new-password', placeholder: bk.password ? '' : 'Required to enable automatic backups', oninput: () => { bk.password = autoPw.value; } });
     const autoPw2 = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'Repeat the password (leave blank to keep the saved one)' });
     const autoSaveBtn = h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
-      if (autoPw2.value && autoPw.value !== autoPw2.value) { toast('The passwords do not match', { kind: 'error' }); autoPw2.focus(); return; }
+      // Only the saved password (shown masked) may stand unconfirmed: a newly
+      // typed one is checked against the confirmation, blank or not.
+      if ((autoPw2.value || autoPw.value !== savedPw) && autoPw.value !== autoPw2.value) { toast('The passwords do not match', { kind: 'error' }); autoPw2.focus(); return; }
       if (bk.enabled && !bk.password) { toast('A password is required to enable automatic backups', { kind: 'error' }); autoPw.focus(); return; }
       const done = busy(autoSaveBtn, 'Saving…');
       await saveSettings();

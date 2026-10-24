@@ -243,3 +243,31 @@ test('duplicating an existing SNMP check blanks masked credentials', async (t) =
   assert.match(cards[0].textContent, /A value is stored/);
   assert.match(cards[1].textContent, /Nothing stored yet/);
 });
+
+// A header renamed in the form could not be removed afterwards: the remove
+// button deleted the name the row was drawn with, which was no longer there.
+test('a request header can be removed after it has been renamed', async (t) => {
+  const gateway = window.__gwatchMock.nodes.find((n) => n.name === 'Gateway');
+  const { root } = await mountView(nodeEditorView, { params: { id: String(gateway.id) } }, t);
+  const card = [...root.querySelectorAll('.editor-check')].find((el) => el.textContent.includes('Request headers'));
+  const headers = () => card.querySelector('.kv-rows');
+  [...headers().querySelectorAll('button')].find((b) => b.textContent.includes('Add header')).click();
+  const name = headers().querySelector('[aria-label="Header name"]');
+  name.value = 'Authorization';
+  name.dispatchEvent(new window.Event('change', { bubbles: true }));
+  headers().querySelector('[aria-label="Remove header"]').click();
+  assert.equal(headers().querySelectorAll('.kv-row').length, 0, 'the renamed header is gone');
+});
+
+test('a script check\'s environment variable can be removed after it has been renamed', async (t) => {
+  Element.prototype.scrollIntoView = Element.prototype.scrollIntoView || function scrollIntoView() {};
+  const { root } = await mountView(nodeEditorView, { params: {}, query: new URLSearchParams('add=custom') }, t);
+  const card = [...root.querySelectorAll('.editor-check')].find((el) => el.textContent.includes('Environment variables'));
+  const env = () => [...card.querySelectorAll('.kv-rows')].find((el) => el.textContent.includes('Add variable'));
+  [...env().querySelectorAll('button')].find((b) => b.textContent.includes('Add variable')).click();
+  const name = env().querySelector('[aria-label="Environment variable name"]');
+  name.value = 'API_TOKEN';
+  name.dispatchEvent(new window.Event('change', { bubbles: true }));
+  env().querySelector('[aria-label="Remove variable"]').click();
+  assert.equal(env().querySelectorAll('.kv-row').length, 0, 'the renamed variable is gone');
+});

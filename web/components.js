@@ -366,14 +366,24 @@ export function toast(message, { kind = 'info', timeout = 4500, action } = {}) {
 
 /* ---------- Modals ---------- */
 
-const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), details > summary:first-of-type, [tabindex]:not([tabindex="-1"])';
 
 /** The elements in `scope` a Tab press can land on. Judged by markup (hidden,
  *  disabled, inside a hidden ancestor) rather than by layout, so the answer is
  *  the same in a headless test as in a browser.
  *  @param {ParentNode} scope @returns {HTMLElement[]} */
 export function focusableIn(scope) {
-  return [.../** @type {NodeListOf<HTMLElement & { disabled?: boolean }>} */ (scope.querySelectorAll(FOCUSABLE))].filter((x) => !x.hidden && !x.disabled && !x.closest('[hidden]') && x.getAttribute('aria-hidden') !== 'true');
+  return [.../** @type {NodeListOf<HTMLElement & { disabled?: boolean }>} */ (scope.querySelectorAll(FOCUSABLE))].filter((x) => !x.hidden && !x.disabled && !x.closest('[hidden]') && x.getAttribute('aria-hidden') !== 'true' && !inClosedDetails(x));
+}
+
+/** Whether `x` is folded away inside a closed <details>, where Tab cannot
+ *  reach it; a details' own summary stays reachable while it is closed.
+ *  @param {Element} x */
+function inClosedDetails(x) {
+  for (let d = x.closest('details:not([open])'); d; d = d.parentElement?.closest('details:not([open])') || null) {
+    if (!(x.tagName === 'SUMMARY' && x.parentElement === d)) return true;
+  }
+  return false;
 }
 
 // How many modals are open. The page behind them is made inert by the first

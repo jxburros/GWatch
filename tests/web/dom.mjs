@@ -131,7 +131,7 @@ window.fetch = nativeFetch ? (...args) => nativeFetch(...args) : undefined;
   'window', 'document', 'navigator', 'location', 'localStorage', 'sessionStorage',
   'fetch', 'EventSource', 'ResizeObserver', 'IntersectionObserver', 'MutationObserver',
   'requestAnimationFrame', 'cancelAnimationFrame', 'getComputedStyle',
-  'HTMLElement', 'HTMLCanvasElement', 'Node', 'Element', 'SVGElement',
+  'HTMLElement', 'HTMLCanvasElement', 'Node', 'Element', 'SVGElement', 'CustomEvent',
 ].forEach(mirror);
 
 /** A fresh root element to mount a view into, the way app.js's `#view`

@@ -221,6 +221,27 @@ test('kinds only: no instance lists before the machine has reported', () => {
   assert.deepEqual(Object.keys(picker.value()), ['metrics']);
 });
 
+// An empty list is how the API spells "automatic", so unticking every kind
+// of reading (or ticking nothing under "Only the ones I tick") saved as
+// "collect everything" — the opposite of what was asked.
+test('saving a collection with nothing ticked is refused rather than saved as everything', async (t) => {
+  const { root } = await mountNas(t);
+  const card = await waitFor(() => root.querySelector('.agent-card'));
+  const section = card.querySelector('[data-section="collect"]');
+  const before = JSON.stringify((await (await fetch('/api/agents')).json())[0].collect);
+  for (const box of section.querySelectorAll('.collect-group:first-of-type input[type="checkbox"]')) box.checked = false;
+  document.querySelectorAll('.toast').forEach((el) => el.remove());
+  button(section, 'Save what to collect').click();
+  await waitFor(() => [...document.querySelectorAll('.toast-error')].find((el) => /at least one kind of reading/i.test(el.textContent)));
+  assert.equal(JSON.stringify((await (await fetch('/api/agents')).json())[0].collect), before, 'nothing was saved');
+
+  const picker = collectionPicker({ value: {}, inventory: { interfaces: [{ name: 'eth0', auto: true }] } });
+  assert.equal(picker.problem(), '');
+  picker.el.querySelector('input[id$="-interfaces-only"]').click();
+  picker.el.querySelector('input[id*="-interfaces-"][type="checkbox"]').checked = false;
+  assert.match(picker.problem(), /network interfaces/i);
+});
+
 // #132: a Linux machine's sensors, pressure figures and ZFS pool are shown
 // with its other readings, and the pool is one filesystem, not one per dataset.
 test('a Linux machine shows its temperatures, pressure and ZFS pool', async (t) => {
@@ -296,4 +317,36 @@ test('this computer\'s services are chosen on its hardware panel', async (t) => 
   assert.equal(viewer.el.querySelector('[data-section="watch"]'), null);
   // Leave the mock as it was found.
   await fetch('/api/hosts/local/watch', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+});
+
+// A live update and a refresh (or two updates) each load the machine; the
+// older answer arriving last drew the older reading over the newer one.
+test('a hardware panel draws only its newest reading', async (t) => {
+  const { hardwarePanel } = await import('../../../web/views/machines.js');
+  const waiting = { host: [] };
+  const realFetch = window.fetch;
+  window.fetch = (url) => {
+    const u = String(url);
+    if (u.startsWith('/api/hosts/race/history')) return new Promise(() => {});
+    const kind = u.startsWith('/api/hosts/race') ? 'host' : null;
+    if (!kind) return realFetch(url);
+    return new Promise((resolve) => waiting[kind].push((body) => resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }))));
+  };
+  t.after(() => { window.fetch = realFetch; });
+  const panel = hardwarePanel('race');
+  document.body.append(panel.el);
+  t.after(() => { panel.destroy(); panel.el.remove(); });
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  await tick();
+  panel.refresh();
+  await tick();
+  assert.equal(waiting.host.length, 2, 'two readings are out at once');
+  const host = (hostname) => ({ key: 'race', source: 'agent', status: 'up', metrics: { ts: new Date().toISOString(), hostname, platform: 'linux' } });
+  waiting.host[1](host('newer-box'));
+  await tick();
+  waiting.host[0](host('older-box'));
+  await tick(); await tick();
+  assert.match(panel.el.textContent, /newer-box/);
+  assert.doesNotMatch(panel.el.textContent, /older-box/);
+
 });

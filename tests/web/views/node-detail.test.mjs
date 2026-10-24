@@ -149,3 +149,26 @@ test('a slow history pass for the old range never overwrites the newly chosen on
   assert.match(root.querySelector('.uptime-row .sub').textContent, /^7 samples/);
   assert.equal(root.querySelector('.range-chips .chip.active').textContent, '7d');
 });
+
+// "Silence alerts" sends one request per check. When one of them failed the
+// page only said so, and went on showing no silence although the others had
+// taken: it now reads the node back either way.
+test('a partly refused silence still shows the checks that were silenced', async (t) => {
+  const gateway = window.__gwatchMock.nodes.find((n) => n.name === 'Gateway');
+  assert.ok(gateway.checks.length > 1);
+  const { root, ctx } = await mountView(nodeDetailView, { params: { id: String(gateway.id) } }, t);
+  const refused = gateway.checks[1].id;
+  const realFetch = window.fetch;
+  window.fetch = async (url, init) => (String(url) === `/api/checks/${refused}/silence`
+    ? new Response(JSON.stringify({ error: 'that check is busy' }), { status: 409, headers: { 'Content-Type': 'application/json' } })
+    : realFetch(url, init));
+  t.after(async () => {
+    window.fetch = realFetch;
+    for (const c of gateway.checks) await realFetch(`/api/checks/${c.id}/silence`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"minutes":0}' });
+  });
+  assert.doesNotMatch(root.textContent, /Alerts silenced/);
+  ctx.setTitleCalls.at(-1).opts.actions.find((a) => a.getAttribute('aria-haspopup') === 'menu').click();
+  [...document.querySelectorAll('.menu-item')].find((b) => b.textContent.includes('Silence alerts for 1 hour')).click();
+  await waitFor(() => [...document.querySelectorAll('.toast-error')].find((el) => /that check is busy/.test(el.textContent)));
+  await waitFor(() => /Alerts silenced/.test(root.textContent));
+});

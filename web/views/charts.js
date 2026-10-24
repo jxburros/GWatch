@@ -3,7 +3,7 @@
 // dashboard as widgets.
 
 import { api } from '../api.js';
-import { h, icon, clear, replace, toast, confirmDialog, promptDialog, menuButton, emptyState, skeleton, rangeChips, busy, uid } from '../components.js';
+import { h, icon, clear, replace, toast, confirmDialog, promptDialog, menuButton, emptyState, skeleton, rangeChips, busy, uid, field } from '../components.js';
 import { chartConfigEditor, renderConfiguredChart, normalizeChartConfig, describeChartConfig, chartMetricSummary, cachedHistoryFetch, expireHistory, chartCsvItems } from '../chart-config.js';
 import { debounce } from '../api.js';
 import { TIMESTACK_PERIODS } from '../chart-config.js';
@@ -153,7 +153,7 @@ export async function mount(root, ctx) {
     try { dashboards = await api.get('/api/dashboards'); } catch (e) { toast(e.message, { kind: 'error' }); return; }
     if (!dashboards.length) { toast('Create a dashboard first', { kind: 'error' }); return; }
     const sel = h('select', null, dashboards.map((d) => h('option', { value: d.id }, d.name)));
-    const ok = await confirmDialog({ title: 'Pin chart to a dashboard', confirmLabel: 'Pin', body: h('div', { class: 'field' }, h('label', null, 'Dashboard'), sel) });
+    const ok = await confirmDialog({ title: 'Pin chart to a dashboard', confirmLabel: 'Pin', body: field({ label: 'Dashboard', input: sel }) });
     if (!ok) return;
     const d = dashboards.find((x) => String(x.id) === sel.value);
     const widgets = [...(d.widgets || []), { id: uid('w'), type: 'chart', title: current()?.name || '', width: 2, height: 2, config: state.cfg }];
