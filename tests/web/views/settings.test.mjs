@@ -258,6 +258,41 @@ test('a maintenance window for "a group" with no group to pick is refused, not s
   dialog.querySelector('.modal-foot button').click();
 });
 
+// The confirm box said "leave blank to keep the saved one", and the save took
+// that to mean a newly typed password needed no confirming: one typo and
+// every automatic backup from then on was locked with a password nobody knew.
+test('a new automatic-backup password is not saved without its confirmation', async (t) => {
+  const before = await api.get('/api/settings');
+  t.after(() => api.put('/api/settings', before));
+  const { root } = await mountView(settingsView, { params: { tab: 'backups' } }, t);
+  const pw = await waitFor(() => [...root.querySelectorAll('input[type="password"]')].find((el) => /Required to enable automatic backups/.test(el.placeholder)));
+  pw.value = 'tpyo-secret';
+  pw.dispatchEvent(new window.Event('input'));
+  document.querySelectorAll('.toast').forEach((el) => el.remove());
+  [...root.querySelectorAll('button')].find((b) => b.textContent.includes('Save automatic backup settings')).click();
+  await waitFor(() => [...document.querySelectorAll('.toast')].find((el) => /do not match|confirm/i.test(el.textContent) || /Settings saved/.test(el.textContent)));
+  assert.notEqual((await api.get('/api/settings')).backups.password, 'tpyo-secret');
+});
+
+// A save replaces the settings document with the server's copy, and the form
+// went on writing into the old one, so a second edit and save on the same tab
+// said "Settings saved" and sent nothing new.
+test('a second save from the same settings tab sends the second edit', async (t) => {
+  const before = await api.get('/api/settings');
+  t.after(() => api.put('/api/settings', before));
+  const { root } = await mountView(settingsView, undefined, t);
+  const name = root.querySelector('.settings-panel input[type="text"]');
+  const save = [...root.querySelectorAll('.settings-panel button')].find((b) => b.textContent.includes('Save changes'));
+  for (const value of ['First name', 'Second name']) {
+    name.value = value;
+    name.dispatchEvent(new window.Event('input'));
+    document.querySelectorAll('.toast').forEach((el) => el.remove());
+    save.click();
+    await waitFor(() => [...document.querySelectorAll('.toast')].find((el) => /Settings saved/.test(el.textContent)));
+    assert.equal((await api.get('/api/settings')).general.instanceName, value);
+  }
+});
+
 // #122: Settings › Alerts lists the "also notify" channels, adds one through
 // the channel editor (which offers notification types only and tests through
 // /api/settings/test-channel), and saves it with the settings.
