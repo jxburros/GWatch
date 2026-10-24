@@ -73,13 +73,16 @@ func runDNSCheck(ctx context.Context, check model.Check, target string) model.Re
 	t0 := time.Now()
 	switch recordType {
 	case "A", "AAAA":
-		ips, lerr := resolver.LookupIPAddr(ctx, name)
+		// Ask for the one family only: LookupIPAddr returns both, so an A
+		// check on a name with only AAAA records used to pass.
+		network := "ip4"
+		if recordType == "AAAA" {
+			network = "ip6"
+		}
+		ips, lerr := resolver.LookupIP(ctx, network, name)
 		err = lerr
 		for _, ip := range ips {
-			if recordType == "AAAA" && ip.IP.To4() != nil {
-				continue
-			}
-			values = append(values, ip.IP.String())
+			values = append(values, ip.String())
 		}
 		sort.Strings(values)
 	case "CNAME":

@@ -655,7 +655,8 @@ func TestTCPCheck(t *testing.T) {
 }
 
 // fakeDNS answers A queries with 1.2.3.4 for names under "good." and
-// NXDOMAIN for everything else. AAAA queries get an empty NOERROR answer.
+// NXDOMAIN for everything else. AAAA queries get an empty NOERROR answer,
+// except under "v6.test", whose names have only an AAAA record (2001:db8::1).
 func fakeDNS(t *testing.T) string {
 	t.Helper()
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -698,7 +699,12 @@ func fakeDNS(t *testing.T) string {
 			flags := uint16(0x8180)         // QR, RD, RA
 			ancount := uint16(0)
 			var answer []byte
-			if strings.HasSuffix(name, "good.test") {
+			if strings.HasSuffix(name, "v6.test") {
+				if qtype == 28 {
+					ancount = 1
+					answer = append([]byte{0xC0, 0x0C, 0, 28, 0, 1, 0, 0, 0, 60, 0, 16}, net.ParseIP("2001:db8::1")...)
+				}
+			} else if strings.HasSuffix(name, "good.test") {
 				if qtype == 1 {
 					ancount = 1
 					answer = []byte{0xC0, 0x0C, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 1, 2, 3, 4}
@@ -753,6 +759,15 @@ func TestDNSCheck(t *testing.T) {
 	res = run(t, httpCheck(model.CheckDNS, "localhost", model.CheckConfig{}), Options{})
 	if !res.Success || res.Details.Resolver != "system" || len(res.Details.ResolvedValues) == 0 {
 		t.Errorf("localhost: %+v", res)
+	}
+	// An A check on a name with only an AAAA record fails; AAAA finds it.
+	res = run(t, httpCheck(model.CheckDNS, "host.v6.test", model.CheckConfig{DNSServer: server, RecordType: "A"}), Options{})
+	if res.Success {
+		t.Errorf("A check passed on an AAAA-only name: %+v", res)
+	}
+	res = run(t, httpCheck(model.CheckDNS, "host.v6.test", model.CheckConfig{DNSServer: server, RecordType: "AAAA"}), Options{})
+	if !res.Success || len(res.Details.ResolvedValues) != 1 || res.Details.ResolvedValues[0] != "2001:db8::1" {
+		t.Errorf("AAAA check: %+v", res)
 	}
 	// A URL target is reduced to its host.
 	res = run(t, httpCheck(model.CheckDNS, "https://www.good.test:8443/path", model.CheckConfig{DNSServer: server}), Options{})
