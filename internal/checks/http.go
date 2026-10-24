@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -109,6 +110,13 @@ func (t *httpTiming) fill(d *model.ResultDetails) {
 	}
 }
 
+// leavesOrigin reports whether a redirect from first to next leaves the host
+// a check was pointed at, or drops from https to plain http. Either way what
+// the check was told to send there is not for next.
+func leavesOrigin(first, next *url.URL) bool {
+	return !strings.EqualFold(first.Hostname(), next.Hostname()) || (first.Scheme == "https" && next.Scheme != "https")
+}
+
 // runHTTPCheck implements the http, keyword and json check types.
 func runHTTPCheck(ctx context.Context, check model.Check, target string, opts Options) model.Result {
 	cfg := check.Config
@@ -182,6 +190,21 @@ func runHTTPCheck(ctx context.Context, check model.Check, target string, opts Op
 				return fmt.Errorf("stopped after %d redirects", maxRedirects)
 			}
 			redirects = len(via)
+			// The headers and body a check is configured with are stored as
+			// credentials, and Go would carry them (all but Authorization and
+			// Cookie) to whatever host a redirect names. Off the host the
+			// check was pointed at, or down from https to http, the request
+			// goes without them.
+			if leavesOrigin(via[0].URL, r.URL) {
+				for k := range cfg.Headers {
+					r.Header.Del(strings.TrimSpace(k))
+				}
+				if r.Body != nil && r.Body != http.NoBody {
+					r.Body.Close()
+					r.Body, r.GetBody, r.ContentLength = http.NoBody, nil, 0
+					r.Header.Del("Content-Type")
+				}
+			}
 			return nil
 		},
 	}

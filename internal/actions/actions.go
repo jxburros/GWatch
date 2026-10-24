@@ -221,6 +221,7 @@ func (r *Runner) Run(ctx context.Context, a model.Action, vars Vars) (res model.
 			res.Error = fmt.Sprintf("internal error: %v", p)
 		}
 		res.DurationMS = time.Since(start).Milliseconds()
+		scrubResult(&res, a, vars)
 		if len(res.Output) > maxOutput {
 			res.Output = res.Output[:maxOutput] + "\n… (truncated)"
 		}
@@ -282,6 +283,63 @@ func (r *Runner) Run(ctx context.Context, a model.Action, vars Vars) (res model.
 	}
 	res.Error = "unsupported action"
 	return res
+}
+
+// scrubResult takes the action's credentials out of its result's text. Go's
+// transport errors quote the whole request URL ("Post \"https://hooks.slack.
+// com/services/…\": dial tcp …"), and an HTTP action reports the URL it
+// called, yet a webhook URL is itself the secret (model.Action.SecretFields).
+// The result's first line becomes the timeline entry of a trigger, rule or
+// alert, which every viewer and every read-only API key can read, so the
+// secret URLs are cut down to their scheme and host and the tokens replaced,
+// in both their stored and their expanded forms.
+func scrubResult(res *model.ActionResult, a model.Action, vars Vars) {
+	replace := map[string]string{}
+	for _, raw := range []string{a.URL, a.WebhookURL} {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		forms := []string{raw}
+		if u, err := expandURL(raw, vars); err == nil {
+			forms = append(forms, u)
+		}
+		for _, f := range forms {
+			p, err := url.Parse(f)
+			if err != nil || p.Host == "" {
+				continue
+			}
+			short := p.Scheme + "://" + p.Host + "/…"
+			for _, v := range []string{f, p.String(), p.Redacted()} {
+				replace[v] = short
+			}
+		}
+	}
+	for _, raw := range []string{a.Token, a.UserKey, a.RoutingKey} {
+		for _, v := range []string{strings.TrimSpace(raw), strings.TrimSpace(Expand(raw, vars))} {
+			// A value this short could be anything; it is not worth mangling
+			// ordinary words in the output over.
+			if len(v) >= 8 {
+				replace[v] = "<redacted>"
+			}
+		}
+	}
+	if len(replace) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(replace))
+	for k := range replace {
+		keys = append(keys, k)
+	}
+	// Longest first, so a URL is replaced whole before any token inside it.
+	sort.Slice(keys, func(i, j int) bool { return len(keys[i]) > len(keys[j]) })
+	pairs := make([]string, 0, 2*len(keys))
+	for _, k := range keys {
+		pairs = append(pairs, k, replace[k])
+	}
+	r := strings.NewReplacer(pairs...)
+	res.Error = r.Replace(res.Error)
+	res.Output = r.Replace(res.Output)
 }
 
 // ---- http ----

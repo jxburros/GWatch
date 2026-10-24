@@ -155,7 +155,18 @@ func scrapeHostMetrics(ctx context.Context, check model.Check) (model.HostMetric
 	}
 	defer transport.CloseIdleConnections()
 
-	resp, err := (&http.Client{Transport: transport}).Do(req)
+	client := &http.Client{Transport: transport, CheckRedirect: func(r *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		// Go keeps Authorization for a subdomain and across a drop to plain
+		// http; the token is for the endpoint that was configured and no other.
+		if leavesOrigin(via[0].URL, r.URL) {
+			r.Header.Del("Authorization")
+		}
+		return nil
+	}}
+	resp, err := client.Do(req)
 	if err != nil {
 		return model.HostMetrics{}, fmt.Errorf("cannot reach the metrics endpoint: %s", describeNetError(err, timeout))
 	}
