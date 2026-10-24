@@ -333,7 +333,9 @@ export async function openTemplatePicker(state, ctx, reload) {
   let templates = state?.templates;
   try { if (!templates) templates = await api.get('/api/templates'); if (state) state.templates = templates; } catch (e) { templates = []; }
   const grid = h('div', { class: 'template-grid' });
-  for (const t of templates || []) {
+  // The agent-machine template is what a paired agent's node is built from; the
+  // picker offers that through its own card below, which also hands out the code.
+  for (const t of (templates || []).filter((t) => t.id !== 'agent-machine')) {
     grid.append(h('a', { class: 'template-card', href: `#/nodes/new?template=${encodeURIComponent(t.id)}`, onclick: () => m.close() },
       h('span', { class: 't-icon' }, icon(TEMPLATE_ICONS[t.id] || t.icon || 'server')),
       h('span', null, h('b', null, t.name), h('span', null, t.description || ''))));
