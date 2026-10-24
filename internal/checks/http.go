@@ -206,7 +206,13 @@ func runHTTPCheck(ctx context.Context, check model.Check, target string, opts Op
 	}
 	defer resp.Body.Close()
 
-	bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
+	// truncated is that the response went on past what is read, so a keyword
+	// that was not found may simply be further down.
+	truncated := len(bodyBytes) > maxBodyBytes
+	if truncated {
+		bodyBytes = bodyBytes[:maxBodyBytes]
+	}
 	total := time.Since(timing.start)
 	res.LatencyMS = msPtr(total)
 	res.Details.TotalMs = msPtr(total)
@@ -264,6 +270,9 @@ func runHTTPCheck(ctx context.Context, check model.Check, target string, opts Op
 			msg = fmt.Sprintf("Keyword %q absent as expected", cfg.Keyword)
 		default:
 			msg = fmt.Sprintf("Keyword %q not found", cfg.Keyword)
+		}
+		if !found && truncated {
+			msg += fmt.Sprintf(" in the first %d MiB of the response", maxBodyBytes>>20)
 		}
 		if res.Success {
 			res.Success = ok

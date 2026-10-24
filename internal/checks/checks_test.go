@@ -1,6 +1,7 @@
 package checks
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -329,6 +330,28 @@ func TestKeywordCheck(t *testing.T) {
 	res = run(t, httpCheck(model.CheckKeyword, srv.URL, model.CheckConfig{}), Options{})
 	if res.Success || !strings.Contains(res.Error, "keyword") {
 		t.Errorf("missing keyword config should fail: %+v", res)
+	}
+}
+
+// A keyword past the part of a large response that is read is not "absent":
+// the message has to say how much was searched.
+func TestKeywordPastTheReadLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(bytes.Repeat([]byte("x"), maxBodyBytes))
+		_, _ = w.Write([]byte("Error"))
+	}))
+	defer srv.Close()
+	res := run(t, httpCheck(model.CheckKeyword, srv.URL, model.CheckConfig{Keyword: "Error", KeywordAbsent: true}), Options{})
+	if !strings.Contains(res.Message, "first 2 MiB") {
+		t.Errorf("message does not say only part was searched: %q", res.Message)
+	}
+	small := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(bytes.Repeat([]byte("x"), maxBodyBytes))
+	}))
+	defer small.Close()
+	res = run(t, httpCheck(model.CheckKeyword, small.URL, model.CheckConfig{Keyword: "Error"}), Options{})
+	if res.Message != `Keyword "Error" not found` {
+		t.Errorf("a response that fits was called cut short: %q", res.Message)
 	}
 }
 
