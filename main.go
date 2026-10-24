@@ -121,12 +121,7 @@ Environment: GWATCH_DATA_DIR, GWATCH_LISTEN, GWATCH_TRUSTED_PROXIES, GWATCH_DB_*
 }
 
 func main() {
-	args := os.Args[1:]
-	cmd := "run"
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		cmd = args[0]
-		args = args[1:]
-	}
+	cmd, args := splitCommand(os.Args[1:])
 	fs := flag.NewFlagSet("gwatch", flag.ContinueOnError)
 	fs.Usage = usage
 	cfg := config{}
@@ -156,10 +151,10 @@ func main() {
 	}
 
 	switch cmd {
-	case "version", "-v", "--version":
+	case "version":
 		fmt.Printf("gwatch %s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
 		return
-	case "help", "-h", "--help":
+	case "help":
 		usage()
 		return
 	case "open":
@@ -326,6 +321,25 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+}
+
+// splitCommand separates the command from its flags. No command means run;
+// --version and --help are the commands of those names, since the flag parser
+// knows neither and would refuse them.
+func splitCommand(args []string) (string, []string) {
+	if len(args) == 0 {
+		return "run", args
+	}
+	switch args[0] {
+	case "-v", "-version", "--version":
+		return "version", args[1:]
+	case "-h", "-help", "--help":
+		return "help", args[1:]
+	}
+	if strings.HasPrefix(args[0], "-") {
+		return "run", args
+	}
+	return args[0], args[1:]
 }
 
 // program is what the service runs (svc.Program).
