@@ -64,7 +64,19 @@ export function timeTicks(from, to, width, minPx = 76) {
   }
   const ticks = [];
   const start = new Date(from);
-  if (typeof step === 'number' && step < DAY) {
+  if (typeof step === 'number' && step >= HOUR && step < DAY) {
+    // Hour steps follow the local clock day by day, so a span across a
+    // daylight-saving change keeps its ticks on 00:00, 06:00 … rather than
+    // drifting an hour off them (and losing the midnight day label).
+    const hours = step / HOUR;
+    for (const d = new Date(start.getFullYear(), start.getMonth(), start.getDate()); d.getTime() <= to; d.setDate(d.getDate() + 1)) {
+      for (let hh = 0; hh < 24; hh += hours) {
+        const t = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh).getTime();
+        if (t < from || t > to || (ticks.length && t <= ticks[ticks.length - 1].t)) continue;
+        ticks.push({ t, major: new Date(t).getHours() === 0 && new Date(t).getMinutes() === 0 });
+      }
+    }
+  } else if (typeof step === 'number' && step < DAY) {
     // align to local midnight + multiples of step
     const midnight = new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime();
     let t = midnight + Math.ceil((from - midnight) / step) * step;
