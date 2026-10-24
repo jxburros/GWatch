@@ -199,6 +199,26 @@ test('Tab inside a modal cycles between its first and last focusable elements wi
   m.close();
 });
 
+test('the modal trap counts a details summary, and not what a closed details folds away', () => {
+  // A dialog with no footer that ends in a closed <details>: its summary is
+  // the last thing Tab can reach, and the input folded inside it is not.
+  const folded = h('input', { id: 'folded' });
+  const det = h('details', null, h('summary', null, 'More'), folded);
+  const m = openModal({ title: 'Fold', body: [h('input', { id: 'top' }), det] });
+  const summary = det.querySelector('summary');
+  const closeBtn = m.el.querySelector('.modal-head button');
+  closeBtn.focus();
+  key(document, 'Tab', { shiftKey: true });
+  assert.equal(document.activeElement, summary, 'Shift+Tab from the first wraps to the summary, not to the folded input');
+  key(document, 'Tab');
+  assert.equal(document.activeElement, closeBtn, 'Tab from the summary wraps back to the first');
+  det.open = true;
+  closeBtn.focus();
+  key(document, 'Tab', { shiftKey: true });
+  assert.equal(document.activeElement, folded, 'once open, the folded input is the last');
+  m.close();
+});
+
 test('confirmDialog describes the dialog by its message', async () => {
   const p = confirmDialog({ title: 'Delete?', message: 'This cannot be undone.' });
   const dialog = document.getElementById('modals').lastElementChild.querySelector('[role="dialog"]');
