@@ -92,6 +92,24 @@ test('a node-level change reports node counts and leaves the checks alone', asyn
   assert.deepEqual(node.checks.map((c) => c.intervalSeconds), intervals, 'a node-only change left the checks alone');
 });
 
+// The server replaces a check's whole alert override with the object a bulk
+// edit sends, so setting only the cooldown sends a check whose alerts were
+// switched off back to sending them. The summary the confirm repeats says so.
+test('a bulk alert change says the overrides it does not set go back to the global settings', async (t) => {
+  const { root } = await mountView(bulkView, undefined, t);
+  tick(root.querySelector('.bulk-node .bulk-node-head input[type="checkbox"]'));
+  const paramSel = root.querySelector('.bulk-row select');
+  paramSel.value = 'alertsCooldown';
+  paramSel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const summary = root.querySelector('.bulk-summary').textContent;
+  assert.match(summary, /Set the alert cooldown to 60 min on \d+ checks?/);
+  assert.match(summary, /other alert overrides on those checks go back to the global settings/i);
+
+  paramSel.value = 'intervalSeconds';
+  paramSel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  assert.doesNotMatch(root.querySelector('.bulk-summary').textContent, /alert overrides/, 'only an alert change carries the note');
+});
+
 test('nothing selected means nothing to apply', async (t) => {
   const { root } = await mountView(bulkView, undefined, t);
   const apply = [...root.querySelectorAll('.btn')].find((b) => b.textContent.includes('Apply changes'));
