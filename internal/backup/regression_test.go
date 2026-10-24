@@ -2,11 +2,15 @@ package backup
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
+
+	"github.com/jxburros/GWatch/internal/store/storetest"
 )
 
 func TestScheduledPrunePreservesManualAndLegacyArchives(t *testing.T) {
@@ -28,6 +32,27 @@ func TestScheduledPrunePreservesManualAndLegacyArchives(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Fatalf("manual backup deleted: %s", name)
 		}
+	}
+}
+
+// An archive holds every credential digest and secret the database does, so
+// it is written owner-only rather than with the umask's 0644.
+func TestArchiveIsOwnerOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits")
+	}
+	st := storetest.Open(t)
+	dir := t.TempDir()
+	info, err := Create(context.Background(), st, dir, "pw", false, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(filepath.Join(dir, info.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Fatalf("archive perms = %v, want 0600", fi.Mode().Perm())
 	}
 }
 

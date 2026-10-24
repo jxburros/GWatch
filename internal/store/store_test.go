@@ -422,8 +422,14 @@ func TestOldDatabaseMigratesAndBacksUp(t *testing.T) {
 	}
 	if isFileBacked() {
 		backupPath := fmt.Sprintf("%s.before-v%d", dbPath, currentSchemaVersion)
-		if fi, err := os.Stat(backupPath); err != nil || fi.Size() == 0 {
+		fi, err := os.Stat(backupPath)
+		if err != nil || fi.Size() == 0 {
 			t.Fatalf("pre-migration backup missing or empty: %v", err)
+		}
+		// The copy holds what the database does, so it is as private as the
+		// database file, whatever the umask.
+		if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
+			t.Fatalf("pre-migration backup perms = %v, want 0600", fi.Mode().Perm())
 		}
 		if rep.BackupPath != backupPath || rep.BackupSkipped != "" {
 			t.Fatalf("migration report = %+v", rep)

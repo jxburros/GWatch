@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/jxburros/GWatch/internal/model"
+	"github.com/jxburros/GWatch/internal/permissions"
 	"github.com/jxburros/GWatch/internal/store"
 )
 
@@ -236,11 +237,18 @@ func create(ctx context.Context, st *store.Store, dir, password string, includeH
 	}
 	path := filepath.Join(dir, name)
 	tmp := path + ".tmp"
-	f, err := os.Create(tmp)
+	// Owner-only, like the database it copies: the archive is encrypted, but
+	// a copy anyone on the machine can read is a copy anyone can attack the
+	// password of at leisure.
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return model.BackupInfo{}, err
 	}
 	cleanup := func() { f.Close(); os.Remove(tmp) }
+	if err := permissions.EnsurePrivateFile(tmp); err != nil {
+		cleanup()
+		return model.BackupInfo{}, err
+	}
 
 	if err := writeArchive(ctx, st, f, password, includeHistory, appVersion, now); err != nil {
 		cleanup()
