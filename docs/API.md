@@ -849,8 +849,9 @@ routes — an administrator in the browser, never an API key:
 
 - `GET /api/agents` → `[Agent]`. The token is never returned; only `prefix` is.
 - `POST /api/agents` body `{ "name": "Living room NAS", "nodeId": null|id }` →
-  `{ "token": "gwa_…", "agent": Agent }`. **The token is returned exactly once.** Only its
-  sha256 digest is stored, so it cannot be shown again.
+  `{ "token": "gwa_…", "agent": Agent }`. Its sha256 digest is what GWatch checks it
+  against; a copy sealed with `gwatch.key` is kept as well, so an administrator can read it
+  back later with `POST /api/agents/{id}/token` (below).
 - `PUT /api/agents/{id}` body `{ "name": …, "nodeId": …, "enabled": bool }` → `Agent`. A field left out
   keeps its value; `"nodeId": null` detaches the machine from its node.
 - `DELETE /api/agents/{id}` → 204. Revokes the token and keeps the machine's past
