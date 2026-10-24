@@ -6,8 +6,9 @@ your data, but the interface and the JSON API can still change between releases.
 1.0.0 is reserved for the first public, stable release.
 
 The version a build reports comes from the [`VERSION`](VERSION) file, and a
-release is cut by tagging `v<VERSION>`. CI refuses to publish a tag that
-disagrees with the file — see [`docs/RELEASING.md`](docs/RELEASING.md).
+release is published as `v<VERSION>` by the Release workflow, dispatched from
+`main`. It refuses to publish a tag that disagrees with the file — see
+[`docs/RELEASING.md`](docs/RELEASING.md).
 
 ## 0.8.0 (not yet released)
 
