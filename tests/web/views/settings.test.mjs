@@ -203,6 +203,23 @@ test('a refused password hashing change puts the select back', async (t) => {
   assert.equal(select.value, 'argon2id');
 });
 
+// A rule with no `enabled` field showed its switch on but its row dimmed as
+// off, and saved as disabled; it is on, everywhere, and saved that way.
+test('an indicator rule without an enabled field is on in its switch, its row and its save', async (t) => {
+  const before = await api.get('/api/settings');
+  t.after(() => api.put('/api/settings', before));
+  const { enabled, ...bare } = before.indicators[0];
+  assert.equal(enabled, true);
+  await api.put('/api/settings', { ...before, indicators: [bare] });
+  const { root } = await mountView(settingsView, { params: { tab: 'indicators' } }, t);
+  const row = await waitFor(() => root.querySelector('.ind-rule'));
+  assert.equal(row.querySelector('input[role="switch"]').checked, true);
+  assert.equal(row.classList.contains('off'), false, 'the row is not dimmed as off');
+  [...root.querySelectorAll('button')].find((b) => /Save changes/.test(b.textContent)).click();
+  await waitFor(() => [...document.querySelectorAll('.toast')].find((el) => /Settings saved/.test(el.textContent)));
+  assert.equal((await api.get('/api/settings')).indicators[0].enabled, true);
+});
+
 // #122: Settings › Alerts lists the "also notify" channels, adds one through
 // the channel editor (which offers notification types only and tests through
 // /api/settings/test-channel), and saves it with the settings.
