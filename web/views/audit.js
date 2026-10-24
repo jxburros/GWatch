@@ -57,9 +57,13 @@ export async function mount(root, ctx) {
     type.addEventListener('change', () => reload()); node.addEventListener('change', () => reload());
     syncExport();
 
-    async function fetchPage(before) { return api.get(`/api/events${qs({ ...params(), limit: PAGE, before })}`); }
+    // The filter the list on screen was loaded with. Load more and the live
+    // refresh keep to it; the boxes only take effect when applied.
+    let applied = params();
+    async function fetchPage(before) { return api.get(`/api/events${qs({ ...applied, limit: PAGE, before })}`); }
     async function reload() {
       const token = ++request; loading = true;
+      applied = params();
       events.length = 0; hasMore = true;
       replace(listEl, skeleton({ lines: 6 }));
       try { const rows = await fetchPage(null); if (state.destroyed || token !== request) return; events.push(...(rows || [])); hasMore = events.length >= PAGE; render(); }
