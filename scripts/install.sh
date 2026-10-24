@@ -71,4 +71,4 @@ fi
 if "$no_start"; then set -- "$@" --no-start; fi
 "$tmp/binary" "$@"
 echo "GWatch installed. Open http://${listen:-127.0.0.1:7230} (or use an SSH tunnel)."
-echo 'First administrator: ssh -L 7230:127.0.0.1:7230 user@server, then open http://127.0.0.1:7230 and Settings > Accounts.'
+echo 'First administrator: ssh -L 7230:127.0.0.1:7230 user@server, then open http://127.0.0.1:7230 and Settings > Users & access.'

@@ -122,7 +122,7 @@ Keep the initial listener on loopback. Open an SSH tunnel from your desktop:
 ssh -L 7230:127.0.0.1:7230 user@server
 ```
 
-Open `http://127.0.0.1:7230`, create an administrator in Settings > Accounts, and enable the local sign-in requirement. Alternatively, create the first administrator from a shell on the server:
+Open `http://127.0.0.1:7230`, create an administrator in Settings > Users & access, and enable the local sign-in requirement. Alternatively, create the first administrator from a shell on the server:
 
 ```sh
 # A private admin.json contains username, password, and role set to admin.
