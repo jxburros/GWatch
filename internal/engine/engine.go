@@ -587,7 +587,13 @@ func (e *Engine) runAndProcess(ctx context.Context, checkID int64, depth int) (m
 	e.running[checkID] = true
 	e.mu.Unlock()
 
-	timeout := time.Duration(c.TimeoutSeconds)*time.Second*time.Duration(c.Retries+1) + 15*time.Second
+	// A check saved without a timeout runs each attempt for the checks
+	// package's 10 s default, so the whole run must allow for that too.
+	perAttempt := c.TimeoutSeconds
+	if perAttempt <= 0 {
+		perAttempt = 10
+	}
+	timeout := time.Duration(perAttempt)*time.Second*time.Duration(c.Retries+1) + 15*time.Second
 	rctx, cancel := context.WithTimeout(ctx, timeout)
 	result := e.opts.Run(rctx, c, opts)
 	cancel()
