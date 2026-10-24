@@ -78,6 +78,7 @@ settings table — a copy of the file on its own does not give the password away
 | Field | Meaning |
 | --- | --- |
 | `driver` | `sqlite` (default), `postgres` or `mysql` (`mariadb` is accepted as a spelling of `mysql`) |
+| `path` | SQLite only: where the database file is. Empty means `gwatch.db` in the data directory |
 | `host`, `port` | The server. Ports default to 5432 and 3306 |
 | `user`, `password` | The account GWatch signs in as. Save through the settings page or `gwatch install`/`migrate-db` and the password is encrypted for you; a plaintext password in a hand-written file is accepted and encrypted the next time the file is saved |
 | `database` | The database name on the server |

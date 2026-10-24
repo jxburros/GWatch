@@ -726,7 +726,7 @@ Every other check type leaves `metrics` absent.
 - **Limit:** a named-metric series is always read from raw results. The rollup tables
   have a column per built-in metric (latency, jitter, loss) and nowhere to put one a
   check invented, so `metric=` reaches back only as far as raw history is retained — 30
-  days by default, whatever Settings › Retention says otherwise. Ranges beyond that
+  days by default, or whatever Settings › Retention sets. Ranges beyond that
   return the part of the window raw results still cover. Availability, latency and the
   uptime bars for an SNMP or json check are rolled up normally; only the named readings
   are limited this way.
@@ -1555,7 +1555,8 @@ See [`RESTORE.md`](RESTORE.md) for the end-to-end restore-to-a-new-machine proce
   incidents (default active). `GET /api/incidents/{id}` returns `{incident, events}`.
 - `POST /api/incidents/{id}/acknowledge`, `/resolve`, or `/note` takes `{ "note": "..." }`.
   Admins and read-write keys may update; viewers/read keys may read. Notes are limited
-  to 8,000 bytes. Incidents expose `openedAt`, acknowledgment/resolution times and actors,
+  to 8,000 bytes, and `/note` needs one (`400` otherwise); acknowledging an incident that
+  is already resolved is a `409`, an unknown incident a `404`. Incidents expose `openedAt`, acknowledgment/resolution times and actors,
   `checkIds`, notes, `durationSeconds`, and acknowledgment/resolution elapsed seconds.
 - `GET /api/reports` and `PUT /api/reports` are administrator-only. PUT replaces the list
   of definitions: `id` (unique string), `name`, `enabled`, `groups`, `tags`, `period`
