@@ -869,6 +869,18 @@ Approximate round trip times in milli-seconds:
 	if pr.Sent != 4 || pr.Received != 3 || len(pr.RTTs) != 3 || pr.RTTs[1] != time.Millisecond {
 		t.Errorf("windows: %+v", pr)
 	}
+	// A French Windows: no "time=" and no "Sent =" anywhere, so the replies
+	// are counted from their lines and the rest is settled by settleSent.
+	french := `Envoi d'une requête 'Ping'  8.8.8.8 avec 32 octets de données :
+Réponse de 8.8.8.8 : octets=32 temps=14 ms TTL=117
+Réponse de 8.8.8.8 : octets=32 temps<1ms TTL=117
+
+Statistiques Ping pour 8.8.8.8:
+    Paquets : envoyés = 2, reçus = 2, perdus = 0 (perte 0%),`
+	pr = parsePingOutput(french)
+	if pr.Received != 2 || len(pr.RTTs) != 2 || pr.RTTs[0] != 14*time.Millisecond {
+		t.Errorf("french windows: %+v", pr)
+	}
 	pr = parsePingOutput("ping: unknown host nope")
 	if pr.Sent != 0 || pr.Received != 0 || len(pr.RTTs) != 0 {
 		t.Errorf("garbage: %+v", pr)
