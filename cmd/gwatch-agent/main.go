@@ -403,6 +403,18 @@ func main() {
 		return
 	}
 
+	// A second install is refused, and it has to be refused before it pairs
+	// (spending the code on a second registration in GWatch), rewrites the
+	// file, or copies this binary over the one the running service uses. The
+	// service is asked after as "run", which describes it without the copy.
+	if cmd == "install" {
+		if s, err := agentService(cfg, "run"); err == nil {
+			if _, serr := s.Status(); serr == nil {
+				fatal(alreadyInstalledError(cfg))
+			}
+		}
+	}
+
 	// install --code does the pairing first, so that everything after this
 	// point is the ordinary token install and there is only one of it.
 	if cmd == "install" && cfg.code != "" {
@@ -486,6 +498,12 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+}
+
+// alreadyInstalledError is what a second install says: what to do instead,
+// since the settings it was given were not saved.
+func alreadyInstalledError(cfg config) error {
+	return fmt.Errorf("the %s service is already installed, and nothing was changed; to change a setting, edit %s and run `gwatch-agent restart`; to pair again, run `gwatch-agent pair` and then restart; or run `gwatch-agent uninstall` first", serviceName, cfg.configPathOrDefault())
 }
 
 // knownCommands is every word main understands as a command. Anything else is
