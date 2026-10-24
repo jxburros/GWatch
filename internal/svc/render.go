@@ -47,10 +47,13 @@ type unitData struct {
 // systemd wants for the first word, and escapes the space instead. Both double
 // the percent sign, which systemd would otherwise read as a specifier (%h,
 // %n and so on), and cmd escapes the backslash, which it would read as the
-// start of an escape sequence.
+// start of an escape sequence, and doubles the dollar sign, which ExecStart=
+// would otherwise expand in an argument as an environment variable ($HOME,
+// ${GWATCH_DATA_DIR}). The program path is not expanded, so its dollar signs
+// are left alone.
 var systemdFuncs = template.FuncMap{
 	"cmd": func(s string) string {
-		r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, `%`, `%%`)
+		r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, `%`, `%%`, `$`, `$$`)
 		return `"` + r.Replace(s) + `"`
 	},
 	"cmdEscape": func(s string) string {
