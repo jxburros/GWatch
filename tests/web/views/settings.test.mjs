@@ -215,6 +215,7 @@ test('an indicator rule without an enabled field is on in its switch, its row an
   const row = await waitFor(() => root.querySelector('.ind-rule'));
   assert.equal(row.querySelector('input[role="switch"]').checked, true);
   assert.equal(row.classList.contains('off'), false, 'the row is not dimmed as off');
+  document.querySelectorAll('.toast').forEach((el) => el.remove());
   [...root.querySelectorAll('button')].find((b) => /Save changes/.test(b.textContent)).click();
   await waitFor(() => [...document.querySelectorAll('.toast')].find((el) => /Settings saved/.test(el.textContent)));
   assert.equal((await api.get('/api/settings')).indicators[0].enabled, true);
@@ -291,6 +292,22 @@ test('a second save from the same settings tab sends the second edit', async (t)
     await waitFor(() => [...document.querySelectorAll('.toast')].find((el) => /Settings saved/.test(el.textContent)));
     assert.equal((await api.get('/api/settings')).general.instanceName, value);
   }
+});
+
+// The exception meant for "the saved password, left as it is" was written as
+// "a password is saved and the box is empty" — which is exactly what Remove
+// password leaves — so removing it with remote access on skipped the warning.
+test('removing the access password with remote access on still asks before opening up', async (t) => {
+  const before = await api.get('/api/settings');
+  t.after(() => api.put('/api/settings', before));
+  await api.put('/api/settings', { ...before, general: { ...before.general, remoteAccess: true, accessPassword: 'hunter22' } });
+  const { root } = await mountView(settingsView, { params: { tab: 'network' } }, t);
+  const remove = await waitFor(() => [...root.querySelectorAll('button')].find((b) => b.textContent === 'Remove password'));
+  remove.click();
+  [...root.querySelectorAll('button')].find((b) => b.textContent.includes('Save changes')).click();
+  const dialog = await waitFor(() => [...document.querySelectorAll('.modal h2')].find((el) => el.textContent === 'Open without a password?'));
+  [...dialog.closest('.modal').querySelectorAll('.modal-foot button')].find((b) => b.textContent === 'Cancel').click();
+  assert.equal((await api.get('/api/settings')).general.accessPassword, '********', 'nothing was saved');
 });
 
 // #122: Settings › Alerts lists the "also notify" channels, adds one through
