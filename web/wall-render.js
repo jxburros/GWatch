@@ -52,7 +52,7 @@ export const WALL_THEMES = [
  * timer and its own clock; the caller owns its lifetime and must call destroy.
  */
 export function createWall(root, load, { onError } = {}) {
-  const state = { doc: null, charts: [], timer: null, clockTimer: null, destroyed: false, clocks: [] };
+  const state = { doc: null, charts: [], timer: null, clockTimer: null, destroyed: false, clocks: [], run: 0 };
   const wall = h('div', { class: 'wall' });
   clear(root);
   root.append(wall);
@@ -74,17 +74,21 @@ export function createWall(root, load, { onError } = {}) {
 
   async function refresh() {
     if (document.hidden || state.destroyed) return;
+    // The timer, the tab coming back and a caller can each start a load while
+    // one is still out; only the newest may draw, or a slow older answer
+    // would put a stale board back over a fresh one.
+    const run = ++state.run;
     let doc;
     try {
       doc = await load();
     } catch (e) {
-      if (state.destroyed) return;
+      if (state.destroyed || run !== state.run) return;
       rearm(5);
       if (onError) onError(e);
       else clear(wall).append(emptyState({ icon: 'alert', title: 'Could not load this wallboard', text: e.message }));
       return;
     }
-    if (state.destroyed) return;
+    if (state.destroyed || run !== state.run) return;
     state.doc = doc;
     draw();
     rearm();
