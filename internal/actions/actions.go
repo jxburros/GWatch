@@ -406,8 +406,11 @@ func (r *Runner) runGit(ctx context.Context, a model.Action, vars Vars, res mode
 	cmd := exec.CommandContext(ctx, git, args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), append(Env(vars), "GIT_TERMINAL_PROMPT=0")...)
-	out, err := cmd.CombinedOutput()
-	res.Output = fmt.Sprintf("$ git %s\n%s", strings.Join(args, " "), strings.TrimSpace(string(out)))
+	// subprocess.Run, as for scripts: git hands a push or pull to ssh or a
+	// credential helper, and one that hung kept the output pipe open after
+	// the timeout killed git, so the action (and Stop) waited on it for ever.
+	out, err := subprocess.Run(cmd)
+	res.Output = fmt.Sprintf("$ git %s\n%s", strings.Join(args, " "), strings.TrimSpace(out))
 	if err != nil {
 		res.Error = describeExecError(ctx, err)
 		return res
