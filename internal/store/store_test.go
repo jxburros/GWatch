@@ -877,3 +877,35 @@ func TestBulkUpdateRollsBackTheWholeBatch(t *testing.T) {
 		t.Fatalf("empty batch: %v %+v", err, res)
 	}
 }
+
+// The timeline search is a plain substring: "%", "_" and "\" in it mean
+// themselves on every database, rather than LIKE wildcards (or, on PostgreSQL
+// and MySQL, an escape character, which PostgreSQL refuses at the end of a
+// pattern).
+func TestListEventsQueryIsLiteral(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	for _, title := range []string{"disk 50% full", "disk 500 GB free", "share_a mounted", "shareXa mounted", `path C:\data missing`} {
+		if _, err := s.InsertEvent(ctx, model.Event{Timestamp: time.Now(), Type: model.EventDown, Title: title}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for q, want := range map[string][]string{
+		"50%":     {"disk 50% full"},
+		"share_a": {"share_a mounted"},
+		`C:\`:     {`path C:\data missing`},
+		"!":       nil,
+	} {
+		got, err := s.ListEvents(ctx, EventFilter{Query: q})
+		if err != nil {
+			t.Fatalf("query %q: %v", q, err)
+		}
+		var titles []string
+		for _, e := range got {
+			titles = append(titles, e.Title)
+		}
+		if fmt.Sprint(titles) != fmt.Sprint(want) {
+			t.Fatalf("query %q found %q, want %q", q, titles, want)
+		}
+	}
+}
