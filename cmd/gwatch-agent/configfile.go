@@ -567,8 +567,13 @@ func baseConfig() (c config, problems, warnings []string) {
 	env("server", "GWATCH_SERVER", func(v string) bool { c.server = v; return true })
 	env("token", "GWATCH_AGENT_TOKEN", func(v string) bool { c.token = v; return true })
 	env("interval", "GWATCH_AGENT_INTERVAL", func(v string) bool {
-		d, err := time.ParseDuration(v)
+		// Read the way the file's interval is, bare seconds included, and
+		// said out loud when it cannot be: an interval quietly left at the
+		// default is the "I set it and nothing changed" this file exists to end.
+		raw, _ := json.Marshal(v)
+		d, err := parseDurationJSON(raw)
 		if err != nil || d <= 0 {
+			warnings = append(warnings, fmt.Sprintf("GWATCH_AGENT_INTERVAL=%q is not a duration like \"90s\" or \"15m\", and was ignored", v))
 			return false
 		}
 		c.interval = d

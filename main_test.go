@@ -24,6 +24,27 @@ func TestValidateListen(t *testing.T) {
 	}
 }
 
+// TestSplitCommand: gwatch --version and --help used to reach the flag parser,
+// which refused them with exit status 2.
+func TestSplitCommand(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		cmd  string
+		rest int
+	}{
+		{nil, "run", 0},
+		{[]string{"--listen", ":1"}, "run", 2},
+		{[]string{"--version"}, "version", 0},
+		{[]string{"-v"}, "version", 0},
+		{[]string{"--help"}, "help", 0},
+		{[]string{"install", "--no-start"}, "install", 1},
+	} {
+		if cmd, rest := splitCommand(tc.args); cmd != tc.cmd || len(rest) != tc.rest {
+			t.Errorf("splitCommand(%q) = %q %q", tc.args, cmd, rest)
+		}
+	}
+}
+
 func TestEffectiveListen(t *testing.T) {
 	cases := []struct {
 		base   string

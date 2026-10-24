@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
@@ -208,12 +209,15 @@ func isSocketPermissionError(err error) bool {
 }
 
 var (
-	rePingTime   = regexp.MustCompile(`(?i)\btime[=<]\s*([\d.]+)\s*ms`)
-	rePingLoss   = regexp.MustCompile(`(?i)(\d+(?:\.\d+)?)%\s*(?:packet\s+)?loss`)
-	rePingUnix   = regexp.MustCompile(`(?i)(\d+)\s+packets\s+transmitted,\s*(\d+)\s+(?:packets\s+)?received`)
-	rePingWinTx  = regexp.MustCompile(`(?i)Sent\s*=\s*(\d+)`)
-	rePingWinRx  = regexp.MustCompile(`(?i)Received\s*=\s*(\d+)`)
-	rePingWinLat = regexp.MustCompile(`(?i)(?:Zeit|time)[=<]\s*(\d+)\s*ms`)
+	rePingTime  = regexp.MustCompile(`(?i)\btime[=<]\s*([\d.]+)\s*ms`)
+	rePingLoss  = regexp.MustCompile(`(?i)(\d+(?:\.\d+)?)%\s*(?:packet\s+)?loss`)
+	rePingUnix  = regexp.MustCompile(`(?i)(\d+)\s+packets\s+transmitted,\s*(\d+)\s+(?:packets\s+)?received`)
+	rePingWinTx = regexp.MustCompile(`(?i)Sent\s*=\s*(\d+)`)
+	rePingWinRx = regexp.MustCompile(`(?i)Received\s*=\s*(\d+)`)
+	// Windows translates ping's output into the display language ("Zeit=",
+	// "temps=", "tiempo=", "時間 ="), but every reply line still ends in a time
+	// in ms followed by TTL=, which is what this goes by.
+	rePingWinLat = regexp.MustCompile(`(?i)[=<]\s*(\d+)\s*ms\s+TTL=`)
 )
 
 // runSystemPing executes the OS ping command and parses its output.
@@ -232,6 +236,11 @@ func runSystemPing(ctx context.Context, host string, count int, timeout time.Dur
 		args = []string{"-c", strconv.Itoa(count), "-W", strconv.Itoa(secs), host}
 	}
 	cmd := exec.CommandContext(ctx, "ping", args...)
+	if runtime.GOOS != "windows" {
+		// iputils ping is translated, and in some languages writes a decimal
+		// comma ("Zeit=0,045 ms"); the parser reads the untranslated output.
+		cmd.Env = append(os.Environ(), "LC_ALL=C")
+	}
 	out, runErr := cmd.CombinedOutput()
 	pr := parsePingOutput(string(out))
 	if pr.Sent == 0 && pr.Received == 0 && len(pr.RTTs) == 0 {

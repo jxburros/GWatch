@@ -253,6 +253,31 @@ tmpfs /run tmpfs rw 0 0
 	}
 }
 
+// TestReadMountsCountsFragmentsAndClampsCounts covers two things statfs can
+// say that the arithmetic must not take literally: block counts in units of
+// Frsize while Bsize is a much larger preferred I/O size (NFS), and more free
+// inodes than there are (some FUSE filesystems), which must not wrap around.
+func TestReadMountsCountsFragmentsAndClampsCounts(t *testing.T) {
+	fakeProc(t, map[string]string{"mounts": "/dev/sda1 / ext4 rw 0 0\n"})
+	restore := statfs
+	statfs = func(path string, st *syscall.Statfs_t) error {
+		*st = syscall.Statfs_t{Bsize: 1 << 20, Frsize: 4096, Blocks: 100, Bfree: 45, Bavail: 40, Files: 10, Ffree: 12}
+		return nil
+	}
+	t.Cleanup(func() { statfs = restore })
+
+	fs, _ := readMounts()
+	if len(fs) != 1 {
+		t.Fatalf("got %+v", fs)
+	}
+	if fs[0].TotalBytes != 100*4096 || fs[0].FreeBytes != 40*4096 || fs[0].UsedBytes != 55*4096 {
+		t.Errorf("sizes not in fragment units: %+v", fs[0])
+	}
+	if fs[0].InodesUsed != 0 || fs[0].InodesUsedPct == nil || *fs[0].InodesUsedPct != 0 {
+		t.Errorf("inodes used: got %d", fs[0].InodesUsed)
+	}
+}
+
 // TestHostRootReadsTheHost is the container case (docs/HARDWARE.md#in-a-container):
 // with the host's / mounted at a host root, the filesystems must be the
 // host's — read from its init's mount table and measured through the mount,

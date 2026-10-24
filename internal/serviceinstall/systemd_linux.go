@@ -169,7 +169,15 @@ func InstallSystemd(o SystemdInstall) (SystemdResult, error) {
 		return res, fmt.Errorf("create data directory: %w", err)
 	}
 	if o.Prepare != nil {
+		// Run again over an install, the directory is the service user's,
+		// and GWatch's own files refuse a directory or key file root does
+		// not own ("untrusted owner"). It is root's while the caller writes
+		// into it, and handed back below either way.
+		if err := chownTree(dataDir, 0, 0); err != nil {
+			return res, err
+		}
 		if err := o.Prepare(dataDir); err != nil {
+			_ = chownTree(dataDir, uid, gid)
 			return res, err
 		}
 	}

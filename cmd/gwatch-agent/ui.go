@@ -376,11 +376,11 @@ func (s *uiServer) guard(next http.Handler) http.Handler {
 				http.Error(w, "that address is not valid, or has already been used; run `gwatch-agent ui` again for a fresh one", http.StatusForbidden)
 				return
 			}
-			http.SetCookie(w, &http.Cookie{Name: uiCookie, Value: s.secret, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
+			http.SetCookie(w, &http.Cookie{Name: s.cookieName(), Value: s.secret, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
 		}
-		c, err := r.Cookie(uiCookie)
+		c, err := r.Cookie(s.cookieName())
 		if err != nil || !secretEqual(c.Value, s.secret) {
 			http.Error(w, "open the address `gwatch-agent ui` printed", http.StatusForbidden)
 			return
@@ -405,6 +405,15 @@ func (s *uiServer) guard(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// cookieName is the session cookie's name for this panel. A browser keeps
+// cookies by host name, not port, so two panels open at once (a user's and a
+// sudo one, say) would otherwise overwrite each other's cookie and lock the
+// first one out; the port keeps them apart.
+func (s *uiServer) cookieName() string {
+	_, port, _ := net.SplitHostPort(s.addr)
+	return uiCookie + "_" + port
 }
 
 // redeem reports whether k is the panel's code, still unused and in date, and

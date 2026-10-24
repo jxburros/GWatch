@@ -73,7 +73,7 @@ func (p *panel) do(method, path string, body any, o opts) (*http.Response, []byt
 	}
 	req, _ := http.NewRequest(method, p.ts.URL+path, rdr)
 	if o.cookie {
-		req.AddCookie(&http.Cookie{Name: uiCookie, Value: p.secret})
+		req.AddCookie(&http.Cookie{Name: p.ui.cookieName(), Value: p.secret})
 	}
 	if o.header {
 		req.Header.Set(uiHeader, "1")
@@ -122,12 +122,33 @@ func TestNothingIsServedWithoutTheSecret(t *testing.T) {
 	}
 	var cookie *http.Cookie
 	for _, c := range resp.Cookies() {
-		if c.Name == uiCookie {
+		if c.Name == p.ui.cookieName() {
 			cookie = c
 		}
 	}
 	if cookie == nil || !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode || cookie.Value != "s3cret" {
 		t.Errorf("cookie %+v", cookie)
+	}
+}
+
+// TestTwoPanelsKeepTheirOwnCookies: cookies are kept per host name, not per
+// port, so a second panel on 127.0.0.1 must not set a cookie under the name the
+// first one reads, or opening it would lock the first one out.
+func TestTwoPanelsKeepTheirOwnCookies(t *testing.T) {
+	a, b := newPanel(t), newPanel(t)
+	if a.ui.cookieName() == b.ui.cookieName() {
+		t.Fatalf("both panels use the cookie %q", a.ui.cookieName())
+	}
+	req, _ := http.NewRequest("GET", a.ts.URL+"/api/state", nil)
+	req.AddCookie(&http.Cookie{Name: b.ui.cookieName(), Value: "other"})
+	req.AddCookie(&http.Cookie{Name: a.ui.cookieName(), Value: a.secret})
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Errorf("the other panel's cookie got in the way: %d", resp.StatusCode)
 	}
 }
 

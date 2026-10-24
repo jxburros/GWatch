@@ -82,16 +82,15 @@ func systemdCommand(cmd string, cfg config, given map[string]bool) int {
 	if given["trusted-proxies"] {
 		env["GWATCH_TRUSTED_PROXIES"] = cfg.trustedProxies
 	}
-	res, err := serviceinstall.InstallSystemd(serviceinstall.SystemdInstall{
+	opts := serviceinstall.SystemdInstall{
 		DataDir: cfg.dataDir, DataDirSet: given["data-dir"],
 		Listen: cfg.listen, ListenSet: given["listen"],
 		Env: env, NoStart: cfg.noStart, Out: os.Stdout,
+	}
+	if !cfg.db.Empty() {
 		// The service is started with no flags at all, so a database given
 		// here has to be written down for it to find.
-		Prepare: func(dataDir string) error {
-			if cfg.db.Empty() {
-				return nil
-			}
+		opts.Prepare = func(dataDir string) error {
 			dbCfg, _, err := dbconfig.Resolve(dataDir, cfg.db)
 			if err != nil {
 				return err
@@ -101,8 +100,9 @@ func systemdCommand(cmd string, cfg config, given map[string]bool) int {
 			}
 			fmt.Printf("Database settings saved to %s (%s).\n", dbconfig.Path(dataDir), dbCfg.Describe())
 			return nil
-		},
-	})
+		}
+	}
+	res, err := serviceinstall.InstallSystemd(opts)
 	for _, m := range res.Migrated {
 		fmt.Println("Upgraded the earlier installation:", m+".")
 	}

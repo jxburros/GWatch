@@ -193,7 +193,12 @@ the SQLite file into the server once:
    gwatch migrate-db --db-driver postgres --db-host db.lan --db-user gwatch --db-name gwatch --db-sslmode verify-full
    ```
 
-   Add `--data-dir` if GWatch's data is not in the default place. The command prints its
+   Add `--data-dir` if GWatch's data is not in the default place. On Linux with
+   systemd the data belongs to the service's own `gwatch` user, and GWatch refuses a
+   data directory owned by anyone but the account running it (root included), so stop
+   the service with `sudo systemctl stop gwatch` and run the copy as that user:
+   `sudo -u gwatch gwatch migrate-db --data-dir /var/lib/gwatch` (with
+   any `--db-*` flags after it). The command prints its
    progress by stage and a final count:
 
    ```

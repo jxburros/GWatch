@@ -90,6 +90,18 @@ func TestTheFileIsReadAndTheEnvironmentOverridesIt(t *testing.T) {
 	if ov := overrides(c); len(ov) != 2 {
 		t.Errorf("config validate should say which file settings are overridden, got %v", ov)
 	}
+
+	// Bare seconds work as they do in the file, and nonsense is said out loud
+	// rather than quietly leaving the file's interval in force.
+	t.Setenv("GWATCH_AGENT_INTERVAL", "30")
+	if c, _, _ = baseConfig(); c.interval != 30*time.Second {
+		t.Errorf("GWATCH_AGENT_INTERVAL=30: interval %s", c.interval)
+	}
+	t.Setenv("GWATCH_AGENT_INTERVAL", "often")
+	c, _, warnings = baseConfig()
+	if c.interval != 45*time.Second || len(warnings) != 1 || !strings.Contains(warnings[0], "GWATCH_AGENT_INTERVAL") {
+		t.Errorf("GWATCH_AGENT_INTERVAL=often: interval %s, warnings %q", c.interval, warnings)
+	}
 }
 
 func TestMistakesInTheFileAreNamed(t *testing.T) {
