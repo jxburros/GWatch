@@ -246,6 +246,15 @@ func main() {
 		svcConfig.Arguments = []string{"run"}
 	}
 	if cmd == "install" {
+		// A second install is refused, and before it copies this binary over
+		// the one the running service uses or saves database settings it
+		// will not pick up; the service is described without the copy to ask.
+		if probe, err := svc.New(prg, svcConfig); err == nil {
+			if _, serr := probe.Status(); serr == nil {
+				fmt.Fprintf(os.Stderr, "error: the %s service is already installed, and nothing was changed; run gwatch uninstall first to install it again\n", name)
+				os.Exit(1)
+			}
+		}
 		exe, err := serviceinstall.Executable("gwatch")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
