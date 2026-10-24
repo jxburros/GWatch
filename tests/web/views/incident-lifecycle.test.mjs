@@ -19,3 +19,26 @@ test('viewer reports offer generation without admin delivery definitions', async
   assert.match(root.textContent, /Open printable report/);
   assert.doesNotMatch(root.textContent, /Save schedules|Scheduled reports|forbidden/i);
 });
+
+test('a refused incident action says why and gives the button back', async (t) => {
+  const { root } = await mountView(view, { query: new URLSearchParams('state=all') }, t);
+  [...root.querySelectorAll('button')].find((b) => b.textContent === 'Timeline and notes').click();
+  const modal = await waitFor(() => document.querySelector('[role="dialog"]'));
+  t.after(() => modal.closest('.modal-backdrop')?.remove());
+  const realFetch = window.fetch;
+  window.fetch = async (url, init) => (init?.method === 'POST' && String(url).startsWith('/api/incidents/')
+    ? new Response(JSON.stringify({ error: 'database is locked' }), { status: 500, headers: { 'Content-Type': 'application/json' } })
+    : realFetch(url, init));
+  t.after(() => { window.fetch = realFetch; });
+  modal.querySelector('textarea').value = 'Still looking';
+  const add = [...modal.querySelectorAll('button')].find((b) => b.textContent === 'Add note');
+  add.click();
+  await waitFor(() => document.querySelector('.toast-error'));
+  assert.match(document.querySelector('.toast-error').textContent, /database is locked/);
+  assert.equal(add.disabled, false, 'the button can be pressed again');
+});
+
+test('the node page\'s Timeline link (?nodeId=) opens the events for that node', async (t) => {
+  const { root } = await mountView(view, { query: new URLSearchParams('nodeId=1') }, t);
+  assert.ok(root.querySelector('select[aria-label="Event type"]'), 'the Events tab, not the incident list');
+});
