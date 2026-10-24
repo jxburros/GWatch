@@ -72,12 +72,8 @@ func (s *Server) handleGenerateReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d := model.ReportDefinition{Name: "GWatch availability report", IncludeLatencyCharts: r.URL.Query().Get("charts") == "1"}
-	if v := r.URL.Query().Get("groups"); v != "" {
-		d.Groups = strings.Split(v, ",")
-	}
-	if v := r.URL.Query().Get("tags"); v != "" {
-		d.Tags = strings.Split(v, ",")
-	}
+	d.Groups = splitList(r.URL.Query().Get("groups"))
+	d.Tags = splitList(r.URL.Query().Get("tags"))
 	if v := r.URL.Query().Get("target"); v != "" {
 		d.TargetAvailability, err = strconv.ParseFloat(v, 64)
 		if err != nil || d.TargetAvailability < 0 || d.TargetAvailability > 100 {
@@ -94,4 +90,18 @@ func (s *Server) handleGenerateReport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", `attachment; filename="gwatch-report.html"`)
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write([]byte(html))
+}
+
+// splitList reads a comma-separated query value. Entries are trimmed and
+// blanks dropped: "Office, Lab" names the group "Lab", not " Lab" (which no
+// tag and no chart grouping would match), and "Office," does not add an empty
+// name that matches nothing.
+func splitList(v string) []string {
+	var out []string
+	for _, s := range strings.Split(v, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
