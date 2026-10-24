@@ -146,6 +146,21 @@ test('settings no longer has a Hardware section, and the old link goes to Nodes'
   assert.equal(root.querySelector('.settings-nav'), null, 'nothing of Settings is drawn for a link that is passed on');
 });
 
+// A viewer's theme is "remembered by this browser", as the tab says: the shell
+// styles the page with lookFor(me) on every identity check, and that used to
+// be the shared theme alone, so the viewer's choice lasted until the next one.
+test('a viewer\'s own theme outlasts the next identity check', async (t) => {
+  const { lookFor } = await import('../../../web/components.js');
+  t.after(() => { try { localStorage.removeItem('gw.ownLook'); } catch { /* ignore */ } });
+  const viewer = { isAdmin: false, theme: 'dark', accentColor: '#43c9c0' };
+  assert.deepEqual(lookFor(viewer), { theme: 'dark', accentColor: '#43c9c0' });
+  const { root } = await mountView(settingsView, { isAdmin: false, params: { tab: 'appearance' } }, t);
+  const light = await waitFor(() => [...root.querySelectorAll('.theme-option')].find((b) => b.textContent.startsWith('Light')));
+  light.click();
+  assert.equal(lookFor(viewer).theme, 'light', 'the shell keeps the viewer\'s choice');
+  assert.equal(lookFor({ ...viewer, isAdmin: true }).theme, 'dark', 'an administrator follows the shared setting');
+});
+
 // #49: Users & access carries the password-hashing choice. Argon2id is the
 // default and labelled as recommended; choosing PBKDF2 saves the setting
 // straight away, like the other switches on this tab.

@@ -210,6 +210,26 @@ export function applyAccent(hex) {
   try { localStorage.setItem('gw.accent', hex.toLowerCase()); } catch { /* ignore */ }
   if (changed) notifyTheme();
 }
+/* A viewer may not change the theme for everyone, so a theme or accent a
+   viewer picks in Settings › Appearance is theirs alone, kept by this browser.
+   It has a key of its own: gw.theme and gw.accent follow whatever was last
+   applied, which includes the shared look /api/me brings on every check. */
+const OWN_LOOK_KEY = 'gw.ownLook';
+/** @param {{ theme?: string, accentColor?: string }} look */
+export function rememberOwnLook(look) {
+  try { localStorage.setItem(OWN_LOOK_KEY, JSON.stringify(look)); } catch { /* private window: forgotten on reload */ }
+}
+/** The theme and accent to style this browser with for the principal `me`:
+ *  the shared ones from /api/me, unless a viewer has chosen their own.
+ *  @param {any} me @returns {{ theme: string, accentColor: string }} */
+export function lookFor(me) {
+  let own = null;
+  if (me && !me.isAdmin) { try { own = JSON.parse(localStorage.getItem(OWN_LOOK_KEY) || 'null'); } catch { own = null; } }
+  return {
+    theme: own?.theme || me?.theme || 'dark',
+    accentColor: own?.accentColor && hexToRgb(own.accentColor) ? own.accentColor : me?.accentColor || '#43c9c0',
+  };
+}
 export const ACCENT_PRESETS = [
   { name: 'Signal', hex: '#43c9c0' }, { name: 'Violet', hex: '#7c6cff' }, { name: 'Blue', hex: '#3b82f6' }, { name: 'Cyan', hex: '#06b6d4' },
   { name: 'Teal', hex: '#14b8a6' }, { name: 'Green', hex: '#22c55e' }, { name: 'Lime', hex: '#a3e635' }, { name: 'Amber', hex: '#f59e0b' },
