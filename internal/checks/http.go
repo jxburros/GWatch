@@ -238,7 +238,14 @@ func runHTTPCheck(ctx context.Context, check model.Check, target string, opts Op
 	// Certificate details.
 	warnDays := pickInt(cfg.CertWarnDays, opts.DefaultCertWarn, defaultCertWarn)
 	if resp.TLS != nil && (cfg.CertCheck == nil || *cfg.CertCheck) && len(resp.TLS.PeerCertificates) > 0 {
-		info := certInfoFromState(resp.TLS, u.Hostname(), cfg.IgnoreTLSErrors)
+		// The certificate is the last hop's, so it is checked against that
+		// hop's name: example.com redirecting to www.example.com is not a
+		// name mismatch.
+		host := u.Hostname()
+		if resp.Request != nil && resp.Request.URL != nil {
+			host = resp.Request.URL.Hostname()
+		}
+		info := certInfoFromState(resp.TLS, host, cfg.IgnoreTLSErrors)
 		res.Details.Cert = info
 		res.Warnings = append(res.Warnings, certWarnings(info, warnDays)...)
 	}
