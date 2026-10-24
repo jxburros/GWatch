@@ -146,6 +146,21 @@ test('settings no longer has a Hardware section, and the old link goes to Nodes'
   assert.equal(root.querySelector('.settings-nav'), null, 'nothing of Settings is drawn for a link that is passed on');
 });
 
+// A viewer's theme is "remembered by this browser", as the tab says: the shell
+// styles the page with lookFor(me) on every identity check, and that used to
+// be the shared theme alone, so the viewer's choice lasted until the next one.
+test('a viewer\'s own theme outlasts the next identity check', async (t) => {
+  const { lookFor } = await import('../../../web/components.js');
+  t.after(() => { try { localStorage.removeItem('gw.ownLook'); } catch { /* ignore */ } });
+  const viewer = { isAdmin: false, theme: 'dark', accentColor: '#43c9c0' };
+  assert.deepEqual(lookFor(viewer), { theme: 'dark', accentColor: '#43c9c0' });
+  const { root } = await mountView(settingsView, { isAdmin: false, params: { tab: 'appearance' } }, t);
+  const light = await waitFor(() => [...root.querySelectorAll('.theme-option')].find((b) => b.textContent.startsWith('Light')));
+  light.click();
+  assert.equal(lookFor(viewer).theme, 'light', 'the shell keeps the viewer\'s choice');
+  assert.equal(lookFor({ ...viewer, isAdmin: true }).theme, 'dark', 'an administrator follows the shared setting');
+});
+
 // #49: Users & access carries the password-hashing choice. Argon2id is the
 // default and labelled as recommended; choosing PBKDF2 saves the setting
 // straight away, like the other switches on this tab.
@@ -168,6 +183,24 @@ test('settings Users & access offers the password hashing choice and saves it', 
   assert.equal(saved.general.passwordHashing, 'pbkdf2-sha256');
   // Put the mock back the way the other tests expect it.
   await api.put('/api/settings', { ...saved, general: { ...saved.general, passwordHashing: 'argon2id' } });
+});
+
+// A refused save leaves the control showing what is stored, not the choice
+// that was refused (it used to read the edit back as the saved value).
+test('a refused password hashing change puts the select back', async (t) => {
+  const { root } = await mountView(settingsView, { params: { tab: 'users' } }, t);
+  const panel = root.querySelector('.settings-panel');
+  await waitFor(() => [...panel.querySelectorAll('h2')].some((el) => el.textContent === 'Password hashing'));
+  const select = [...panel.querySelectorAll('select')].find((el) => [...el.options].some((o) => o.value === 'pbkdf2-sha256'));
+  const realFetch = window.fetch;
+  window.fetch = async (url, init) => (init?.method === 'PUT' && String(url) === '/api/settings'
+    ? new Response(JSON.stringify({ error: 'settings are read-only right now' }), { status: 409, headers: { 'Content-Type': 'application/json' } })
+    : realFetch(url, init));
+  t.after(() => { window.fetch = realFetch; });
+  select.value = 'pbkdf2-sha256';
+  select.dispatchEvent(new window.Event('change'));
+  await waitFor(() => [...document.querySelectorAll('.toast-error')].find((el) => /read-only right now/.test(el.textContent)));
+  assert.equal(select.value, 'argon2id');
 });
 
 // #122: Settings › Alerts lists the "also notify" channels, adds one through

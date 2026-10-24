@@ -40,7 +40,7 @@ export async function mount(root, ctx) {
     } catch (err) {
       done();
       pass.value = '';
-      replace(message, banner('error', err.message || 'Could not sign in.'));
+      replace(message, banner('down', err.message || 'Could not sign in.'));
       pass.focus();
     }
   }

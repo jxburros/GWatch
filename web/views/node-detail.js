@@ -333,7 +333,13 @@ export async function mount(root, ctx) {
   }
 
   /* ---------- Charts ---------- */
+  // Each pass is numbered and only the newest may touch the card: a live
+  // update's pass for the old range finishing after the one a range chip
+  // started would otherwise draw the old range under the new chip.
+  let historyRun = 0;
+  const staleRun = (run) => state.destroyed || run !== historyRun;
   async function loadHistory() {
+    const run = ++historyRun;
     const n = state.node;
     const checks = (n.checks || []);
     const ids = checks.map((c) => c.id);
@@ -349,8 +355,8 @@ export async function mount(root, ctx) {
     // is what read as a flash on every live update.
     if (!historyBody.firstChild) historyBody.append(skeleton({ height: 220 }));
     let series;
-    try { series = await getHistoryMulti(ids, state.range); } catch (e) { clearCharts(); replace(historyBody, h('p', { class: 'note' }, 'Could not load history: ' + e.message)); return; }
-    if (state.destroyed) return;
+    try { series = await getHistoryMulti(ids, state.range); } catch (e) { if (staleRun(run)) return; clearCharts(); replace(historyBody, h('p', { class: 'note' }, 'Could not load history: ' + e.message)); return; }
+    if (staleRun(run)) return;
     state.history = series;
     const list = Array.isArray(series) ? series : [series];
     const from = list[0]?.from, to = list[0]?.to, bucket = list[0]?.bucketSeconds || 0;
@@ -376,8 +382,8 @@ export async function mount(root, ctx) {
       // A metric that has just produced its first reading has no chart yet,
       // and that is the one case where the card's shape changes without any
       // check being added — so it falls through to the rebuild below.
-      if (await refreshMetricCharts(metricChecks)) return;
-      if (state.destroyed) return;
+      if (await refreshMetricCharts(metricChecks, run)) return;
+      if (staleRun(run)) return;
     }
 
     // The shape did change, so the card is rebuilt — but off-screen and in one
@@ -403,8 +409,8 @@ export async function mount(root, ctx) {
     // chart rather than sharing an axis with a rate in bits per second and
     // a percentage.
     for (const c of metricChecks) {
-      const section = await renderMetricCharts(c);
-      if (state.destroyed) return;
+      const section = await renderMetricCharts(c, run);
+      if (staleRun(run)) return;
       if (section) built.push(section);
     }
     state.uptimeEl = h('div', null, ...uptimeContent(list));
@@ -466,7 +472,7 @@ export async function mount(root, ctx) {
   // the rollup tables have no column for a metric a check invented, so these
   // charts reach back only as far as raw history is kept. Each chart is kept
   // in state.metricCharts so a later pass can hand it new points in place.
-  async function renderMetricCharts(c) {
+  async function renderMetricCharts(c, run) {
     const groups = chartGroups(c);
     if (!groups.length) return null;
     const n = state.node;
@@ -474,8 +480,8 @@ export async function mount(root, ctx) {
     const section = h('div', { class: 'stack-sm', 'data-check': c.id }, h('div', { class: 'section-title' }, `${c.name} — ${heading}`));
     let drew = false;
     for (const g of groups) {
-      const data = await groupData(c, g);
-      if (state.destroyed) return null;
+      const data = await groupData(c, g, run);
+      if (staleRun(run)) return null;
       if (!data) continue;
       const host = h('div', null);
       const chart = new LineChart(host, { unit: g.unit || '', height: 180, legend: g.metrics.length > 1, alwaysLegend: g.metrics.length > 1, yMin: g.pct ? 0 : undefined, yMax: g.pct ? 100 : undefined, ariaLabel: `${g.title} history`, title: `${n.name} — ${g.title} (${state.range})` });
@@ -501,12 +507,12 @@ export async function mount(root, ctx) {
   }
   /** Fetches every metric of a group and builds one chart's data, or null
    *  when none of them has a reading in the range. */
-  async function groupData(c, g) {
+  async function groupData(c, g, run) {
     const series = [];
     for (const m of g.metrics) {
       let hs;
       try { hs = await getHistoryMetric(c.id, state.range, m.name); } catch { continue; }
-      if (state.destroyed) return null;
+      if (staleRun(run)) return null;
       if (!(hs.points || []).some((p) => p.value != null)) continue;
       series.push({ ...toSeries(hs, 'avg', SERIES_COLORS[series.length % SERIES_COLORS.length]), name: m.label || m.name, from: hs.from, to: hs.to });
     }
@@ -515,11 +521,11 @@ export async function mount(root, ctx) {
   }
   /** Hands every existing metric chart its new points. Returns false when a
    *  metric has readings but no chart yet, which means the card must be rebuilt. */
-  async function refreshMetricCharts(metricChecks) {
+  async function refreshMetricCharts(metricChecks, run) {
     for (const c of metricChecks) {
       for (const g of chartGroups(c)) {
-        const data = await groupData(c, g);
-        if (state.destroyed) return true;
+        const data = await groupData(c, g, run);
+        if (staleRun(run)) return true;
         const chart = state.metricCharts.get(`${c.id}:${g.id}`);
         if (chart && data) chart.setData(data);
         else if (data) return false;

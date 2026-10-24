@@ -4,7 +4,13 @@ import { h, field, textInput, numberInput, selectInput, checkbox, replace, toast
 export async function mount(root, ctx) {
   ctx.setTitle('Reports');
   let destroyed = false, definitions = [];
-  const date = (d) => d.toISOString().slice(0, 10);
+  // The dates are the reader's own calendar days: a date input's value is a
+  // local date, and so is midnight at either end of the report. toISOString
+  // and new Date('YYYY-MM-DD') both work in UTC, which moved the window by the
+  // time-zone offset and could default "today" to tomorrow or yesterday.
+  const pad = (n) => String(n).padStart(2, '0');
+  const date = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const midnight = (v) => { const [y, m, d] = v.split('-').map(Number); return new Date(y, m - 1, d); };
   const to = h('input', { type: 'date', value: date(new Date()) });
   const from = h('input', { type: 'date', value: date(new Date(Date.now() - 7 * 86400000)) });
   const groups = textInput({ placeholder: 'All groups' }), tags = textInput({ placeholder: 'All tags' });
@@ -14,7 +20,7 @@ export async function mount(root, ctx) {
   const link = h('a', { class: 'btn btn-primary', target: '_blank', rel: 'noopener', href: '#', onclick: (e) => {
     if (!from.value || !to.value || from.value >= to.value || !target.checkValidity()) { e.preventDefault(); error.textContent = 'Choose an end date after the start date and a target from 0 to 100%.'; return; }
     error.textContent = '';
-    link.href = `/api/reports/generate${qs({ from: new Date(from.value).toISOString(), to: new Date(to.value).toISOString(), groups: groups.value.trim(), tags: tags.value.trim(), target: target.value, charts: charts.input.checked ? '1' : null })}`;
+    link.href = `/api/reports/generate${qs({ from: midnight(from.value).toISOString(), to: midnight(to.value).toISOString(), groups: groups.value.trim(), tags: tags.value.trim(), target: target.value, charts: charts.input.checked ? '1' : null })}`;
   } }, 'Open printable report');
   const list = h('div', { class: 'stack' });
   root.append(h('section', { class: 'card' }, h('h2', null, 'Availability report'), h('p', { class: 'lead' }, 'Choose a time window and scope. Open the report, then use your browser’s Print or Save as PDF.'),

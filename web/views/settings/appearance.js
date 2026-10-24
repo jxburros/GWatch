@@ -4,7 +4,7 @@
 // view's own, moved here unchanged inside create(shell), which hands it the
 // view's shared state and helpers.
 
-import { h, icon, clear, textInput, toggle, toast, applyTheme, applyAccent, ACCENT_PRESETS, hexToRgb, applyDensity, currentDensity } from '../../components.js';
+import { h, icon, clear, textInput, toggle, toast, applyTheme, applyAccent, ACCENT_PRESETS, hexToRgb, applyDensity, currentDensity, lookFor, rememberOwnLook } from '../../components.js';
 import { tipsEnabled, setTipsEnabled, resetTips, seenCount, resetOnboarding, TIPS } from '../../tips.js';
 
 /** @param {Record<string, any>} shell the view's state and helpers */
@@ -14,7 +14,9 @@ export function create(shell) {
   async function tabAppearance() {
     // A viewer cannot read settings, so their theme choice is theirs alone:
     // it starts from what /api/me reported and is remembered by this browser.
-    const g = isAdmin ? (state.settings || await loadSettings()).general : { theme: ctx.me?.theme || 'dark', accentColor: ctx.me?.accentColor || '#43c9c0' };
+    const g = isAdmin ? (state.settings || await loadSettings()).general : lookFor(ctx.me);
+    // A viewer's choice is written down as it is made, since there is no Save.
+    const keep = () => { if (!isAdmin) rememberOwnLook({ theme: g.theme, accentColor: g.accentColor }); };
     const themes = [
       { value: 'dark', label: 'Dark', desc: 'Low-glare, for wall displays and night owls.', bg: '#0f1114', card: '#16181d', fg: '#f2f4f6' },
       { value: 'light', label: 'Light', desc: 'Bright, high contrast on white.', bg: '#f1f2f4', card: '#ffffff', fg: '#10151d' },
@@ -24,7 +26,7 @@ export function create(shell) {
     const renderThemes = () => {
       clear(themeWrap);
       for (const t of themes) {
-        themeWrap.append(h('button', { type: 'button', role: 'radio', class: `theme-option ${g.theme === t.value ? 'active' : ''}`, 'aria-checked': g.theme === t.value ? 'true' : 'false', onclick: () => { g.theme = t.value; applyTheme(t.value); renderThemes(); } },
+        themeWrap.append(h('button', { type: 'button', role: 'radio', class: `theme-option ${g.theme === t.value ? 'active' : ''}`, 'aria-checked': g.theme === t.value ? 'true' : 'false', onclick: () => { g.theme = t.value; applyTheme(t.value); keep(); renderThemes(); } },
           h('div', { class: 'preview', style: { background: t.bg } }, h('i', { style: { background: t.card } }), h('i', { style: { background: t.card, margin: '8px', boxShadow: `inset 0 3px 0 rgb(var(--accent-rgb))` } })),
           h('b', null, t.label), h('span', null, t.desc)));
       }
@@ -49,11 +51,11 @@ export function create(shell) {
     };
     renderDensities();
     const swatches = h('div', { class: 'swatches', role: 'radiogroup', 'aria-label': 'Accent colour' });
-    const custom = h('input', { type: 'color', value: g.accentColor || '#43c9c0', 'aria-label': 'Custom accent colour', oninput: () => { g.accentColor = custom.value; applyAccent(custom.value); renderSwatches(); } });
-    const hex = textInput({ value: g.accentColor || '#43c9c0', class: 'mono', style: { maxWidth: '110px' }, 'aria-label': 'Accent hex', oninput: () => { if (hexToRgb(hex.value)) { g.accentColor = hex.value.toLowerCase(); custom.value = g.accentColor; applyAccent(g.accentColor); renderSwatches(); } } });
+    const custom = h('input', { type: 'color', value: g.accentColor || '#43c9c0', 'aria-label': 'Custom accent colour', oninput: () => { g.accentColor = custom.value; applyAccent(custom.value); keep(); renderSwatches(); } });
+    const hex = textInput({ value: g.accentColor || '#43c9c0', class: 'mono', style: { maxWidth: '110px' }, 'aria-label': 'Accent hex', oninput: () => { if (hexToRgb(hex.value)) { g.accentColor = hex.value.toLowerCase(); custom.value = g.accentColor; applyAccent(g.accentColor); keep(); renderSwatches(); } } });
     const renderSwatches = () => {
       clear(swatches);
-      for (const p of ACCENT_PRESETS) swatches.append(h('button', { type: 'button', role: 'radio', class: `swatch ${(g.accentColor || '').toLowerCase() === p.hex ? 'active' : ''}`, 'aria-checked': (g.accentColor || '').toLowerCase() === p.hex ? 'true' : 'false', title: p.name, style: { background: p.hex }, onclick: () => { g.accentColor = p.hex; custom.value = p.hex; hex.value = p.hex; applyAccent(p.hex); renderSwatches(); } }));
+      for (const p of ACCENT_PRESETS) swatches.append(h('button', { type: 'button', role: 'radio', class: `swatch ${(g.accentColor || '').toLowerCase() === p.hex ? 'active' : ''}`, 'aria-checked': (g.accentColor || '').toLowerCase() === p.hex ? 'true' : 'false', title: p.name, style: { background: p.hex }, onclick: () => { g.accentColor = p.hex; custom.value = p.hex; hex.value = p.hex; applyAccent(p.hex); keep(); renderSwatches(); } }));
       swatches.append(custom, hex);
     };
     renderSwatches();

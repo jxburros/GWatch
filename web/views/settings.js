@@ -43,12 +43,15 @@ export async function mount(root, ctx) {
   }
 
   async function loadSettings() { state.settings = await api.get('/api/settings'); return state.settings; }
+  /** Resolves to the saved document, or to null when the save was refused —
+   *  a caller that shows what was stored must not take its own edit for it. */
   async function saveSettings(btn) {
     const done = btn ? busy(btn, 'Saving…') : () => {};
-    try { state.settings = await api.put('/api/settings', state.settings); toast('Settings saved', { kind: 'success' }); }
+    let saved = null;
+    try { saved = state.settings = await api.put('/api/settings', state.settings); toast('Settings saved', { kind: 'success' }); }
     catch (e) { toast(e.message, { kind: 'error' }); }
     done();
-    return state.settings;
+    return saved;
   }
 
   async function renderTab() {

@@ -119,3 +119,33 @@ test('node detail shows a hardware check\'s per-metric verdicts in the inspector
   assert.ok(media.textContent.includes('warning'), 'and its own verdict');
   assert.ok(rows.find((r) => r.dataset.metric === 'cpu').textContent.includes('within thresholds'), 'while the processor is fine');
 });
+
+// A live update's history pass for the old range must not land after the one
+// a range chip started and draw the old range under the new chip.
+test('a slow history pass for the old range never overwrites the newly chosen one', async (t) => {
+  const gateway = window.__gwatchMock.nodes.find((n) => n.name === 'Gateway');
+  const { root, instance } = await mountView(nodeDetailView, { params: { id: String(gateway.id) } }, t);
+  await waitFor(() => root.querySelector('.uptime-row'));
+  const realFetch = window.fetch;
+  t.after(() => { window.fetch = realFetch; });
+  // Every series answers with its range as its sample count, the 24 h one late.
+  let asked24;
+  const asked = new Promise((r) => { asked24 = r; });
+  window.fetch = async (url, init) => {
+    const u = new URL(String(url), 'http://localhost');
+    if (u.pathname !== '/api/history/multi') return realFetch(url, init);
+    const range = u.searchParams.get('range');
+    if (range === '24h') { asked24(); await new Promise((r) => setTimeout(r, 150)); }
+    const count = range === '24h' ? 24 : 7;
+    const body = u.searchParams.getAll('checkId').map((id) => ({ checkId: Number(id), checkName: `check ${id}`, from: new Date(Date.now() - 864e5).toISOString(), to: new Date().toISOString(), bucketSeconds: 300, points: [], summary: { count, failures: 0, availability: 100 } }));
+    return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
+  };
+  const slow = instance.refresh();                    // a live update: 24 h, slow
+  await asked;                                        // its history request is out
+  const chip = [...root.querySelectorAll('.range-chips button')].find((b) => b.textContent === '7d');
+  chip.click();                                       // the reader picks 7 d: fast
+  await slow;
+  await new Promise((r) => setTimeout(r, 200));
+  assert.match(root.querySelector('.uptime-row .sub').textContent, /^7 samples/);
+  assert.equal(root.querySelector('.range-chips .chip.active').textContent, '7d');
+});
