@@ -177,7 +177,7 @@ exported as CSV.
 Per-OID history is read from **raw results only**. GWatch's rollup tables have
 columns for latency, jitter and packet loss and nowhere to put a metric a check
 invented, so the per-OID charts reach back as far as raw history is kept — 30
-days by default, whatever *Settings › Retention* says otherwise. The check's
+days by default, or whatever *Settings › Retention* sets. The check's
 availability and latency roll up normally and go back as far as everything else.
 
 A reading that is text rather than a number — `sysDescr`, a name, a MAC address

@@ -164,8 +164,8 @@ cost:
 
 ## Hardware readings are the container's
 
-The **This computer** readings under Settings → Hardware, and any "this
-computer" metrics you monitor, describe the container: its share of memory,
+A **Hardware health** check reading *This computer* (the **This computer**
+template), and any "this computer" metrics you monitor, describe the container: its share of memory,
 the disk the volume is on, the container's network interfaces. They are not
 wrong, but they are not the host either.
 
@@ -197,8 +197,8 @@ the database is not supported — take a backup first if you want that option.
 ## Backups and moving to another machine
 
 GWatch's own backups (Settings → Backups) are password-encrypted archives that
-include the secrets key, so one archive is a complete copy that restores on any
-machine — container or not. Make one, download it from the same page, and keep
+carry the stored secrets themselves rather than needing `gwatch.key`, so one
+archive is a complete copy that restores on any machine — container or not. Make one, download it from the same page, and keep
 it somewhere other than the volume. [`RESTORE.md`](RESTORE.md) covers restoring
 one onto a fresh install; a fresh container with a new empty volume counts.
 

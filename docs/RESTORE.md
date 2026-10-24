@@ -39,7 +39,7 @@ open the web interface.
 2. Under **Restore from a file**, choose the `.gwbackup` file you copied over,
    enter its password, and decide whether to also restore history and events
    (only available if the archive was created with history included).
-3. Click **Restore from a file**. GWatch reads the archive and shows what it
+3. Click **Restore from file**. GWatch reads the archive and shows what it
    holds, and lists everything in it that matters for security (see
    [Before it is applied: the preview](#before-it-is-applied-the-preview)).
    Nothing has changed yet.
@@ -70,9 +70,10 @@ curl -sS -X POST http://127.0.0.1:7230/api/backups/restore \
   -F "includeHistory=true"
 ```
 
-Add basic-auth credentials (`-u user:pass` or an `Authorization` header) if the
-new machine's remote-access password is set and you are not calling from
-`127.0.0.1`. A successful response looks like:
+From `127.0.0.1` no credentials are needed (unless sign-in on this computer is
+required). From elsewhere, send an administrator's: a signed-in administrator's
+`gwatch_session` cookie, or the legacy access password as basic auth
+(`-u any:password`). API keys are refused on every backup route. A successful response looks like:
 
 ```json
 { "ok": true, "nodes": 12, "checks": 31, "results": 481203, "rollups": 9120, "events": 214, "history": true,
@@ -208,13 +209,12 @@ database without an archive.
 
 ## What a restore does not bring over
 
-- **The `gwatch.key` file and update-signing configuration**, if present on the
-  old machine (used to verify signed release updates). This is deliberately
-  outside the backup archive — it is tied to the machine's installation, not to
-  the monitoring configuration, and copying signing material between machines
-  is a decision to make explicitly, not something a configuration restore
-  should do silently. If the new machine needs to verify signed updates the
-  same way, set that up separately.
+- **The `gwatch.key` file.** It is the key that encrypts the secrets stored in
+  the old machine's database, and it belongs to that installation. The archive
+  does not need it: it carries those secrets itself, inside its own password
+  encryption, and the new machine seals them again with its own `gwatch.key`.
+  (The keys that verify signed release updates are built into the program, so
+  there is nothing about updates to carry over either.)
 - The **access password** for remote/LAN access is restored as part of
   settings (it travels with the config), but SMTP and automatic-backup
   passwords are only ever stored encrypted/hashed as GWatch normally does —
@@ -238,7 +238,7 @@ After restoring:
 
 1. Check **Settings › Monitor health** — service running, scheduler running,
    database size roughly matching what you expect.
-2. Check the **Overview** page — the same nodes/groups should appear with the
+2. Check the **Dashboard** and **Nodes** pages — the same nodes/groups should appear with the
    status you expect once the first check cycle completes.
 3. If you restored history, open a node's **Charts** and confirm data extends
    back further than "just now".

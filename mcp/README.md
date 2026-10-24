@@ -80,7 +80,7 @@ make mcp-build          # writes dist/gwatch-mcp
 
 ## Create an API key
 
-In GWatch: **Settings › Users & access › API keys › New key**. Give it a name you will recognise
+In GWatch: **Settings › Users & access › API keys › New API key**. Give it a name you will recognise
 ("Claude Desktop"), choose the **`read`** scope, and copy the `gw_…` key — it is shown once and
 only a digest is stored. Pick `readwrite` only if you actually want the assistant to change your
 monitoring, and see the trust model above first.
@@ -92,7 +92,7 @@ gwatch-mcp check --url http://127.0.0.1:7230 --api-key gw_…
 ```
 
 ```
-gwatch-mcp 0.1.0
+gwatch-mcp 0.1.2
 GWatch:      http://127.0.0.1:7230/api/v1
 Connection:  ok
 Principal:   API key "Claude Desktop" (scope read)
