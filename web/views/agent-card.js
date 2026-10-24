@@ -172,6 +172,8 @@ async function cancelRotation(agent, onChange) {
 function collectSection(agent, onChange) {
   const picker = collectionPicker({ value: agent.collect || {}, inventory: agent.inventory || null });
   const save = h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
+    const problem = picker.problem();
+    if (problem) { toast(problem, { kind: 'error' }); return; }
     save.disabled = true;
     try {
       await api.put(`/api/agents/${agent.id}/collect`, picker.value());

@@ -57,6 +57,8 @@ export async function addAgentNode(reload) {
     confirmLabel: 'Get a pairing code',
   });
   if (!ok) return;
+  const problem = picker.problem();
+  if (problem) { toast(problem, { kind: 'error' }); return; }
   try {
     const res = await api.post('/api/agents/pairings', {
       name: name.value.trim(),

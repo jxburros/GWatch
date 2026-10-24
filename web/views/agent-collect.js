@@ -77,6 +77,13 @@ export function collectionPicker({ value = {}, inventory = null, instances = tru
     },
     /** One line saying what is chosen, for a summary. */
     summary: () => describeSelection(api.value()),
+    /** Why the selection cannot be saved, or ''. An empty list is how the
+     *  API spells "automatic", so nothing ticked would be saved as everything. */
+    problem() {
+      if (!famBoxes.some((b) => b.input.checked)) return 'Tick at least one kind of reading: with none ticked the machine would send every kind.';
+      const none = kinds.find((k) => k.picking() && !k.value().length);
+      return none ? `Tick at least one under ${none.title}, or set it back to Automatic.` : '';
+    },
   };
   return api;
 }
@@ -183,5 +190,5 @@ function buildKind(id, kind, current, items, disabled) {
       h('label', { class: 'radio', for: pick.id }, pick, h('span', null, 'Only the ones I tick'))),
     h('p', { class: 'note' }, kind.auto),
     rows.length ? list : h('p', { class: 'note' }, 'Nothing listed yet.'));
-  return { key: kind.key, el, value: () => (pick.checked ? boxes.filter((b) => b.input.checked).map((b) => b.name) : []) };
+  return { key: kind.key, title: kind.title, el, picking: () => pick.checked, value: () => (pick.checked ? boxes.filter((b) => b.input.checked).map((b) => b.name) : []) };
 }
