@@ -32,8 +32,12 @@ export async function mount(root, ctx) {
   function parseCfg(c) { if (typeof c === 'string') { try { return JSON.parse(c); } catch { return {}; } } return c || {}; }
   function current() { return state.saved.find((c) => c.id === state.currentId) || null; }
 
-  async function persist() {
-    try { state.saved = await api.put('/api/charts', state.saved); } catch (e) { toast(e.message, { kind: 'error' }); throw e; }
+  /** Saves `list` as the whole set of charts and adopts it only once the
+   *  server has taken it: a refused save leaves the list as it was, rather
+   *  than showing a chart deleted (or added) that never was. Resolves to
+   *  false, having said why, when it is refused. */
+  async function persist(list = state.saved) {
+    try { state.saved = await api.put('/api/charts', list); return true; } catch (e) { toast(e.message, { kind: 'error' }); return false; }
   }
   // Latency history and each named metric are cached by what was asked for,
   // so flipping between styles or colours never refetches.
@@ -117,14 +121,14 @@ export async function mount(root, ctx) {
   async function save() {
     const c = current();
     if (!c) { await saveAs(); return; }
-    c.config = state.cfg; await persist(); state.dirty = false; toast('Chart saved', { kind: 'success' }); render();
+    if (!await persist(state.saved.map((x) => (x === c ? { ...c, config: state.cfg } : x)))) return;
+    state.dirty = false; toast('Chart saved', { kind: 'success' }); render();
   }
   async function saveAs() {
     const name = await promptDialog({ title: 'Save chart', label: 'Name', value: current()?.name ? `${current().name} copy` : '', placeholder: 'e.g. Gateway latency, All websites 7d' });
     if (!name) return;
     const entry = { id: uid('chart'), name: name.trim(), config: state.cfg };
-    state.saved.push(entry);
-    await persist();
+    if (!await persist([...state.saved, entry])) return;
     const saved = state.saved.find((x) => x.name === entry.name) || state.saved[state.saved.length - 1];
     state.currentId = saved.id; state.dirty = false;
     toast('Chart saved', { kind: 'success' });
@@ -134,14 +138,15 @@ export async function mount(root, ctx) {
     const c = current(); if (!c) return;
     const name = await promptDialog({ title: 'Rename chart', label: 'Name', value: c.name });
     if (!name || name.trim() === c.name) return;
-    c.name = name.trim(); await persist(); toast('Chart renamed', { kind: 'success' }); render();
+    if (!await persist(state.saved.map((x) => (x === c ? { ...c, name: name.trim() } : x)))) return;
+    toast('Chart renamed', { kind: 'success' }); render();
   }
   async function remove() {
     const c = current(); if (!c) return;
     if (!await confirmDialog({ title: `Delete "${c.name}"?`, confirmLabel: 'Delete', danger: true })) return;
-    state.saved = state.saved.filter((x) => x.id !== c.id);
-    await persist(); state.currentId = null; state.dirty = false; toast('Chart deleted', { kind: 'success' });
-    ctx.navigate('/charts'); render();
+    if (!await persist(state.saved.filter((x) => x.id !== c.id))) return;
+    state.currentId = null; state.dirty = false; pickCurrent(); toast('Chart deleted', { kind: 'success' });
+    ctx.navigate(state.currentId ? `/charts/${state.currentId}` : '/charts'); render();
   }
   async function pinToDashboard() {
     let dashboards = [];
@@ -164,7 +169,10 @@ export async function mount(root, ctx) {
     refresh() { expireHistory(state.cache); state.view?.refresh(); },
     themeChanged() { renderMain(); },
     async update(params) {
-      if (params.id !== state.currentId) { state.currentId = params.id || null; state.dirty = false; pickCurrent(); if (!params.id) state.cfg = state.cfg; render(); }
+      // The route has no id for #/charts, and currentId is null for an unsaved
+      // chart: the two are the same chart, or "New chart" (which goes to
+      // #/charts) would land on the first saved one instead.
+      if ((params.id || null) !== state.currentId) { state.currentId = params.id || null; state.dirty = false; pickCurrent(); if (!params.id) state.cfg = state.cfg; render(); }
       return true;
     },
     destroy() { state.destroyed = true; state.view?.destroy(); },
