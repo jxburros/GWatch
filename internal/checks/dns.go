@@ -73,9 +73,9 @@ func runDNSCheck(ctx context.Context, check model.Check, target string) model.Re
 	t0 := time.Now()
 	switch recordType {
 	case "A", "AAAA":
-		// Ask for the one family only: LookupIPAddr returns both, so an A
-		// check on a name with only AAAA records used to pass.
-		network := "ip4"
+		// "A" is the editor's "addresses" choice and has always meant either
+		// family (model.CheckConfig.RecordType); "AAAA" asks for IPv6 only.
+		network := "ip"
 		if recordType == "AAAA" {
 			network = "ip6"
 		}

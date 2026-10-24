@@ -783,10 +783,15 @@ func TestDNSCheck(t *testing.T) {
 	if !res.Success || res.Details.Resolver != "system" || len(res.Details.ResolvedValues) == 0 {
 		t.Errorf("localhost: %+v", res)
 	}
-	// An A check on a name with only an AAAA record fails; AAAA finds it.
+	// "A" means any address, so it finds an AAAA-only name; AAAA asks for
+	// IPv6 alone and does not return good.test's IPv4 address.
 	res = run(t, httpCheck(model.CheckDNS, "host.v6.test", model.CheckConfig{DNSServer: server, RecordType: "A"}), Options{})
+	if !res.Success || len(res.Details.ResolvedValues) != 1 || res.Details.ResolvedValues[0] != "2001:db8::1" {
+		t.Errorf("A check on an AAAA-only name: %+v", res)
+	}
+	res = run(t, httpCheck(model.CheckDNS, "www.good.test", model.CheckConfig{DNSServer: server, RecordType: "AAAA"}), Options{})
 	if res.Success {
-		t.Errorf("A check passed on an AAAA-only name: %+v", res)
+		t.Errorf("AAAA check passed on an IPv4-only name: %+v", res)
 	}
 	res = run(t, httpCheck(model.CheckDNS, "host.v6.test", model.CheckConfig{DNSServer: server, RecordType: "AAAA"}), Options{})
 	if !res.Success || len(res.Details.ResolvedValues) != 1 || res.Details.ResolvedValues[0] != "2001:db8::1" {
