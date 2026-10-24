@@ -19,7 +19,9 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
+	"time"
 
 	"github.com/jxburros/GWatch/internal/store"
 )
@@ -38,7 +40,7 @@ func Backend() string {
 // more than once in a test when the test needs two stores.
 func Config(t testing.TB) store.DBConfig {
 	t.Helper()
-	dir := t.TempDir()
+	dir := dbDir(t)
 	var cfg store.DBConfig
 	switch Backend() {
 	case "sqlite":
@@ -82,4 +84,33 @@ func Open(t testing.TB) *store.Store {
 	}
 	t.Cleanup(func() { s.Close() })
 	return s
+}
+
+// dbDir is t.TempDir for a test database, but tolerant of Windows holding the
+// closed file a little longer. The store is closed before this cleanup runs,
+// yet on a Windows runner something else (antivirus, the indexer) can keep
+// test.db open past the two seconds t.TempDir's cleanup retries for, failing
+// a test whose assertions all passed. This retries for longer and then only
+// logs the leftover directory.
+func dbDir(t testing.TB) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "gwatch-storetest-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			err := os.RemoveAll(dir)
+			if err == nil {
+				return
+			}
+			if runtime.GOOS != "windows" || time.Now().After(deadline) {
+				t.Logf("could not remove the test database directory: %v", err)
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	})
+	return dir
 }
