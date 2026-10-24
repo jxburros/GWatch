@@ -408,6 +408,16 @@ func clampPct(v float64) float64 {
 }
 
 // usedPct is the share of a filesystem or pool that is in use.
+// sub is a-b for counts a filesystem reports, 0 rather than a wrapped-around
+// eighteen quintillion when b is the larger: some filesystems (FUSE and
+// network ones among them) report more free inodes or blocks than they have.
+func sub(a, b uint64) uint64 {
+	if b > a {
+		return 0
+	}
+	return a - b
+}
+
 func usedPct(used, total uint64) float64 {
 	if total == 0 {
 		return 0

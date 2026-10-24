@@ -19,3 +19,21 @@ test('wall retries automatically after its first request fails', async (t) => {
   await new Promise((r) => setTimeout(r, 0));
   assert.match(root.textContent, /Recovered/);
 });
+
+test('an older wall load that answers last does not draw over a newer one', async (t) => {
+  t.mock.method(globalThis, 'setInterval', () => 1);
+  t.mock.method(globalThis, 'clearInterval', () => {});
+  const waiting = [];
+  const root = freshRoot();
+  const wall = createWall(root, () => new Promise((resolve) => waiting.push(resolve)));
+  t.after(() => wall.destroy());
+  wall.refresh();
+  assert.equal(waiting.length, 2, 'two loads are out at once');
+  const board = (text) => ({ wallboard: { panels: [{ type: 'message', config: { text } }] } });
+  waiting[1](board('Newer'));
+  await new Promise((r) => setTimeout(r, 0));
+  waiting[0](board('Older'));
+  await new Promise((r) => setTimeout(r, 0));
+  assert.match(root.textContent, /Newer/);
+  assert.doesNotMatch(root.textContent, /Older/);
+});

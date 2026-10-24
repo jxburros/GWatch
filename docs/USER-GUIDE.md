@@ -22,7 +22,7 @@ options the Help page only mentions in passing.
 
 **The things you watch**
 3. [Nodes and checks](#3-nodes-and-checks)
-4. [The ten check types](#4-the-ten-check-types)
+4. [The eleven check types](#4-the-eleven-check-types)
 5. [Discovery: adding a whole network at once](#5-discovery-adding-a-whole-network-at-once)
 6. [Bulk edit: changing many things at once](#6-bulk-edit-changing-many-things-at-once)
 
@@ -87,7 +87,7 @@ resets the ones you have already dismissed.
 ### The layout
 
 - **The sidebar** on the left is in two parts. *Monitor* holds **Dashboard**,
-  **Nodes**, **Charts** and **Incidents**; *System* holds **Audit** and
+  **Nodes**, **Charts**, **Network map** and **Incidents**; *System* holds **Audit** and
   **Help**. Along its foot sit the signed-in account, **Sign out**,
   **Wallboards**, the service-health line and **Pin sidebar**. The sidebar
   collapses to icons to give the content more room; the pin keeps it open.
@@ -288,7 +288,7 @@ message is not enough.
 
 ---
 
-## 4. The ten check types
+## 4. The eleven check types
 
 Every type shares a schedule (**interval**, **timeout**, **retries**,
 **failures before down**) and takes an optional **target** that overrides the
@@ -326,10 +326,10 @@ Reachability and latency over ICMP.
   one check covers both reachability and expiry.
 - **Warn before expiry** (days) for that certificate check.
 
-> **Request headers are stored as written.** Unlike the SNMP and agent
-> credentials, they are not encrypted and not masked, so an `Authorization`
-> header on an HTTP check sits readable in the database. Use a token you are
-> willing to store that way.
+> **Request headers and the body are treated as credentials.** Like the SNMP
+> secrets, their values are encrypted in the database with `gwatch.key`, shown
+> masked when the check is read back, and left out of the configuration export.
+> Leave a masked value as it is to keep the stored one.
 
 ### HTTPS certificate
 
@@ -344,8 +344,9 @@ database, or Plex on 32400.
 
 ### DNS
 
-- **Record type** — *A / AAAA* (the default, which resolves both), *CNAME*,
-  *MX* or *TXT*.
+- **Record type** — *A / AAAA (addresses)* (the default, which accepts IPv4 or
+  IPv6 addresses), *CNAME*, *MX* or *TXT*. An IPv6-only AAAA check can be saved
+  through the API (`recordType: "AAAA"`).
 - **Expected values** — optional. Every resolved value must be in the list.
 - **DNS server** — optional `host[:port]`. Leave it blank for the system
   resolver. Filling it in is how you check one particular resolver rather than
@@ -1144,8 +1145,8 @@ visible to viewer accounts; the rest are administrator-only.
 | **General** | Instance name (shown in the wallboard and in alert emails), default interval and timeout for new checks, how many checks run at once, the minimum interval allowed, wallboard refresh, the global latency and packet-loss warnings, and the ping method |
 | **Appearance** | Theme, accent colour, density, and the switch for contextual tips |
 | **Indicators** | The rules behind the coloured circles in the header |
-| **Users & access** | Accounts, roles, API keys, and the legacy shared access password |
-| **Network access** | Whether other devices on your LAN may reach the interface, and the addresses they would use |
+| **Users & access** | Accounts, roles, API keys, sign-in on this computer, and the password hashing method |
+| **Network access** | Whether other devices on your LAN may reach the interface, the listen port, the HTTPS reverse proxy switch, the addresses they would use, and the legacy shared access password |
 | **Alerts** | Email and SMTP, as in [section 10](#10-email-alerts) |
 | **Automation** | Triggers and custom endpoints, as in [section 12](#12-automation-triggers-and-endpoints) |
 | **Rules** | Notification rules, as in [section 11](#11-notification-rules) |
@@ -1216,7 +1217,7 @@ shipped. Nothing here is on by default. See [`mcp/README.md`](../mcp/README.md).
 | **Viewer** | See dashboards, charts, history, incidents and the audit log. Refused — with an explanation, not a silent failure — on every change |
 
 GWatch will not let you remove or demote the last administrator. Passwords are
-stored as argon2id hashes; session tokens and API keys only as sha256 digests.
+stored as argon2id (or, if you choose it, PBKDF2) hashes; session tokens and API keys only as sha256 digests.
 None can be read back out of the database.
 
 ### Password hashing

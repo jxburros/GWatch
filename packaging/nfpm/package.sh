@@ -11,7 +11,7 @@
 #
 #   NFPM=nfpm packaging/nfpm/package.sh 0.5.0 dist/packages
 #
-# Output file names are nfpm's own, gwatch-agent_<v>_<arch>.deb and
+# Output file names are nfpm's own, gwatch-agent_<v>-1_<arch>.deb and
 # gwatch-agent-<v>-1.<arch>.rpm, neither of which the self-updater's exact
 # gwatch-agent-<os>-<arch> match can ever mistake for an update
 # (TestPackagedAssetsAreInvisibleToTheUpdater).
@@ -33,7 +33,7 @@ mkdir -p "$outdir"
 for arch in "$@"; do
 	case "$arch" in
 	amd64 | arm64) nfpm_arch=$arch ;;
-	# GOARM=7, the Go default and what the agent-release job builds: armhf.
+	# GOARM=7, the Go default and what the gwatch-agent-build job builds: armhf.
 	arm) nfpm_arch=arm7 ;;
 	*)
 		echo "unsupported architecture '$arch'" >&2

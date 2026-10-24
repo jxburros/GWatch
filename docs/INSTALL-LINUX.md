@@ -25,7 +25,7 @@ Settings go in `/etc/gwatch/gwatch.env` (`GWATCH_LISTEN`, `GWATCH_DB_*`, `GWATCH
 
 **Removal.** `sudo apt remove gwatch` (or `sudo dnf remove gwatch`) stops and removes the service and keeps `/var/lib/gwatch` and the `gwatch` user, so reinstalling picks up where you left off. `sudo apt purge gwatch` also deletes `/var/lib/gwatch`, `/etc/gwatch` and the `gwatch` user; export a backup first. rpm has no purge: remove those by hand.
 
-Switching from `gwatch install` to the package: run `sudo /usr/local/libexec/gwatch/gwatch uninstall` first and keep `/var/lib/gwatch`. The package's service takes the directory over, and systemd hands its ownership to the `gwatch` user on first start. If dpkg asks about `/etc/gwatch/gwatch.env`, keep your version.
+Switching from `gwatch install` to the package: run `sudo /usr/local/bin/gwatch uninstall` (`/usr/local/libexec/gwatch/gwatch` for a copy installed by 0.7.x or earlier) first and keep `/var/lib/gwatch`. The package's service takes the directory over, and systemd hands its ownership to the `gwatch` user on first start. If dpkg asks about `/etc/gwatch/gwatch.env`, keep your version.
 
 **Not yet: an apt/dnf repository.** A signed repository would let `apt upgrade` and `dnf upgrade` keep GWatch current unattended. It needs hosting and a repository signing key held outside this repository (for example a Cloudsmith or packagecloud account, or a GitHub Pages repository signed in a protected release job). That is a planned follow-up and is not part of the release workflow today.
 
@@ -68,7 +68,7 @@ Releases before this one installed a unit called `GWatch.service` that ran as ro
 
 The unit is hardened along the lines of the [hardware agent's](../packaging/nfpm/gwatch-agent.service): `NoNewPrivileges=yes`, `ProtectSystem=strict` with `ReadWritePaths=` the data directory, `ProtectHome=yes`, `PrivateTmp=yes`, `PrivateDevices=yes`, `UMask=0077`, the kernel, clock, hostname and control-group protections, and `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK` (IPv4 and IPv6 cover ICMP and UDP; netlink is how the interface list is read). It restarts five seconds after a failure (`Restart=on-failure`), but not after exit status 78, which GWatch uses for settings that are wrong — a malformed `GWATCH_LISTEN`, unreadable database settings — so a mistake shows once in the journal rather than every five seconds.
 
-The service holds one capability, `CAP_NET_RAW`, as an ambient capability, so that ping works (see [Network and ping](#network-and-ping)). When the listen address is a port below 1024, install adds `CAP_NET_BIND_SERVICE` as well. Changing the port to one below 1024 later from Settings > Network does not; run `sudo gwatch install --listen 0.0.0.0:443` (or whichever) instead.
+The service holds one capability, `CAP_NET_RAW`, as an ambient capability, so that ping works (see [Network and ping](#network-and-ping)). When the listen address is a port below 1024, install adds `CAP_NET_BIND_SERVICE` as well. Changing the port to one below 1024 later from Settings > Network access does not; run `sudo gwatch install --listen 0.0.0.0:443` (or whichever) instead.
 
 Logs go to the journal as well as to the log files in the data directory:
 
@@ -122,7 +122,7 @@ Keep the initial listener on loopback. Open an SSH tunnel from your desktop:
 ssh -L 7230:127.0.0.1:7230 user@server
 ```
 
-Open `http://127.0.0.1:7230`, create an administrator in Settings > Accounts, and enable the local sign-in requirement. Alternatively, create the first administrator from a shell on the server:
+Open `http://127.0.0.1:7230`, create an administrator in Settings > Users & access, and enable the local sign-in requirement. Alternatively, create the first administrator from a shell on the server:
 
 ```sh
 # A private admin.json contains username, password, and role set to admin.
@@ -133,7 +133,7 @@ Delete the credential file afterward. Existing installations require an authenti
 
 ## Network and ping
 
-Settings > Network changes the port live; zero retains the startup default. If binding fails, the old listener is restored and a restart action is offered. To change the startup address, run `sudo gwatch install --listen ADDRESS`, or edit `GWATCH_LISTEN` in `/etc/gwatch/gwatch.env` and restart. On headless machines `gwatch open` prints the URL.
+Settings > Network access changes the port live; zero retains the startup default. If binding fails, the old listener is restored and a restart action is offered. To change the startup address, run `sudo gwatch install --listen ADDRESS`, or edit `GWATCH_LISTEN` in `/etc/gwatch/gwatch.env` and restart. On headless machines `gwatch open` prints the URL.
 
 For LAN access, permit the selected port through your firewall:
 
@@ -152,7 +152,7 @@ GWatch's built-in ping tries three ways of sending an echo request, in this orde
 
 1. **An unprivileged ICMP socket.** Linux allows one only to processes in a group inside the `net.ipv4.ping_group_range` sysctl. Many distributions (and systemd since version 243) set it to `0 2147483647`, which covers everyone; others leave the kernel default `1 0`, which covers no one.
 2. **A raw ICMP socket**, which needs root or the `CAP_NET_RAW` capability.
-3. **The system `ping` command** (only with the ping method set to *auto* or *system*, in Settings > General > Ping). It works wherever `ping` itself does, but starts a process per check and is noticeably slower for discovery sweeps.
+3. **The system `ping` command** (only with the ping method set to *auto* or *system*, in Settings > General > Ping method). It works wherever `ping` itself does, but starts a process per check and is noticeably slower for discovery sweeps.
 
 The service `gwatch install` sets up already holds `CAP_NET_RAW` (`AmbientCapabilities=CAP_NET_RAW` in the unit), so on a systemd install ping works without anything else. If you run GWatch some other way as an ordinary user — from a terminal, under your own unit, or from a package that does not grant the capability — pick one of these:
 

@@ -463,7 +463,10 @@ export async function mount(root, ctx) {
         const vIn = textInput({ value: v, placeholder: 'Value', 'aria-label': 'Header value' });
         const commit = () => { const next = {}; headersWrap.querySelectorAll('.kv-row').forEach((r) => { const [a, b] = r.querySelectorAll('input'); if (a.value.trim()) next[a.value.trim()] = b.value; }); cfg.headers = next; };
         kIn.addEventListener('change', commit); vIn.addEventListener('input', commit);
-        headersWrap.append(h('div', { class: 'kv-row' }, kIn, vIn, h('button', { class: 'btn btn-sm icon-btn', type: 'button', 'aria-label': 'Remove header', onclick: () => { const nh = { ...cfg.headers }; delete nh[k]; cfg.headers = nh; renderHeaders(); } }, icon('x'))));
+        // Removing takes the row away and reads the rest back, rather than
+        // deleting `k`: the name may have been edited since this row was drawn.
+        const row = h('div', { class: 'kv-row' }, kIn, vIn, h('button', { class: 'btn btn-sm icon-btn', type: 'button', 'aria-label': 'Remove header', onclick: () => { row.remove(); commit(); renderHeaders(); } }, icon('x')));
+        headersWrap.append(row);
       });
       headersWrap.append(h('div', null, h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { cfg.headers = { ...(cfg.headers || {}), [`Header-${entries.length + 1}`]: '' }; renderHeaders(); } }, icon('plus'), 'Add header')));
     };
@@ -591,7 +594,9 @@ export async function mount(root, ctx) {
             const vIn = textInput({ value: v, placeholder: 'value', 'aria-label': 'Environment variable value' });
             const commit = () => { const next = {}; envWrap.querySelectorAll('.kv-row').forEach((r) => { const [a, b] = r.querySelectorAll('input'); if (a.value.trim()) next[a.value.trim()] = b.value; }); cfg.env = next; };
             kIn.addEventListener('change', commit); vIn.addEventListener('input', commit);
-            envWrap.append(h('div', { class: 'kv-row' }, kIn, vIn, h('button', { class: 'btn btn-sm icon-btn', type: 'button', 'aria-label': 'Remove variable', onclick: () => { const nv = { ...cfg.env }; delete nv[k]; cfg.env = nv; renderEnv(); } }, icon('x'))));
+            // As for headers: the name may have been edited since the row was drawn.
+            const row = h('div', { class: 'kv-row' }, kIn, vIn, h('button', { class: 'btn btn-sm icon-btn', type: 'button', 'aria-label': 'Remove variable', onclick: () => { row.remove(); commit(); renderEnv(); } }, icon('x')));
+            envWrap.append(row);
           });
           envWrap.append(h('div', null, h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { cfg.env = { ...(cfg.env || {}), [`VAR_${entries.length + 1}`]: '' }; renderEnv(); } }, icon('plus'), 'Add variable')));
         };

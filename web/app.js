@@ -2,7 +2,7 @@
 // indicators), theme + accent handling and live updates.
 
 import { api, onConnection, connection, subscribeUpdates, debounce, refreshMe, identityKnown, onIdentity, signOut, getAuthSetup, onAuthChallenge, onDenied } from './api.js';
-import { h, icon, clear, toast, closeMenus, replace, applyTheme, applyAccent, onThemeChange, openModal } from './components.js';
+import { h, icon, clear, toast, closeMenus, replace, applyTheme, applyAccent, lookFor, onThemeChange, openModal } from './components.js';
 import { relTime } from './fmt.js';
 import { notifyRoute as tipsRoute, closeTip, onboardingDone } from './tips.js';
 
@@ -97,8 +97,11 @@ async function loadAppearance({ retries = 0 } = {}) {
     return;
   }
   try {
-    applyTheme(me.theme || 'dark');
-    applyAccent(me.accentColor || '#43c9c0');
+    // A viewer's own choice from Settings › Appearance wins over the shared
+    // look; it used to be overwritten by the next of these checks.
+    const look = lookFor(me);
+    applyTheme(look.theme);
+    applyAccent(look.accentColor);
     applyIdentity(me);
     setIndicatorRules(me.indicators);
   } catch (e) { console.error(e); }

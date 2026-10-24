@@ -1,6 +1,7 @@
 package checks
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -332,6 +333,28 @@ func TestKeywordCheck(t *testing.T) {
 	}
 }
 
+// A keyword past the part of a large response that is read is not "absent":
+// the message has to say how much was searched.
+func TestKeywordPastTheReadLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(bytes.Repeat([]byte("x"), maxBodyBytes))
+		_, _ = w.Write([]byte("Error"))
+	}))
+	defer srv.Close()
+	res := run(t, httpCheck(model.CheckKeyword, srv.URL, model.CheckConfig{Keyword: "Error", KeywordAbsent: true}), Options{})
+	if !strings.Contains(res.Message, "first 2 MiB") {
+		t.Errorf("message does not say only part was searched: %q", res.Message)
+	}
+	small := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(bytes.Repeat([]byte("x"), maxBodyBytes))
+	}))
+	defer small.Close()
+	res = run(t, httpCheck(model.CheckKeyword, small.URL, model.CheckConfig{Keyword: "Error"}), Options{})
+	if res.Message != `Keyword "Error" not found` {
+		t.Errorf("a response that fits was called cut short: %q", res.Message)
+	}
+}
+
 func TestJSONPath(t *testing.T) {
 	doc := map[string]any{
 		"status": "ok",
@@ -655,7 +678,8 @@ func TestTCPCheck(t *testing.T) {
 }
 
 // fakeDNS answers A queries with 1.2.3.4 for names under "good." and
-// NXDOMAIN for everything else. AAAA queries get an empty NOERROR answer.
+// NXDOMAIN for everything else. AAAA queries get an empty NOERROR answer,
+// except under "v6.test", whose names have only an AAAA record (2001:db8::1).
 func fakeDNS(t *testing.T) string {
 	t.Helper()
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -698,7 +722,12 @@ func fakeDNS(t *testing.T) string {
 			flags := uint16(0x8180)         // QR, RD, RA
 			ancount := uint16(0)
 			var answer []byte
-			if strings.HasSuffix(name, "good.test") {
+			if strings.HasSuffix(name, "v6.test") {
+				if qtype == 28 {
+					ancount = 1
+					answer = append([]byte{0xC0, 0x0C, 0, 28, 0, 1, 0, 0, 0, 60, 0, 16}, net.ParseIP("2001:db8::1")...)
+				}
+			} else if strings.HasSuffix(name, "good.test") {
 				if qtype == 1 {
 					ancount = 1
 					answer = []byte{0xC0, 0x0C, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 1, 2, 3, 4}
@@ -753,6 +782,20 @@ func TestDNSCheck(t *testing.T) {
 	res = run(t, httpCheck(model.CheckDNS, "localhost", model.CheckConfig{}), Options{})
 	if !res.Success || res.Details.Resolver != "system" || len(res.Details.ResolvedValues) == 0 {
 		t.Errorf("localhost: %+v", res)
+	}
+	// "A" means any address, so it finds an AAAA-only name; AAAA asks for
+	// IPv6 alone and does not return good.test's IPv4 address.
+	res = run(t, httpCheck(model.CheckDNS, "host.v6.test", model.CheckConfig{DNSServer: server, RecordType: "A"}), Options{})
+	if !res.Success || len(res.Details.ResolvedValues) != 1 || res.Details.ResolvedValues[0] != "2001:db8::1" {
+		t.Errorf("A check on an AAAA-only name: %+v", res)
+	}
+	res = run(t, httpCheck(model.CheckDNS, "www.good.test", model.CheckConfig{DNSServer: server, RecordType: "AAAA"}), Options{})
+	if res.Success {
+		t.Errorf("AAAA check passed on an IPv4-only name: %+v", res)
+	}
+	res = run(t, httpCheck(model.CheckDNS, "host.v6.test", model.CheckConfig{DNSServer: server, RecordType: "AAAA"}), Options{})
+	if !res.Success || len(res.Details.ResolvedValues) != 1 || res.Details.ResolvedValues[0] != "2001:db8::1" {
+		t.Errorf("AAAA check: %+v", res)
 	}
 	// A URL target is reduced to its host.
 	res = run(t, httpCheck(model.CheckDNS, "https://www.good.test:8443/path", model.CheckConfig{DNSServer: server}), Options{})
@@ -869,6 +912,18 @@ Approximate round trip times in milli-seconds:
 	if pr.Sent != 4 || pr.Received != 3 || len(pr.RTTs) != 3 || pr.RTTs[1] != time.Millisecond {
 		t.Errorf("windows: %+v", pr)
 	}
+	// A French Windows: no "time=" and no "Sent =" anywhere, so the replies
+	// are counted from their lines and the rest is settled by settleSent.
+	french := `Envoi d'une requête 'Ping'  8.8.8.8 avec 32 octets de données :
+Réponse de 8.8.8.8 : octets=32 temps=14 ms TTL=117
+Réponse de 8.8.8.8 : octets=32 temps<1ms TTL=117
+
+Statistiques Ping pour 8.8.8.8:
+    Paquets : envoyés = 2, reçus = 2, perdus = 0 (perte 0%),`
+	pr = parsePingOutput(french)
+	if pr.Received != 2 || len(pr.RTTs) != 2 || pr.RTTs[0] != 14*time.Millisecond {
+		t.Errorf("french windows: %+v", pr)
+	}
 	pr = parsePingOutput("ping: unknown host nope")
 	if pr.Sent != 0 || pr.Received != 0 || len(pr.RTTs) != 0 {
 		t.Errorf("garbage: %+v", pr)
@@ -909,6 +964,7 @@ func TestValidate(t *testing.T) {
 		{"timeout too large", model.Check{Type: model.CheckPing, TimeoutSeconds: 999}, "h", "timeout"},
 		{"retries too many", model.Check{Type: model.CheckPing, Retries: 50}, "h", "retries"},
 		{"ping count", model.Check{Type: model.CheckPing, Config: model.CheckConfig{PingCount: 50}}, "h", "ping count"},
+		{"ping host is an option", model.Check{Type: model.CheckPing}, "-fc100000", "invalid hostname"},
 		{"http ok", model.Check{Type: model.CheckHTTP, Config: model.CheckConfig{Target: "example.com/path"}}, "", ""},
 		{"http bad scheme", model.Check{Type: model.CheckHTTP, Config: model.CheckConfig{Target: "ftp://example.com"}}, "", "scheme"},
 		{"http bad status", model.Check{Type: model.CheckHTTP, Config: model.CheckConfig{Target: "example.com", ExpectedStatus: "abc"}}, "", "status"},

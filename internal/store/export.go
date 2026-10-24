@@ -194,6 +194,132 @@ func (s *Store) ImportAgent(ctx context.Context, r AgentRecord) (bool, error) {
 		r.LastAddr, r.LastVersion, r.Hostname, r.OS, r.Arch, collectColumn(r.Collect), boolInt(r.Collector))
 }
 
+// RemapAgentReferences runs after a restore has written the nodes and checks
+// (with the agent ids of the archive) and imported the archive's agents, and
+// makes every reference to an agent name the same machine it named in the
+// archive: a node's "check from" collector, and the machine a hardware check
+// reads.
+//
+// Agent ids are not kept across a restore: ImportAgent keeps an archived id
+// only while it is free here, and an agent already on this server keeps the
+// id it has. Matched by id alone, a reference would land on whatever local
+// agent happens to hold the archived number - a different machine, which as
+// a collector would be handed the node's check credentials, and as a
+// hardware check's machine would have its readings shown as another's.
+// Agents are matched by token digest instead: a reference to one that is
+// here (imported or already known) is moved to its local id; a reference to
+// one left out of the restore, while a different agent holds its old id, is
+// cleared (the node is checked from this server; the hardware check has no
+// machine until one is chosen). agents are the archive's agent records.
+func (s *Store) RemapAgentReferences(ctx context.Context, agents []AgentRecord) error {
+	archived := map[int64]string{}
+	for _, a := range agents {
+		if a.ID > 0 && a.TokenHash != "" {
+			archived[a.ID] = a.TokenHash
+		}
+	}
+	if len(archived) == 0 {
+		return nil
+	}
+	return s.writeTx(ctx, func(tx *wtx) error {
+		// resolve says what archived agent id old should become here, and
+		// whether it changes at all; 0 means no agent.
+		resolve := func(old int64) (int64, bool, error) {
+			hash, ok := archived[old]
+			if !ok {
+				return old, false, nil
+			}
+			var local int64
+			err := tx.queryRow(ctx, "SELECT id FROM agents WHERE token_hash = ?", hash).Scan(&local)
+			if err == nil {
+				return local, local != old, nil
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return 0, false, err
+			}
+			var n int
+			if err := tx.queryRow(ctx, "SELECT COUNT(*) FROM agents WHERE id = ?", old).Scan(&n); err != nil {
+				return 0, false, err
+			}
+			// No agent answers to the old id: the reference says its machine
+			// is gone, which is true.
+			return 0, n > 0, nil
+		}
+
+		type ref struct {
+			id    int64
+			agent int64
+			cfg   string
+		}
+		read := func(q string, withConfig bool) ([]ref, error) {
+			rows, err := tx.query(ctx, q)
+			if err != nil {
+				return nil, err
+			}
+			defer rows.Close()
+			var out []ref
+			for rows.Next() {
+				var r ref
+				dest := []any{&r.id, &r.agent}
+				if withConfig {
+					dest = []any{&r.id, &r.cfg}
+				}
+				if err := rows.Scan(dest...); err != nil {
+					return nil, err
+				}
+				out = append(out, r)
+			}
+			return out, rows.Err()
+		}
+
+		nodes, err := read("SELECT id, collector_id FROM nodes WHERE collector_id IS NOT NULL", false)
+		if err != nil {
+			return err
+		}
+		for _, n := range nodes {
+			id, changed, err := resolve(n.agent)
+			if err != nil {
+				return err
+			}
+			if !changed {
+				continue
+			}
+			var want any
+			if id > 0 {
+				want = id
+			}
+			if _, err := tx.exec(ctx, "UPDATE nodes SET collector_id = ? WHERE id = ?", want, n.id); err != nil {
+				return err
+			}
+		}
+
+		checks, err := read("SELECT id, config FROM checks WHERE type = '"+string(model.CheckSystem)+"'", true)
+		if err != nil {
+			return err
+		}
+		for _, c := range checks {
+			var cfg model.CheckConfig
+			if json.Unmarshal([]byte(c.cfg), &cfg) != nil || cfg.AgentID <= 0 {
+				continue
+			}
+			id, changed, err := resolve(cfg.AgentID)
+			if err != nil {
+				return err
+			}
+			if !changed {
+				continue
+			}
+			// The secrets in the stored config are sealed strings and stay
+			// exactly as they are.
+			cfg.AgentID = id
+			if _, err := tx.exec(ctx, "UPDATE checks SET config = ? WHERE id = ?", jsonString(cfg), c.id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // ReplaceWallboards removes every wallboard and writes the given ones in
 // their place, ids and share tokens included: a projected address typed
 // into a display has to keep working after a restore.

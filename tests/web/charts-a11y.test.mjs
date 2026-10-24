@@ -91,6 +91,25 @@ test('a wallboard-style chart can leave the table out', (t) => {
   assert.ok(root.querySelector('canvas[aria-describedby]'), 'the summary still describes it');
 });
 
+test('exportPNG downloads the picture (its height used to shadow the element builder)', async (t) => {
+  const root = freshRoot();
+  const chart = sized(new LineChart(root, { unit: 'ms' }));
+  t.after(() => chart.destroy());
+  chart.setData({ series, from: T0, to: T0 + 120e3 });
+  const created = []; const revoked = [];
+  const origCreate = URL.createObjectURL; const origRevoke = URL.revokeObjectURL;
+  URL.createObjectURL = () => { created.push(1); return 'blob:chart'; };
+  URL.revokeObjectURL = (u) => revoked.push(u);
+  t.after(() => { URL.createObjectURL = origCreate; URL.revokeObjectURL = origRevoke; });
+  const clicked = [];
+  const onClick = (e) => { if (e.target.download) { clicked.push(e.target.download); e.preventDefault(); } };
+  document.addEventListener('click', onClick, true);
+  t.after(() => document.removeEventListener('click', onClick, true));
+  assert.equal(await chart.exportPNG('latency.png'), true);
+  assert.deepEqual(clicked, ['latency.png']);
+  assert.equal(created.length, 1);
+});
+
 test('uptimeBar names itself after what it shows and sums up its periods', () => {
   const points = [
     { ts: new Date(T0).toISOString(), availability: 100 },
@@ -102,4 +121,13 @@ test('uptimeBar names itself after what it shows and sums up its periods', () =>
   const name = bar.getAttribute('aria-label');
   assert.match(name, /^Availability per period — Office router › Ping: 1 of 3 periods fully up, 1 partial, 1 down, first trouble /);
   assert.equal(uptimeBar([], { label: 'x' }).getAttribute('aria-label'), 'Availability per period — x: no data');
+});
+
+test('uptimeBar weighs merged buckets by their samples', () => {
+  const points = [
+    { ts: new Date(T0).toISOString(), availability: 100, count: 99 },
+    { ts: new Date(T0 + 60e3).toISOString(), availability: 0, count: 1 },
+  ];
+  const bar = uptimeBar(points, { maxSegments: 1, bucketSeconds: 60, from: T0, to: T0 + 120e3 });
+  assert.match(bar.querySelector('.seg').getAttribute('title'), / — 99\.0% available$/);
 });

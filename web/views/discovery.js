@@ -185,7 +185,11 @@ export async function openDiscovery(ctx, onDone) {
     }
     startBtn.disabled = true;
     try {
-      state.job = await api.post('/api/discovery', { ranges, ports });
+      const job = await api.post('/api/discovery', { ranges, ports });
+      // Closed while the request was out: watching now would start a poll
+      // and a stream subscription that nothing is left to stop.
+      if (state.closed) return;
+      state.job = job;
       state.selected.clear();
       startWatching();
       render();

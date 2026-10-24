@@ -35,7 +35,9 @@ export function create(shell) {
     };
     renderUrls(info);
     const saveBtn = h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
-      if (g.remoteAccess && !g.accessPassword && !(info?.passwordSet && pw.value === '')) {
+      // A saved password comes back masked, so an empty one here is no
+      // password at all once saved — Remove password included.
+      if (g.remoteAccess && !g.accessPassword) {
         const ok = await confirmDialog({ title: 'Open without a password?', message: 'Anyone on your network will be able to see and change everything, including triggers that run commands on this computer. Setting a password is strongly recommended.', confirmLabel: 'Open anyway', danger: true });
         if (!ok) return;
       }

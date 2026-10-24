@@ -39,3 +39,17 @@ func TestContentWatchEmptyBaseline(t *testing.T) {
 		})
 	}
 }
+
+// A json check whose body is not JSON parses it once for the check and again
+// for the content watch; the second look must not see a document either.
+func TestContentWatchJSONOnInvalidBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<html>maintenance</html>`))
+	}))
+	defer srv.Close()
+	c := httpCheck(model.CheckJSON, srv.URL, model.CheckConfig{ContentWatch: "json"})
+	r := run(t, c, Options{})
+	if r.Details.ContentValue != "" {
+		t.Fatalf("watched value of a non-JSON body = %q, want empty", r.Details.ContentValue)
+	}
+}

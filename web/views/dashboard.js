@@ -219,7 +219,17 @@ export async function mount(root, ctx) {
       Object.assign(d, saved);
       state.layout = toLayout(d.widgets || []);
       if (!silent) toast('Layout saved', { kind: 'success' });
-    } catch (e) { toast(e.message, { kind: 'error' }); throw e; }
+    } catch (e) {
+      toast(e.message, { kind: 'error' });
+      // The callers have already changed the widgets in hand; put back what
+      // is stored so the grid does not show an edit that was refused.
+      try {
+        const stored = (await api.get('/api/dashboards') || []).find((x) => x.id === d.id);
+        // Drawn here too: a drag or a key press saves without waiting.
+        if (stored) { Object.assign(d, stored); state.layout = toLayout(d.widgets || []); renderWidgets(); }
+      } catch { /* keep what is shown; the next load corrects it */ }
+      throw e;
+    }
   }
   function tidy() { state.layout = compact(state.layout.map((l) => ({ ...l })), null); persist().catch(() => {}); renderWidgets(); }
 
@@ -822,7 +832,7 @@ export async function mount(root, ctx) {
       if (!arr.length) { replace(list, emptyState({ icon: 'activity', title: 'Nothing to show yet', compact: true })); return; }
       const rows = [];
       for (const hs of arr) {
-        const avail = hs.summary?.availability;
+        const avail = hs.summary?.count > 0 ? hs.summary.availability : null;
         const cls = avail == null ? '' : avail >= 99.9 ? 'text-up' : avail >= 95 ? 'text-degraded' : 'text-down';
         rows.push(h('div', { class: 'uptime-row' },
           h('div', { class: 'uptime-name truncate' }, h('a', { class: 'u-color-inherit', href: `#/nodes/${findCheck(hs.checkId)?.node.id ?? ''}` }, hs.nodeName || ''), h('div', { class: 'sub' }, hs.checkName)),

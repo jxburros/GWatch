@@ -52,7 +52,7 @@ export const WALL_THEMES = [
  * timer and its own clock; the caller owns its lifetime and must call destroy.
  */
 export function createWall(root, load, { onError } = {}) {
-  const state = { doc: null, charts: [], timer: null, clockTimer: null, destroyed: false, clocks: [] };
+  const state = { doc: null, charts: [], timer: null, clockTimer: null, destroyed: false, clocks: [], run: 0 };
   const wall = h('div', { class: 'wall' });
   clear(root);
   root.append(wall);
@@ -74,17 +74,21 @@ export function createWall(root, load, { onError } = {}) {
 
   async function refresh() {
     if (document.hidden || state.destroyed) return;
+    // The timer, the tab coming back and a caller can each start a load while
+    // one is still out; only the newest may draw, or a slow older answer
+    // would put a stale board back over a fresh one.
+    const run = ++state.run;
     let doc;
     try {
       doc = await load();
     } catch (e) {
-      if (state.destroyed) return;
+      if (state.destroyed || run !== state.run) return;
       rearm(5);
       if (onError) onError(e);
       else clear(wall).append(emptyState({ icon: 'alert', title: 'Could not load this wallboard', text: e.message }));
       return;
     }
-    if (state.destroyed) return;
+    if (state.destroyed || run !== state.run) return;
     state.doc = doc;
     draw();
     rearm();
@@ -320,12 +324,14 @@ function trends(body, doc, cfg, state) {
     // A ping check that reports loss but no latency is charted as loss: on a
     // wall an empty latency chart says nothing at all.
     const isLoss = hs.checkType === 'ping' && (hs.points || []).every((p) => p.avgMs == null) && (hs.points || []).some((p) => p.lossPct != null);
+    // No samples in the range is no figure, not 0% available.
+    const avail = hs.summary?.count > 0 && hs.summary.availability?.toFixed ? `${hs.summary.availability.toFixed(2)}%` : '—';
     wrap.append(h('section', { class: 'wall-chart' },
       h('div', { class: 'wc-head' },
         h('span', { class: 'wc-name' }, `${hs.nodeName} › ${hs.checkName}`),
         h('span', { class: 'wc-val' }, hs.summary?.avgMs != null
-          ? `avg ${fmtMs(hs.summary.avgMs)} · ${hs.summary.availability?.toFixed?.(2) ?? '—'}%`
-          : `${hs.summary?.availability?.toFixed?.(2) ?? '—'}% available`)),
+          ? `avg ${fmtMs(hs.summary.avgMs)} · ${avail}`
+          : `${avail} available`)),
       host));
     const chart = new LineChart(host, { unit: isLoss ? '%' : 'ms', legend: false, height: null, yTicks: 2, minTickPx: 90, ariaLabel: `${hs.checkName} trend`, table: false });
     state.charts.push(chart);

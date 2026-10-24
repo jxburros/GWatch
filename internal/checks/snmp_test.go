@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gosnmp/gosnmp"
 	"github.com/jxburros/GWatch/internal/model"
 )
 
@@ -743,6 +744,22 @@ func TestCounterResetIsNotARate(t *testing.T) {
 	for _, pair := range [][2]snmpCounter{{{raw: 5000000000000, bits: 64}, {raw: 1000, bits: 64}}, {{raw: 3000000000, bits: 32}, {raw: 1000, bits: 32}}, {{raw: 1000, bits: 32}, {raw: 1001, bits: 64}}} {
 		if counterIntervalValid(pair[0], pair[1]) {
 			t.Fatalf("reset accepted: %+v", pair)
+		}
+	}
+}
+
+// TestSNMPv3ReportsNameTheSetting: a v3 device that refuses a request says why
+// in a report, and "wrong digest" on its own names no setting anyone can fix.
+func TestSNMPv3ReportsNameTheSetting(t *testing.T) {
+	cfg := model.CheckConfig{SNMPVersion: "3", SNMPUser: "monitor"}
+	for err, want := range map[error]string{
+		gosnmp.ErrWrongDigest:                           "authentication password",
+		fmt.Errorf("request: %w", gosnmp.ErrDecryption): "privacy password",
+		gosnmp.ErrUnknownSecurityLevel:                  "security level",
+		gosnmp.ErrUnknownUsername:                       `no SNMP v3 user "monitor"`,
+	} {
+		if got := snmpFailureMessage(err, cfg, "10.0.0.1", 161, time.Second); !strings.Contains(got, want) {
+			t.Errorf("%v: %q, want it to mention %q", err, got, want)
 		}
 	}
 }

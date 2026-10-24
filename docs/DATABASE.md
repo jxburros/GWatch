@@ -78,6 +78,7 @@ settings table — a copy of the file on its own does not give the password away
 | Field | Meaning |
 | --- | --- |
 | `driver` | `sqlite` (default), `postgres` or `mysql` (`mariadb` is accepted as a spelling of `mysql`) |
+| `path` | SQLite only: where the database file is. Empty means `gwatch.db` in the data directory |
 | `host`, `port` | The server. Ports default to 5432 and 3306 |
 | `user`, `password` | The account GWatch signs in as. Save through the settings page or `gwatch install`/`migrate-db` and the password is encrypted for you; a plaintext password in a hand-written file is accepted and encrypted the next time the file is saved |
 | `database` | The database name on the server |
@@ -193,7 +194,12 @@ the SQLite file into the server once:
    gwatch migrate-db --db-driver postgres --db-host db.lan --db-user gwatch --db-name gwatch --db-sslmode verify-full
    ```
 
-   Add `--data-dir` if GWatch's data is not in the default place. The command prints its
+   Add `--data-dir` if GWatch's data is not in the default place. On Linux with
+   systemd the data belongs to the service's own `gwatch` user, and GWatch refuses a
+   data directory owned by anyone but the account running it (root included), so stop
+   the service with `sudo systemctl stop gwatch` and run the copy as that user:
+   `sudo -u gwatch gwatch migrate-db --data-dir /var/lib/gwatch` (with
+   any `--db-*` flags after it). The command prints its
    progress by stage and a final count:
 
    ```

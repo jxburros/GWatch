@@ -240,6 +240,7 @@ func (e *Engine) IngestCollectorResults(ctx context.Context, agent model.Agent, 
 				if _, err := e.store.InsertResult(ctx, it.res); err != nil {
 					return reply, err
 				}
+				e.noteHeldResult(it.res.Timestamp)
 			}
 			reply.Accepted++
 			continue
@@ -276,6 +277,7 @@ func cleanCollectorResult(r model.Result, checkID int64) model.Result {
 		}
 		r.Metrics = trimmed
 	}
+	r.Details = cleanCollectorDetails(r.Details)
 	if r.Attempts < 1 {
 		r.Attempts = 1
 	}
@@ -286,6 +288,54 @@ func cleanCollectorResult(r model.Result, checkID int64) model.Result {
 		r.Status = model.StatusUp
 	}
 	return r
+}
+
+// cleanCollectorDetails bounds a collected result's diagnostics the same way.
+// They are stored with every result and sent with every node a viewer opens,
+// and the batch limit alone would let one result carry megabytes. The parts
+// only a check a collector never runs fills in (hardware, Matter, a custom
+// check's output) are dropped.
+func cleanCollectorDetails(d model.ResultDetails) model.ResultDetails {
+	d.Host, d.HostAgeSec, d.MetricResults = nil, nil, nil
+	d.Matter, d.MatterServer, d.Output = nil, "", ""
+	d.FinalURL = clip(d.FinalURL, 2000)
+	d.ContentHash = clip(d.ContentHash, 128)
+	d.ContentValue = clip(d.ContentValue, 2000)
+	d.JSONValue = clip(d.JSONValue, 2000)
+	d.Resolver = clip(d.Resolver, 200)
+	d.RemoteAddr = clip(d.RemoteAddr, 200)
+	if len(d.RTTs) > 100 {
+		d.RTTs = d.RTTs[:100]
+	}
+	d.ResolvedValues = clipList(d.ResolvedValues, 100, 500)
+	if len(d.SNMP) > 200 {
+		d.SNMP = d.SNMP[:200]
+	}
+	for i := range d.SNMP {
+		v := &d.SNMP[i]
+		v.OID, v.Name, v.Raw, v.Unit = clip(v.OID, 200), clip(v.Name, 200), clip(v.Raw, 500), clip(v.Unit, 50)
+	}
+	if d.Cert != nil {
+		c := *d.Cert
+		c.Subject, c.Issuer, c.Serial, c.Error = clip(c.Subject, 500), clip(c.Issuer, 500), clip(c.Serial, 200), clip(c.Error, 500)
+		c.DNSNames = clipList(c.DNSNames, 100, 300)
+		d.Cert = &c
+	}
+	return d
+}
+
+func clipList(in []string, n, each int) []string {
+	if in == nil {
+		return nil
+	}
+	if len(in) > n {
+		in = in[:n]
+	}
+	out := make([]string, len(in))
+	for i, v := range in {
+		out[i] = clip(v, each)
+	}
+	return out
 }
 
 func clip(s string, n int) string {

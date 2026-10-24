@@ -53,6 +53,17 @@ test('the network map side panel offers a link style for the node\'s line to its
   assert.equal(fieldset(selectedCard(rootNode)), null);
 });
 
+test('the network map\'s pin-to-dashboard dialog names its dashboard select', async (t) => {
+  const { ctx } = await mountView(networkMapView, undefined, t);
+  ctx.setTitleCalls.at(-1).opts.actions.find((a) => a.textContent.includes('Pin to a dashboard')).click();
+  const dialog = await waitFor(() => document.querySelector('[role="dialog"]'));
+  const sel = await waitFor(() => dialog.querySelector('select'));
+  const label = sel.id && dialog.querySelector(`label[for="${sel.id}"]`);
+  assert.ok(label, 'the select has a label');
+  assert.equal(label.textContent, 'Dashboard');
+  [...dialog.querySelectorAll('button')].find((b) => b.textContent === 'Cancel').click();
+});
+
 test('changing a link\'s style in the side panel is saved on the node and redrawn on the map', async (t) => {
   resetLinkStyles();
   const printer = nodeNamed('Printer'), swtch = nodeNamed('Office switch'), nas = nodeNamed('NAS');

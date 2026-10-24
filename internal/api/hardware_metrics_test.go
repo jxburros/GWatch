@@ -3,7 +3,10 @@ package api
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -80,6 +83,17 @@ func TestHistoryServesHardwareMetrics(t *testing.T) {
 	// The CSV export goes through the same gate.
 	if code := call(t, ts, "GET", fmt.Sprintf("/api/export/history.csv?checkId=%d&range=24h&metric=disk:/srv", checkID), nil, nil); code != 200 {
 		t.Fatalf("csv = %d", code)
+	}
+	// And writes the metric in its own unit, not under latency headings.
+	resp, err := http.Get(ts.URL + fmt.Sprintf("/api/export/history.csv?checkId=%d&range=24h&metric=net:eth0.rx", checkID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	lines := strings.Split(strings.TrimSpace(strings.TrimPrefix(string(body), "\uFEFF")), "\n")
+	if len(lines) != 2 || strings.TrimSpace(lines[0]) != "timestamp,value,unit,availability_pct" || !strings.HasSuffix(strings.TrimSpace(lines[1]), ",1500,B/s,100.00") {
+		t.Fatalf("named metric csv = %q", body)
 	}
 }
 

@@ -119,3 +119,56 @@ test('node detail shows a hardware check\'s per-metric verdicts in the inspector
   assert.ok(media.textContent.includes('warning'), 'and its own verdict');
   assert.ok(rows.find((r) => r.dataset.metric === 'cpu').textContent.includes('within thresholds'), 'while the processor is fine');
 });
+
+// A live update's history pass for the old range must not land after the one
+// a range chip started and draw the old range under the new chip.
+test('a slow history pass for the old range never overwrites the newly chosen one', async (t) => {
+  const gateway = window.__gwatchMock.nodes.find((n) => n.name === 'Gateway');
+  const { root, instance } = await mountView(nodeDetailView, { params: { id: String(gateway.id) } }, t);
+  await waitFor(() => root.querySelector('.uptime-row'));
+  const realFetch = window.fetch;
+  t.after(() => { window.fetch = realFetch; });
+  // Every series answers with its range as its sample count, the 24 h one late.
+  let asked24;
+  const asked = new Promise((r) => { asked24 = r; });
+  window.fetch = async (url, init) => {
+    const u = new URL(String(url), 'http://localhost');
+    if (u.pathname !== '/api/history/multi') return realFetch(url, init);
+    const range = u.searchParams.get('range');
+    if (range === '24h') { asked24(); await new Promise((r) => setTimeout(r, 150)); }
+    const count = range === '24h' ? 24 : 7;
+    const body = u.searchParams.getAll('checkId').map((id) => ({ checkId: Number(id), checkName: `check ${id}`, from: new Date(Date.now() - 864e5).toISOString(), to: new Date().toISOString(), bucketSeconds: 300, points: [], summary: { count, failures: 0, availability: 100 } }));
+    return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
+  };
+  const slow = instance.refresh();                    // a live update: 24 h, slow
+  await asked;                                        // its history request is out
+  const chip = [...root.querySelectorAll('.range-chips button')].find((b) => b.textContent === '7d');
+  chip.click();                                       // the reader picks 7 d: fast
+  await slow;
+  await new Promise((r) => setTimeout(r, 200));
+  assert.match(root.querySelector('.uptime-row .sub').textContent, /^7 samples/);
+  assert.equal(root.querySelector('.range-chips .chip.active').textContent, '7d');
+});
+
+// "Silence alerts" sends one request per check. When one of them failed the
+// page only said so, and went on showing no silence although the others had
+// taken: it now reads the node back either way.
+test('a partly refused silence still shows the checks that were silenced', async (t) => {
+  const gateway = window.__gwatchMock.nodes.find((n) => n.name === 'Gateway');
+  assert.ok(gateway.checks.length > 1);
+  const { root, ctx } = await mountView(nodeDetailView, { params: { id: String(gateway.id) } }, t);
+  const refused = gateway.checks[1].id;
+  const realFetch = window.fetch;
+  window.fetch = async (url, init) => (String(url) === `/api/checks/${refused}/silence`
+    ? new Response(JSON.stringify({ error: 'that check is busy' }), { status: 409, headers: { 'Content-Type': 'application/json' } })
+    : realFetch(url, init));
+  t.after(async () => {
+    window.fetch = realFetch;
+    for (const c of gateway.checks) await realFetch(`/api/checks/${c.id}/silence`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"minutes":0}' });
+  });
+  assert.doesNotMatch(root.textContent, /Alerts silenced/);
+  ctx.setTitleCalls.at(-1).opts.actions.find((a) => a.getAttribute('aria-haspopup') === 'menu').click();
+  [...document.querySelectorAll('.menu-item')].find((b) => b.textContent.includes('Silence alerts for 1 hour')).click();
+  await waitFor(() => [...document.querySelectorAll('.toast-error')].find((el) => /that check is busy/.test(el.textContent)));
+  await waitFor(() => /Alerts silenced/.test(root.textContent));
+});

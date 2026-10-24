@@ -107,8 +107,11 @@ func (s *Server) handleSaveMaintenance(w http.ResponseWriter, r *http.Request) {
 			m.EndAt = m.StartAt.AddDate(10, 0, 0)
 		}
 	}
+	// A node id that is not a node is a narrow scope that lost its node, not
+	// a request for every node; widening it silently would silence them all.
 	if m.NodeID != nil && *m.NodeID <= 0 {
-		m.NodeID = nil
+		writeError(w, http.StatusBadRequest, "nodeId must be a node's id, or null for a window over all nodes")
+		return
 	}
 	if m.NodeID != nil {
 		if _, err := s.Store.GetNode(r.Context(), *m.NodeID); err != nil {
@@ -128,6 +131,11 @@ func (s *Server) handleSaveMaintenance(w http.ResponseWriter, r *http.Request) {
 
 func maintenanceSummary(m model.MaintenanceWindow) string {
 	if len(m.Weekdays) > 0 {
+		// A window with its own start time runs at that time in its own
+		// zone; StartAt is only when it was saved.
+		if m.StartTime != "" {
+			return fmt.Sprintf("Weekly on %d day(s) at %s %s for %d minutes.", len(m.Weekdays), m.StartTime, m.TimeZone, m.DurationMinutes)
+		}
 		return fmt.Sprintf("Weekly on %d day(s) at %s for %d minutes.", len(m.Weekdays), m.StartAt.Local().Format("15:04"), m.DurationMinutes)
 	}
 	return fmt.Sprintf("From %s to %s.", m.StartAt.Local().Format("2006-01-02 15:04"), m.EndAt.Local().Format("2006-01-02 15:04"))
@@ -751,8 +759,13 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request, path, password 
 		// Checked again on the copy actually restored, which is the one that
 		// counts should the file have changed since it was read above.
 		Validate: func(c *backup.Config) error { return s.checkArchive(ctx, c, recreateAccounts) }})
-	resume()
 	var partial *backup.HistoryError
+	if err == nil || errors.As(err, &partial) {
+		// The restored checks start from their stored (emptied) states, not
+		// from what the engine held for whatever had the same id before.
+		s.Engine.DiscardStates()
+	}
+	resume()
 	if err != nil && !errors.As(err, &partial) {
 		// Refused, or failed and rolled back: the configuration is as it was.
 		var invalid *backup.InvalidError
@@ -920,6 +933,20 @@ func (s *Server) handleExportHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cw := csvWriter(w, fmt.Sprintf("gwatch-%s-%s-%s.csv", slug(series.NodeName), slug(series.CheckName), series.Range))
+	if series.Metric != "" {
+		// A named metric is in its own unit, not milliseconds: its values go
+		// under "value", with the unit beside them.
+		_ = cw.Write([]string{"timestamp", "value", "unit", "availability_pct"})
+		for _, p := range series.Points {
+			value := ""
+			if p.Value != nil {
+				value = strconv.FormatFloat(*p.Value, 'f', -1, 64)
+			}
+			_ = cw.Write([]string{p.Timestamp.Format(time.RFC3339), value, csvText(series.MetricUnit), strconv.FormatFloat(p.Availability, 'f', 2, 64)})
+		}
+		cw.Flush()
+		return
+	}
 	_ = cw.Write([]string{"timestamp", "avg_ms", "min_ms", "max_ms", "jitter_ms", "loss_pct", "availability_pct", "count", "failures"})
 	for _, p := range series.Points {
 		_ = cw.Write([]string{p.Timestamp.Format(time.RFC3339), fmtFloat(p.AvgMS), fmtFloat(p.MinMS), fmtFloat(p.MaxMS), fmtFloat(p.JitterMS), fmtFloat(p.LossPct), strconv.FormatFloat(p.Availability, 'f', 2, 64), strconv.Itoa(p.Count), strconv.Itoa(p.Failures)})
@@ -1058,9 +1085,12 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 	keepalive := time.NewTicker(25 * time.Second)
 	defer keepalive.Stop()
+	done := s.streams()
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-done:
 			return
 		case <-keepalive.C:
 			fmt.Fprint(w, ": keepalive\n\n")
@@ -1074,6 +1104,20 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 }
 
 var _ = engine.Update{}
+
+func (s *Server) streams() chan struct{} {
+	s.streamsOnce.Do(func() { s.streamsDone = make(chan struct{}) })
+	return s.streamsDone
+}
+
+// CloseStreams ends every open /api/stream response, now and from then on.
+// http.Server.Shutdown waits for responses to finish and a stream never does,
+// so without this one open browser tab held every stop up for the whole
+// shutdown timeout. Register it with http.Server.RegisterOnShutdown.
+func (s *Server) CloseStreams() {
+	ch := s.streams()
+	s.streamsClose.Do(func() { close(ch) })
+}
 
 // sameIndicators compares two indicator lists. IndicatorRule is comparable
 // all the way down, so this is == over the slice rather than reflection.

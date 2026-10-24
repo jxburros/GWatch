@@ -275,6 +275,8 @@ jobs:
       run: |
         python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
         python3 scripts/ci/check-authenticode-order.py .github/workflows/release.yml
+    - name: Markdown links and anchors resolve
+      run: python3 scripts/ci/check-md-links.py .
     - name: Staticcheck
       run: |
         go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...

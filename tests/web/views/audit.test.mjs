@@ -17,3 +17,18 @@ test('audit view defaults to the event log tab and lists mock events', async (t)
   const rows = root.querySelectorAll('.event-row, tbody tr');
   assert.ok(rows.length > 0, 'expected the event log to list at least one mock event');
 });
+
+// The live refresh and Load more read the filter boxes as they stood, not as
+// they were last applied, so a search typed but not yet applied (or a From
+// date being picked) pulled events of another filter into the list shown.
+test('the event log keeps to the applied filter when it refreshes', async (t) => {
+  const { root, instance } = await mountView(auditView, undefined, t);
+  const urls = [];
+  const realFetch = window.fetch;
+  window.fetch = (url, init) => { if (String(url).startsWith('/api/events')) urls.push(String(url)); return realFetch(url, init); };
+  t.after(() => { window.fetch = realFetch; });
+  root.querySelector('input[type="search"]').value = 'unapplied';
+  await instance.refresh();
+  assert.ok(urls.length, 'the refresh asked for events');
+  assert.ok(urls.every((u) => !u.includes('unapplied')), `asked with the applied filter only (got ${urls.join(', ')})`);
+});

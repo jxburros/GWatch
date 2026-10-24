@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,8 +41,25 @@ func New(baseURL, key, userAgent string, timeout time.Duration) *Client {
 		BaseURL:   strings.TrimRight(strings.TrimSpace(baseURL), "/"),
 		APIKey:    strings.TrimSpace(key),
 		UserAgent: userAgent,
-		HTTP:      &http.Client{Timeout: timeout},
+		HTTP:      &http.Client{Timeout: timeout, CheckRedirect: sameOriginRedirect},
 	}
+}
+
+// sameOriginRedirect refuses a redirect to any other scheme, host or port.
+// net/http carries custom headers across a redirect, X-API-Key included (it
+// only strips Authorization and cookies when the host changes), so following
+// one elsewhere would hand the key to whoever the redirect names, and
+// following one from https to http would send it in the clear.
+func sameOriginRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	first := via[0].URL
+	if req.URL.Scheme != first.Scheme || !strings.EqualFold(req.URL.Host, first.Host) {
+		return fmt.Errorf("refusing to follow a redirect from %s://%s to %s://%s: the API key would go with it; set the GWatch URL to the address it redirects to",
+			first.Scheme, first.Host, req.URL.Scheme, req.URL.Host)
+	}
+	return nil
 }
 
 // Error is a non-2xx answer from GWatch. It keeps the status and the server's

@@ -281,3 +281,15 @@ test('live refresh retains the chart canvas and keyboard focus', async (t) => {
     assert.equal(document.activeElement, canvas);
   }
 });
+
+test('a check with no samples in the range shows no availability, not 0%', async (t) => {
+  const root = freshRoot();
+  const empty = { ...hist(22, 'ping', []), summary: { availability: 0, avgMs: null, count: 0, failures: 0 } };
+  const view = renderConfiguredChart(root, { series: [{ checkId: 22, metric: 'availability' }], uptime: true }, { title: 'Quiet', fetch: async () => [empty] });
+  t.after(() => view.destroy());
+  await settle(); await settle();
+  assert.equal(root.querySelector('.uptime-pct').textContent, '—');
+  assert.ok(!root.querySelector('.uptime-pct').classList.contains('text-down'), 'no samples is not an outage');
+  const tiles = [...root.querySelectorAll('.chart-stats .stat-value')].map((el) => el.textContent);
+  assert.ok(!tiles.includes('0%'), `stat tiles: ${tiles}`);
+});

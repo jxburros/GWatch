@@ -440,6 +440,30 @@ func TestWriteToolsWithReadWriteKey(t *testing.T) {
 	}
 }
 
+// TestUpdateKeepsUnnamedCheckFields: giving an existing check by id changes the
+// fields given and keeps the rest, rather than resetting them to the defaults
+// of a new check (the seeded Ping has a 5 s timeout; a new check gets 10).
+func TestUpdateKeepsUnnamedCheckFields(t *testing.T) {
+	cs, _ := session(t, writeKey, true)
+	text, isErr := call(t, cs, "gwatch_update_node", map[string]any{
+		"id": 1, "checks": []any{map[string]any{"id": 11, "type": "ping", "name": "Ping (gateway)"}},
+	})
+	if isErr {
+		t.Fatalf("update_node failed: %s", text)
+	}
+	checks, _ := jsonPart(t, text)["checks"].([]any)
+	if len(checks) != 1 {
+		t.Fatalf("want the one check back, got %v", checks)
+	}
+	c, _ := checks[0].(map[string]any)
+	if c["name"] != "Ping (gateway)" {
+		t.Errorf("the new name was not applied: %v", c["name"])
+	}
+	if c["timeoutSeconds"] != float64(5) || c["nodeId"] != float64(1) {
+		t.Errorf("fields the caller left out were reset: timeoutSeconds %v, nodeId %v", c["timeoutSeconds"], c["nodeId"])
+	}
+}
+
 // TestDeleteNeedsConfirm keeps the destructive tool behind an explicit
 // acknowledgement, before any request is made.
 func TestDeleteNeedsConfirm(t *testing.T) {

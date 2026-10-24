@@ -89,7 +89,9 @@ proxy's HTTPS still keeps it out of sight on the way. That is deliberate: a `Sec
 cookie set through `https://` would be withheld from the same host name over plain
 HTTP, and could not then be replaced from there, so signing in over the LAN address
 would bounce straight back to the sign-in screen. If the host name is only ever reached
-over HTTPS, nothing is lost.
+over HTTPS, nothing is lost — and you can tick **GWatch is behind an HTTPS reverse
+proxy** in Settings › Network access to have the cookie marked `Secure` after all. Leave
+it off if anyone still opens GWatch over plain HTTP.
 
 Three things to do if you go this way:
 
@@ -147,9 +149,11 @@ gwatch run --trusted-proxies 10.0.0.0/24            # a proxy elsewhere on the L
 GWATCH_TRUSTED_PROXIES=127.0.0.1 gwatch run         # the same, from the environment
 ```
 
-The value is a list of addresses and CIDR ranges, separated by commas. `gwatch install`
-passes it on to the service (in `/etc/gwatch/gwatch.env` on Linux, when that file is
-first written; add `GWATCH_TRUSTED_PROXIES=…` there yourself on an existing install).
+The value is a list of addresses and CIDR ranges, separated by commas. `gwatch install
+--trusted-proxies …` passes it on to the service (on Linux with systemd it is written to
+`/etc/gwatch/gwatch.env`, on a first install or a re-run alike; leaving the flag out of a
+re-run keeps what is there, and you can also edit `GWATCH_TRUSTED_PROXIES=…` in that file
+yourself and restart).
 
 Only for a request whose connection comes from one of those addresses does GWatch read
 `X-Forwarded-For`, from the right: each proxy appends the address it was connected

@@ -90,8 +90,8 @@ administrator, whatever its scope:
   blanked for a key, since they routinely carry credentials; the SNMP and metrics
   secrets come back masked, the same as for a browser.
 - `readwrite` — the same, plus creating, updating, deleting, enabling, running and
-  silencing nodes and checks, notes, maintenance windows, dashboards, wallboards and
-  charts. A key may lay a wallboard out; it may not project one. It may **not**
+  silencing nodes and checks, notes, acknowledging, resolving and annotating incidents,
+  maintenance windows, dashboards, wallboards and charts. A key may lay a wallboard out; it may not project one. It may **not**
   create, edit or test a `custom` check, or a `system` check that reads an
   agentless URL: both run code or carry a stored token to a chosen address, so an
   administrator must create them in the web interface (403, not 401). The same goes
@@ -114,7 +114,13 @@ administrator, whatever its scope:
 everything under `/api/endpoints` (including `GET`), `POST /api/actions/test`,
 `GET /api/automation/meta`, `GET /api/retention/status`, `POST /api/retention/run`,
 `GET|POST /api/update/…`, `GET /api/mcp/status`, `GET /api/mcp/skill`, everything under
-`/api/users` and `/api/apikeys`, and `POST /api/auth/change-password`.
+`/api/users` and `/api/apikeys`, and `POST /api/auth/change-password`; also
+`POST /api/restart`, `POST /api/settings/test-channel`, `GET|PUT /api/reports`,
+everything under `/api/rules` (including `GET`), `/api/discovery` and `/api/agents`
+(pairing codes and `POST /api/agents/pair` included), `GET /api/hosts/local/watchable`,
+`PUT /api/hosts/local/watch`, `POST /api/snmp/walk`, `POST /api/matter/nodes`,
+`POST /api/matter/commission`, `POST /api/wallboards/{id}/share`, the sign-in routes
+`POST /api/auth/login`/`logout`, and any `/api/` route not listed as open to keys.
 
 That list is deliberate and tested: a key is for reading a monitor from elsewhere, not
 for administering the machine it runs on. It is the same boundary `gwatch-mcp`, the Model
@@ -153,8 +159,10 @@ which a correct password does not clear. They are refused before the password is
 and at most two run at once; when both are busy the answer is `429` with `Retry-After: 1`.
 All of these answer `429` with `Retry-After` in seconds. The client IP is the connecting
 address, or, when that address is listed in `--trusted-proxies`, the client the proxy
-names in `X-Forwarded-For` / `X-Real-IP` (see [REMOTE-ACCESS.md](REMOTE-ACCESS.md#rate-limiting)). A `/hook/` call that presents the right token gives its budget
-back, so an endpoint called on a schedule is never throttled by its own traffic; an
+names in `X-Forwarded-For` / `X-Real-IP` (see [REMOTE-ACCESS.md](REMOTE-ACCESS.md#rate-limiting)). A `/hook/` call that presents the right token (or reaches an
+endpoint that allows calls without one) is given back the attempt it was charged, so an
+endpoint called on a schedule is never throttled by its own traffic — but earlier failures
+from the same client still count; an
 unknown slug still answers `404`, but it is charged for, so slugs cannot be enumerated.
 
 **Response headers.** Every response, the static UI included, carries:
@@ -187,7 +195,7 @@ route is closed until it is opened on purpose.
 ### Sign-in and accounts
 
 - `GET /api/auth/setup` → `{ "usersConfigured": bool, "loginRequired": bool, "accessPasswordSet": bool, "localLoginForced": bool, "apiVersion": 1 }`. `loginRequired` is about *this* client.
-- `POST /api/auth/login` body `{ "username", "password" }` → the principal, and sets `gwatch_session` (HttpOnly, SameSite=Lax, 30-day sliding expiry, `Secure` only when GWatch itself terminates HTTPS). Rate limited. While the session is in use its expiry slides forward about once an hour, and the response that slides it re-issues the cookie with the new expiry, so a session in regular use does not run out.
+- `POST /api/auth/login` body `{ "username", "password" }` → the principal, and sets `gwatch_session` (HttpOnly, SameSite=Lax, 30-day sliding expiry, `Secure` only when GWatch itself terminates HTTPS or `general.behindHTTPSProxy` is on). Rate limited. While the session is in use its expiry slides forward about once an hour, and the response that slides it re-issues the cookie with the new expiry, so a session in regular use does not run out.
 - `POST /api/auth/logout` → `{ok:true}` and clears the cookie.
 - `POST /api/auth/change-password` body `{ "current", "new" }` → changes your own password and signs every browser of that account out. Any signed-in user; never an API key.
 - `GET /api/users` → `[User]`. `POST /api/users` body `{ "username", "password", "role": "admin"|"viewer" }` → `User` (201). The first account created is always an administrator, and on an install with no accounts a `local` or `password` principal may create it.
@@ -222,6 +230,7 @@ companion that lets an AI assistant use this API with a key, is documented in
 - `GET /api/status` → header summary: `{ "down", "degraded", "unknown", "up", "total", "certWarnings", "maintenance", "attention", "serviceOk", "serviceIssues": [..] }`.
   This one document is also what the header indicators are evaluated against, in the browser (see Indicators).
 - `GET /api/network` → `NetworkInfo`: effective listen address, whether other devices can reach it, LAN URLs, whether a password is set.
+- `POST /api/restart` (admin) → 202 `{ "restarting": true }`, then restarts GWatch about a second later; 503 when this process has no way to restart itself.
 
 ## Nodes and checks
 
@@ -411,12 +420,12 @@ falls back to `general.latencyWarnMs` / `general.packetLossWarnPct`).
 | type | config fields |
 | --- | --- |
 | `ping` | `pingCount` (packets per run, default 4, max 20), `pingMethod` (`""` follows `general.pingMethod`, else `auto`/`builtin`/`system`) |
-| `http` | `method` (default `GET`), `expectedStatus` (`"200"`, `"200-299"`, `"200,301,302"`; default `"200-399"`), `followRedirects` (default `true`), `headers`, `body`, `ignoreTlsErrors`, `certCheck` (also judge certificate expiry — default `true` on https), `certWarnDays`, `contentWatch`, `contentHeader` |
+| `http` | `method` (default `GET`), `expectedStatus` (`"200"`, `"200-299"`, `"200,301,302"`; default `"200-399"`), `followRedirects` (default `true`; a redirect to another host, or from https to http, is followed without the check's `headers` and `body`), `headers`, `body`, `ignoreTlsErrors`, `certCheck` (also judge certificate expiry — default `true` on https), `certWarnDays`, `contentWatch`, `contentHeader` |
 | `keyword` | everything `http` takes, plus `keyword` (the text that must be present) and `keywordAbsent` (`true` inverts it: the text must **not** be present) |
 | `json` | everything `http` takes, plus `jsonPath` (dotted, e.g. `status` or `data.items[0].name`), `jsonExpected` (empty means "the path must merely exist") and the recording fields `jsonRecord`, `jsonMetric`, `jsonUnit`, `jsonWarnAbove`, `jsonCritAbove`, `jsonWarnBelow`, `jsonCritBelow` — see [Named metrics](#named-metrics) |
 | `cert` | `port` (default 443), `certWarnDays` (warn this many days before expiry, default 14) |
 | `tcp` | `port` (required) |
-| `dns` | `recordType` (`A` — the default, which resolves A and AAAA — or `CNAME`, `MX`, `TXT`), `expectedIps` (optional list; every resolved value must be in it) and `dnsServer` (optional resolver `host[:port]`; the system resolver otherwise) |
+| `dns` | `recordType` (`A` — the default, IPv4 or IPv6 addresses — `AAAA` for IPv6 addresses only, `CNAME`, `MX` or `TXT`), `expectedIps` (optional list; every resolved value must be in it) and `dnsServer` (optional resolver `host[:port]`; the system resolver otherwise) |
 | `custom` | `command`, `workDir`, `env` — see the output contract above |
 | `system` | `hostSource`, `agentId`, `metricsUrl`, `metricsToken`, `metricThresholds`, `diskMounts`, `staleAfterSeconds` — see [Hardware check metrics](#hardware-check-metrics) |
 | `snmp` | the `snmp*` fields in the table above |
@@ -431,7 +440,8 @@ a `content_changed` event and marks the check degraded.
 A `system` check's `hostSource` says which machine it reads: `local` (the computer
 GWatch runs on), `agent` (the newest reading pushed by the registered machine named by
 `agentId`) or `url` (scraped from `metricsUrl`, with `metricsToken` as the bearer
-token). `staleAfterSeconds` is how old a reading may be before the check calls the
+token, which is not sent on to another host or from https to http if the endpoint
+redirects). `staleAfterSeconds` is how old a reading may be before the check calls the
 machine down; `0` means three times the check's interval. See
 [`HARDWARE.md`](HARDWARE.md).
 
@@ -598,8 +608,9 @@ admin-only; a read-write API key may call it, a read-only key gets 403.
 ```
 
 **Semantics.** The `node` patch applies to every node in `nodeIds`. The `check`
-patch applies to every check in `checkIds` **plus** every check of every node in
-`nodeIds`. `checkFilter.types` narrows that whole set, listed check ids
+patch applies to every check in `checkIds`; only when `checkIds` is absent does it
+apply to every check of every node in `nodeIds` instead (an explicit `[]` touches
+no checks). `checkFilter.types` narrows that whole set, listed check ids
 included, so what a caller selects and what it changes are the same set. Both
 patches are partial: only the fields actually present in the JSON are changed,
 so `"enabled": false` and an absent `enabled` are different requests. An
@@ -711,12 +722,12 @@ Every other check type leaves `metrics` absent.
   The series carries `metric` and `metricUnit`, each point carries `value`, and `avgMs`,
   `minMs` and `maxMs` carry the same number so that a chart drawn from a series' latency
   fields plots a named metric unchanged. `GET /api/export/history.csv` takes `metric=`
-  too.
+  too, and then writes `timestamp,value,unit,availability_pct`.
 - A name the check is not configured to measure is a `400`, rather than an empty series.
 - **Limit:** a named-metric series is always read from raw results. The rollup tables
   have a column per built-in metric (latency, jitter, loss) and nowhere to put one a
   check invented, so `metric=` reaches back only as far as raw history is retained — 30
-  days by default, whatever Settings › Retention says otherwise. Ranges beyond that
+  days by default, or whatever Settings › Retention sets. Ranges beyond that
   return the part of the window raw results still cover. Availability, latency and the
   uptime bars for an SNMP or json check are rolled up normally; only the named readings
   are limited this way.
@@ -728,6 +739,8 @@ Every other check type leaves `metrics` absent.
   reading in `metrics`, a `status` and a `stale` flag. That status means only "are
   readings still arriving" — whether a figure is *too high* is a hardware check's
   business, because only a check knows the thresholds somebody chose.
+  A registered machine's `agent.inventory` (every service and program on it) is left
+  out for anyone but an administrator; `GET /api/agents` carries it.
 - `GET /api/hosts/{key}` → one `HostSummary`. The key is `local`, `agent:<id>` or
   `url:<check id>`.
 - `GET /api/hosts/local/watchable` → `{ "services": [InventoryItem], "processes": [InventoryItem], "problems": [string] }`.
@@ -837,9 +850,11 @@ routes — an administrator in the browser, never an API key:
 
 - `GET /api/agents` → `[Agent]`. The token is never returned; only `prefix` is.
 - `POST /api/agents` body `{ "name": "Living room NAS", "nodeId": null|id }` →
-  `{ "token": "gwa_…", "agent": Agent }`. **The token is returned exactly once.** Only its
-  sha256 digest is stored, so it cannot be shown again.
-- `PUT /api/agents/{id}` body `{ "name": …, "nodeId": …, "enabled": bool }` → `Agent`.
+  `{ "token": "gwa_…", "agent": Agent }`. Its sha256 digest is what GWatch checks it
+  against; a copy sealed with `gwatch.key` is kept as well, so an administrator can read it
+  back later with `POST /api/agents/{id}/token` (below).
+- `PUT /api/agents/{id}` body `{ "name": …, "nodeId": …, "enabled": bool }` → `Agent`. A field left out
+  keeps its value; `"nodeId": null` detaches the machine from its node.
 - `DELETE /api/agents/{id}` → 204. Revokes the token and keeps the machine's past
   readings. `?purge=1` deletes the registration (token, how it was enrolled); the node, and the history its hardware check recorded, stay with the node.
 - `POST /api/agents/{id}/token` → `{ "agent": Agent, "token": "gwa_…", "pending": "gwa_…"|"", "viewable": bool }`.
@@ -1105,7 +1120,7 @@ every other event.
 ## Maintenance windows
 
 - `GET /api/maintenance` → `[MaintenanceWindow]` (each with extra `"active": bool`).
-- `POST /api/maintenance` body MaintenanceWindow → created.
+- `POST /api/maintenance` body MaintenanceWindow → created. `nodeId` is a node's id or `null` (with an empty `group`, every node); `0` or a negative id is a 400.
 - `PUT /api/maintenance/{id}` → updated. `DELETE /api/maintenance/{id}` → `{ok:true}`.
 
 Weekly maintenance windows accept `weekdays` (0 = Sunday), `startTime` (`HH:MM`),
@@ -1254,13 +1269,13 @@ An `Action` is `{ "type": "http|slack|teams|discord|telegram|matrix|ntfy|gotify|
 | `script` | `interpreter` (`sh`, `bash`, `powershell`, `cmd`, `python`, `node`, `custom`), `command` (for custom; `{{file}}` is the script path), `code`, `workDir`, `allowUntrustedInput` |
 | `run_node` | `nodeId` |
 
-A URL is where a request — and for ntfy its bearer token — is sent, so the `url` of an `http` action, the `webhookUrl` of `slack`, `teams` and `discord`, and the `server` of `ntfy`, `gotify` and `matrix` must spell out their scheme and host (and port, and any user info): a placeholder there is refused with 400 when the action is saved. Placeholders may appear in the path, query and fragment, where each value is escaped as data (path-escaped in the path, query-escaped in the query) and so cannot add a segment, a parameter or another host. The ntfy `topic` is one escaped path segment under `server`. ntfy's `Authorization` header is dropped if the server redirects to another scheme, host or port, and so are the credential headers of the other channels (`Authorization` for Matrix and Opsgenie, `X-Gotify-Key` for Gotify). Telegram, Twilio, PagerDuty and Opsgenie are pinned to their providers' fixed API hosts: there is no field to point them anywhere else. A Telegram bot token, which the Bot API puts in the URL path, is replaced by `<bot token>` in any error the run reports.
+A URL is where a request — and for ntfy its bearer token — is sent, so the `url` of an `http` action, the `webhookUrl` of `slack`, `teams` and `discord`, and the `server` of `ntfy`, `gotify` and `matrix` must spell out their scheme and host (and port, and any user info): a placeholder there is refused with 400 when the action is saved. Placeholders may appear in the path, query and fragment, where each value is escaped as data (path-escaped in the path, query-escaped in the query) and so cannot add a segment, a parameter or another host. The ntfy `topic` is one escaped path segment under `server`. ntfy's `Authorization` header is dropped if the server redirects to another scheme, host or port, and so are the credential headers of the other channels (`Authorization` for Matrix and Opsgenie, `X-Gotify-Key` for Gotify). Telegram, Twilio, PagerDuty and Opsgenie are pinned to their providers' fixed API hosts: there is no field to point them anywhere else. A Telegram bot token, which the Bot API puts in the URL path, is replaced by `<bot token>` in any error the run reports. More generally, a run's reported error and output never repeat a secret URL (an `http` action's `url`, a `webhookUrl`) beyond its scheme and host, nor a `token`, `userKey` or `routingKey`: those results become timeline entries that viewers and read-only keys can read.
 
 **Incidents (PagerDuty, Opsgenie).** With `eventAction` left automatic, a run whose `{{event}}` is `recovered`, `warning_cleared` or `rule_cleared` resolves (closes) the incident and anything else opens it. The default `dedupKey`/alias is one per check — `gwatch-node-<nodeId>-check-<checkId>`, with `-warning` appended for warning events (`degraded`, `warning`, `warning_cleared`, `cert_warning`, `content_changed`) so a cleared warning never resolves an outage — or `gwatch-rule-<ruleId>` for a rule, so a trigger on `down` + `recovered` (or a rule with "notify when cleared") opens and resolves the same incident. Severity in automatic mode is `critical`, or `warning` for warning events.
 
 Every notification type (`slack`, `teams`, `discord`, `telegram`, `matrix`, `ntfy`, `gotify`, `pushover`, `twilio`, `pagerduty`, `opsgenie`) defaults `title` to `"GWatch {{instance}}"` and `message` to `"{{node.name}} is {{status}}: {{message}}"` when left blank; both fields are JSON-safe (or form/header-safe) no matter what characters `{{message}}` expands to, since the payload is built with `encoding/json` (or form-encoding for Pushover, headers for ntfy) instead of string concatenation.
 
-String fields may contain `{{placeholders}}`: `node.name`, `node.host`, `node.group` (the node's first group), `node.groups` (all of them, comma-separated), `check.name`, `check.type`, `target`, `status`, `prev_status`, `message`, `error`, `success`, `latencyMs`, `lossPct`, `statusCode`, `failures`, `event`, `ts`, `instance`, `metric`, `metric.label`, `metric.value`, `metric.status` (the metric a metric-scoped event or a `metric_over` condition fired on; empty otherwise), `metrics.<key>` (every named metric of the run — a key's characters other than letters, digits, dots and dashes become `_`, so `disk:/srv` is `{{metrics.disk__srv}}`), `body`, `query.<name>`. Scripts also receive them as `GWATCH_*` environment variables (`node.name` → `GWATCH_NODE_NAME`).
+String fields may contain `{{placeholders}}`: `node.id`, `node.name`, `node.host`, `node.group` (the node's first group), `node.groups` (all of them, comma-separated), `node.tags` (comma-separated), `node.notes`, `check.id`, `check.name`, `check.type`, `check.target` (the check's own target, empty when it inherits the node's host), `target`, `affected_by` (the parent node an `affected_by` event names), `trigger.name`, `status`, `prev_status`, `message`, `error`, `success`, `latencyMs`, `lossPct`, `statusCode`, `failures`, `event`, `ts`, `instance`, `metric`, `metric.label`, `metric.value`, `metric.status` (the metric a metric-scoped event or a `metric_over` condition fired on; empty otherwise), `metrics.<key>` (every named metric of the run — a key's characters other than letters, digits, dots and dashes become `_`, so `disk:/srv` is `{{metrics.disk__srv}}`), and, on a custom endpoint, `body`, `query.<name>`, `method` and `remote` (the caller's address). Scripts also receive them as `GWATCH_*` environment variables (`node.name` → `GWATCH_NODE_NAME`).
 
 A placeholder value can be anything an HTTP caller or a monitored device sent, so inside the **code of a script action** it is never spliced in as raw text. It is replaced by something the interpreter cannot re-parse as code:
 
@@ -1381,6 +1396,8 @@ assistant up, not for the assistant: both are admin-only and refuse every API ke
 | `theme` | `dark` | `dark`, `light` or `system` |
 | `accentColor` | `#43c9c0` | hex colour used for the accent |
 | `remoteAccess` | `false` | rebinds the listener to every interface, live |
+| `listenPort` | `0` (omitted) | the port to listen on in place of the one from `--listen`/`GWATCH_LISTEN`; `0` keeps that one. 1–65535, anything else is a `400`. Applied live, like `remoteAccess` |
+| `behindHTTPSProxy` | `false` | browsers always reach GWatch through an HTTPS reverse proxy, so session cookies are marked `Secure` (see [REMOTE-ACCESS.md](REMOTE-ACCESS.md)) |
 | `accessPassword` | — | the legacy shared password for other devices (user accounts replace it) |
 | `updateRepo` | `jxburros/GWatch` | the GitHub `owner/repo` checked for releases |
 | `requireLoginLocally` | `false` | makes a browser on this computer sign in too. Refused while no administrator account exists, and ignored until one does |
@@ -1503,7 +1520,7 @@ See [`RESTORE.md`](RESTORE.md) for the end-to-end restore-to-a-new-machine proce
 
 ## Export
 
-- `GET /api/export/history.csv?checkId=ID&range=30d` → CSV: `timestamp,avg_ms,min_ms,max_ms,jitter_ms,loss_pct,availability_pct,count,failures`.
+- `GET /api/export/history.csv?checkId=ID&range=30d` → CSV: `timestamp,avg_ms,min_ms,max_ms,jitter_ms,loss_pct,availability_pct,count,failures`; with `metric=NAME`, `timestamp,value,unit,availability_pct`.
 - `GET /api/export/results.csv?checkId=ID&limit=5000` → raw results CSV: `timestamp,success,status,message,error,latency_ms,min_ms,max_ms,jitter_ms,stddev_ms,loss_pct,http_status,final_url,attempts`.
 - `GET /api/export/events.csv?nodeId=&limit=5000&type=&q=&since=&until=` → events CSV (same filters as `/api/events`).
 - Every CSV is UTF-8 and starts with a byte-order mark, so Excel shows accents and dashes as written; strip the leading `\uFEFF` if a tool of yours does not expect it.
@@ -1540,7 +1557,8 @@ See [`RESTORE.md`](RESTORE.md) for the end-to-end restore-to-a-new-machine proce
   incidents (default active). `GET /api/incidents/{id}` returns `{incident, events}`.
 - `POST /api/incidents/{id}/acknowledge`, `/resolve`, or `/note` takes `{ "note": "..." }`.
   Admins and read-write keys may update; viewers/read keys may read. Notes are limited
-  to 8,000 bytes. Incidents expose `openedAt`, acknowledgment/resolution times and actors,
+  to 8,000 bytes, and `/note` needs one (`400` otherwise); acknowledging an incident that
+  is already resolved is a `409`, an unknown incident a `404`. Incidents expose `openedAt`, acknowledgment/resolution times and actors,
   `checkIds`, notes, `durationSeconds`, and acknowledgment/resolution elapsed seconds.
 - `GET /api/reports` and `PUT /api/reports` are administrator-only. PUT replaces the list
   of definitions: `id` (unique string), `name`, `enabled`, `groups`, `tags`, `period`

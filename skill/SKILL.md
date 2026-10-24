@@ -1,7 +1,7 @@
 ---
 name: gwatch
 description: How to use the GWatch MCP tools (gwatch_*) to answer questions about a home or small-office network monitor — what is up, what is down, why, and since when — and, only when the tools for it exist, to make careful changes to what is monitored. Use whenever a gwatch_* tool is available.
-version: 1.0.1
+version: 1.0.2
 ---
 
 # Working with GWatch
@@ -85,7 +85,8 @@ The write tools (`gwatch_create_node`, `gwatch_update_node`, `gwatch_delete_node
 `gwatch_test_check`) are only registered when the server was started with `--allow-write`
 **and** GWatch itself only accepts them from an API key with the `readwrite` scope. Never assume
 they exist: check your tool list. If they are missing, say that this connection is read-only and
-that the person can enable writes in GWatch under Settings › AI & MCP if they want to.
+that the person can enable writes if they want to: a `readwrite` key from Settings › Users &
+access in GWatch, and `--allow-write` on `gwatch-mcp` (Settings › AI & MCP explains both).
 
 A tool error of **HTTP 403 "This API key is read-only"** means the key GWatch was given cannot
 write, whatever the server advertised. Do not retry with different arguments or another tool: the

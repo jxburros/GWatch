@@ -114,9 +114,10 @@ export function create(shell) {
       checked: !!g.requireLoginLocally,
       disabled: admins === 0,
       onChange: async (v) => {
+        const was = !!g.requireLoginLocally;
         g.requireLoginLocally = v;
         const saved = await saveSettings();
-        g.requireLoginLocally = !!saved?.general?.requireLoginLocally;
+        g.requireLoginLocally = saved ? !!saved.general?.requireLoginLocally : was;
         sw.input.checked = g.requireLoginLocally;
       },
     });
@@ -143,9 +144,10 @@ export function create(shell) {
       value: g.passwordHashing || 'argon2id',
       disabled: !isAdmin,
       onchange: async () => {
+        const was = g.passwordHashing || 'argon2id';
         g.passwordHashing = sel.value;
         const saved = await saveSettings();
-        g.passwordHashing = saved?.general?.passwordHashing || 'argon2id';
+        g.passwordHashing = saved ? saved.general?.passwordHashing || 'argon2id' : was;
         sel.value = g.passwordHashing;
       },
     });

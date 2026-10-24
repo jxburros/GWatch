@@ -146,6 +146,21 @@ test('settings no longer has a Hardware section, and the old link goes to Nodes'
   assert.equal(root.querySelector('.settings-nav'), null, 'nothing of Settings is drawn for a link that is passed on');
 });
 
+// A viewer's theme is "remembered by this browser", as the tab says: the shell
+// styles the page with lookFor(me) on every identity check, and that used to
+// be the shared theme alone, so the viewer's choice lasted until the next one.
+test('a viewer\'s own theme outlasts the next identity check', async (t) => {
+  const { lookFor } = await import('../../../web/components.js');
+  t.after(() => { try { localStorage.removeItem('gw.ownLook'); } catch { /* ignore */ } });
+  const viewer = { isAdmin: false, theme: 'dark', accentColor: '#43c9c0' };
+  assert.deepEqual(lookFor(viewer), { theme: 'dark', accentColor: '#43c9c0' });
+  const { root } = await mountView(settingsView, { isAdmin: false, params: { tab: 'appearance' } }, t);
+  const light = await waitFor(() => [...root.querySelectorAll('.theme-option')].find((b) => b.textContent.startsWith('Light')));
+  light.click();
+  assert.equal(lookFor(viewer).theme, 'light', 'the shell keeps the viewer\'s choice');
+  assert.equal(lookFor({ ...viewer, isAdmin: true }).theme, 'dark', 'an administrator follows the shared setting');
+});
+
 // #49: Users & access carries the password-hashing choice. Argon2id is the
 // default and labelled as recommended; choosing PBKDF2 saves the setting
 // straight away, like the other switches on this tab.
@@ -168,6 +183,131 @@ test('settings Users & access offers the password hashing choice and saves it', 
   assert.equal(saved.general.passwordHashing, 'pbkdf2-sha256');
   // Put the mock back the way the other tests expect it.
   await api.put('/api/settings', { ...saved, general: { ...saved.general, passwordHashing: 'argon2id' } });
+});
+
+// A refused save leaves the control showing what is stored, not the choice
+// that was refused (it used to read the edit back as the saved value).
+test('a refused password hashing change puts the select back', async (t) => {
+  const { root } = await mountView(settingsView, { params: { tab: 'users' } }, t);
+  const panel = root.querySelector('.settings-panel');
+  await waitFor(() => [...panel.querySelectorAll('h2')].some((el) => el.textContent === 'Password hashing'));
+  const select = [...panel.querySelectorAll('select')].find((el) => [...el.options].some((o) => o.value === 'pbkdf2-sha256'));
+  const realFetch = window.fetch;
+  window.fetch = async (url, init) => (init?.method === 'PUT' && String(url) === '/api/settings'
+    ? new Response(JSON.stringify({ error: 'settings are read-only right now' }), { status: 409, headers: { 'Content-Type': 'application/json' } })
+    : realFetch(url, init));
+  t.after(() => { window.fetch = realFetch; });
+  select.value = 'pbkdf2-sha256';
+  select.dispatchEvent(new window.Event('change'));
+  await waitFor(() => [...document.querySelectorAll('.toast-error')].find((el) => /read-only right now/.test(el.textContent)));
+  assert.equal(select.value, 'argon2id');
+});
+
+// A rule with no `enabled` field showed its switch on but its row dimmed as
+// off, and saved as disabled; it is on, everywhere, and saved that way.
+test('an indicator rule without an enabled field is on in its switch, its row and its save', async (t) => {
+  const before = await api.get('/api/settings');
+  t.after(() => api.put('/api/settings', before));
+  const { enabled, ...bare } = before.indicators[0];
+  assert.equal(enabled, true);
+  await api.put('/api/settings', { ...before, indicators: [bare] });
+  const { root } = await mountView(settingsView, { params: { tab: 'indicators' } }, t);
+  const row = await waitFor(() => root.querySelector('.ind-rule'));
+  assert.equal(row.querySelector('input[role="switch"]').checked, true);
+  assert.equal(row.classList.contains('off'), false, 'the row is not dimmed as off');
+  document.querySelectorAll('.toast').forEach((el) => el.remove());
+  [...root.querySelectorAll('button')].find((b) => /Save changes/.test(b.textContent)).click();
+  await waitFor(() => [...document.querySelectorAll('.toast')].find((el) => /Settings saved/.test(el.textContent)));
+  assert.equal((await api.get('/api/settings')).indicators[0].enabled, true);
+});
+
+// A window for a group nobody is in any more could not show that group in its
+// select, read back blank, and was saved as a window for every node.
+test('saving a maintenance window keeps a group that no node is in any more', async (t) => {
+  const made = await api.post('/api/maintenance', { name: 'Old racks', nodeId: null, group: 'Retired racks', enabled: true, startAt: new Date(Date.now() + 3600e3).toISOString(), endAt: new Date(Date.now() + 7200e3).toISOString(), weekdays: [], durationMinutes: 0, notes: '' });
+  t.after(() => api.del(`/api/maintenance/${made.id}`));
+  const { root } = await mountView(settingsView, { params: { tab: 'maintenance' } }, t);
+  const row = await waitFor(() => [...root.querySelectorAll('.maint-row')].find((r) => r.textContent.includes('Old racks')));
+  [...row.querySelectorAll('button')].find((b) => b.textContent.includes('Edit')).click();
+  const dialog = document.getElementById('modals').lastElementChild;
+  [...dialog.querySelectorAll('.modal-foot button')].find((b) => b.textContent === 'Save').click();
+  await waitFor(() => [...document.querySelectorAll('.toast')].find((el) => /Window saved/.test(el.textContent)));
+  const saved = (await api.get('/api/maintenance')).find((w) => w.id === made.id);
+  assert.equal(saved.group, 'Retired racks');
+});
+
+test('a maintenance window for "a group" with no group to pick is refused, not saved for every node', async (t) => {
+  const realFetch = window.fetch;
+  const posts = [];
+  window.fetch = async (url, init) => {
+    if (String(url) === '/api/groups') return new Response(JSON.stringify({ groups: [], tags: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    if (init?.method === 'POST' && String(url) === '/api/maintenance') posts.push(JSON.parse(init.body));
+    return realFetch(url, init);
+  };
+  t.after(() => { window.fetch = realFetch; });
+  const { root } = await mountView(settingsView, { params: { tab: 'maintenance' } }, t);
+  const add = await waitFor(() => [...root.querySelectorAll('button')].find((b) => b.textContent.includes('New window')));
+  add.click();
+  const dialog = document.getElementById('modals').lastElementChild;
+  dialog.querySelector('input').value = 'Racks';
+  const scope = [...dialog.querySelectorAll('select')].find((s) => [...s.options].some((o) => o.value === 'group'));
+  scope.value = 'group';
+  scope.dispatchEvent(new window.Event('change'));
+  [...dialog.querySelectorAll('.modal-foot button')].find((b) => b.textContent === 'Create').click();
+  await waitFor(() => [...document.querySelectorAll('.toast-error')].find((el) => /group/i.test(el.textContent)));
+  assert.equal(posts.length, 0, 'nothing was sent');
+  dialog.querySelector('.modal-foot button').click();
+});
+
+// The confirm box said "leave blank to keep the saved one", and the save took
+// that to mean a newly typed password needed no confirming: one typo and
+// every automatic backup from then on was locked with a password nobody knew.
+test('a new automatic-backup password is not saved without its confirmation', async (t) => {
+  const before = await api.get('/api/settings');
+  t.after(() => api.put('/api/settings', before));
+  const { root } = await mountView(settingsView, { params: { tab: 'backups' } }, t);
+  const pw = await waitFor(() => [...root.querySelectorAll('input[type="password"]')].find((el) => /Required to enable automatic backups/.test(el.placeholder)));
+  pw.value = 'tpyo-secret';
+  pw.dispatchEvent(new window.Event('input'));
+  document.querySelectorAll('.toast').forEach((el) => el.remove());
+  [...root.querySelectorAll('button')].find((b) => b.textContent.includes('Save automatic backup settings')).click();
+  await waitFor(() => [...document.querySelectorAll('.toast')].find((el) => /do not match|confirm/i.test(el.textContent) || /Settings saved/.test(el.textContent)));
+  assert.notEqual((await api.get('/api/settings')).backups.password, 'tpyo-secret');
+});
+
+// A save replaces the settings document with the server's copy, and the form
+// went on writing into the old one, so a second edit and save on the same tab
+// said "Settings saved" and sent nothing new.
+test('a second save from the same settings tab sends the second edit', async (t) => {
+  const before = await api.get('/api/settings');
+  t.after(() => api.put('/api/settings', before));
+  const { root } = await mountView(settingsView, undefined, t);
+  const name = root.querySelector('.settings-panel input[type="text"]');
+  const save = [...root.querySelectorAll('.settings-panel button')].find((b) => b.textContent.includes('Save changes'));
+  for (const value of ['First name', 'Second name']) {
+    name.value = value;
+    name.dispatchEvent(new window.Event('input'));
+    document.querySelectorAll('.toast').forEach((el) => el.remove());
+    save.click();
+    await waitFor(() => [...document.querySelectorAll('.toast')].find((el) => /Settings saved/.test(el.textContent)));
+    assert.equal((await api.get('/api/settings')).general.instanceName, value);
+  }
+});
+
+// The exception meant for "the saved password, left as it is" was written as
+// "a password is saved and the box is empty" — which is exactly what Remove
+// password leaves — so removing it with remote access on skipped the warning.
+test('removing the access password with remote access on still asks before opening up', async (t) => {
+  const before = await api.get('/api/settings');
+  t.after(() => api.put('/api/settings', before));
+  await api.put('/api/settings', { ...before, general: { ...before.general, remoteAccess: true, accessPassword: 'hunter22' } });
+  const { root } = await mountView(settingsView, { params: { tab: 'network' } }, t);
+  const remove = await waitFor(() => [...root.querySelectorAll('button')].find((b) => b.textContent === 'Remove password'));
+  remove.click();
+  [...root.querySelectorAll('button')].find((b) => b.textContent.includes('Save changes')).click();
+  const dialog = await waitFor(() => [...document.querySelectorAll('.modal h2')].find((el) => el.textContent === 'Open without a password?'));
+  [...dialog.closest('.modal').querySelectorAll('.modal-foot button')].find((b) => b.textContent === 'Cancel').click();
+  assert.equal((await api.get('/api/settings')).general.accessPassword, '********', 'nothing was saved');
 });
 
 // #122: Settings › Alerts lists the "also notify" channels, adds one through

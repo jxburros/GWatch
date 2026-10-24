@@ -210,6 +210,26 @@ export function applyAccent(hex) {
   try { localStorage.setItem('gw.accent', hex.toLowerCase()); } catch { /* ignore */ }
   if (changed) notifyTheme();
 }
+/* A viewer may not change the theme for everyone, so a theme or accent a
+   viewer picks in Settings › Appearance is theirs alone, kept by this browser.
+   It has a key of its own: gw.theme and gw.accent follow whatever was last
+   applied, which includes the shared look /api/me brings on every check. */
+const OWN_LOOK_KEY = 'gw.ownLook';
+/** @param {{ theme?: string, accentColor?: string }} look */
+export function rememberOwnLook(look) {
+  try { localStorage.setItem(OWN_LOOK_KEY, JSON.stringify(look)); } catch { /* private window: forgotten on reload */ }
+}
+/** The theme and accent to style this browser with for the principal `me`:
+ *  the shared ones from /api/me, unless a viewer has chosen their own.
+ *  @param {any} me @returns {{ theme: string, accentColor: string }} */
+export function lookFor(me) {
+  let own = null;
+  if (me && !me.isAdmin) { try { own = JSON.parse(localStorage.getItem(OWN_LOOK_KEY) || 'null'); } catch { own = null; } }
+  return {
+    theme: own?.theme || me?.theme || 'dark',
+    accentColor: own?.accentColor && hexToRgb(own.accentColor) ? own.accentColor : me?.accentColor || '#43c9c0',
+  };
+}
 export const ACCENT_PRESETS = [
   { name: 'Signal', hex: '#43c9c0' }, { name: 'Violet', hex: '#7c6cff' }, { name: 'Blue', hex: '#3b82f6' }, { name: 'Cyan', hex: '#06b6d4' },
   { name: 'Teal', hex: '#14b8a6' }, { name: 'Green', hex: '#22c55e' }, { name: 'Lime', hex: '#a3e635' }, { name: 'Amber', hex: '#f59e0b' },
@@ -346,14 +366,24 @@ export function toast(message, { kind = 'info', timeout = 4500, action } = {}) {
 
 /* ---------- Modals ---------- */
 
-const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), details > summary:first-of-type, [tabindex]:not([tabindex="-1"])';
 
 /** The elements in `scope` a Tab press can land on. Judged by markup (hidden,
  *  disabled, inside a hidden ancestor) rather than by layout, so the answer is
  *  the same in a headless test as in a browser.
  *  @param {ParentNode} scope @returns {HTMLElement[]} */
 export function focusableIn(scope) {
-  return [.../** @type {NodeListOf<HTMLElement & { disabled?: boolean }>} */ (scope.querySelectorAll(FOCUSABLE))].filter((x) => !x.hidden && !x.disabled && !x.closest('[hidden]') && x.getAttribute('aria-hidden') !== 'true');
+  return [.../** @type {NodeListOf<HTMLElement & { disabled?: boolean }>} */ (scope.querySelectorAll(FOCUSABLE))].filter((x) => !x.hidden && !x.disabled && !x.closest('[hidden]') && x.getAttribute('aria-hidden') !== 'true' && !inClosedDetails(x));
+}
+
+/** Whether `x` is folded away inside a closed <details>, where Tab cannot
+ *  reach it; a details' own summary stays reachable while it is closed.
+ *  @param {Element} x */
+function inClosedDetails(x) {
+  for (let d = x.closest('details:not([open])'); d; d = d.parentElement?.closest('details:not([open])') || null) {
+    if (!(x.tagName === 'SUMMARY' && x.parentElement === d)) return true;
+  }
+  return false;
 }
 
 // How many modals are open. The page behind them is made inert by the first

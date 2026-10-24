@@ -82,7 +82,7 @@ exits, which is the quickest way to prove the settings work.
 the token *and* the server address on the machine, so afterwards
 `gwatch-agent run` needs no arguments at all. That is how the packages below
 run it. (For a rollout you are scripting, `POST /api/agents` registers a machine
-with a token instead of a code — see [`API.md`](API.md#agents).)
+with a token instead of a code — see [`API.md`](API.md#hardware-health).)
 
 ### The agent's configuration file
 
@@ -95,6 +95,8 @@ Everything about how a machine talks to GWatch is in one plain-text file,
 | Linux, macOS | `~/.local/share/gwatch/agent.json` (`$XDG_DATA_HOME/gwatch/agent.json`) |
 | `.deb`, `.rpm` and the container | `/var/lib/gwatch-agent/agent.json` |
 
+`--config` or `GWATCH_AGENT_CONFIG` points the agent at another file, and
+`GWATCH_AGENT_TOKEN_FILE` moves the directory it defaults to.
 `gwatch-agent config path` prints it. It is created when the machine is paired
 or the service installed, with every setting in it so you can see what there is
 to change:
@@ -138,7 +140,10 @@ says so in its log, and writes the file whole again the next time it saves it.
 A mistake made editing the file by hand is still reported, not covered over.
 
 **Precedence**, lowest to highest: built-in defaults, this file, environment
-variables (`GWATCH_SERVER`, `GWATCH_AGENT_TOKEN`, …), command-line flags. Run
+variables (`GWATCH_SERVER`, `GWATCH_AGENT_TOKEN`, `GWATCH_AGENT_INTERVAL`,
+`GWATCH_AGENT_LISTEN`, `GWATCH_AGENT_CERT_PIN`, `GWATCH_AGENT_REPO`,
+`GWATCH_HOST_ROOT`, `GWATCH_AGENT_AUTO_UPDATE` and `GWATCH_AGENT_COLLECTOR`;
+`checkIn` and `buffer` have none), command-line flags. Run
 `gwatch-agent config show` to see every setting with the layer that decided it —
 the answer to "I edited the file and nothing changed" — and
 `gwatch-agent config validate` to check the file: a misspelt key is named, a bad

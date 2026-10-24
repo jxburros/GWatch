@@ -163,6 +163,12 @@ func TestSysV(t *testing.T) {
 	script := root.path("/etc/init.d/GWatchAgent")
 	r := &fakeRunner{answers: map[string]fakeAnswer{script + " status": {"Stopped\n", 3}}}
 	m := sysvManager{root: root, r: r}
+	if managerRestartsOnExit(m) {
+		t.Error("a System V script does not start the program again when it exits")
+	}
+	if !managerRestartsOnExit(systemdManager{}) || !managerRestartsOnExit(openrcManager{}) || !managerRestartsOnExit(launchdManager{}) {
+		t.Error("systemd, OpenRC and launchd all restart a service that exits")
+	}
 
 	if err := m.install(agentConfig, agentExe); err != nil {
 		t.Fatal(err)

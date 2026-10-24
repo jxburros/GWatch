@@ -401,9 +401,13 @@ export async function mount(root, ctx) {
       parts.push(`${cap(f.summary(r.value, { nodeName }))} on ${word(nodeCount, 'node', 'nodes')}`);
     }
     const nothing = (!checkRows.length || !checkCount) && (!nodeRows.length || !nodeCount);
+    // The server takes the alert fields sent as each check's whole override
+    // (see bulkCheckPatch.Alerts), so one alert setting resets the others.
+    const alertNote = checkCount && checkRows.some((r) => bulkField(r.key).path.startsWith('alerts.'))
+      ? ' Any other alert overrides on those checks go back to the global settings.' : '';
     summaryEl.textContent = nothing
       ? 'Pick some nodes or checks on the left, then choose what to change.'
-      : parts.join('; ') + '.';
+      : parts.join('; ') + '.' + alertNote;
     summaryEl.classList.toggle('dim', nothing);
     applyBtn.disabled = nothing || state.applying;
   }

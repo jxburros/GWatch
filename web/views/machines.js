@@ -57,6 +57,8 @@ export async function addAgentNode(reload) {
     confirmLabel: 'Get a pairing code',
   });
   if (!ok) return;
+  const problem = picker.problem();
+  if (problem) { toast(problem, { kind: 'error' }); return; }
   try {
     const res = await api.post('/api/agents/pairings', {
       name: name.value.trim(),
@@ -344,10 +346,15 @@ export function hardwarePanel(key, { title = 'Hardware', metricStatus = null, is
     h('div', { class: 'card-head' }, h('h2', { class: 'card-title' }, icon('cpu'), title), h('span', { class: 'mono dim small' }, key)),
     h('div', { class: 'stack' }, headEl, snapEl, watchEl, chartsEl));
 
+  // A live update, a refresh and the first load can each be out at once;
+  // only the newest may draw, or an older reading lands over a newer one.
+  let loadRun = 0;
   async function load() {
+    const run = ++loadRun;
     try {
-      state.host = await api.get(`/api/hosts/${encodeURIComponent(key)}`);
-      if (state.destroyed) return;
+      const host = await api.get(`/api/hosts/${encodeURIComponent(key)}`);
+      if (state.destroyed || run !== loadRun) return;
+      state.host = host;
       renderHead();
       // Drawn again once the newest release is known, rather than holding the
       // whole panel up for a question that only decides a label.
@@ -360,6 +367,7 @@ export function hardwarePanel(key, { title = 'Hardware', metricStatus = null, is
       renderSnapshot();
       if (!state.watchBuilt && state.host.source === 'local' && isAdmin) { state.watchBuilt = true; renderLocalWatch(); }
     } catch (e) {
+      if (state.destroyed || run !== loadRun) return;
       replace(headEl, emptyState({ icon: 'alert', title: 'Could not load this machine', text: e.message, compact: true }));
     }
   }

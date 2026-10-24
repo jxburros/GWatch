@@ -102,6 +102,9 @@ export function create(shell) {
 
     const ruleRow = (rule, i) => {
       rule.condition = rule.condition || { kind: 'nodesInStatus', status: 'down', minCount: 1 };
+      // A rule that does not say is on, as its switch shows: settled here so
+      // the row, the preview and the save all agree with the switch.
+      rule.enabled = rule.enabled !== false;
       const row = h('div', { class: `ind-rule ${rule.enabled ? '' : 'off'}` });
       const on = toggle({ checked: rule.enabled !== false, ariaLabel: `Enable ${rule.name || 'indicator'}`, onChange: (v) => { rule.enabled = v; row.classList.toggle('off', !v); } });
       const swatches = h('div', { class: 'ind-swatches', role: 'radiogroup', 'aria-label': 'Severity' });

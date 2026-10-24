@@ -1,6 +1,6 @@
 # The version lives in the VERSION file, so a local build, the installer and a
-# release all say the same thing. Releases are cut by tagging v<VERSION>; CI
-# checks the two agree before it publishes anything (see docs/RELEASING.md).
+# release all say the same thing. A release is published as v<VERSION> by the
+# Release workflow, which checks the two agree first (see docs/RELEASING.md).
 VERSION ?= $(shell tr -d ' \t\r\n' < VERSION)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
@@ -194,7 +194,7 @@ verify-release:
 # packaging/.
 NFPM ?= go run github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
 
-.PHONY: agent-packages agent-image
+.PHONY: agent-packages server-packages agent-image
 agent-packages:
 	NFPM='$(NFPM)' sh packaging/nfpm/package.sh $(AGENT_VERSION) dist/packages
 

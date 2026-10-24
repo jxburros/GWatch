@@ -400,3 +400,18 @@ func TestOpsgenieAliasIsOnePathSegment(t *testing.T) {
 		t.Fatalf("alias escaped wrongly: %q", raw)
 	}
 }
+
+// An alert about a remote collector whose machine is not a node carries node
+// id 0 and the collector's stand-in check id; it must not share the key every
+// test alert uses, or two such collectors (and the Test button) would open,
+// and resolve, one and the same incident.
+func TestIncidentKeyKeepsNodelessCollectorsApart(t *testing.T) {
+	if k := incidentKey(model.Action{}, Vars{"node.id": "0", "check.id": "0"}); k != "gwatch-test" {
+		t.Errorf("test alert key = %q", k)
+	}
+	a := incidentKey(model.Action{}, Vars{"node.id": "0", "check.id": "-3", "event": "down"})
+	b := incidentKey(model.Action{}, Vars{"node.id": "0", "check.id": "-4", "event": "recovered"})
+	if a == "gwatch-test" || b == "gwatch-test" || a == b {
+		t.Errorf("collector keys = %q, %q", a, b)
+	}
+}

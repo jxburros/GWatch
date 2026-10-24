@@ -69,8 +69,8 @@ the node's host); and the settings that check type reads — expected status,
 keyword, JSON path, DNS record type and so on.
 
 **That includes the credentials some checks carry**: an SNMP community string
-or v3 passwords, and the HTTP headers of an HTTP, Keyword or JSON check, which
-often hold an API key or an `Authorization` header. GWatch keeps these sealed on
+or v3 passwords, and the request headers and body of an HTTP, Keyword or JSON
+check, which often hold an API key or an `Authorization` header. GWatch keeps these sealed on
 disk and never shows them back in its own interface, but a collector has to
 have them to run the check, so:
 

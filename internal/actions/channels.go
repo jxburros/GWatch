@@ -577,13 +577,20 @@ func incidentKey(a model.Action, vars Vars) string {
 	if id := vars["rule.id"]; id != "" {
 		return "gwatch-rule-" + id
 	}
-	node := vars["node.id"]
-	if node == "" || node == "0" {
+	// Only an alert about no node and no check is a test. A remote
+	// collector's alert names no node when its machine has none, but its
+	// stand-in check id is its own, so it must not share the test key.
+	node, check := vars["node.id"], vars["check.id"]
+	noNode, noCheck := node == "" || node == "0", check == "" || check == "0"
+	if noNode && noCheck {
 		return "gwatch-test"
 	}
+	if noNode {
+		node = "0"
+	}
 	key := "gwatch-node-" + node
-	if c := vars["check.id"]; c != "" && c != "0" {
-		key += "-check-" + c
+	if !noCheck {
+		key += "-check-" + check
 	}
 	if warningEvents[vars["event"]] {
 		key += "-warning"

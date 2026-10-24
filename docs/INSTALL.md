@@ -70,8 +70,8 @@ things out as you go. Tips are off until you turn them on.
 - A **GWatch Monitor** shortcut in your Start Menu (and on the desktop, if you chose
   that option) reopens the interface any time.
 - **If you allowed other devices on your network to connect**: go to
-  **Settings › Users & access** in the web interface and set an access password (or
-  create individual user accounts) right away. Without one, anyone who can reach that
+  **Settings › Users & access** in the web interface and create user accounts (or set
+  the legacy shared access password under **Settings › Network access**) right away. Without one, anyone who can reach that
   port on your network can see and change everything.
 
 ## Installing the agent on other machines
@@ -136,7 +136,7 @@ That data directory is always a normal, permanent folder on this computer's disk
 never a temp directory that the OS can clear on reboot or under disk pressure. The
 Windows installer and `scripts/install.ps1` both point the service at
 `C:\ProgramData\GWatch`; running GWatch directly (any OS, see the
-[README](../README.md#run-without-installing-any-os)) picks a per-platform default
+[README](../README.md#install)) picks a per-platform default
 unless you override it:
 
 | Platform | Default data directory |

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jxburros/GWatch/internal/model"
+	"github.com/jxburros/GWatch/internal/sysmetrics"
 )
 
 // The agent is the one part of GWatch that runs on a machine nobody is
@@ -271,6 +272,38 @@ func TestValidateExplainsWhatIsMissing(t *testing.T) {
 	}
 }
 
+// TestSplitCommand: --version and --help are commands the flag parser does not
+// know, so they must be recognised before it runs, and a word that is not a
+// command must not be taken for one that needs a token.
+func TestSplitCommand(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		cmd  string
+		rest int
+	}{
+		{nil, "run", 0},
+		{[]string{"--server", "x"}, "run", 2},
+		{[]string{"--version"}, "version", 0},
+		{[]string{"-v"}, "version", 0},
+		{[]string{"--help"}, "help", 0},
+		{[]string{"-h"}, "help", 0},
+		{[]string{"install", "--code", "X"}, "install", 2},
+	} {
+		cmd, rest := splitCommand(tc.args)
+		if cmd != tc.cmd || len(rest) != tc.rest || !knownCommands[cmd] {
+			t.Errorf("splitCommand(%q) = %q %q", tc.args, cmd, rest)
+		}
+	}
+	if knownCommands["instal"] {
+		t.Error("a misspelt command is known")
+	}
+	for _, cmd := range []string{"uninstall", "status", "stop"} {
+		if !serviceOnlyCommand(cmd) {
+			t.Errorf("%s reads settings, so a broken file would block it", cmd)
+		}
+	}
+}
+
 // TestServiceIsRegisteredWithNothingToEdit: the installed service is given no
 // settings on its command line. They are in the configuration file, so that
 // changing one is an edit and a restart, and so the token is not left in a
@@ -427,6 +460,38 @@ func TestServeNeedsTheToken(t *testing.T) {
 				t.Errorf("GET /metrics %s = %d, want %d", tc.name, resp.StatusCode, tc.want)
 			}
 		})
+	}
+}
+
+// The machine's own collect limit is the owner's last word on what leaves the
+// machine, and serve mode is a way out too: it must not hand over what
+// agent.json leaves out.
+func TestServeKeepsTheMachinesOwnLimit(t *testing.T) {
+	old := takeReading
+	takeReading = func(context.Context, config, *sysmetrics.Collector) (model.HostMetrics, error) {
+		return model.HostMetrics{
+			Interfaces:  []model.HostInterface{{Name: "eth0", Up: true}, {Name: "eth1", Up: true}},
+			Filesystems: []model.HostFilesystem{{Mount: "/"}, {Mount: "/private"}},
+		}, nil
+	}
+	t.Cleanup(func() { takeReading = old })
+	limit := model.CollectSelection{Interfaces: []string{"eth0"}, Mounts: []string{"/"}}
+	prg := &program{cfg: config{token: "gwa_secret", collect: limit}, mode: "serve"}
+	srv := httptest.NewServer(prg.metricsHandler())
+	defer srv.Close()
+	req, _ := http.NewRequest("GET", srv.URL+"/metrics", nil)
+	req.Header.Set("Authorization", "Bearer gwa_secret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got model.HostMetrics
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Interfaces) != 1 || got.Interfaces[0].Name != "eth0" || len(got.Filesystems) != 1 || got.Filesystems[0].Mount != "/" {
+		t.Errorf("serve handed over more than agent.json allows: %+v %+v", got.Interfaces, got.Filesystems)
 	}
 }
 

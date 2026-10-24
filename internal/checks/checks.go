@@ -436,7 +436,9 @@ func hostOnly(target string) (string, error) {
 	if t == "" {
 		return "", errors.New("a hostname or IP address is required")
 	}
-	if strings.ContainsAny(t, " /\\") {
+	// A leading "-" is never a host, and the system ping command would take
+	// it for an option.
+	if strings.ContainsAny(t, " /\\") || strings.HasPrefix(t, "-") {
 		return "", fmt.Errorf("invalid hostname %q", t)
 	}
 	return t, nil

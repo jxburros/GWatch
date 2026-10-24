@@ -17,7 +17,7 @@
 # no path by which it could be uploaded as something the self-updater would
 # pick up.
 #
-# Everything else matches the agent-release job in .github/workflows/ci.yml:
+# Everything else matches the gwatch-agent-build job in .github/workflows/release.yml:
 # CGO_ENABLED=0, -trimpath, -s -w, the default GOARM (7) for linux/arm. This
 # script is the one place the packaged ldflags are written down; CI and
 # `make agent-packages` both call it.

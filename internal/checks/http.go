@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -109,6 +110,13 @@ func (t *httpTiming) fill(d *model.ResultDetails) {
 	}
 }
 
+// leavesOrigin reports whether a redirect from first to next leaves the host
+// a check was pointed at, or drops from https to plain http. Either way what
+// the check was told to send there is not for next.
+func leavesOrigin(first, next *url.URL) bool {
+	return !strings.EqualFold(first.Hostname(), next.Hostname()) || (first.Scheme == "https" && next.Scheme != "https")
+}
+
 // runHTTPCheck implements the http, keyword and json check types.
 func runHTTPCheck(ctx context.Context, check model.Check, target string, opts Options) model.Result {
 	cfg := check.Config
@@ -182,6 +190,21 @@ func runHTTPCheck(ctx context.Context, check model.Check, target string, opts Op
 				return fmt.Errorf("stopped after %d redirects", maxRedirects)
 			}
 			redirects = len(via)
+			// The headers and body a check is configured with are stored as
+			// credentials, and Go would carry them (all but Authorization and
+			// Cookie) to whatever host a redirect names. Off the host the
+			// check was pointed at, or down from https to http, the request
+			// goes without them.
+			if leavesOrigin(via[0].URL, r.URL) {
+				for k := range cfg.Headers {
+					r.Header.Del(strings.TrimSpace(k))
+				}
+				if r.Body != nil && r.Body != http.NoBody {
+					r.Body.Close()
+					r.Body, r.GetBody, r.ContentLength = http.NoBody, nil, 0
+					r.Header.Del("Content-Type")
+				}
+			}
 			return nil
 		},
 	}
@@ -206,7 +229,13 @@ func runHTTPCheck(ctx context.Context, check model.Check, target string, opts Op
 	}
 	defer resp.Body.Close()
 
-	bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
+	// truncated is that the response went on past what is read, so a keyword
+	// that was not found may simply be further down.
+	truncated := len(bodyBytes) > maxBodyBytes
+	if truncated {
+		bodyBytes = bodyBytes[:maxBodyBytes]
+	}
 	total := time.Since(timing.start)
 	res.LatencyMS = msPtr(total)
 	res.Details.TotalMs = msPtr(total)
@@ -232,7 +261,14 @@ func runHTTPCheck(ctx context.Context, check model.Check, target string, opts Op
 	// Certificate details.
 	warnDays := pickInt(cfg.CertWarnDays, opts.DefaultCertWarn, defaultCertWarn)
 	if resp.TLS != nil && (cfg.CertCheck == nil || *cfg.CertCheck) && len(resp.TLS.PeerCertificates) > 0 {
-		info := certInfoFromState(resp.TLS, u.Hostname(), cfg.IgnoreTLSErrors)
+		// The certificate is the last hop's, so it is checked against that
+		// hop's name: example.com redirecting to www.example.com is not a
+		// name mismatch.
+		host := u.Hostname()
+		if resp.Request != nil && resp.Request.URL != nil {
+			host = resp.Request.URL.Hostname()
+		}
+		info := certInfoFromState(resp.TLS, host, cfg.IgnoreTLSErrors)
 		res.Details.Cert = info
 		res.Warnings = append(res.Warnings, certWarnings(info, warnDays)...)
 	}
@@ -265,6 +301,9 @@ func runHTTPCheck(ctx context.Context, check model.Check, target string, opts Op
 		default:
 			msg = fmt.Sprintf("Keyword %q not found", cfg.Keyword)
 		}
+		if !found && truncated {
+			msg += fmt.Sprintf(" in the first %d MiB of the response", maxBodyBytes>>20)
+		}
 		if res.Success {
 			res.Success = ok
 			res.Message = msg
@@ -278,10 +317,10 @@ func runHTTPCheck(ctx context.Context, check model.Check, target string, opts Op
 
 	// JSON.
 	var jsonDoc any
-	jsonParsed := false
+	jsonParsed, jsonOK := false, false
 	parseJSON := func() bool {
 		if jsonParsed {
-			return jsonDoc != nil || len(bodyBytes) > 0
+			return jsonOK
 		}
 		jsonParsed = true
 		dec := json.NewDecoder(strings.NewReader(bodyText))
@@ -290,6 +329,7 @@ func runHTTPCheck(ctx context.Context, check model.Check, target string, opts Op
 			jsonDoc = nil
 			return false
 		}
+		jsonOK = true
 		return true
 	}
 	if check.Type == model.CheckJSON {

@@ -370,3 +370,38 @@ func TestDigestDue(t *testing.T) {
 		t.Error("a warning before 08:00 belongs in that morning's digest")
 	}
 }
+
+// The hourly digest goes out at the next top of the hour on the nights the
+// clocks change too: not at once in spring, nor an hour late in autumn.
+func TestHourlyDigestDueAcrossDST(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Local
+	time.Local = ny
+	t.Cleanup(func() { time.Local = old })
+	at := func(s string) time.Time {
+		v, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	for _, c := range []struct {
+		first, now string
+		want       bool
+	}{
+		// Spring: 01:30 EST is followed by 03:00 EDT half an hour later.
+		{"2026-03-08T01:30:00-05:00", "2026-03-08T01:45:00-05:00", false},
+		{"2026-03-08T01:30:00-05:00", "2026-03-08T03:00:00-04:00", true},
+		// Autumn: 01:30 EDT is followed by 01:00 EST half an hour later.
+		{"2026-11-01T01:30:00-04:00", "2026-11-01T01:00:00-05:00", true},
+		{"2026-11-01T01:30:00-05:00", "2026-11-01T01:59:00-05:00", false},
+		{"2026-11-01T01:30:00-05:00", "2026-11-01T02:00:00-05:00", true},
+	} {
+		if got := digestDue(model.WarningDigestHourly, at(c.first), at(c.now)); got != c.want {
+			t.Errorf("first %s, now %s: due %v, want %v", c.first, c.now, got, c.want)
+		}
+	}
+}

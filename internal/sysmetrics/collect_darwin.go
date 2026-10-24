@@ -179,7 +179,7 @@ func darwinFilesystems() ([]model.HostFilesystem, []string) {
 		seen[device] = true
 		bs := uint64(st.Bsize)
 		free := st.Bavail * bs
-		used := (st.Blocks - st.Bfree) * bs
+		used := sub(st.Blocks, st.Bfree) * bs
 		fs := model.HostFilesystem{
 			Mount: mount, Device: device, FSType: fsType,
 			TotalBytes: st.Blocks * bs, FreeBytes: free, UsedBytes: used,
@@ -187,7 +187,7 @@ func darwinFilesystems() ([]model.HostFilesystem, []string) {
 		}
 		if st.Files > 0 {
 			fs.InodesTotal = st.Files
-			fs.InodesUsed = st.Files - st.Ffree
+			fs.InodesUsed = sub(st.Files, st.Ffree)
 			pct := usedPct(fs.InodesUsed, fs.InodesTotal)
 			fs.InodesUsedPct = &pct
 		}

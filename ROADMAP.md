@@ -225,7 +225,7 @@ promise.
   the web UI without touching PowerShell or the CLI.
 
 ### 4.2 Container image
-- Done: a multi-arch image (`ghcr.io/jxburros/gwatch`, `linux/amd64` and `linux/arm64`)
+- Done: a multi-arch image (`ghcr.io/jxburros/gwatch`, `linux/amd64`, `linux/arm64` and `linux/arm/v7`)
   published by the release workflow, with a Compose file and `docs/DOCKER.md` covering
   what a container changes — the first account has to be created from inside it, ping
   needs `NET_RAW` or the system ping method, discovery sees Docker's network unless
@@ -306,6 +306,13 @@ what shipped, and that shape is the constraint to hold:
   management, and the only remote configuration is the administrator narrowing which
   readings a machine sends, inside the limit in the machine's own file — and nothing more
   should be added.
+- **Remote collectors (#123) are the one step past this, and the boundary for it.** With
+  the machine's owner and the administrator both opting in, an agent also runs the
+  built-in network checks (ping, TCP, HTTP and its relatives, DNS, SNMP) of the nodes
+  pointed at it and posts the results — data from a closed list, never a script, and
+  still over connections the agent opens. That is how one GWatch watches a second site;
+  it is not a second GWatch, a fleet, or remote execution. The reasoning, and what a
+  compromised GWatch could do with it, is in `docs/AGENT-DECISIONS.md` (entry 16).
 - **No metric language.** Readings are a fixed struct: processor, memory, filesystem,
   network, disk throughput. Not a metrics pipeline, not arbitrary series, not something
   with a query language. A new reading is a field, reviewed like any other field.
@@ -313,8 +320,10 @@ what shipped, and that shape is the constraint to hold:
   agents working ever needs config management, the feature has grown wrong.
 
 Temperatures and SMART were considered and left out: both are patchy across vendors on
-Windows, and SMART needs elevated privileges on the watched machine. Revisit only if
-someone actually wants them, and only within the constraints above.
+Windows, and SMART needs elevated privileges on the watched machine. Temperatures have
+since come in on Linux only (#132), read from the kernel's hwmon and thermal zones as
+more fields of the same reading; SMART is still left out. Revisit the rest only if
+someone actually wants it, and only within the constraints above.
 
 **Network discovery was on the brief's non-goals and shipped anyway** (#42, 0.2.2 —
 `internal/discovery`, `docs/API.md` → Discovery). It was decided at the 2026-09-19

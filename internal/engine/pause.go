@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"sync"
+
+	"github.com/jxburros/GWatch/internal/model"
 )
 
 // Pausing the engine (#148). A restore replaces the configuration and,
@@ -119,4 +121,16 @@ func (e *Engine) Resume() {
 		e.log.Printf("engine resumed")
 		e.broadcast(Update{Kind: "state"})
 	}
+}
+
+// DiscardStates drops every check's in-memory state, so the next ReloadConfig
+// reads them from the database. A restore keeps check ids but replaces what
+// they mean, and empties the stored states; without this a restored check
+// would inherit the old check's status and active alert, which its next
+// result then writes back. Only call it while paused, when nothing runs.
+func (e *Engine) DiscardStates() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.states = map[int64]*model.CheckState{}
+	e.running = map[int64]bool{}
 }

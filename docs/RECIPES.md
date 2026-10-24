@@ -220,7 +220,7 @@ GWatch version, or want more control over the exact payload).
 - **Action type**: `Custom code`, interpreter `sh` (or `bash`).
 - **Code**:
   ```sh
-  docker restart "$GWATCH_NODE_NAME_CONTAINER" || docker restart plex
+  docker restart "$GWATCH_NODE_NAME"
   ```
   In practice, hardcode the container name (it rarely matches the GWatch node
   name exactly) — put it directly in the script rather than deriving it from
@@ -576,11 +576,11 @@ curl -X POST 'https://api.pushover.net/1/messages.json' \
   powerful as a shell on that machine. Give the service account only the
   access it needs (e.g. a scoped SSH deploy key, a `docker` group membership
   if it must restart containers), not broad admin rights.
-- Outbound webhook URLs and bodies can carry secrets (tokens, API keys) in
-  plain text in the trigger/endpoint config; anyone with UI/API access can
-  read them back via `GET /api/triggers` or `GET /api/endpoints` (they are
-  not masked). Restrict who can reach the GWatch UI accordingly.
-- `GET /api/export/config.json` deliberately omits passwords but **does**
-  include trigger/endpoint actions (and therefore any secrets embedded in
-  their URLs/headers/bodies) — treat exported config files the same way you
-  treat the live config.
+- Outbound webhook URLs, request URLs, headers, bodies, tokens and user keys
+  can carry secrets (tokens, API keys). They are encrypted in the database
+  with `gwatch.key` and masked for viewer accounts, but an administrator reads
+  them back in full via `GET /api/triggers` or `GET /api/endpoints`. Restrict
+  who holds an administrator account accordingly.
+- `GET /api/export/config.json` leaves passwords, endpoint tokens and those
+  action secrets out (they come back empty), so an export is safe to share;
+  an encrypted backup is what carries them.

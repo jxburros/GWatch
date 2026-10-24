@@ -2,7 +2,9 @@ package store
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -37,7 +39,28 @@ func TestSQLiteFileURI(t *testing.T) {
 // pragmas the store relies on actually took effect. This is what the three
 // driver_*.go files have to agree on, so it runs under every build tag.
 func TestDataSourceNameApplies(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "dsn.db")
+	plain := filepath.Join(t.TempDir(), "dsn.db")
+	testDataSourceName(t, plain)
+	// A data directory whose name holds characters a URI gives meaning to
+	// must open the file at exactly that path, with every pragma applied.
+	if runtime.GOOS != "windows" {
+		dir := filepath.Join(t.TempDir(), "site#2 what? 100%")
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		awkward := filepath.Join(dir, "dsn.db")
+		testDataSourceName(t, awkward)
+		if _, err := os.Stat(awkward); err != nil {
+			t.Fatalf("database not created at %q: %v", awkward, err)
+		}
+		if entries, _ := os.ReadDir(filepath.Dir(dir)); len(entries) != 1 {
+			t.Fatalf("SQLite created files outside the data directory: %v", entries)
+		}
+	}
+}
+
+func testDataSourceName(t *testing.T, path string) {
+	t.Helper()
 	for _, writer := range []bool{true, false} {
 		dsn := dataSourceName(path, writer)
 		db, err := sql.Open(driverName, dsn)

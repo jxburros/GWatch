@@ -38,3 +38,13 @@ test('wall draws a projected nodes panel and footer', async (t) => {
   assert.match(root.textContent, /Service healthy/);
   assert.match(root.textContent, /1 nodes monitored/);
 });
+
+test('a trend with no samples in its range shows no availability, not 0.00%', async (t) => {
+  const now = Date.now();
+  const root = await render(t, {
+    wallboard: { name: 'Trends', layout: { hideChrome: true }, panels: [{ type: 'trends', config: { range: '24h', limit: 4, checkIds: [] } }] },
+    nodes: [], groups: [], attention: [], certWarnings: [], maintenance: [],
+    trends: [{ checkId: 7, checkName: 'Ping', nodeName: 'Paused NAS', checkType: 'ping', from: new Date(now - 86400e3).toISOString(), to: new Date(now).toISOString(), bucketSeconds: 0, points: [], summary: { availability: 0, avgMs: null, count: 0, failures: 0 } }],
+  });
+  assert.equal(root.querySelector('.wc-val').textContent, '— available');
+});

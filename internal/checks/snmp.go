@@ -317,6 +317,18 @@ func snmpFailureMessage(err error, cfg model.CheckConfig, host string, port int,
 		}
 		return fmt.Sprintf("no response from %s:%d after %s — check the device is reachable on UDP %d, that SNMP is enabled and that the community string is right: SNMP v2c answers a wrong community with silence, so a wrong community and an unreachable device look the same", host, port, fmtDur(timeout), port)
 	}
+	// SNMP v3 says what was wrong in a report, which gosnmp hands back as one
+	// of its own errors; their bare text ("wrong digest") names no setting.
+	switch {
+	case errors.Is(err, gosnmp.ErrWrongDigest):
+		return fmt.Sprintf("authentication failed at %s:%d: the device does not accept the authentication password or protocol for user %q", host, port, strings.TrimSpace(cfg.SNMPUser))
+	case errors.Is(err, gosnmp.ErrDecryption):
+		return fmt.Sprintf("authentication failed at %s:%d: the device does not accept the privacy password or protocol for user %q", host, port, strings.TrimSpace(cfg.SNMPUser))
+	case errors.Is(err, gosnmp.ErrUnknownSecurityLevel):
+		return fmt.Sprintf("authentication failed at %s:%d: the device does not allow user %q this security level; check which of authentication and privacy the user is set up for", host, port, strings.TrimSpace(cfg.SNMPUser))
+	case errors.Is(err, gosnmp.ErrUnknownUsername):
+		return fmt.Sprintf("authentication failed at %s:%d: the device has no SNMP v3 user %q", host, port, strings.TrimSpace(cfg.SNMPUser))
+	}
 	if strings.Contains(strings.ToLower(err.Error()), "authentication") || strings.Contains(strings.ToLower(err.Error()), "unknown user") {
 		return fmt.Sprintf("authentication failed at %s:%d: %v", host, port, err)
 	}

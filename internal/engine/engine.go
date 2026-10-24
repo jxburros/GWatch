@@ -95,6 +95,7 @@ type Engine struct {
 	rules       []model.Rule
 	ruleStates  map[int64]*model.RuleState
 	rulesLoaded bool
+	rulesEvalMu sync.Mutex // serialises evaluateRules; taken before mu
 
 	// hosts samples this computer's hardware and holds the newest reading
 	// from every machine that reports in.
@@ -127,6 +128,9 @@ type Engine struct {
 
 	retention model.RetentionStatus
 	backup    model.BackupStatus
+	// heldSince is the oldest held-back result recorded since the last
+	// rollup, which the next one rolls up from; see noteHeldResult.
+	heldSince time.Time
 
 	// gate keeps the engine's own writes out of the way of a restore; see
 	// pause.go.
@@ -560,10 +564,15 @@ func (e *Engine) runAndProcess(ctx context.Context, checkID int64, depth int) (m
 	}
 	c, ok := e.checks[checkID]
 	if !ok {
+		e.clearRunningLocked(checkID)
 		e.mu.Unlock()
 		return model.Result{}, fmt.Errorf("check %d not found", checkID)
 	}
 	if _, collected := e.collectedLocked(c); collected {
+		// A reload can hand the check to a collector between tick marking
+		// it running and this run starting; without clearing the mark it
+		// would never be scheduled again.
+		e.clearRunningLocked(checkID)
 		e.mu.Unlock()
 		return model.Result{}, ErrCollected
 	}
@@ -587,7 +596,13 @@ func (e *Engine) runAndProcess(ctx context.Context, checkID int64, depth int) (m
 	e.running[checkID] = true
 	e.mu.Unlock()
 
-	timeout := time.Duration(c.TimeoutSeconds)*time.Second*time.Duration(c.Retries+1) + 15*time.Second
+	// A check saved without a timeout runs each attempt for the checks
+	// package's 10 s default, so the whole run must allow for that too.
+	perAttempt := c.TimeoutSeconds
+	if perAttempt <= 0 {
+		perAttempt = 10
+	}
+	timeout := time.Duration(perAttempt)*time.Second*time.Duration(c.Retries+1) + 15*time.Second
 	rctx, cancel := context.WithTimeout(ctx, timeout)
 	result := e.opts.Run(rctx, c, opts)
 	cancel()
@@ -600,12 +615,18 @@ func (e *Engine) runAndProcess(ctx context.Context, checkID int64, depth int) (m
 	flight.result, flight.err = stored, err
 	delete(e.inflight, checkID)
 	close(flight.done)
+	e.clearRunningLocked(checkID)
+	e.mu.Unlock()
+	return stored, err
+}
+
+// clearRunningLocked drops the running mark tick or runAndProcess set on a
+// check. The caller holds e.mu.
+func (e *Engine) clearRunningLocked(checkID int64) {
 	delete(e.running, checkID)
 	if st := e.states[checkID]; st != nil {
 		st.Running = false
 	}
-	e.mu.Unlock()
-	return stored, err
 }
 
 // RunNow executes a check immediately, records the result and returns it.

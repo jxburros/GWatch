@@ -6,7 +6,9 @@ import * as eventsView from './incident-events.js';
 import * as reportsView from './reports.js';
 
 export async function mount(root, ctx) {
-  const tab = ctx.query.get('tab') || (ctx.query.has('type') ? 'events' : 'active');
+  // A type or a node filter is an event-feed filter (the node page's Timeline
+  // link is #/incidents?nodeId=…), so either one opens the Events tab.
+  const tab = ctx.query.get('tab') || (ctx.query.has('type') || ctx.query.has('nodeId') ? 'events' : 'active');
   const tabs = h('nav', { class: 'tabs', 'aria-label': 'Incident sections' },
     ...[['active', 'Incidents'], ['events', 'Events'], ['reports', 'Reports']].map(([id, name]) => h('a', { href: `#/incidents?tab=${id}`, class: tab === id ? 'tab active' : 'tab', 'aria-current': tab === id ? 'page' : null }, name)));
   const body = h('div', { class: 'stack' }); root.append(tabs, body);
@@ -53,9 +55,12 @@ export async function mount(root, ctx) {
         ctx.me?.canWrite ? field({ label: 'Note', input: note }) : null);
       const action = (name, label) => h('button', { type: 'button', class: 'btn', onclick: async (ev) => {
         if (name === 'note' && !note.value.trim()) { note.focus(); return; }
-        ev.currentTarget.disabled = true;
+        // currentTarget is only set while the event is being dispatched, so
+        // after the await it is null: the button is held on to here.
+        const btn = ev.currentTarget;
+        btn.disabled = true;
         try { await api.post(`/api/incidents/${id}/${name}`, { note: note.value.trim() }); modal.close(); await load(); toast('Incident updated', { kind: 'success' }); }
-        catch (e) { ev.currentTarget.disabled = false; toast(e.message, { kind: 'error' }); }
+        catch (e) { btn.disabled = false; toast(e.message, { kind: 'error' }); }
       } }, label);
       const modal = openModal({ title: `${i.nodeName} — incident`, body: contents, footer: ctx.me?.canWrite ? [i.state === 'open' ? action('acknowledge', 'Acknowledge') : null, i.state !== 'resolved' ? action('resolve', 'Resolve') : null, action('note', 'Add note')] : [] });
     } catch (e) { toast(e.message, { kind: 'error' }); }

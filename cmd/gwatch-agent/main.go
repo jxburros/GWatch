@@ -51,6 +51,7 @@ import (
 	"github.com/jxburros/GWatch/internal/serviceinstall"
 	"github.com/jxburros/GWatch/internal/svc"
 	"github.com/jxburros/GWatch/internal/sysmetrics"
+	"github.com/jxburros/GWatch/internal/update"
 )
 
 // version is set at build time with -ldflags "-X main.version=1.2.3".
@@ -213,11 +214,10 @@ does not replace itself, whatever the settings above say. To update it,
 }
 
 func main() {
-	args := os.Args[1:]
-	cmd := "run"
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		cmd = args[0]
-		args = args[1:]
+	cmd, args := splitCommand(os.Args[1:])
+	if !knownCommands[cmd] {
+		fmt.Fprintf(os.Stderr, "unknown command %q; `gwatch-agent help` lists them\n", cmd)
+		os.Exit(2)
 	}
 	if cmd == "run" || cmd == "serve" {
 		args = keepTokenOffCommandLine(cmd, args)
@@ -310,10 +310,10 @@ func main() {
 	}
 
 	switch cmd {
-	case "version", "-v", "--version":
+	case "version":
 		fmt.Println(versionLine())
 		return
-	case "help", "-h", "--help":
+	case "help":
 		usage()
 		return
 	case "config":
@@ -346,6 +346,14 @@ func main() {
 	// A configuration file that cannot be read is not something to guess
 	// around. Running on defaults would report a machine to the wrong place, or
 	// under the wrong name, without anyone knowing the file was ignored.
+	// Removing, stopping or asking after the service reads no setting, and a
+	// broken file must not stand between someone and uninstalling the agent.
+	if len(problems) > 0 && serviceOnlyCommand(cmd) {
+		for _, p := range problems {
+			fmt.Fprintln(os.Stderr, "warning:", p)
+		}
+		problems = nil
+	}
 	if len(problems) > 0 {
 		for _, p := range problems {
 			fmt.Fprintln(os.Stderr, "error:", p)
@@ -394,6 +402,18 @@ func main() {
 			fatal(err)
 		}
 		return
+	}
+
+	// A second install is refused, and it has to be refused before it pairs
+	// (spending the code on a second registration in GWatch), rewrites the
+	// file, or copies this binary over the one the running service uses. The
+	// service is asked after as "run", which describes it without the copy.
+	if cmd == "install" {
+		if s, err := agentService(cfg, "run"); err == nil {
+			if _, serr := s.Status(); serr == nil {
+				fatal(alreadyInstalledError(cfg))
+			}
+		}
 	}
 
 	// install --code does the pairing first, so that everything after this
@@ -479,6 +499,51 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+}
+
+// alreadyInstalledError is what a second install says: what to do instead,
+// since the settings it was given were not saved.
+func alreadyInstalledError(cfg config) error {
+	return fmt.Errorf("the %s service is already installed, and nothing was changed; to change a setting, edit %s and run `gwatch-agent restart`; to pair again, run `gwatch-agent pair` and then restart; or run `gwatch-agent uninstall` first", serviceName, cfg.configPathOrDefault())
+}
+
+// knownCommands is every word main understands as a command. Anything else is
+// refused up front, rather than being taken for a reporting command and told
+// that it needs a token.
+var knownCommands = map[string]bool{
+	"run": true, "serve": true, "once": true, "print": true, "pair": true, "ui": true,
+	"probe": true, "tray": true, "config": true, "install": true, "uninstall": true,
+	"start": true, "stop": true, "restart": true, "status": true, "update": true,
+	"rollback": true, "version": true, "help": true,
+}
+
+// splitCommand separates the command from its flags. No command means run;
+// --version and --help (in any of the spellings people try) are the commands
+// of those names, since the flag parser knows neither.
+func splitCommand(args []string) (string, []string) {
+	if len(args) == 0 {
+		return "run", args
+	}
+	switch args[0] {
+	case "-v", "-version", "--version":
+		return "version", args[1:]
+	case "-h", "-help", "--help":
+		return "help", args[1:]
+	}
+	if strings.HasPrefix(args[0], "-") {
+		return "run", args
+	}
+	return args[0], args[1:]
+}
+
+// serviceOnlyCommand reports a command that only acts on the registered
+// service and reads none of the settings.
+func serviceOnlyCommand(cmd string) bool {
+	switch cmd {
+	case "uninstall", "status", "start", "stop", "restart":
+		return true
+	}
+	return false
 }
 
 // dropServerBoundTrust forgets the file's insecure and certPin when the agent
@@ -618,8 +683,7 @@ func userAgent() string {
 // validate reports a configuration the agent cannot run with, in the words
 // someone setting it up would use.
 func (c config) validate(cmd string) error {
-	switch cmd {
-	case "uninstall", "status", "start", "stop", "restart":
+	if serviceOnlyCommand(cmd) {
 		return nil
 	}
 	if c.token == "" {
@@ -795,8 +859,20 @@ func (p *program) run(ctx context.Context) {
 // fragile on every platform in a different way. Reporting is stopped first, so
 // nothing is half-sent, and the exit status is non-zero because a Windows
 // service that exits cleanly is left stopped (see exitUpdated).
+//
+// The exception is a machine whose service manager starts the agent once and
+// never again (a System V init script): exiting there would leave it stopped
+// until the next boot. There the new program replaces this process in place
+// instead, keeping its process ID, which is what the script's pid file names.
 func (p *program) restartForUpdate() {
 	_ = p.Stop(nil)
+	if !svc.RestartsOnExit() {
+		if exe, err := update.Executable(); err == nil {
+			log.Printf("restarting into the newly installed agent in place (nothing on this machine starts the agent again when it exits)")
+			err = reexec(exe, os.Args, os.Environ())
+			log.Printf("could not restart in place (%v); start the agent again to run the new version", err)
+		}
+	}
 	log.Printf("restarting into the newly installed agent")
 	os.Exit(exitUpdated)
 }
@@ -814,6 +890,12 @@ func (p *program) report(ctx context.Context) {
 	queue := openReadingQueue(p.cfg, queueFile())
 	// Whatever is still held when the agent stops is on disk for the next run.
 	defer queue.sync()
+	// The collector's sender and the check-in run beside this loop. Stopping
+	// waits for them too: the sender writes the results it holds to disk as
+	// it leaves, and a check-in may be saving a replacement token, and the
+	// service manager ends the process as soon as this returns.
+	var side sync.WaitGroup
+	defer side.Wait()
 	log.Printf("gwatch-agent %s reporting to %s every %s (settings: %s)", version, p.cfg.server, p.cfg.interval, p.cfg.configPathOrDefault())
 	if ov := overrides(p.cfg); len(ov) > 0 {
 		for _, o := range ov {
@@ -826,10 +908,12 @@ func (p *program) report(ctx context.Context) {
 		rt.collector = col
 		rt.mu.Unlock()
 		log.Print(describeCollector(p.cfg))
-		go col.sendLoop(ctx)
+		side.Add(1)
+		go func() { defer side.Done(); col.sendLoop(ctx) }()
 	}
 	rt.writeStatus(p.cfg, queue.len())
-	go p.checkInLoop(ctx, rt, client)
+	side.Add(1)
+	go func() { defer side.Done(); p.checkInLoop(ctx, rt, client) }()
 
 	// Taking readings and delivering them are two clocks. Readings are taken
 	// every interval, always, so that what is held through an outage is a
@@ -1296,6 +1380,7 @@ var listenRetry = 5 * time.Second
 // without opening a port.
 func (p *program) metricsHandler() http.Handler {
 	collector := newCollector(p.cfg)
+	ceiling := p.cfg.collect.Normalize()
 	want := []byte(p.cfg.token)
 	limiter := newServeLimiter()
 
@@ -1312,11 +1397,14 @@ func (p *program) metricsHandler() http.Handler {
 			http.Error(w, "a token is required", http.StatusUnauthorized)
 			return
 		}
-		metrics, err := collect(r.Context(), p.cfg, collector)
+		metrics, err := takeReading(r.Context(), p.cfg, collector)
 		if err != nil {
 			http.Error(w, "cannot read this computer's hardware", http.StatusServiceUnavailable)
 			return
 		}
+		// The machine's own limit holds here as it does for a pushed reading:
+		// what agent.json leaves out is not handed to whoever holds the token.
+		metrics = sysmetrics.Apply(metrics, ceiling, true)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(metrics)

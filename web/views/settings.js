@@ -43,12 +43,29 @@ export async function mount(root, ctx) {
   }
 
   async function loadSettings() { state.settings = await api.get('/api/settings'); return state.settings; }
+  /** Resolves to the saved document, or to null when the save was refused —
+   *  a caller that shows what was stored must not take its own edit for it. */
   async function saveSettings(btn) {
     const done = btn ? busy(btn, 'Saving…') : () => {};
-    try { state.settings = await api.put('/api/settings', state.settings); toast('Settings saved', { kind: 'success' }); }
+    let saved = null;
+    try { saved = state.settings = adoptSaved(state.settings, await api.put('/api/settings', state.settings)); toast('Settings saved', { kind: 'success' }); }
     catch (e) { toast(e.message, { kind: 'error' }); }
     done();
-    return state.settings;
+    return saved;
+  }
+
+  /** Takes the server's copy into the document in place, rather than putting
+   *  a new object in its place: the open tab's fields hold on to the objects
+   *  inside it (general, alerts.smtp, backups …), and edits written to a
+   *  replaced copy would never be sent by the next save. */
+  function adoptSaved(into, from) {
+    if (!into || typeof into !== 'object' || Array.isArray(into)) return from;
+    for (const [k, v] of Object.entries(from || {})) {
+      const cur = into[k];
+      if (v && typeof v === 'object' && !Array.isArray(v) && cur && typeof cur === 'object' && !Array.isArray(cur)) adoptSaved(cur, v);
+      else into[k] = v;
+    }
+    return into;
   }
 
   async function renderTab() {
