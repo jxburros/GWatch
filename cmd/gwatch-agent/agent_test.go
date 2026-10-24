@@ -271,6 +271,38 @@ func TestValidateExplainsWhatIsMissing(t *testing.T) {
 	}
 }
 
+// TestSplitCommand: --version and --help are commands the flag parser does not
+// know, so they must be recognised before it runs, and a word that is not a
+// command must not be taken for one that needs a token.
+func TestSplitCommand(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		cmd  string
+		rest int
+	}{
+		{nil, "run", 0},
+		{[]string{"--server", "x"}, "run", 2},
+		{[]string{"--version"}, "version", 0},
+		{[]string{"-v"}, "version", 0},
+		{[]string{"--help"}, "help", 0},
+		{[]string{"-h"}, "help", 0},
+		{[]string{"install", "--code", "X"}, "install", 2},
+	} {
+		cmd, rest := splitCommand(tc.args)
+		if cmd != tc.cmd || len(rest) != tc.rest || !knownCommands[cmd] {
+			t.Errorf("splitCommand(%q) = %q %q", tc.args, cmd, rest)
+		}
+	}
+	if knownCommands["instal"] {
+		t.Error("a misspelt command is known")
+	}
+	for _, cmd := range []string{"uninstall", "status", "stop"} {
+		if !serviceOnlyCommand(cmd) {
+			t.Errorf("%s reads settings, so a broken file would block it", cmd)
+		}
+	}
+}
+
 // TestServiceIsRegisteredWithNothingToEdit: the installed service is given no
 // settings on its command line. They are in the configuration file, so that
 // changing one is an edit and a restart, and so the token is not left in a

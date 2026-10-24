@@ -213,11 +213,10 @@ does not replace itself, whatever the settings above say. To update it,
 }
 
 func main() {
-	args := os.Args[1:]
-	cmd := "run"
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		cmd = args[0]
-		args = args[1:]
+	cmd, args := splitCommand(os.Args[1:])
+	if !knownCommands[cmd] {
+		fmt.Fprintf(os.Stderr, "unknown command %q; `gwatch-agent help` lists them\n", cmd)
+		os.Exit(2)
 	}
 	if cmd == "run" || cmd == "serve" {
 		args = keepTokenOffCommandLine(cmd, args)
@@ -310,10 +309,10 @@ func main() {
 	}
 
 	switch cmd {
-	case "version", "-v", "--version":
+	case "version":
 		fmt.Println(versionLine())
 		return
-	case "help", "-h", "--help":
+	case "help":
 		usage()
 		return
 	case "config":
@@ -346,6 +345,14 @@ func main() {
 	// A configuration file that cannot be read is not something to guess
 	// around. Running on defaults would report a machine to the wrong place, or
 	// under the wrong name, without anyone knowing the file was ignored.
+	// Removing, stopping or asking after the service reads no setting, and a
+	// broken file must not stand between someone and uninstalling the agent.
+	if len(problems) > 0 && serviceOnlyCommand(cmd) {
+		for _, p := range problems {
+			fmt.Fprintln(os.Stderr, "warning:", p)
+		}
+		problems = nil
+	}
 	if len(problems) > 0 {
 		for _, p := range problems {
 			fmt.Fprintln(os.Stderr, "error:", p)
@@ -479,6 +486,45 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+}
+
+// knownCommands is every word main understands as a command. Anything else is
+// refused up front, rather than being taken for a reporting command and told
+// that it needs a token.
+var knownCommands = map[string]bool{
+	"run": true, "serve": true, "once": true, "print": true, "pair": true, "ui": true,
+	"probe": true, "tray": true, "config": true, "install": true, "uninstall": true,
+	"start": true, "stop": true, "restart": true, "status": true, "update": true,
+	"rollback": true, "version": true, "help": true,
+}
+
+// splitCommand separates the command from its flags. No command means run;
+// --version and --help (in any of the spellings people try) are the commands
+// of those names, since the flag parser knows neither.
+func splitCommand(args []string) (string, []string) {
+	if len(args) == 0 {
+		return "run", args
+	}
+	switch args[0] {
+	case "-v", "-version", "--version":
+		return "version", args[1:]
+	case "-h", "-help", "--help":
+		return "help", args[1:]
+	}
+	if strings.HasPrefix(args[0], "-") {
+		return "run", args
+	}
+	return args[0], args[1:]
+}
+
+// serviceOnlyCommand reports a command that only acts on the registered
+// service and reads none of the settings.
+func serviceOnlyCommand(cmd string) bool {
+	switch cmd {
+	case "uninstall", "status", "start", "stop", "restart":
+		return true
+	}
+	return false
 }
 
 // dropServerBoundTrust forgets the file's insecure and certPin when the agent
@@ -618,8 +664,7 @@ func userAgent() string {
 // validate reports a configuration the agent cannot run with, in the words
 // someone setting it up would use.
 func (c config) validate(cmd string) error {
-	switch cmd {
-	case "uninstall", "status", "start", "stop", "restart":
+	if serviceOnlyCommand(cmd) {
 		return nil
 	}
 	if c.token == "" {

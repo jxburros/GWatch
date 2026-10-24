@@ -416,7 +416,9 @@ the answer is to reinstall once, and `config show` says so.
 **A file it cannot read stops the agent** (exit 78, which the packaged unit does
 not restart on) rather than running on defaults: reporting a machine under the
 wrong name to the wrong place without anyone knowing the file was ignored is
-worse than not reporting. An unknown key is a warning, not a refusal — a typo is
+worse than not reporting. The service commands that read no setting
+(`uninstall`, `stop`, `start`, `restart`, `status`) only warn about it, so a
+broken file never stands between someone and removing the agent. An unknown key is a warning, not a refusal — a typo is
 worth a line in the log, not a dead agent — and `config validate` fails on it.
 
 **JSON, not XML.** The agent already wrote JSON, the standard library reads it,
