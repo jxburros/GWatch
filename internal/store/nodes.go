@@ -810,6 +810,10 @@ func (s *Store) InsertEvent(ctx context.Context, e model.Event) (model.Event, er
 	return e, nil
 }
 
+// likeEscaper makes a string match itself in a LIKE pattern written with
+// ESCAPE '!'.
+var likeEscaper = strings.NewReplacer("!", "!!", "%", "!%", "_", "!_")
+
 // EventFilter narrows ListEvents.
 type EventFilter struct {
 	Limit    int
@@ -856,8 +860,12 @@ func (s *Store) ListEvents(ctx context.Context, f EventFilter) ([]model.Event, e
 		args = append(args, f.Until.UnixMilli())
 	}
 	if q := strings.TrimSpace(f.Query); q != "" {
-		like := "%" + strings.ToLower(q) + "%"
-		where = append(where, "(lower(title) LIKE ? OR lower(detail) LIKE ? OR lower(node_name) LIKE ? OR lower(check_name) LIKE ? OR lower(type) LIKE ?)")
+		// The search is a substring, so LIKE's wildcards in it are taken
+		// literally. The escape character is named explicitly: PostgreSQL
+		// and MySQL would otherwise treat a backslash as one (and
+		// PostgreSQL refuses a pattern that ends in one), SQLite would not.
+		like := "%" + likeEscaper.Replace(strings.ToLower(q)) + "%"
+		where = append(where, "(lower(title) LIKE ? ESCAPE '!' OR lower(detail) LIKE ? ESCAPE '!' OR lower(node_name) LIKE ? ESCAPE '!' OR lower(check_name) LIKE ? ESCAPE '!' OR lower(type) LIKE ? ESCAPE '!')")
 		args = append(args, like, like, like, like, like)
 	}
 	q := "SELECT " + eventCols + " FROM events"

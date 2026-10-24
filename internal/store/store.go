@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jxburros/GWatch/internal/permissions"
 	"github.com/jxburros/GWatch/internal/secrets"
 )
 
@@ -648,9 +649,17 @@ func copyFile(src, dst string) error {
 	}
 	defer in.Close()
 	tmp := dst + ".tmp"
-	out, err := os.Create(tmp)
+	// The copy holds everything the database does (password and token
+	// digests, sealed secrets), so it gets the database file's owner-only
+	// permissions rather than whatever the umask leaves (0644, typically).
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", tmp, err)
+	}
+	if err := permissions.EnsurePrivateFile(tmp); err != nil {
+		out.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("protect %s: %w", tmp, err)
 	}
 	if _, err := io.Copy(out, in); err != nil {
 		out.Close()
