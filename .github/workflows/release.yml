@@ -47,7 +47,7 @@ jobs:
         go-version: 1.26.x
         check-latest: true
         cache: true
-    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
       with:
         node-version: '22'
     - name: gofmt, go vet, go mod tidy, go mod verify
@@ -194,7 +194,7 @@ jobs:
         go-version: 1.26.x
         check-latest: true
         cache: true
-    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
       with:
         node-version: '22'
         cache: npm
@@ -1142,7 +1142,7 @@ jobs:
         ref: d7f42f9910c075ef34915fa2b95cf28dd2be534a
         path: .toolkit
         persist-credentials: false
-    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
       with:
         node-version: 24
     - name: Stage the complete configured release inventory
@@ -1195,7 +1195,7 @@ jobs:
         ref: d7f42f9910c075ef34915fa2b95cf28dd2be534a
         path: .toolkit
         persist-credentials: false
-    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
       with:
         node-version: 24
     - name: Stage the complete configured release inventory
