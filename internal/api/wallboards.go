@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -97,6 +98,12 @@ func (s *Server) handleSaveWallboard(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.fail(w, err)
 		return
+	}
+	// The saved board carries the stored share settings, token and all. A
+	// read-write API key may lay out a board that is already projected, but
+	// the address is shown only to an administrator, the same as on a read.
+	if !auth.FromContext(r.Context()).IsAdmin() {
+		saved.Share = saved.Share.Redact()
 	}
 	writeJSON(w, http.StatusOK, saved)
 }
@@ -252,12 +259,19 @@ func (s *Server) handleWallboardView(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	anonymous := !auth.FromContext(ctx).Authenticated()
 	board, err := s.Store.GetWallboard(ctx, id)
 	if err != nil {
+		if anonymous && errors.Is(err, store.ErrNotFound) {
+			// Out here a board that does not exist gets the same answer as
+			// one that is not shared, or else ids could be probed for.
+			writeError(w, http.StatusUnauthorized, "this wallboard is not available at this address")
+			return
+		}
 		s.fail(w, err)
 		return
 	}
-	if !auth.FromContext(ctx).Authenticated() {
+	if anonymous {
 		token := r.URL.Query().Get("token")
 		if !board.Share.Enabled || board.Share.Token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(board.Share.Token)) != 1 {
 			// Whether the board exists, is not shared, or was asked for with

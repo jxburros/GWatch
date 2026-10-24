@@ -200,8 +200,17 @@ func (s *Server) hostSummaries(r *http.Request) ([]model.HostSummary, error) {
 	}
 	out = append(out, local)
 
+	// An agent's inventory is every service and program on that machine. The
+	// same list for this computer is administrator-only and never an API key's
+	// (handleLocalWatchable), and only the collection picker, which reads
+	// /api/agents, needs it; the hardware list, open to every viewer and every
+	// read-only key, leaves it out for anyone who is not an administrator.
+	admin := auth.FromContext(ctx).IsAdmin()
 	for _, a := range agents {
 		agent := a
+		if !admin {
+			agent.Inventory = nil
+		}
 		summary := model.HostSummary{
 			Key:    agent.HostKey(),
 			Name:   agent.Name,
@@ -365,9 +374,12 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Name    string `json:"name"`
-		NodeID  *int64 `json:"nodeId"`
-		Enabled *bool  `json:"enabled"`
+		Name string `json:"name"`
+		// NodeID stays raw so that a body that leaves it out (one that only
+		// switches the machine off, say) keeps the machine on its node, while
+		// an explicit null still detaches it.
+		NodeID  json.RawMessage `json:"nodeId"`
+		Enabled *bool           `json:"enabled"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeDecodeError(w, err)
@@ -386,13 +398,21 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	if body.Enabled != nil {
 		enabled = *body.Enabled
 	}
-	if body.NodeID != nil {
-		if _, err := s.Store.GetNode(ctx, *body.NodeID); err != nil {
-			writeError(w, http.StatusBadRequest, "the node this machine belongs to does not exist")
+	nodeID := current.NodeID
+	if len(body.NodeID) > 0 {
+		nodeID = nil
+		if err := json.Unmarshal(body.NodeID, &nodeID); err != nil {
+			writeError(w, http.StatusBadRequest, "nodeId must be a node id or null")
 			return
 		}
+		if nodeID != nil {
+			if _, err := s.Store.GetNode(ctx, *nodeID); err != nil {
+				writeError(w, http.StatusBadRequest, "the node this machine belongs to does not exist")
+				return
+			}
+		}
 	}
-	updated, err := s.Store.UpdateAgent(ctx, id, name, body.NodeID, enabled)
+	updated, err := s.Store.UpdateAgent(ctx, id, name, nodeID, enabled)
 	if err != nil {
 		s.fail(w, err)
 		return

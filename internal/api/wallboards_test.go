@@ -104,6 +104,13 @@ func TestWallboardProjection(t *testing.T) {
 	if status, _ := onTheNetwork(t, ts, view); status != http.StatusUnauthorized {
 		t.Fatalf("an unshared board must not be readable anonymously, got %d", status)
 	}
+	// A board that does not exist looks the same from out here as one that is
+	// not shared, so ids cannot be probed for.
+	unshared, _ := onTheNetwork(t, ts, view)
+	missing, _ := onTheNetwork(t, ts, "/api/wallboards/"+itoa(b.ID+1000)+"/view?token=x")
+	if missing != unshared {
+		t.Fatalf("a missing board answered %d, an unshared one %d", missing, unshared)
+	}
 
 	var shared model.Wallboard
 	if code := call(t, ts, "POST", "/api/wallboards/"+itoa(b.ID)+"/share", map[string]any{"enabled": true}, &shared); code != 200 {
@@ -270,5 +277,33 @@ func TestSharedNodesBoardCarriesOnlyItsNodes(t *testing.T) {
 	}
 	if doc.Health == nil || !doc.Health.ServiceRunning {
 		t.Fatalf("the footer needs the service state: %s", body)
+	}
+}
+
+// A read-write key may lay out a board that an administrator has projected,
+// but the answer to its save must not hand it the board's address: that is
+// shown to administrators only, on a save as on a read.
+func TestSavingAProjectedBoardThroughAKeyKeepsTheTokenHidden(t *testing.T) {
+	ts, srv := newTestServer(t)
+	allowTestRemote(srv)
+	admin := bootstrapAdmin(t, ts, "root", "correct horse battery")
+	var b model.Wallboard
+	as(t, ts, creds{Cookie: admin}, "POST", "/api/wallboards", map[string]any{"name": "Hall"}, &b)
+	var shared model.Wallboard
+	if code, body, _ := as(t, ts, creds{Cookie: admin}, "POST", "/api/wallboards/"+itoa(b.ID)+"/share", map[string]any{"enabled": true}, &shared); code != 200 || shared.Share.Token == "" {
+		t.Fatalf("share: %d %s", code, body)
+	}
+	key := mintKey(t, ts, admin, "layout", "readwrite")
+	code, body, _ := as(t, ts, creds{APIKey: key, Remote: "192.168.1.50:9999"}, "PUT", "/api/wallboards/"+itoa(b.ID), map[string]any{"name": "Hall, rearranged"}, nil)
+	if code != 200 {
+		t.Fatalf("save through a key: %d %s", code, body)
+	}
+	if strings.Contains(body, shared.Share.Token) {
+		t.Fatalf("the save answered a key with the share token: %s", body)
+	}
+	// The administrator still gets it back.
+	_, body, _ = as(t, ts, creds{Cookie: admin}, "PUT", "/api/wallboards/"+itoa(b.ID), map[string]any{"name": "Hall"}, nil)
+	if !strings.Contains(body, shared.Share.Token) {
+		t.Fatalf("an administrator's save should still show the address: %s", body)
 	}
 }

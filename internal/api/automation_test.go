@@ -566,3 +566,52 @@ func TestHookTokenAttemptsAreRateLimited(t *testing.T) {
 		t.Fatalf("an unknown slug on a full budget should be a 404, got %d", status)
 	}
 }
+
+// A call that gets in hands back only what it was charged. It must not wipe
+// the failures before it: otherwise anyone who can call one endpoint — an
+// endpoint that allows calls without a token is open to all — could clear
+// their budget between guesses at another endpoint's token and guess for ever.
+func TestHookSuccessDoesNotClearEarlierFailures(t *testing.T) {
+	ts, _ := newTestServer(t)
+	action := map[string]any{"type": "http", "url": "http://127.0.0.1:1/never"}
+	if code := call(t, ts, "POST", "/api/endpoints", map[string]any{
+		"name": "Open", "slug": "open", "enabled": true, "allowNoToken": true, "action": action,
+	}, nil); code != 200 {
+		t.Fatalf("create open endpoint: %d", code)
+	}
+	if code := call(t, ts, "POST", "/api/endpoints", map[string]any{
+		"name": "Reboot", "slug": "reboot", "enabled": true, "token": "the-real-token", "action": action,
+	}, nil); code != 200 {
+		t.Fatalf("create protected endpoint: %d", code)
+	}
+	hook := func(path, token string) int {
+		t.Helper()
+		req, err := http.NewRequest("POST", ts.URL+path, strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if token != "" {
+			req.Header.Set("X-GWatch-Token", token)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	for i := 0; i < failureLimit*3; i++ {
+		// A good call to the open endpoint between every guess.
+		if status := hook("/hook/open", ""); status != http.StatusBadGateway && status != http.StatusTooManyRequests {
+			t.Fatalf("open endpoint: %d", status)
+		}
+		switch status := hook("/hook/reboot", fmt.Sprintf("guess-%d", i)); status {
+		case http.StatusTooManyRequests:
+			return
+		case http.StatusUnauthorized:
+		default:
+			t.Fatalf("guess %d: %d", i, status)
+		}
+	}
+	t.Fatalf("interleaving good calls let %d guesses through; the budget is %d", failureLimit*3, failureLimit)
+}

@@ -67,6 +67,18 @@ func (s *Server) handleIncidentAction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "a note must contain 1–8000 bytes")
 		return
 	}
+	// The store refuses to acknowledge a resolved incident with a plain error,
+	// which would come out as a 500; it is a conflict with the incident's
+	// state, so it is answered as one (and a missing incident as a 404).
+	cur, err := s.Store.GetIncident(r.Context(), id)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if action == "acknowledge" && cur.State == "resolved" {
+		writeError(w, http.StatusConflict, "this incident is already resolved")
+		return
+	}
 	v, err := s.Store.UpdateIncident(r.Context(), id, action, auth.FromContext(r.Context()).Label(), body.Note)
 	if err != nil {
 		s.fail(w, err)

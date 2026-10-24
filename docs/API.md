@@ -159,8 +159,10 @@ which a correct password does not clear. They are refused before the password is
 and at most two run at once; when both are busy the answer is `429` with `Retry-After: 1`.
 All of these answer `429` with `Retry-After` in seconds. The client IP is the connecting
 address, or, when that address is listed in `--trusted-proxies`, the client the proxy
-names in `X-Forwarded-For` / `X-Real-IP` (see [REMOTE-ACCESS.md](REMOTE-ACCESS.md#rate-limiting)). A `/hook/` call that presents the right token gives its budget
-back, so an endpoint called on a schedule is never throttled by its own traffic; an
+names in `X-Forwarded-For` / `X-Real-IP` (see [REMOTE-ACCESS.md](REMOTE-ACCESS.md#rate-limiting)). A `/hook/` call that presents the right token (or reaches an
+endpoint that allows calls without one) is given back the attempt it was charged, so an
+endpoint called on a schedule is never throttled by its own traffic — but earlier failures
+from the same client still count; an
 unknown slug still answers `404`, but it is charged for, so slugs cannot be enumerated.
 
 **Response headers.** Every response, the static UI included, carries:
@@ -735,6 +737,8 @@ Every other check type leaves `metrics` absent.
   reading in `metrics`, a `status` and a `stale` flag. That status means only "are
   readings still arriving" — whether a figure is *too high* is a hardware check's
   business, because only a check knows the thresholds somebody chose.
+  A registered machine's `agent.inventory` (every service and program on it) is left
+  out for anyone but an administrator; `GET /api/agents` carries it.
 - `GET /api/hosts/{key}` → one `HostSummary`. The key is `local`, `agent:<id>` or
   `url:<check id>`.
 - `GET /api/hosts/local/watchable` → `{ "services": [InventoryItem], "processes": [InventoryItem], "problems": [string] }`.
@@ -846,7 +850,8 @@ routes — an administrator in the browser, never an API key:
 - `POST /api/agents` body `{ "name": "Living room NAS", "nodeId": null|id }` →
   `{ "token": "gwa_…", "agent": Agent }`. **The token is returned exactly once.** Only its
   sha256 digest is stored, so it cannot be shown again.
-- `PUT /api/agents/{id}` body `{ "name": …, "nodeId": …, "enabled": bool }` → `Agent`.
+- `PUT /api/agents/{id}` body `{ "name": …, "nodeId": …, "enabled": bool }` → `Agent`. A field left out
+  keeps its value; `"nodeId": null` detaches the machine from its node.
 - `DELETE /api/agents/{id}` → 204. Revokes the token and keeps the machine's past
   readings. `?purge=1` deletes the registration (token, how it was enrolled); the node, and the history its hardware check recorded, stay with the node.
 - `POST /api/agents/{id}/token` → `{ "agent": Agent, "token": "gwa_…", "pending": "gwa_…"|"", "viewable": bool }`.

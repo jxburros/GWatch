@@ -439,3 +439,72 @@ func TestPairingToAnExistingNodeAddsItsHardwareCheck(t *testing.T) {
 		t.Errorf("each machine gets its own hardware check, got %d", n)
 	}
 }
+
+// An agent's inventory names every service and program on its machine. The
+// same list for this computer is for administrators only, so the hardware list
+// that every viewer and every read-only key may read must not carry it either.
+func TestHostListHidesAgentInventoryFromNonAdministrators(t *testing.T) {
+	ts, srv := newTestServer(t)
+	allowTestRemote(srv)
+	a := registerAgent(t, ts, "nas")
+	if code, _ := checkIn(t, ts, a.Token, model.AgentCheckIn{Inventory: &model.Inventory{
+		Services: []model.InventoryItem{{Name: "secret-backup-daemon"}},
+	}}); code != 200 {
+		t.Fatalf("check-in: %d", code)
+	}
+
+	// The administrator on this computer still sees it.
+	if _, body, _ := as(t, ts, creds{}, "GET", "/api/hosts", nil, nil); !strings.Contains(body, "secret-backup-daemon") {
+		t.Fatalf("an administrator should still see the inventory: %s", body)
+	}
+
+	admin := bootstrapAdmin(t, ts, "root", "correct horse battery")
+	key := mintKey(t, ts, admin, "ha", "read")
+	if code, body, _ := as(t, ts, creds{Cookie: admin}, "POST", "/api/users", map[string]string{"username": "pat", "password": "viewer password 1", "role": "viewer"}, nil); code != 201 {
+		t.Fatalf("create viewer: %d %s", code, body)
+	}
+	viewer := login(t, ts, "pat", "viewer password 1")
+	for name, c := range map[string]creds{
+		"read key": {APIKey: key, Remote: "192.168.1.50:9999"},
+		"viewer":   {Cookie: viewer},
+	} {
+		for _, path := range []string{"/api/hosts", "/api/hosts/agent:" + itoa(a.Agent.ID)} {
+			code, body, _ := as(t, ts, c, "GET", path, nil, nil)
+			if code != 200 {
+				t.Fatalf("%s %s: %d %s", name, path, code, body)
+			}
+			if strings.Contains(body, "secret-backup-daemon") || strings.Contains(body, `"inventory"`) {
+				t.Errorf("%s %s: the agent's inventory leaked: %s", name, path, body)
+			}
+		}
+	}
+}
+
+// PUT /api/agents/{id} changes what its body names. Switching a machine off
+// must not also take it off its node, which is what a missing nodeId used to
+// do; an explicit null still detaches it.
+func TestUpdateAgentKeepsTheNodeUnlessAskedToChangeIt(t *testing.T) {
+	ts, _ := newTestServer(t)
+	a := registerAgent(t, ts, "nas")
+	if a.Agent.NodeID == nil {
+		t.Fatal("a registered machine should have a node")
+	}
+	node := *a.Agent.NodeID
+
+	var got model.Agent
+	if code := call(t, ts, "PUT", "/api/agents/"+itoa(a.Agent.ID), map[string]any{"enabled": false}, &got); code != 200 {
+		t.Fatalf("disable: %d", code)
+	}
+	if got.Enabled || got.NodeID == nil || *got.NodeID != node || got.Name != "nas" {
+		t.Fatalf("switching the machine off changed more than that: %+v", got)
+	}
+	if code := call(t, ts, "PUT", "/api/agents/"+itoa(a.Agent.ID), map[string]any{"nodeId": nil}, &got); code != 200 {
+		t.Fatalf("detach: %d", code)
+	}
+	if got.NodeID != nil || got.Enabled {
+		t.Fatalf("an explicit null should detach the machine and nothing else: %+v", got)
+	}
+	if code := call(t, ts, "PUT", "/api/agents/"+itoa(a.Agent.ID), map[string]any{"nodeId": node + 1000}, nil); code != 400 {
+		t.Fatalf("a node that does not exist should be refused, got %d", code)
+	}
+}
