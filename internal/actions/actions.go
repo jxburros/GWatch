@@ -78,6 +78,10 @@ func hasPlaceholder(s string) bool {
 // spliced into a cmd script (see expandScriptCode).
 var cmdUnsafe = strings.NewReplacer("&", "", "|", "", "<", "", ">", "", "^", "", "%", "", "!", "", "\"", "", "\r", "", "\n", " ")
 
+// pythonUnsafe are the characters strconv.Quote leaves bare that a Python
+// literal the author wrapped the placeholder in would act on.
+var pythonUnsafe = strings.NewReplacer("'", `\x27`, "{", `\x7b`, "}", `\x7d`)
+
 // expandScriptCode substitutes {{placeholders}} inside the code of a script
 // action. Unlike Expand it never splices the raw value into the code: a value
 // can be anything an HTTP caller or a monitored device sent, so it is replaced
@@ -116,7 +120,10 @@ func expandScriptCode(code string, vars Vars, interp string) string {
 		case "cmd":
 			return cmdUnsafe.Replace(val)
 		case "python":
-			return strconv.Quote(val)
+			// Quoting alone does not protect a single-quoted literal (' is
+			// not escaped by strconv.Quote) or an f-string ({ } would be
+			// evaluated): those become escapes Python reads as plain text.
+			return pythonUnsafe.Replace(strconv.Quote(val))
 		case "node":
 			b, err := json.Marshal(val)
 			if err != nil {
