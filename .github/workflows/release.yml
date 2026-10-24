@@ -550,6 +550,8 @@ jobs:
         fetch-depth: 0
         ref: ${{ needs.plan.outputs.sha }}
     - name: Tagged commit is reviewed on main
+      env:
+        RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
       run: git merge-base --is-ancestor "$RELEASE_SOURCE_SHA" origin/main
     - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
       with:
@@ -769,6 +771,8 @@ jobs:
         fetch-depth: 0
         ref: ${{ needs.plan.outputs.sha }}
     - name: Tagged commit is reviewed on main
+      env:
+        RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
       run: git merge-base --is-ancestor "$RELEASE_SOURCE_SHA" origin/main
     - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
       with:
