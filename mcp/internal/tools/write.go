@@ -53,6 +53,54 @@ func (c checkInput) toAPI() map[string]any {
 	return out
 }
 
+// mergeInto renders the check as an update of prev, the check with the same
+// id as GWatch sent it: the fields the caller gave replace prev's, and every
+// other one — enabled, interval, retries, the per-check alert override, its
+// place in the list — keeps the value it has, instead of being reset to
+// toAPI's defaults or dropped by a PUT that replaces the whole check list.
+func (c checkInput) mergeInto(prev map[string]any) map[string]any {
+	out := make(map[string]any, len(prev)+4)
+	for k, v := range prev {
+		out[k] = v
+	}
+	out["id"] = c.ID
+	out["type"] = c.Type
+	out["name"] = c.Name
+	if c.Enabled != nil {
+		out["enabled"] = *c.Enabled
+	}
+	if c.IntervalSeconds > 0 {
+		out["intervalSeconds"] = c.IntervalSeconds
+	}
+	if c.TimeoutSeconds > 0 {
+		out["timeoutSeconds"] = c.TimeoutSeconds
+	}
+	if c.Retries > 0 {
+		out["retries"] = c.Retries
+	}
+	if c.FailureThreshold > 0 {
+		out["failureThreshold"] = c.FailureThreshold
+	}
+	if c.Config != nil {
+		out["config"] = c.Config
+	}
+	return out
+}
+
+// checksByID indexes the checks of a node as GWatch sent it.
+func checksByID(node map[string]any) map[int64]map[string]any {
+	byID := map[int64]map[string]any{}
+	list, _ := node["checks"].([]any)
+	for _, item := range list {
+		if m, ok := item.(map[string]any); ok {
+			if id, ok := m["id"].(float64); ok && id > 0 {
+				byID[int64(id)] = m
+			}
+		}
+	}
+	return byID
+}
+
 func orEmpty(m map[string]any) map[string]any {
 	if m == nil {
 		return map[string]any{}
@@ -85,7 +133,7 @@ func checkSchema(withID bool) map[string]any {
 	}
 	required := []string{"type", "name"}
 	if withID {
-		props["id"] = integer("The id of an existing check to update. Omit to create a new one.")
+		props["id"] = integer("The id of an existing check to update; the fields left out keep their current values. Omit to create a new one.")
 	}
 	return object(props, required...)
 }
@@ -320,10 +368,15 @@ func (s *Set) updateNode(ctx context.Context, args json.RawMessage) (Result, err
 		changed = append(changed, "enabled")
 	}
 	if in.Checks != nil {
+		existing := checksByID(node)
 		checks := make([]map[string]any, 0, len(in.Checks))
 		for i, c := range in.Checks {
 			if strings.TrimSpace(c.Type) == "" || strings.TrimSpace(c.Name) == "" {
 				return Result{}, usage("checks[%d] needs both a type and a name", i)
+			}
+			if prev, ok := existing[c.ID]; ok && c.ID > 0 {
+				checks = append(checks, c.mergeInto(prev))
+				continue
 			}
 			checks = append(checks, c.toAPI())
 		}
