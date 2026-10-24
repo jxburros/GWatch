@@ -297,3 +297,35 @@ test('this computer\'s services are chosen on its hardware panel', async (t) => 
   // Leave the mock as it was found.
   await fetch('/api/hosts/local/watch', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}' });
 });
+
+// A live update and a refresh (or two updates) each load the machine; the
+// older answer arriving last drew the older reading over the newer one.
+test('a hardware panel draws only its newest reading', async (t) => {
+  const { hardwarePanel } = await import('../../../web/views/machines.js');
+  const waiting = { host: [] };
+  const realFetch = window.fetch;
+  window.fetch = (url) => {
+    const u = String(url);
+    if (u.startsWith('/api/hosts/race/history')) return new Promise(() => {});
+    const kind = u.startsWith('/api/hosts/race') ? 'host' : null;
+    if (!kind) return realFetch(url);
+    return new Promise((resolve) => waiting[kind].push((body) => resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }))));
+  };
+  t.after(() => { window.fetch = realFetch; });
+  const panel = hardwarePanel('race');
+  document.body.append(panel.el);
+  t.after(() => { panel.destroy(); panel.el.remove(); });
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  await tick();
+  panel.refresh();
+  await tick();
+  assert.equal(waiting.host.length, 2, 'two readings are out at once');
+  const host = (hostname) => ({ key: 'race', source: 'agent', status: 'up', metrics: { ts: new Date().toISOString(), hostname, platform: 'linux' } });
+  waiting.host[1](host('newer-box'));
+  await tick();
+  waiting.host[0](host('older-box'));
+  await tick(); await tick();
+  assert.match(panel.el.textContent, /newer-box/);
+  assert.doesNotMatch(panel.el.textContent, /older-box/);
+
+});
