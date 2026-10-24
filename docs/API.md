@@ -607,8 +607,9 @@ admin-only; a read-write API key may call it, a read-only key gets 403.
 ```
 
 **Semantics.** The `node` patch applies to every node in `nodeIds`. The `check`
-patch applies to every check in `checkIds` **plus** every check of every node in
-`nodeIds`. `checkFilter.types` narrows that whole set, listed check ids
+patch applies to every check in `checkIds`; only when `checkIds` is absent does it
+apply to every check of every node in `nodeIds` instead (an explicit `[]` touches
+no checks). `checkFilter.types` narrows that whole set, listed check ids
 included, so what a caller selects and what it changes are the same set. Both
 patches are partial: only the fields actually present in the JSON are changed,
 so `"enabled": false` and an absent `enabled` are different requests. An
