@@ -843,7 +843,8 @@ routes — an administrator in the browser, never an API key:
 - `POST /api/agents` body `{ "name": "Living room NAS", "nodeId": null|id }` →
   `{ "token": "gwa_…", "agent": Agent }`. **The token is returned exactly once.** Only its
   sha256 digest is stored, so it cannot be shown again.
-- `PUT /api/agents/{id}` body `{ "name": …, "nodeId": …, "enabled": bool }` → `Agent`.
+- `PUT /api/agents/{id}` body `{ "name": …, "nodeId": …, "enabled": bool }` → `Agent`. A field left out
+  keeps its value; `"nodeId": null` detaches the machine from its node.
 - `DELETE /api/agents/{id}` → 204. Revokes the token and keeps the machine's past
   readings. `?purge=1` deletes the registration (token, how it was enrolled); the node, and the history its hardware check recorded, stay with the node.
 - `POST /api/agents/{id}/token` → `{ "agent": Agent, "token": "gwa_…", "pending": "gwa_…"|"", "viewable": bool }`.

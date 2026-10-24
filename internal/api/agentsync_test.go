@@ -479,3 +479,32 @@ func TestHostListHidesAgentInventoryFromNonAdministrators(t *testing.T) {
 		}
 	}
 }
+
+// PUT /api/agents/{id} changes what its body names. Switching a machine off
+// must not also take it off its node, which is what a missing nodeId used to
+// do; an explicit null still detaches it.
+func TestUpdateAgentKeepsTheNodeUnlessAskedToChangeIt(t *testing.T) {
+	ts, _ := newTestServer(t)
+	a := registerAgent(t, ts, "nas")
+	if a.Agent.NodeID == nil {
+		t.Fatal("a registered machine should have a node")
+	}
+	node := *a.Agent.NodeID
+
+	var got model.Agent
+	if code := call(t, ts, "PUT", "/api/agents/"+itoa(a.Agent.ID), map[string]any{"enabled": false}, &got); code != 200 {
+		t.Fatalf("disable: %d", code)
+	}
+	if got.Enabled || got.NodeID == nil || *got.NodeID != node || got.Name != "nas" {
+		t.Fatalf("switching the machine off changed more than that: %+v", got)
+	}
+	if code := call(t, ts, "PUT", "/api/agents/"+itoa(a.Agent.ID), map[string]any{"nodeId": nil}, &got); code != 200 {
+		t.Fatalf("detach: %d", code)
+	}
+	if got.NodeID != nil || got.Enabled {
+		t.Fatalf("an explicit null should detach the machine and nothing else: %+v", got)
+	}
+	if code := call(t, ts, "PUT", "/api/agents/"+itoa(a.Agent.ID), map[string]any{"nodeId": node + 1000}, nil); code != 400 {
+		t.Fatalf("a node that does not exist should be refused, got %d", code)
+	}
+}
