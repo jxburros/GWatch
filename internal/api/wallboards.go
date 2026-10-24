@@ -99,6 +99,12 @@ func (s *Server) handleSaveWallboard(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	// The saved board carries the stored share settings, token and all. A
+	// read-write API key may lay out a board that is already projected, but
+	// the address is shown only to an administrator, the same as on a read.
+	if !auth.FromContext(r.Context()).IsAdmin() {
+		saved.Share = saved.Share.Redact()
+	}
 	writeJSON(w, http.StatusOK, saved)
 }
 
