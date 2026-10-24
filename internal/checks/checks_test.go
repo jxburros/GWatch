@@ -924,6 +924,7 @@ func TestValidate(t *testing.T) {
 		{"timeout too large", model.Check{Type: model.CheckPing, TimeoutSeconds: 999}, "h", "timeout"},
 		{"retries too many", model.Check{Type: model.CheckPing, Retries: 50}, "h", "retries"},
 		{"ping count", model.Check{Type: model.CheckPing, Config: model.CheckConfig{PingCount: 50}}, "h", "ping count"},
+		{"ping host is an option", model.Check{Type: model.CheckPing}, "-fc100000", "invalid hostname"},
 		{"http ok", model.Check{Type: model.CheckHTTP, Config: model.CheckConfig{Target: "example.com/path"}}, "", ""},
 		{"http bad scheme", model.Check{Type: model.CheckHTTP, Config: model.CheckConfig{Target: "ftp://example.com"}}, "", "scheme"},
 		{"http bad status", model.Check{Type: model.CheckHTTP, Config: model.CheckConfig{Target: "example.com", ExpectedStatus: "abc"}}, "", "status"},
