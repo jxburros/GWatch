@@ -751,8 +751,13 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request, path, password 
 		// Checked again on the copy actually restored, which is the one that
 		// counts should the file have changed since it was read above.
 		Validate: func(c *backup.Config) error { return s.checkArchive(ctx, c, recreateAccounts) }})
-	resume()
 	var partial *backup.HistoryError
+	if err == nil || errors.As(err, &partial) {
+		// The restored checks start from their stored (emptied) states, not
+		// from what the engine held for whatever had the same id before.
+		s.Engine.DiscardStates()
+	}
+	resume()
 	if err != nil && !errors.As(err, &partial) {
 		// Refused, or failed and rolled back: the configuration is as it was.
 		var invalid *backup.InvalidError

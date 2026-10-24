@@ -124,3 +124,32 @@ func TestPauseGivesUpWithoutStayingPaused(t *testing.T) {
 		t.Fatal("still paused")
 	}
 }
+
+// A restore keeps check ids but empties their stored states; once the engine
+// discards what it held, a restored check does not inherit the old check's
+// status or active alert.
+func TestDiscardStatesForgetsTheOldChecksState(t *testing.T) {
+	e, st, _, _ := setup(t)
+	ctx := context.Background()
+	n, err := st.CreateNode(ctx, model.Node{Name: "Old", Host: "example.com", Enabled: true, Checks: []model.Check{{Type: model.CheckTCP, Name: "TCP", Enabled: true, IntervalSeconds: 60}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ReloadConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	id := n.Checks[0].ID
+	e.mu.Lock()
+	e.states[id].Status = model.StatusDown
+	e.states[id].AlertActive = true
+	e.mu.Unlock()
+
+	e.DiscardStates()
+	if err := e.ReloadConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := e.States()[id]
+	if got.AlertActive || got.Status == model.StatusDown {
+		t.Fatalf("the check kept the state the engine held before: %+v", got)
+	}
+}
