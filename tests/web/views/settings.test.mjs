@@ -220,6 +220,44 @@ test('an indicator rule without an enabled field is on in its switch, its row an
   assert.equal((await api.get('/api/settings')).indicators[0].enabled, true);
 });
 
+// A window for a group nobody is in any more could not show that group in its
+// select, read back blank, and was saved as a window for every node.
+test('saving a maintenance window keeps a group that no node is in any more', async (t) => {
+  const made = await api.post('/api/maintenance', { name: 'Old racks', nodeId: null, group: 'Retired racks', enabled: true, startAt: new Date(Date.now() + 3600e3).toISOString(), endAt: new Date(Date.now() + 7200e3).toISOString(), weekdays: [], durationMinutes: 0, notes: '' });
+  t.after(() => api.del(`/api/maintenance/${made.id}`));
+  const { root } = await mountView(settingsView, { params: { tab: 'maintenance' } }, t);
+  const row = await waitFor(() => [...root.querySelectorAll('.maint-row')].find((r) => r.textContent.includes('Old racks')));
+  [...row.querySelectorAll('button')].find((b) => b.textContent.includes('Edit')).click();
+  const dialog = document.getElementById('modals').lastElementChild;
+  [...dialog.querySelectorAll('.modal-foot button')].find((b) => b.textContent === 'Save').click();
+  await waitFor(() => [...document.querySelectorAll('.toast')].find((el) => /Window saved/.test(el.textContent)));
+  const saved = (await api.get('/api/maintenance')).find((w) => w.id === made.id);
+  assert.equal(saved.group, 'Retired racks');
+});
+
+test('a maintenance window for "a group" with no group to pick is refused, not saved for every node', async (t) => {
+  const realFetch = window.fetch;
+  const posts = [];
+  window.fetch = async (url, init) => {
+    if (String(url) === '/api/groups') return new Response(JSON.stringify({ groups: [], tags: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    if (init?.method === 'POST' && String(url) === '/api/maintenance') posts.push(JSON.parse(init.body));
+    return realFetch(url, init);
+  };
+  t.after(() => { window.fetch = realFetch; });
+  const { root } = await mountView(settingsView, { params: { tab: 'maintenance' } }, t);
+  const add = await waitFor(() => [...root.querySelectorAll('button')].find((b) => b.textContent.includes('New window')));
+  add.click();
+  const dialog = document.getElementById('modals').lastElementChild;
+  dialog.querySelector('input').value = 'Racks';
+  const scope = [...dialog.querySelectorAll('select')].find((s) => [...s.options].some((o) => o.value === 'group'));
+  scope.value = 'group';
+  scope.dispatchEvent(new window.Event('change'));
+  [...dialog.querySelectorAll('.modal-foot button')].find((b) => b.textContent === 'Create').click();
+  await waitFor(() => [...document.querySelectorAll('.toast-error')].find((el) => /group/i.test(el.textContent)));
+  assert.equal(posts.length, 0, 'nothing was sent');
+  dialog.querySelector('.modal-foot button').click();
+});
+
 // #122: Settings › Alerts lists the "also notify" channels, adds one through
 // the channel editor (which offers notification types only and tests through
 // /api/settings/test-channel), and saves it with the settings.

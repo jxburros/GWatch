@@ -42,7 +42,11 @@ export function create(shell) {
       const w = existing ? { ...existing, weekdays: [...(existing.weekdays || [])] } : { name: '', nodeId: null, group: '', enabled: true, startAt: new Date(Date.now() + 5 * 60e3).toISOString(), endAt: new Date(Date.now() + 65 * 60e3).toISOString(), weekdays: [], durationMinutes: 60, notes: '' };
       const name = textInput({ value: w.name, placeholder: 'e.g. Sunday updates, NAS reboot' });
       const scope = selectInput({ options: [{ value: 'all', label: 'All nodes' }, { value: 'group', label: 'A group' }, { value: 'node', label: 'One node' }], value: w.nodeId ? 'node' : w.group ? 'group' : 'all' });
-      const groupSel = selectInput({ options: groups.map((g) => ({ value: g.name, label: g.name })), value: w.group || groups[0]?.name || '' });
+      // The window's own group stays on offer even when no node is in it any
+      // more: otherwise the select reads back blank, which means every node.
+      const groupNames = groups.map((g) => g.name);
+      if (w.group && !groupNames.includes(w.group)) groupNames.push(w.group);
+      const groupSel = selectInput({ options: groupNames.map((g) => ({ value: g, label: g })), value: w.group || groupNames[0] || '' });
       const nodeSel = selectInput({ options: nodes.map((n) => ({ value: n.id, label: n.name })), value: w.nodeId ?? nodes[0]?.id ?? '' });
       const groupField = field({ label: 'Group', input: groupSel }); const nodeField = field({ label: 'Node', input: nodeSel });
       const syncScope = () => { groupField.hidden = scope.value !== 'group'; nodeField.hidden = scope.value !== 'node'; };
@@ -68,6 +72,10 @@ export function create(shell) {
       const m = openModal({ title: existing ? 'Edit maintenance window' : 'New maintenance window', wide: true, body: form, footer: [h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn btn-primary', type: 'button', onclick: () => submit() }, existing ? 'Save' : 'Create')] });
       async function submit() {
         if (!name.value.trim()) { name.focus(); toast('Give the window a name', { kind: 'error' }); return; }
+        // A blank group or node is how the server spells "all nodes", so a
+        // narrower scope with nothing chosen must not go out as one.
+        if (scope.value === 'group' && !groupSel.value) { toast('Choose the group this window applies to', { kind: 'error' }); return; }
+        if (scope.value === 'node' && !Number(nodeSel.value)) { toast('Choose the node this window applies to', { kind: 'error' }); return; }
         const payload = { ...w, name: name.value.trim(), nodeId: scope.value === 'node' ? Number(nodeSel.value) : null, group: scope.value === 'group' ? groupSel.value : '', notes: notes.value, enabled: enabledT.input.checked };
         if (kind.value === 'once') {
           payload.weekdays = []; payload.durationMinutes = 0; payload.startTime = ''; payload.timeZone = '';
