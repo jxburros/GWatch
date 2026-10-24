@@ -209,11 +209,11 @@ func isSocketPermissionError(err error) bool {
 }
 
 var (
-	rePingTime   = regexp.MustCompile(`(?i)\btime[=<]\s*([\d.]+)\s*ms`)
-	rePingLoss   = regexp.MustCompile(`(?i)(\d+(?:\.\d+)?)%\s*(?:packet\s+)?loss`)
-	rePingUnix   = regexp.MustCompile(`(?i)(\d+)\s+packets\s+transmitted,\s*(\d+)\s+(?:packets\s+)?received`)
-	rePingWinTx  = regexp.MustCompile(`(?i)Sent\s*=\s*(\d+)`)
-	rePingWinRx  = regexp.MustCompile(`(?i)Received\s*=\s*(\d+)`)
+	rePingTime  = regexp.MustCompile(`(?i)\btime[=<]\s*([\d.]+)\s*ms`)
+	rePingLoss  = regexp.MustCompile(`(?i)(\d+(?:\.\d+)?)%\s*(?:packet\s+)?loss`)
+	rePingUnix  = regexp.MustCompile(`(?i)(\d+)\s+packets\s+transmitted,\s*(\d+)\s+(?:packets\s+)?received`)
+	rePingWinTx = regexp.MustCompile(`(?i)Sent\s*=\s*(\d+)`)
+	rePingWinRx = regexp.MustCompile(`(?i)Received\s*=\s*(\d+)`)
 	// Windows translates ping's output into the display language ("Zeit=",
 	// "temps=", "tiempo=", "時間 ="), but every reply line still ends in a time
 	// in ms followed by TTL=, which is what this goes by.
