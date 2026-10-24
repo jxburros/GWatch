@@ -344,8 +344,8 @@ database, or Plex on 32400.
 
 ### DNS
 
-- **Record type** — *A / AAAA (addresses)* (the default, which looks up IPv4
-  A records only), *CNAME*, *MX* or *TXT*. An IPv6-only AAAA check can be saved
+- **Record type** — *A / AAAA (addresses)* (the default, which accepts IPv4 or
+  IPv6 addresses), *CNAME*, *MX* or *TXT*. An IPv6-only AAAA check can be saved
   through the API (`recordType: "AAAA"`).
 - **Expected values** — optional. Every resolved value must be in the list.
 - **DNS server** — optional `host[:port]`. Leave it blank for the system

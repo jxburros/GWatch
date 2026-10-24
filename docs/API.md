@@ -425,7 +425,7 @@ falls back to `general.latencyWarnMs` / `general.packetLossWarnPct`).
 | `json` | everything `http` takes, plus `jsonPath` (dotted, e.g. `status` or `data.items[0].name`), `jsonExpected` (empty means "the path must merely exist") and the recording fields `jsonRecord`, `jsonMetric`, `jsonUnit`, `jsonWarnAbove`, `jsonCritAbove`, `jsonWarnBelow`, `jsonCritBelow` — see [Named metrics](#named-metrics) |
 | `cert` | `port` (default 443), `certWarnDays` (warn this many days before expiry, default 14) |
 | `tcp` | `port` (required) |
-| `dns` | `recordType` (`A` — the default, IPv4 addresses only — `AAAA` for IPv6 addresses only, `CNAME`, `MX` or `TXT`), `expectedIps` (optional list; every resolved value must be in it) and `dnsServer` (optional resolver `host[:port]`; the system resolver otherwise) |
+| `dns` | `recordType` (`A` — the default, IPv4 or IPv6 addresses — `AAAA` for IPv6 addresses only, `CNAME`, `MX` or `TXT`), `expectedIps` (optional list; every resolved value must be in it) and `dnsServer` (optional resolver `host[:port]`; the system resolver otherwise) |
 | `custom` | `command`, `workDir`, `env` — see the output contract above |
 | `system` | `hostSource`, `agentId`, `metricsUrl`, `metricsToken`, `metricThresholds`, `diskMounts`, `staleAfterSeconds` — see [Hardware check metrics](#hardware-check-metrics) |
 | `snmp` | the `snmp*` fields in the table above |
