@@ -104,6 +104,13 @@ func TestWallboardProjection(t *testing.T) {
 	if status, _ := onTheNetwork(t, ts, view); status != http.StatusUnauthorized {
 		t.Fatalf("an unshared board must not be readable anonymously, got %d", status)
 	}
+	// A board that does not exist looks the same from out here as one that is
+	// not shared, so ids cannot be probed for.
+	unshared, _ := onTheNetwork(t, ts, view)
+	missing, _ := onTheNetwork(t, ts, "/api/wallboards/"+itoa(b.ID+1000)+"/view?token=x")
+	if missing != unshared {
+		t.Fatalf("a missing board answered %d, an unshared one %d", missing, unshared)
+	}
 
 	var shared model.Wallboard
 	if code := call(t, ts, "POST", "/api/wallboards/"+itoa(b.ID)+"/share", map[string]any{"enabled": true}, &shared); code != 200 {
