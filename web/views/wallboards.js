@@ -454,7 +454,10 @@ function panelEditor(existing, { nodes, groups, columns }) {
     renderPicker(); renderCfg();
 
     function submit() {
-      const cfg = {};
+      // Start from the panel's own config so a setting this editor does not
+      // offer (a nodes panel's nodeIds, say) survives the save. Switching
+      // type has already replaced p.config with the new type's defaults.
+      const cfg = { ...p.config };
       for (const [k, read] of Object.entries(reads)) cfg[k] = read();
       result = {
         id: p.id, type: p.type, title: titleInput.value.trim(),
