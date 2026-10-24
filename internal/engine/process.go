@@ -47,6 +47,7 @@ type downDecision struct {
 	needProbe   bool
 	parentCheck *model.Check
 	parentNode  *model.Node
+	cooldown    int // minutes, the check's own when it overrides the global one
 }
 
 // process applies a result to the check state, decides on alerts and persists
@@ -433,7 +434,7 @@ func suppressDetail(d downDecision, st *model.CheckState, s model.Settings) stri
 		}
 		return "A dependency is down; no separate email was sent."
 	case "cooldown":
-		return fmt.Sprintf("An alert for this check was sent less than %d minutes ago (cooldown); no email was sent.", s.Alerts.CooldownMinutes)
+		return fmt.Sprintf("An alert for this check was sent less than %d minutes ago (cooldown); no email was sent.", d.cooldown)
 	case "disabled":
 		return "Email alerts are disabled for this check."
 	}
@@ -468,7 +469,7 @@ func (e *Engine) evaluateDownLocked(c model.Check, n model.Node, st *model.Check
 		cooldown = *c.Alerts.CooldownMinutes
 	}
 	if cooldown > 0 && st.LastAlertAt != nil && now.Sub(*st.LastAlertAt) < time.Duration(cooldown)*time.Minute {
-		return downDecision{reason: "cooldown"}
+		return downDecision{reason: "cooldown", cooldown: cooldown}
 	}
 	return downDecision{send: true}
 }

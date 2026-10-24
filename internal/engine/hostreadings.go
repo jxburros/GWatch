@@ -115,6 +115,7 @@ func (e *Engine) judgeReading(ctx context.Context, c model.Check, n model.Node, 
 		e.RecordError("record a held-back hardware reading", err)
 		return err
 	}
+	e.noteHeldResult(res.Timestamp)
 	return nil
 }
 

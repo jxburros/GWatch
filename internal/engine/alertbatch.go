@@ -450,7 +450,9 @@ func digestDue(mode string, first, now time.Time) bool {
 	var at time.Time
 	switch mode {
 	case model.WarningDigestHourly:
-		at = time.Date(f.Year(), f.Month(), f.Day(), f.Hour()+1, 0, 0, 0, f.Location())
+		// The next top of the local hour: an hour after the start of this
+		// one, which time.Date would misplace on the nights the clocks change.
+		at = f.Add(-time.Duration(f.Minute())*time.Minute - time.Duration(f.Second())*time.Second - time.Duration(f.Nanosecond())).Add(time.Hour)
 	case model.WarningDigestDaily:
 		at = time.Date(f.Year(), f.Month(), f.Day(), digestDailyHour, 0, 0, 0, f.Location())
 		if !at.After(f) {

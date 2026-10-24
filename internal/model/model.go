@@ -891,6 +891,12 @@ func (m MaintenanceWindow) Active(t time.Time) bool {
 			continue
 		}
 		windowStart := time.Date(day.Year(), day.Month(), day.Day(), start.Hour(), start.Minute(), 0, 0, t.Location())
+		// A start the clocks skip over (02:30 on the night they go forward)
+		// comes back from time.Date an hour early, before anything was
+		// scheduled; it starts as the clocks jump instead, as cron does.
+		if want, got := start.Hour()*60+start.Minute(), windowStart.Hour()*60+windowStart.Minute(); got != want {
+			windowStart = windowStart.Add(time.Duration((want-got+24*60)%(24*60)) * time.Minute)
+		}
 		if !t.Before(windowStart) && t.Before(windowStart.Add(dur)) {
 			return true
 		}

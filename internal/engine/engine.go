@@ -128,6 +128,9 @@ type Engine struct {
 
 	retention model.RetentionStatus
 	backup    model.BackupStatus
+	// heldSince is the oldest held-back result recorded since the last
+	// rollup, which the next one rolls up from; see noteHeldResult.
+	heldSince time.Time
 
 	// gate keeps the engine's own writes out of the way of a restore; see
 	// pause.go.

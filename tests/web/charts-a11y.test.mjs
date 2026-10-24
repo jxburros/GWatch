@@ -122,3 +122,12 @@ test('uptimeBar names itself after what it shows and sums up its periods', () =>
   assert.match(name, /^Availability per period — Office router › Ping: 1 of 3 periods fully up, 1 partial, 1 down, first trouble /);
   assert.equal(uptimeBar([], { label: 'x' }).getAttribute('aria-label'), 'Availability per period — x: no data');
 });
+
+test('uptimeBar weighs merged buckets by their samples', () => {
+  const points = [
+    { ts: new Date(T0).toISOString(), availability: 100, count: 99 },
+    { ts: new Date(T0 + 60e3).toISOString(), availability: 0, count: 1 },
+  ];
+  const bar = uptimeBar(points, { maxSegments: 1, bucketSeconds: 60, from: T0, to: T0 + 120e3 });
+  assert.match(bar.querySelector('.seg').getAttribute('title'), / — 99\.0% available$/);
+});

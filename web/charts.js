@@ -64,7 +64,19 @@ export function timeTicks(from, to, width, minPx = 76) {
   }
   const ticks = [];
   const start = new Date(from);
-  if (typeof step === 'number' && step < DAY) {
+  if (typeof step === 'number' && step >= HOUR && step < DAY) {
+    // Hour steps follow the local clock day by day, so a span across a
+    // daylight-saving change keeps its ticks on 00:00, 06:00 … rather than
+    // drifting an hour off them (and losing the midnight day label).
+    const hours = step / HOUR;
+    for (const d = new Date(start.getFullYear(), start.getMonth(), start.getDate()); d.getTime() <= to; d.setDate(d.getDate() + 1)) {
+      for (let hh = 0; hh < 24; hh += hours) {
+        const t = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh).getTime();
+        if (t < from || t > to || (ticks.length && t <= ticks[ticks.length - 1].t)) continue;
+        ticks.push({ t, major: new Date(t).getHours() === 0 && new Date(t).getMinutes() === 0 });
+      }
+    }
+  } else if (typeof step === 'number' && step < DAY) {
     // align to local midnight + multiples of step
     const midnight = new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime();
     let t = midnight + Math.ceil((from - midnight) / step) * step;
@@ -795,7 +807,10 @@ export function uptimeBar(points, { maxSegments = 90, bucketSeconds = 0, from, t
     const b = buckets[i];
     if (p.avail == null) continue;
     b.min = b.min == null ? p.avail : Math.min(b.min, p.avail);
-    b.sum += p.avail; b.n++;
+    // A bucket weighs as many samples as it holds: an hour with two failed
+    // runs does not cancel out one with sixty good ones.
+    const w = p.count > 0 ? p.count : 1;
+    b.sum += p.avail * w; b.n += w;
   }
   const tally = { up: 0, partial: 0, down: 0, none: 0 };
   let firstTrouble = null;

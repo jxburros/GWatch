@@ -592,14 +592,22 @@ export async function loadTimestackSeries(cfg, fetchFn = historyFetch, now = Dat
   }
   const named = !isBuiltinMetric(spec);
   const end = Math.floor(now / 60e3) * 60e3;
+  // A layer of whole days ends at the same time of day i periods back, so
+  // across a daylight-saving change yesterday's 09:00 still sits on today's.
+  const layerEnd = (i) => {
+    if (period.ms < DAY_MS) return end - i * period.ms;
+    const d = new Date(end);
+    d.setDate(d.getDate() - i * (period.ms / DAY_MS));
+    return d.getTime();
+  };
   const lists = await Promise.all(Array.from({ length: ts.layers }, (_, i) => Promise.resolve()
-    .then(() => fetchFn([spec.checkId], ts.period, named ? spec.metric : undefined, i === 0 ? undefined : end - i * period.ms))
+    .then(() => fetchFn([spec.checkId], ts.period, named ? spec.metric : undefined, i === 0 ? undefined : layerEnd(i)))
     .then(asList).catch(() => [])));
   /** @type {StackList} */
   const out = [];
   lists.forEach((list, i) => {
     const hs = list[0];
-    if (hs && !(spec.metric === 'loss' && !named && hs.checkType !== 'ping')) out.push({ spec, hs, layer: i, shift: i * period.ms });
+    if (hs && !(spec.metric === 'loss' && !named && hs.checkType !== 'ping')) out.push({ spec, hs, layer: i, shift: end - layerEnd(i) });
   });
   out.spec = spec;
   return out;
@@ -623,7 +631,7 @@ function entryFigure({ spec, hs }) {
     case 'max': return s.maxMs;
     case 'jitter': return mean('jitterMs');
     case 'loss': return mean('lossPct');
-    case 'availability': return s.availability;
+    case 'availability': return s.count > 0 ? s.availability : null;
     default: return s.avgMs;
   }
 }
@@ -766,7 +774,8 @@ export function renderConfiguredChart(host, cfg, { title = 'Chart', fetch: fetch
       for (const { hs } of entries) {
         if (seen.has(Number(hs.checkId))) continue;
         seen.add(Number(hs.checkId));
-        const avail = hs.summary?.availability;
+        // No samples is no figure, not 0% available.
+        const avail = hs.summary?.count > 0 ? hs.summary.availability : null;
         const cls = avail == null ? '' : avail >= 99.9 ? 'text-up' : avail >= 95 ? 'text-degraded' : 'text-down';
         up.append(h('div', { class: 'uptime-row' }, h('div', { class: 'uptime-name truncate' }, hs.nodeName || '', h('div', { class: 'sub' }, hs.checkName)), uptimeBar(hs.points, { bucketSeconds: hs.bucketSeconds, from: hs.from, to: hs.to, label: `${hs.nodeName || ''} › ${hs.checkName}` }), h('div', { class: `uptime-pct ${cls}` }, pct(avail, 2))));
       }

@@ -320,12 +320,14 @@ function trends(body, doc, cfg, state) {
     // A ping check that reports loss but no latency is charted as loss: on a
     // wall an empty latency chart says nothing at all.
     const isLoss = hs.checkType === 'ping' && (hs.points || []).every((p) => p.avgMs == null) && (hs.points || []).some((p) => p.lossPct != null);
+    // No samples in the range is no figure, not 0% available.
+    const avail = hs.summary?.count > 0 && hs.summary.availability?.toFixed ? `${hs.summary.availability.toFixed(2)}%` : '—';
     wrap.append(h('section', { class: 'wall-chart' },
       h('div', { class: 'wc-head' },
         h('span', { class: 'wc-name' }, `${hs.nodeName} › ${hs.checkName}`),
         h('span', { class: 'wc-val' }, hs.summary?.avgMs != null
-          ? `avg ${fmtMs(hs.summary.avgMs)} · ${hs.summary.availability?.toFixed?.(2) ?? '—'}%`
-          : `${hs.summary?.availability?.toFixed?.(2) ?? '—'}% available`)),
+          ? `avg ${fmtMs(hs.summary.avgMs)} · ${avail}`
+          : `${avail} available`)),
       host));
     const chart = new LineChart(host, { unit: isLoss ? '%' : 'ms', legend: false, height: null, yTicks: 2, minTickPx: 90, ariaLabel: `${hs.checkName} trend`, table: false });
     state.charts.push(chart);

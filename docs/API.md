@@ -722,7 +722,7 @@ Every other check type leaves `metrics` absent.
   The series carries `metric` and `metricUnit`, each point carries `value`, and `avgMs`,
   `minMs` and `maxMs` carry the same number so that a chart drawn from a series' latency
   fields plots a named metric unchanged. `GET /api/export/history.csv` takes `metric=`
-  too.
+  too, and then writes `timestamp,value,unit,availability_pct`.
 - A name the check is not configured to measure is a `400`, rather than an empty series.
 - **Limit:** a named-metric series is always read from raw results. The rollup tables
   have a column per built-in metric (latency, jitter, loss) and nowhere to put one a
@@ -1520,7 +1520,7 @@ See [`RESTORE.md`](RESTORE.md) for the end-to-end restore-to-a-new-machine proce
 
 ## Export
 
-- `GET /api/export/history.csv?checkId=ID&range=30d` → CSV: `timestamp,avg_ms,min_ms,max_ms,jitter_ms,loss_pct,availability_pct,count,failures`.
+- `GET /api/export/history.csv?checkId=ID&range=30d` → CSV: `timestamp,avg_ms,min_ms,max_ms,jitter_ms,loss_pct,availability_pct,count,failures`; with `metric=NAME`, `timestamp,value,unit,availability_pct`.
 - `GET /api/export/results.csv?checkId=ID&limit=5000` → raw results CSV: `timestamp,success,status,message,error,latency_ms,min_ms,max_ms,jitter_ms,stddev_ms,loss_pct,http_status,final_url,attempts`.
 - `GET /api/export/events.csv?nodeId=&limit=5000&type=&q=&since=&until=` → events CSV (same filters as `/api/events`).
 - Every CSV is UTF-8 and starts with a byte-order mark, so Excel shows accents and dashes as written; strip the leading `\uFEFF` if a tool of yours does not expect it.

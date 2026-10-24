@@ -45,6 +45,14 @@ func TestScheduledReportCadence(t *testing.T) {
 			if msg.HTMLAttachment == "" || msg.HTMLAttachment != msg.HTMLBody || !strings.Contains(msg.HTMLAttachment, "Availability") {
 				t.Fatal("report attachment missing")
 			}
+			// The subject names the period's last day, not the midnight after it.
+			want := "Report — 2026-09-28 to 2026-10-04"
+			if period == "monthly" {
+				want = "Report — 2026-09-01 to 2026-09-30"
+			}
+			if msg.Subject != want {
+				t.Errorf("subject %q, want %q", msg.Subject, want)
+			}
 		})
 	}
 }
