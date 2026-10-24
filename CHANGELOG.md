@@ -73,6 +73,47 @@ release is published as `v<VERSION>` by the Release workflow, dispatched from
   retries, alert override) instead of resetting them to a new check's defaults.
 - **Documentation accuracy** (#165): API routes, the config export, Settings tabs,
   retention, privacy (what is encrypted, what GWatch contacts), ROADMAP and the brief.
+- **Tighter access and input handling.** Saving a wallboard no longer hands its share
+  token back to a non-administrator, and a missing board looks the same as an unshared
+  one to an anonymous caller; agent inventories are left out of the hardware list for
+  non-administrators; moving a check to another collector counts as retargeting it, so
+  an API key cannot send its stored credentials somewhere new that way. A ping or DNS
+  target starting with `-` is refused, Python script placeholders can no longer break out
+  of single-quoted or f-string literals, `$` is escaped in systemd `ExecStart=` lines, the
+  SQLite path is escaped in its connection string, and the timeline search treats `%`
+  and `_` literally. Pre-migration database copies and backup archives are written
+  owner-only. `gwatch install` refuses a system directory as the data directory, and on
+  Windows the program a service install puts in Program Files can be run by ordinary
+  users. A correct `/hook/` token gives back the attempt it was charged instead of
+  clearing the whole failure budget.
+- **Checks.** An A check resolves IPv4 only and an AAAA check IPv6 only (an A check on a
+  name with only AAAA records used to pass); a JSON content watch no longer reads a
+  non-JSON body as `null`; a check with no saved timeout is bounded by the default one;
+  a check moved to a collector or deleted just as it fell due is no longer left marked
+  as running and never scheduled again; a hardware
+  reading that carries only the one-minute load is judged correctly; and a collector's
+  incident without a node gets a PagerDuty/Opsgenie key of its own.
+- **API.** Acknowledging a resolved incident is a `409`, not a `500`;
+  `PUT /api/agents/{id}` without `nodeId` keeps the machine on its node instead of
+  detaching it; on-demand reports trim their groups and tags, build their window from
+  local days rather than UTC, and count an open incident as lasting until now; a restore
+  keeps agent references pointing at the same machine.
+- **Agent.** The trial reading before a self-update uses the agent's own configuration
+  file; serve mode stays inside the machine's own collection limit; after a self-update
+  where no service manager would restart it, the agent restarts itself in place; the
+  newest agent version seen at check-in is recorded safely under concurrent check-ins.
+- **Web interface.** A viewer's own theme and accent are no longer reset; the Charts
+  page's **New chart** works and a refused save says so; **Export chart as PNG**
+  downloads instead of throwing; a live update for the old range can no longer redraw a node's History
+  card after another range is picked; a discovery started just before its dialog closed stops polling; incident
+  actions keep their button after a failure and the node's Timeline link opens that node's events; a refused sign-in is styled as an error; and the local sign-in switch and
+  the password hashing choice go back to what is saved when a save is refused.
+- **Documentation**, a second pass: the README names 0.8.0 and the release process as the
+  dispatched workflow runs it, `docs/API.md` lists every route an API key is refused,
+  packaging docs point at screens and jobs that exist, a Markdown link checker
+  (`scripts/ci/check-md-links.py`) guards relative links and anchors, and the user guide,
+  API, install, restore, Docker, privacy, collectors and MCP pages were checked against
+  the code again (settings fields, placeholders, where secrets are kept, CLI paths).
 
 ### Added
 
