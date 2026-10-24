@@ -1309,6 +1309,7 @@ var listenRetry = 5 * time.Second
 // without opening a port.
 func (p *program) metricsHandler() http.Handler {
 	collector := newCollector(p.cfg)
+	ceiling := p.cfg.collect.Normalize()
 	want := []byte(p.cfg.token)
 	limiter := newServeLimiter()
 
@@ -1325,11 +1326,14 @@ func (p *program) metricsHandler() http.Handler {
 			http.Error(w, "a token is required", http.StatusUnauthorized)
 			return
 		}
-		metrics, err := collect(r.Context(), p.cfg, collector)
+		metrics, err := takeReading(r.Context(), p.cfg, collector)
 		if err != nil {
 			http.Error(w, "cannot read this computer's hardware", http.StatusServiceUnavailable)
 			return
 		}
+		// The machine's own limit holds here as it does for a pushed reading:
+		// what agent.json leaves out is not handed to whoever holds the token.
+		metrics = sysmetrics.Apply(metrics, ceiling, true)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(metrics)
