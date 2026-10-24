@@ -347,12 +347,18 @@ func readMounts() ([]model.HostFilesystem, []string) {
 			continue
 		}
 		seen[device] = true
-		bs := uint64(st.Bsize)
+		// Block counts are in units of the fragment size; Bsize is only the
+		// preferred I/O size, which on NFS and some FUSE filesystems is far
+		// larger and would multiply the sizes. df does the same.
+		bs := uint64(st.Frsize)
+		if bs == 0 {
+			bs = uint64(st.Bsize)
+		}
 		total := st.Blocks * bs
 		// Free space excludes the root reservation, so "used" matches df: what
 		// an ordinary process can still write is Bavail, not Bfree.
 		free := st.Bavail * bs
-		used := (st.Blocks - st.Bfree) * bs
+		used := sub(st.Blocks, st.Bfree) * bs
 		fs := model.HostFilesystem{
 			Mount: mount, Device: device, FSType: fsType,
 			TotalBytes: total, FreeBytes: free, UsedBytes: used,
@@ -360,7 +366,7 @@ func readMounts() ([]model.HostFilesystem, []string) {
 		}
 		if st.Files > 0 {
 			fs.InodesTotal = st.Files
-			fs.InodesUsed = st.Files - st.Ffree
+			fs.InodesUsed = sub(st.Files, st.Ffree)
 			pct := usedPct(fs.InodesUsed, fs.InodesTotal)
 			fs.InodesUsedPct = &pct
 		}
