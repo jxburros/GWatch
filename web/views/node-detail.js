@@ -572,15 +572,13 @@ export async function mount(root, ctx) {
   }
   async function silence(minutes) {
     const checks = state.node.checks || [];
-    try {
-      await Promise.all(checks.map((c) => api.post(`/api/checks/${c.id}/silence`, { minutes })));
-      toast(minutes ? `Alerts silenced for ${interval(minutes * 60)}` : 'Alerts unsilenced', { kind: 'success' });
-      await load({ quiet: true });
-    } catch (e) {
-      toast(e.message, { kind: 'error' });
-      // One request per check: the others may have taken, so show what stands.
-      await load({ quiet: true }).catch(() => {});
-    }
+    // One request per check: wait for all of them, since the others may have
+    // taken when one is refused, then show what stands.
+    const results = await Promise.allSettled(checks.map((c) => api.post(`/api/checks/${c.id}/silence`, { minutes })));
+    const refused = results.find((r) => r.status === 'rejected');
+    if (refused) toast(refused.reason?.message || String(refused.reason), { kind: 'error' });
+    else toast(minutes ? `Alerts silenced for ${interval(minutes * 60)}` : 'Alerts unsilenced', { kind: 'success' });
+    await load({ quiet: true }).catch((e) => { if (!refused) toast(e.message, { kind: 'error' }); });
   }
   async function silenceCheck(c, minutes) {
     try { await api.post(`/api/checks/${c.id}/silence`, { minutes }); toast(minutes ? `${c.name} silenced for ${interval(minutes * 60)}` : `${c.name} unsilenced`, { kind: 'success' }); await load({ quiet: true }); } catch (e) { toast(e.message, { kind: 'error' }); }
