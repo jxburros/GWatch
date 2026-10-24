@@ -527,6 +527,7 @@ func runApp(ctx context.Context, cfg config, mode string, requestRestart func())
 		ReadTimeout:       5 * time.Minute, // large backup uploads
 		IdleTimeout:       2 * time.Minute,
 	}
+	httpServer.RegisterOnShutdown(srv.CloseStreams)
 	lm.server = httpServer
 
 	errCh := make(chan error, 1)

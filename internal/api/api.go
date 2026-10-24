@@ -71,6 +71,12 @@ type Server struct {
 	discoveryJobs *discovery.Registry
 	discoveryOnce sync.Once
 
+	// streamsDone is closed by CloseStreams, which ends every open
+	// /api/stream response.
+	streamsOnce  sync.Once
+	streamsClose sync.Once
+	streamsDone  chan struct{}
+
 	// routes records every pattern Handler() registered, so the authorization
 	// tests can prove the router and the policy table describe the same surface.
 	routes []routeSpec
