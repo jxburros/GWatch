@@ -95,6 +95,7 @@ type Engine struct {
 	rules       []model.Rule
 	ruleStates  map[int64]*model.RuleState
 	rulesLoaded bool
+	rulesEvalMu sync.Mutex // serialises evaluateRules; taken before mu
 
 	// hosts samples this computer's hardware and holds the newest reading
 	// from every machine that reports in.

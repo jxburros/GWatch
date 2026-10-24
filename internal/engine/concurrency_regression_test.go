@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -54,4 +55,36 @@ func TestProbeDoesNotOverwriteConcurrentCommit(t *testing.T) {
 	if state.LastSuccessAt == nil || state.ConsecutiveFailures != 1 || state.Status == model.StatusDown {
 		t.Fatalf("probe result overwrote the concurrent success: %+v", state)
 	}
+}
+
+// Rule evaluations that overlap must store where a rule stands in the order
+// they decided it, so the saved state (read back after a restart) agrees with
+// the one in memory.
+func TestConcurrentRuleEvaluationsPersistTheLastDecision(t *testing.T) {
+	f := newRuleFixture(t)
+	id := f.checks[0]
+	rule := f.saveRule(t, model.Rule{Name: "Down", Enabled: true, Join: model.RuleJoinAny,
+		Conditions: []model.RuleCondition{checkCond(id, model.StatusDown)}})
+	for round := 0; round < 20; round++ {
+		var wg sync.WaitGroup
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func(down bool) {
+				defer wg.Done()
+				f.e.mu.Lock()
+				f.e.states[id].Status = map[bool]model.Status{true: model.StatusDown, false: model.StatusUp}[down]
+				f.e.mu.Unlock()
+				f.e.evaluateRules(context.Background(), &id)
+			}(i%2 == 0)
+		}
+		wg.Wait()
+		stored, err := f.st.RuleStates(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mem := f.e.RuleStates()[rule.ID]; stored[rule.ID].Met != mem.Met {
+			t.Fatalf("round %d: stored met=%v, in memory met=%v", round, stored[rule.ID].Met, mem.Met)
+		}
+	}
+	f.e.wg.Wait()
 }
