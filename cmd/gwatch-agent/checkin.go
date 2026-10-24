@@ -367,8 +367,15 @@ func (rt *agentRuntime) apply(cfg config, s model.AgentSettings) time.Duration {
 
 	// A newer agent exists. This is only said: the agent looks for releases on
 	// its own schedule, from the release feed, and verifies what it downloads.
-	if v := strings.TrimSpace(s.LatestAgent); v != "" && v != rt.latestSeen && update.CompareVersions(v, version) > 0 {
+	// latestSeen is read by writeStatus from the reporting loop, so it is
+	// changed under the lock like everything else the status file shows.
+	rt.mu.Lock()
+	seen := rt.latestSeen
+	rt.mu.Unlock()
+	if v := strings.TrimSpace(s.LatestAgent); v != "" && v != seen && update.CompareVersions(v, version) > 0 {
+		rt.mu.Lock()
 		rt.latestSeen = v
+		rt.mu.Unlock()
 		log.Printf("GWatch reports that agent %s is available; this agent (%s) updates itself from signed releases, and %s", v, version, updateAdvice())
 	}
 
