@@ -200,8 +200,17 @@ func (s *Server) hostSummaries(r *http.Request) ([]model.HostSummary, error) {
 	}
 	out = append(out, local)
 
+	// An agent's inventory is every service and program on that machine. The
+	// same list for this computer is administrator-only and never an API key's
+	// (handleLocalWatchable), and only the collection picker, which reads
+	// /api/agents, needs it; the hardware list, open to every viewer and every
+	// read-only key, leaves it out for anyone who is not an administrator.
+	admin := auth.FromContext(ctx).IsAdmin()
 	for _, a := range agents {
 		agent := a
+		if !admin {
+			agent.Inventory = nil
+		}
 		summary := model.HostSummary{
 			Key:    agent.HostKey(),
 			Name:   agent.Name,

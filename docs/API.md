@@ -730,6 +730,8 @@ Every other check type leaves `metrics` absent.
   reading in `metrics`, a `status` and a `stale` flag. That status means only "are
   readings still arriving" — whether a figure is *too high* is a hardware check's
   business, because only a check knows the thresholds somebody chose.
+  A registered machine's `agent.inventory` (every service and program on it) is left
+  out for anyone but an administrator; `GET /api/agents` carries it.
 - `GET /api/hosts/{key}` → one `HostSummary`. The key is `local`, `agent:<id>` or
   `url:<check id>`.
 - `GET /api/hosts/local/watchable` → `{ "services": [InventoryItem], "processes": [InventoryItem], "problems": [string] }`.

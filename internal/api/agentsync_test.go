@@ -439,3 +439,43 @@ func TestPairingToAnExistingNodeAddsItsHardwareCheck(t *testing.T) {
 		t.Errorf("each machine gets its own hardware check, got %d", n)
 	}
 }
+
+// An agent's inventory names every service and program on its machine. The
+// same list for this computer is for administrators only, so the hardware list
+// that every viewer and every read-only key may read must not carry it either.
+func TestHostListHidesAgentInventoryFromNonAdministrators(t *testing.T) {
+	ts, srv := newTestServer(t)
+	allowTestRemote(srv)
+	a := registerAgent(t, ts, "nas")
+	if code, _ := checkIn(t, ts, a.Token, model.AgentCheckIn{Inventory: &model.Inventory{
+		Services: []model.InventoryItem{{Name: "secret-backup-daemon"}},
+	}}); code != 200 {
+		t.Fatalf("check-in: %d", code)
+	}
+
+	// The administrator on this computer still sees it.
+	if _, body, _ := as(t, ts, creds{}, "GET", "/api/hosts", nil, nil); !strings.Contains(body, "secret-backup-daemon") {
+		t.Fatalf("an administrator should still see the inventory: %s", body)
+	}
+
+	admin := bootstrapAdmin(t, ts, "root", "correct horse battery")
+	key := mintKey(t, ts, admin, "ha", "read")
+	if code, body, _ := as(t, ts, creds{Cookie: admin}, "POST", "/api/users", map[string]string{"username": "pat", "password": "viewer password 1", "role": "viewer"}, nil); code != 201 {
+		t.Fatalf("create viewer: %d %s", code, body)
+	}
+	viewer := login(t, ts, "pat", "viewer password 1")
+	for name, c := range map[string]creds{
+		"read key": {APIKey: key, Remote: "192.168.1.50:9999"},
+		"viewer":   {Cookie: viewer},
+	} {
+		for _, path := range []string{"/api/hosts", "/api/hosts/agent:" + itoa(a.Agent.ID)} {
+			code, body, _ := as(t, ts, c, "GET", path, nil, nil)
+			if code != 200 {
+				t.Fatalf("%s %s: %d %s", name, path, code, body)
+			}
+			if strings.Contains(body, "secret-backup-daemon") || strings.Contains(body, `"inventory"`) {
+				t.Errorf("%s %s: the agent's inventory leaked: %s", name, path, body)
+			}
+		}
+	}
+}
