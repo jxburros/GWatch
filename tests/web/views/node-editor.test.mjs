@@ -258,3 +258,16 @@ test('a request header can be removed after it has been renamed', async (t) => {
   headers().querySelector('[aria-label="Remove header"]').click();
   assert.equal(headers().querySelectorAll('.kv-row').length, 0, 'the renamed header is gone');
 });
+
+test('a script check\'s environment variable can be removed after it has been renamed', async (t) => {
+  Element.prototype.scrollIntoView = Element.prototype.scrollIntoView || function scrollIntoView() {};
+  const { root } = await mountView(nodeEditorView, { params: {}, query: new URLSearchParams('add=custom') }, t);
+  const card = [...root.querySelectorAll('.editor-check')].find((el) => el.textContent.includes('Environment variables'));
+  const env = () => [...card.querySelectorAll('.kv-rows')].find((el) => el.textContent.includes('Add variable'));
+  [...env().querySelectorAll('button')].find((b) => b.textContent.includes('Add variable')).click();
+  const name = env().querySelector('[aria-label="Environment variable name"]');
+  name.value = 'API_TOKEN';
+  name.dispatchEvent(new window.Event('change', { bubbles: true }));
+  env().querySelector('[aria-label="Remove variable"]').click();
+  assert.equal(env().querySelectorAll('.kv-row').length, 0, 'the renamed variable is gone');
+});
