@@ -333,7 +333,9 @@ export async function openTemplatePicker(state, ctx, reload) {
   let templates = state?.templates;
   try { if (!templates) templates = await api.get('/api/templates'); if (state) state.templates = templates; } catch (e) { templates = []; }
   const grid = h('div', { class: 'template-grid' });
-  for (const t of templates || []) {
+  // The agent-machine template is what a paired agent's node is built from; the
+  // picker offers that through its own card below, which also hands out the code.
+  for (const t of (templates || []).filter((t) => t.id !== 'agent-machine')) {
     grid.append(h('a', { class: 'template-card', href: `#/nodes/new?template=${encodeURIComponent(t.id)}`, onclick: () => m.close() },
       h('span', { class: 't-icon' }, icon(TEMPLATE_ICONS[t.id] || t.icon || 'server')),
       h('span', null, h('b', null, t.name), h('span', null, t.description || ''))));
@@ -346,14 +348,6 @@ export async function openTemplatePicker(state, ctx, reload) {
   grid.append(h('a', { class: 'template-card', href: '#/nodes/new', onclick: () => m.close() },
     h('span', { class: 't-icon' }, icon('file')),
     h('span', null, h('b', null, 'Blank'), h('span', null, 'Start from an empty node and add the checks you want.'))));
-  // The last card is the other way round: rather than describing a device and
-  // then finding its address, find the addresses first and pick from them.
-  // Nothing is handed back to reload here: the node list is still mounted
-  // behind the modal, and the timeline entry a discovery add writes reaches it
-  // over the update stream within the second.
-  grid.append(h('button', { class: 'template-card', type: 'button', onclick: () => { m.close(); discover(ctx); } },
-    h('span', { class: 't-icon' }, icon('radar')),
-    h('span', null, h('b', null, 'Discover devices'), h('span', null, 'Ping a range of addresses and add whatever answers, several at a time.'))));
   replace(body, h('p', null, 'Pick a starting point. Every setting can be changed afterwards.'), grid);
 }
 

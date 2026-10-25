@@ -153,6 +153,7 @@ test('Add node offers the agent beside the other things GWatch can watch', async
   await waitFor(() => picker.querySelectorAll('.template-card').length > 3);
   const names = [...picker.querySelectorAll('.template-card b')].map((b) => b.textContent);
   assert.ok(names.includes('A machine with the GWatch agent'), names.join(' | '));
+  assert.ok(!names.includes('Machine with an agent'), `the agent is offered once: ${names.join(' | ')}`);
   assert.ok(names.indexOf('A machine with the GWatch agent') > names.findIndex((n) => /Website|Router|Ping/.test(n)), 'it follows the ordinary templates');
 });
 
