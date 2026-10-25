@@ -10,6 +10,17 @@ release is published as `v<VERSION>` by the Release workflow, dispatched from
 `main`. It refuses to publish a tag that disagrees with the file — see
 [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## 0.8.3 (not yet released)
+
+GWatch only; gwatch-agent stays at 0.8.2.
+
+### Changed
+
+- **Add node picker.** The agent machine is offered once, as **A machine with the
+  GWatch agent** (which also hands out the pairing code), instead of twice. The
+  **Discover devices** tile is gone: **Discover** is already on the Nodes toolbar,
+  beside **Add node**.
+
 ## 0.8.2 (not yet released)
 
 0.8.1 was never published, so everything under it below ships in 0.8.2. Agent

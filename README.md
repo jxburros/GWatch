@@ -18,11 +18,17 @@ product brief is [`local-network-monitoring-product-brief.md`](local-network-mon
 some of its non-goals have since shipped in a narrow form, and [`ROADMAP.md`](ROADMAP.md)
 is where the current scope and its limits are kept.
 
-> **GWatch is in beta (0.8.2).** It works and it looks after your data, but the
+> **GWatch is in beta (0.8.3).** It works and it looks after your data, but the
 > interface and the JSON API can still change between releases, and bugs are likelier
 > now than they will be at 1.0 — which is reserved for the first public, stable
 > release. [`CHANGELOG.md`](CHANGELOG.md) lists what is in each version, and
 > [`ROADMAP.md`](ROADMAP.md#known-gaps) the known gaps it still ships with. Please [report anything that looks wrong](https://github.com/jxburros/GWatch/issues).
+
+## What's new in 0.8.3
+
+0.8.3 tidies the **Add node** picker: the agent machine is offered once, as
+**A machine with the GWatch agent**, and the duplicate **Discover devices** tile is
+gone — **Discover** stays on the Nodes toolbar. gwatch-agent stays at 0.8.2.
 
 ## What's new in 0.8.2
 
