@@ -96,6 +96,14 @@ type HostMetrics struct {
 	Services  []HostService `json:"services,omitempty"`
 	Processes []HostProcess `json:"processes,omitempty"`
 
+	// Docker and VMs follow the same rule: the containers this machine's
+	// Docker or Podman daemon runs, and the guests its hypervisor runs, but
+	// only the ones it was told to watch (CollectSelection.Containers, .VMs).
+	// Nothing asks the daemon or the hypervisor anything until a name is
+	// chosen.
+	Docker []HostDockerContainer `json:"docker,omitempty"`
+	VMs    []HostVM              `json:"vms,omitempty"`
+
 	// Container is set when the reading was taken inside a container that has
 	// its own memory or processor limit. Memory and processor use are then
 	// measured against that limit rather than the host's totals: a container
@@ -251,6 +259,108 @@ func ServiceValue(s HostService) float64 {
 type HostProcess struct {
 	Name  string `json:"name"`
 	Count int    `json:"count"`
+}
+
+// HostDockerContainer is one watched container, as the Docker (or Podman)
+// daemon on the machine describes it. Name is the name as it was asked for,
+// without Docker's leading slash ("web", "nextcloud-db-1"), which is also
+// the metric instance: a container that is removed and created again under
+// the same name, as Compose does on every update, keeps its readings.
+type HostDockerContainer struct {
+	Name string `json:"name"`
+	// ID is the first twelve characters of the container's id, as docker ps
+	// shows it, and Image the image it was created from. Both are empty for
+	// a container the daemon does not have.
+	ID    string `json:"id,omitempty"`
+	Image string `json:"image,omitempty"`
+	// State is the daemon's own word: created, running, paused, restarting,
+	// removing, exited or dead, or "not found" when there is no container by
+	// that name. Health is the container's health check — starting, healthy
+	// or unhealthy — and empty when its image defines none.
+	State  string `json:"state"`
+	Health string `json:"health,omitempty"`
+	// Status is the daemon's one-line summary ("Up 3 hours (healthy)",
+	// "Exited (137) 5 minutes ago"), shown beside the verdict.
+	Status    string     `json:"status,omitempty"`
+	StartedAt *time.Time `json:"startedAt,omitempty"`
+	ExitCode  int        `json:"exitCode,omitempty"`
+	// RestartCount is the daemon's count of restarts by the container's
+	// restart policy since it was last started by hand. RecentRestarts is how
+	// many of those happened in the last hour, as far as this machine has
+	// seen: it is the figure worth alerting on, since a container that
+	// restarted twice last month is not the one stuck in a loop now.
+	RestartCount   int `json:"restartCount"`
+	RecentRestarts int `json:"recentRestarts"`
+	// CPUPct and MemoryPct are use measured against the container's own
+	// limit, or against the whole machine when it has none: a container
+	// capped at one core is busy at one core, whatever the machine has to
+	// spare. CPUPct is a rate, so it is missing from the first reading after
+	// a container starts, and both are missing while it is not running.
+	CPUPct           *float64 `json:"cpuPct,omitempty"`
+	CPULimitCores    *float64 `json:"cpuLimitCores,omitempty"`
+	MemoryUsedBytes  uint64   `json:"memoryUsedBytes,omitempty"`
+	MemoryLimitBytes uint64   `json:"memoryLimitBytes,omitempty"`
+	MemoryPct        *float64 `json:"memoryPct,omitempty"`
+}
+
+// DockerValue is a container's state metric: 2 running (and healthy, or with
+// no health check, or with one that has not finished its first run), 1
+// running but not well — unhealthy, paused, or being restarted by its restart
+// policy — and 0 not running at all, or not there. It reads up as up, like a
+// service's, and the default thresholds (warning at or below 1, critical at
+// or below 0) follow from it.
+func DockerValue(c HostDockerContainer) float64 {
+	switch c.State {
+	case "running":
+		if c.Health == "unhealthy" {
+			return 1
+		}
+		return 2
+	case "paused", "restarting":
+		return 1
+	}
+	return 0
+}
+
+// HostVM is one watched virtual machine, read from the hypervisor on the
+// machine it runs on. Name is the guest's name as the hypervisor shows it
+// (Hyper-V Manager's "Name" column), which is also the metric instance.
+type HostVM struct {
+	Name string `json:"name"`
+	// Hypervisor is where the reading came from: "hyperv".
+	Hypervisor string `json:"hypervisor,omitempty"`
+	// ID is the hypervisor's own identifier for the guest (Hyper-V's VM id).
+	ID string `json:"id,omitempty"`
+	// State is the hypervisor's state for the guest, in lower case: running,
+	// off, paused, saved, starting, stopping, saving, pausing, resuming,
+	// resetting — or "not found" when it has no guest by that name.
+	State      string  `json:"state"`
+	UptimeSecs float64 `json:"uptimeSeconds,omitempty"`
+	// Processors is how many virtual processors the guest has, and CPUPct
+	// how busy they are, 0..100 across all of them. MemoryAssignedBytes is
+	// what the host has given the guest, and MemoryPct how much of that the
+	// guest is using, when the hypervisor can tell (Hyper-V can for a guest
+	// running its integration services). A guest that is not running has
+	// none of these.
+	Processors          int      `json:"processors,omitempty"`
+	CPUPct              *float64 `json:"cpuPct,omitempty"`
+	MemoryAssignedBytes uint64   `json:"memoryAssignedBytes,omitempty"`
+	MemoryPct           *float64 `json:"memoryPct,omitempty"`
+}
+
+// VMValue is a guest's state metric: 2 running, 1 paused, saved or part way
+// between states, 0 off or not there. Like a container's it reads up as up,
+// and the default thresholds are warning at or below 1, critical at or below
+// 0. A guest that is off on purpose is not watched, or has a threshold of
+// its own with no levels.
+func VMValue(v HostVM) float64 {
+	switch {
+	case v.State == "running":
+		return 2
+	case v.State == "not found" || v.State == "" || strings.HasPrefix(v.State, "off"):
+		return 0
+	}
+	return 1
 }
 
 // HostContainer describes the container a reading was taken in and the
@@ -465,8 +575,8 @@ type HostSummary struct {
 	Stale    bool         `json:"stale"`
 	Metrics  *HostMetrics `json:"metrics,omitempty"`
 	Warnings []string     `json:"warnings,omitempty"`
-	// Watch is, for the computer GWatch runs on, the services and programs
-	// it watches (an agent's are in Agent.Collect). Absent when it watches
-	// none.
+	// Watch is, for the computer GWatch runs on, the services, programs,
+	// containers and virtual machines it watches (an agent's are in
+	// Agent.Collect). Absent when it watches none.
 	Watch *CollectSelection `json:"watch,omitempty"`
 }

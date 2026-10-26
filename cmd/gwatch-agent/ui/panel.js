@@ -150,9 +150,10 @@ function describeCollecting(c) {
   const kinds = (c.metrics && c.metrics.length) ? c.metrics.join(', ') : 'every kind of reading';
   const only = ['interfaces', 'disks', 'mounts'].filter((k) => c[k] && c[k].length).map((k) => `${c[k].length} ${k}`);
   const named = (l) => (l || []).filter(Boolean).length;
-  const watch = [named(c.services) ? `${named(c.services)} services` : '', named(c.processes) ? `${named(c.processes)} programs` : ''].filter(Boolean);
+  const watch = [['services', 'services'], ['processes', 'programs'], ['containers', 'containers'], ['vms', 'virtual machines']]
+    .map(([k, word]) => (named(c[k]) ? `${named(c[k])} ${word}` : '')).filter(Boolean);
   const out = only.length ? `${kinds}; only ${only.join(', ')}` : kinds;
-  return watch.length ? `${out}; watching ${watch.join(' and ')}` : out;
+  return watch.length ? `${out}; watching ${watch.length > 1 ? `${watch.slice(0, -1).join(', ')} and ${watch[watch.length - 1]}` : watch[0]}` : out;
 }
 
 async function updateNow(ev) {
@@ -364,18 +365,21 @@ function buildCollect() {
     cats.map((c) => c.el), watch.el, problems, h('div', { class: 'row' }, save), h('p', { class: 'note' }, gwText));
 }
 
-/* Services and programs to watch (#62). Each is a list of names, one per line;
-   nothing is watched until a name is given. The machine's own list is long
-   (hundreds of services on Windows), so it is fetched only when asked and
+/* Services, programs, containers and virtual machines to watch (#62). Each is
+   a list of names, one per line; nothing is watched, and neither Docker nor
+   Hyper-V is asked anything, until a name is given. The machine's own list is
+   long (hundreds of services on Windows), so it is fetched only when asked and
    offered as boxes to tick under a filter, ticking adding the name to the list. */
 const WATCH_KINDS = [
   { key: 'services', title: 'Services to watch', hint: 'One per line. A systemd unit on Linux (nginx), a service or display name on Windows (Spooler), a launchd label on macOS. GWatch reports each as running or stopped, and a stopped one is critical by default.' },
   { key: 'processes', title: 'Programs to watch', hint: 'One per line, by executable name (plex, postgres). GWatch reports how many copies are running, and none is critical by default.' },
+  { key: 'containers', title: 'Containers to watch', placeholder: 'web\nnextcloud-db-1', hint: 'One per line, by name as docker ps shows it. The agent reads them from the Docker (or Podman) socket, so its account must be allowed to use it — which also lets it read everything else the daemon knows. GWatch reports each one\u2019s state, health, restarts and use of its limits; a stopped one is critical by default.' },
+  { key: 'vms', title: 'Virtual machines to watch', placeholder: 'dc01', hint: 'One per line, by name as Hyper-V Manager shows it. The agent\u2019s account must be in the local "Hyper-V Administrators" group (the installed service, as LocalSystem, is). GWatch reports each one\u2019s state, uptime and use; one that is off is critical by default.' },
 ];
 
 function buildWatch(coll) {
   const kinds = WATCH_KINDS.map((k) => {
-    const text = h('textarea', { id: `watch-${k.key}`, rows: 4, class: 'watch', 'aria-label': k.title, placeholder: k.key === 'services' ? 'nginx\ndocker' : 'plex' });
+    const text = h('textarea', { id: `watch-${k.key}`, rows: 4, class: 'watch', 'aria-label': k.title, placeholder: k.placeholder || (k.key === 'services' ? 'nginx\ndocker' : 'plex') });
     text.value = (coll[k.key] || []).filter(Boolean).join('\n');
     const names = () => text.value.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
     const filter = h('input', { type: 'text', placeholder: 'Filter', 'aria-label': `Filter ${k.title.toLowerCase()}`, hidden: true });
@@ -409,7 +413,10 @@ function buildWatch(coll) {
     try {
       const out = await api('GET', '/api/watchable');
       for (const k of kinds) k.offer(out[k.key]);
-      listNote.textContent = `${(out.services || []).length} services and ${(out.processes || []).length} running programs on this machine.${(out.problems || []).length ? ' ' + out.problems.join('; ') : ''}`;
+      const counts = [`${(out.services || []).length} services`, `${(out.processes || []).length} running programs`];
+      if ((out.containers || []).length) counts.push(`${out.containers.length} containers`);
+      if ((out.vms || []).length) counts.push(`${out.vms.length} virtual machines`);
+      listNote.textContent = `${counts.slice(0, -1).join(', ')} and ${counts[counts.length - 1]} on this machine.${(out.problems || []).length ? ' ' + out.problems.join('; ') : ''}`;
     } catch (e) { banner('bad', e.message); }
     listBtn.disabled = false;
   } }, 'List what this machine has');

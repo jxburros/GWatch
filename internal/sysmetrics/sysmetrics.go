@@ -140,9 +140,15 @@ type Collector struct {
 	mu   sync.Mutex
 	prev *raw
 
-	// services and processes are the names to watch (SetWatch). Both are
-	// empty unless someone chose, and then nothing is looked for.
-	services, processes []string
+	// services, processes, containers and vms are the names to watch
+	// (SetWatch). All are empty unless someone chose, and then nothing is
+	// looked for.
+	services, processes, containers, vms []string
+
+	// docker is what watching containers remembers between readings: the
+	// counters a container's processor use is measured from, and its
+	// restart counts (docker.go).
+	docker dockerState
 }
 
 // NewCollector returns a Collector labelling its snapshots with key.
@@ -189,18 +195,17 @@ func (c *Collector) Collect(ctx context.Context) (model.HostMetrics, error) {
 	}
 	c.prev = cur
 	key, version := c.Key, c.AgentVersion
-	services, processes := c.services, c.processes
+	watch := watchLists{services: c.services, processes: c.processes, containers: c.containers, vms: c.vms}
 	c.mu.Unlock()
 
 	if key == "" {
 		key = model.HostKeyLocal
 	}
 	m := snapshot(key, version, prev, cur)
-	// Services and processes are states, not rates, so they are read once,
-	// after the counters, and only when something is watched (watch.go).
-	if len(services) > 0 || len(processes) > 0 {
-		var warnings []string
-		m.Services, m.Processes, warnings = readWatched(ctx, services, processes)
+	// Services, processes, containers and guests are read once, after the
+	// counters, and only when something is watched (watch.go).
+	if !watch.empty() {
+		warnings := c.readWatched(ctx, &m, watch)
 		if len(warnings) > 0 {
 			// A fresh slice: m.Warnings shares its array with the reading
 			// kept for next time.

@@ -70,19 +70,38 @@ type CollectSelection struct {
 	// choose from.
 	Services  []string `json:"services,omitempty"`
 	Processes []string `json:"processes,omitempty"`
+
+	// Containers and VMs are watched the same way: by name, empty meaning
+	// none. A container is a Docker or Podman container's name, as docker ps
+	// shows it ("web", "nextcloud-db-1"); a VM is a guest's name as its
+	// hypervisor shows it (Hyper-V Manager's Name column). Naming one is the
+	// only thing that makes a machine ask its Docker daemon or its
+	// hypervisor anything.
+	Containers []string `json:"containers,omitempty"`
+	VMs        []string `json:"vms,omitempty"`
 }
 
-// Watching reports whether the selection names any service or process to
-// watch, which is the only time a collector looks for them.
+// Watching reports whether the selection names any service, process,
+// container or virtual machine to watch, which is the only time a collector
+// looks for them.
 func (c CollectSelection) Watching() bool {
-	return len(watchNames(c.Services)) > 0 || len(watchNames(c.Processes)) > 0
+	return len(watchNames(c.Services)) > 0 || len(watchNames(c.Processes)) > 0 ||
+		len(watchNames(c.Containers)) > 0 || len(watchNames(c.VMs)) > 0
 }
 
-// WatchedServices and WatchedProcesses are the names to look for, without
-// the empty entry that stands for "both sides chose and nothing is in
-// common" (see combineNames).
-func (c CollectSelection) WatchedServices() []string  { return watchNames(c.Services) }
-func (c CollectSelection) WatchedProcesses() []string { return watchNames(c.Processes) }
+// WatchedServices, WatchedProcesses, WatchedContainers and WatchedVMs are
+// the names to look for, without the empty entry that stands for "both sides
+// chose and nothing is in common" (see combineNames).
+func (c CollectSelection) WatchedServices() []string   { return watchNames(c.Services) }
+func (c CollectSelection) WatchedProcesses() []string  { return watchNames(c.Processes) }
+func (c CollectSelection) WatchedContainers() []string { return watchNames(c.Containers) }
+func (c CollectSelection) WatchedVMs() []string        { return watchNames(c.VMs) }
+
+// WatchOnly is the part of a selection that names things to watch, with the
+// rest left automatic.
+func (c CollectSelection) WatchOnly() CollectSelection {
+	return CollectSelection{Services: c.Services, Processes: c.Processes, Containers: c.Containers, VMs: c.VMs}
+}
 
 func watchNames(in []string) []string {
 	var out []string
@@ -98,7 +117,7 @@ func watchNames(in []string) []string {
 // everywhere.
 func (c CollectSelection) IsZero() bool {
 	return len(c.Metrics) == 0 && len(c.Interfaces) == 0 && len(c.Disks) == 0 && len(c.Mounts) == 0 &&
-		len(c.Services) == 0 && len(c.Processes) == 0
+		len(c.Services) == 0 && len(c.Processes) == 0 && len(c.Containers) == 0 && len(c.VMs) == 0
 }
 
 // Normalize trims, de-duplicates and sorts every list, so two selections that
@@ -111,6 +130,8 @@ func (c CollectSelection) Normalize() CollectSelection {
 		Mounts:     normalizeNames(c.Mounts),
 		Services:   normalizeNames(c.Services),
 		Processes:  normalizeNames(c.Processes),
+		Containers: normalizeNames(c.Containers),
+		VMs:        normalizeNames(c.VMs),
 	}
 }
 
@@ -144,7 +165,7 @@ func (c CollectSelection) Validate() error {
 			return fmt.Errorf("%q is not a metric family; use %s", m, strings.Join(MetricFamilies, ", "))
 		}
 	}
-	for label, list := range map[string][]string{"metrics": c.Metrics, "interfaces": c.Interfaces, "disks": c.Disks, "mounts": c.Mounts, "services": c.Services, "processes": c.Processes} {
+	for label, list := range map[string][]string{"metrics": c.Metrics, "interfaces": c.Interfaces, "disks": c.Disks, "mounts": c.Mounts, "services": c.Services, "processes": c.Processes, "containers": c.Containers, "virtual machines": c.VMs} {
 		if len(list) > MaxCollectNames {
 			return fmt.Errorf("too many %s (at most %d)", label, MaxCollectNames)
 		}
@@ -157,8 +178,10 @@ func (c CollectSelection) Validate() error {
 	// A service or program name is handed to systemctl, launchctl or the
 	// Service Control Manager as one argument. Nothing is run through a
 	// shell, but a name starting with a dash would read as an option, and a
-	// control character is never part of a real name.
-	for kind, list := range map[string][]string{"service": c.Services, "program": c.Processes} {
+	// control character is never part of a real name. Container and guest
+	// names are only ever compared with what the daemon or the hypervisor
+	// lists, never passed to either, but the same rule keeps them sane.
+	for kind, list := range map[string][]string{"service": c.Services, "program": c.Processes, "container": c.Containers, "virtual machine": c.VMs} {
 		for _, s := range list {
 			if strings.HasPrefix(s, "-") || strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
 				return fmt.Errorf("%q is not a %s name", s, kind)
@@ -190,6 +213,8 @@ func (c CollectSelection) Effective(selection CollectSelection) CollectSelection
 		Mounts:     combineNames(c.Mounts, selection.Mounts),
 		Services:   combineNames(c.Services, selection.Services),
 		Processes:  combineNames(c.Processes, selection.Processes),
+		Containers: combineNames(c.Containers, selection.Containers),
+		VMs:        combineNames(c.VMs, selection.VMs),
 	}
 }
 
@@ -249,6 +274,12 @@ type Inventory struct {
 	// false: nothing is watched until someone picks it.
 	Services  []InventoryItem `json:"services,omitempty"`
 	Processes []InventoryItem `json:"processes,omitempty"`
+
+	// Containers and VMs are every container the machine's Docker or Podman
+	// daemon has, running or not, and every guest its hypervisor has, made
+	// at the same moments and on the same terms.
+	Containers []InventoryItem `json:"containers,omitempty"`
+	VMs        []InventoryItem `json:"vms,omitempty"`
 }
 
 // MaxInventoryWatchNames bounds the service and process lists of an
@@ -282,8 +313,10 @@ func (i Inventory) Normalize() Inventory {
 	clip := func(in []InventoryItem) []InventoryItem { return clipTo(in, MaxCollectNames) }
 	return Inventory{
 		Interfaces: clip(i.Interfaces), Disks: clip(i.Disks), Mounts: clip(i.Mounts),
-		Services:  clipTo(i.Services, MaxInventoryWatchNames),
-		Processes: clipTo(i.Processes, MaxInventoryWatchNames),
+		Services:   clipTo(i.Services, MaxInventoryWatchNames),
+		Processes:  clipTo(i.Processes, MaxInventoryWatchNames),
+		Containers: clipTo(i.Containers, MaxInventoryWatchNames),
+		VMs:        clipTo(i.VMs, MaxInventoryWatchNames),
 	}
 }
 

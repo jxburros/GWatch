@@ -5,7 +5,7 @@ and several of them close off options that look obvious from the outside — so
 they are written down, with the reasoning, rather than left to be rediscovered
 or quietly reversed.
 
-Dated 2026-09-21; entries 10 and 11 added 2026-09-27; entries 12 to 15 and the update to 6 added 2026-10-14; further updates to 6 (the log, elevation, the Windows tray) 2026-10-23; entry 16 (remote collectors) and its row in 12 added 2026-10-23. Each entry says what was
+Dated 2026-09-21; entries 10 and 11 added 2026-09-27; entries 12 to 15 and the update to 6 added 2026-10-14; further updates to 6 (the log, elevation, the Windows tray) 2026-10-23; entry 16 (remote collectors) and its row in 12 added 2026-10-23; entry 17 (containers and virtual machines) and the note under 11 added 2026-10-26. Each entry says what was
 decided, what was rejected, and what would have to change for the decision to
 be worth revisiting.
 
@@ -339,7 +339,9 @@ not fit it: half of them would be the host's anyway.
 
 **Revisit if:** someone needs the Docker *containers* on a host watched, rather
 than the host — that is per-container cgroup accounting, a new collector rather
-than a new mount.
+than a new mount. (Done differently, in entry 17: the containers are read from the
+Docker daemon's own API, which already does that accounting, and the image only
+needs the socket mounted.)
 
 ## 12. An agent asks GWatch for a small, fixed set of things.
 
@@ -641,6 +643,71 @@ restarts (then the definitions want sealing with a key that never leaves the
 machine), or someone needs a collector for a check type not on the list — add
 the type to `CollectorCheckTypes` with its reasoning, never a generic escape
 hatch.
+
+## 17. Containers and virtual machines are readings, not a kind of node.
+
+**Decided** (2026-10-26). A machine can watch named Docker or Podman containers and
+named Hyper-V guests the way it watches named services: `CollectSelection.Containers`
+and `.VMs`, empty meaning none, each named one a state reading (`docker:<name>`,
+`vm:<name>`) and a few figures beside it (`docker-restarts`, `docker-cpu`,
+`docker-memory`, `vm-cpu`, `vm-memory`). `docs/HARDWARE.md` is the user's account.
+
+**Rejected: a "Docker host" or "hypervisor" node kind.** A node is a group of checks
+and a parent link, and both already fit: a Docker host is an ordinary node whose
+hardware check watches some containers, and a guest with an address of its own is an
+ordinary node whose parent is its host, so the host going down already suppresses
+the guest's alerts and the network map already draws it. A new kind would have
+needed its own editor, its own status and its own place in the map for nothing a
+reading does not already give — the per-reading value, verdict, threshold, chart,
+incident and trigger variable come for free.
+
+**Read from the daemon and the hypervisor, never from inside.** The alternative,
+an agent in every container or guest, already exists (`HostMetrics.Container`) and
+does not scale to "all of them on this box". Docker's API does the per-container
+cgroup accounting entry 11 said a new collector would need, and Hyper-V's WMI
+classes are what its own manager reads. Both are asked only once a name is chosen,
+and only about the chosen names, on the rule services follow (entry 15's "a
+machine nobody asked about pays nothing").
+
+**Read only, and the access said out loud.** The Docker client makes `GET`
+requests and has no code that could make any other; Hyper-V is queried, never
+called. But the Docker socket cannot be opened read-only — whoever can connect can
+read every container's environment and start new ones — so the documentation says
+so where the access is granted, rather than leaving "read-only" to imply more than
+it does. Hyper-V needs the "Hyper-V Administrators" group, which the installed
+service (LocalSystem) has.
+
+**WMI through COM, Get-VM only as a fallback.** The agent's other Windows readings
+call the system directly and start no PowerShell; Hyper-V is read the same way,
+from `golang.org/x/sys/windows` with no WMI library. `Get-VM` is tried only when
+WMI fails for a reason other than "not installed" or "not allowed" (both of which
+it would repeat seconds later), so a host where the COM path misbehaves still
+reports.
+
+**Settled from the plan's open questions:**
+
+- *Is a guest that is deliberately off down?* Yes, if it is watched: naming a
+  guest says it should be running, as naming a service does. One that is off on
+  purpose is not watched, or gets an instance threshold with no levels, which
+  existing thresholds already allow — so there is no per-guest switch to add.
+- *Docker through the agent only, or the local collector too?* Both: GWatch's own
+  collector is the same `sysmetrics.Collector`, so the computer GWatch runs on
+  (container or not) watches containers from its hardware panel like any machine.
+- *Restart loops* are counted by the machine itself — restarts in the last hour,
+  from the restart counts it has seen — because Docker's own count runs from the
+  last manual start and a container caught in a loop can look running every time
+  it is sampled.
+
+**Not done, deliberately:** starting, stopping or restarting anything (entry 2;
+triggers can already run `docker restart` or `ssh … virsh`, `docs/RECIPES.md`);
+orchestrators and cloud hypervisors; Docker over TCP or Docker Desktop's Windows
+named pipe; and creating guest nodes from what a hypervisor lists (the plan's
+optional third phase), which can follow now that the readings exist.
+
+**Revisit if:** a second hypervisor is wanted — libvirt next, then Proxmox — which
+is another `listGuests` behind the same `HostVM`; or watching hundreds of
+containers on one host makes one inspect and one stats request per container per
+reading too slow, which is the point to ask the daemon in parallel.
 
 ---
 

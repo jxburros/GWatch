@@ -198,6 +198,23 @@ test('services and programs read as words and counts', () => {
   assert.equal(fmt.unitAxis(4, 'count'), '4');
 });
 
+// A watched container's and guest's state is 2, 1 or 0, read as a word; its
+// figures are percentages, labelled with the container or guest they are of.
+test('containers and virtual machines read as words and percentages', () => {
+  assert.equal(fmt.metricUnit('docker:web'), 'container');
+  assert.equal(fmt.metricUnit('vm:dc01'), 'guest');
+  assert.equal(fmt.metricUnit('docker-restarts:web'), 'count');
+  for (const k of ['docker-cpu:web', 'docker-memory:web', 'vm-cpu:dc01', 'vm-memory:dc01']) assert.equal(fmt.metricUnit(k), '%', k);
+  assert.equal(fmt.metricLabel('docker:web'), 'Container web');
+  assert.equal(fmt.metricLabel('vm:dc01'), 'Virtual machine dc01');
+  assert.equal(fmt.metricLabel('docker-restarts:web'), 'Restarts of web in the last hour');
+  assert.equal(fmt.metricLabel('vm-memory:dc01'), 'Memory use of dc01');
+  assert.equal(fmt.metricLabel('docker-cpu'), 'Container processor');
+  assert.deepEqual([2, 1, 0].map((v) => fmt.metricValue(v, 'container')), ['running', 'not healthy', 'stopped']);
+  assert.deepEqual([2, 1, 0].map((v) => fmt.unitValue(v, 'guest')), ['running', 'paused or saved', 'off']);
+  assert.equal(fmt.unitAxis(2, 'container'), '2');
+});
+
 test('unitAxis writes every tick on an axis in one scaled unit', () => {
   // Ticks 0 … 2 MB/s in steps of 0.5 MB/s: one unit, one decimal, all the way up.
   const yt = { max: 2e6, step: 5e5 };

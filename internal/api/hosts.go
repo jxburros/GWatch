@@ -65,32 +65,21 @@ func (s *Server) handleGetHost(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotFound, "no such machine")
 }
 
-// handleLocalWatchable lists every service on the computer GWatch runs on
-// and every program running on it now, for choosing which to watch. The list
+// handleLocalWatchable lists every service, container and virtual machine on
+// the computer GWatch runs on and every program running on it now, for
+// choosing which to watch. The list
 // is made when this is asked and never otherwise: it is the whole machine,
 // and nothing but the person choosing needs it. An agent's equivalent arrives
 // with its check-in (Agent.Inventory).
 func (s *Server) handleLocalWatchable(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	out := map[string]any{}
-	var problems []string
-	if svcs, err := sysmetrics.ListServices(ctx); err != nil {
-		problems = append(problems, "services: "+err.Error())
-	} else {
-		out["services"] = svcs
-	}
-	if procs, err := sysmetrics.ListProcesses(ctx); err != nil {
-		problems = append(problems, "programs: "+err.Error())
-	} else {
-		out["processes"] = procs
-	}
-	out["problems"] = problems
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, sysmetrics.ListWatchable(ctx))
 }
 
-// handleSetLocalWatch sets the services and programs the computer GWatch
-// runs on watches. Its hardware check judges them from the next sample on.
+// handleSetLocalWatch sets the services, programs, containers and virtual
+// machines the computer GWatch runs on watches. Its hardware check judges
+// them from the next sample on.
 func (s *Server) handleSetLocalWatch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var sel model.CollectSelection
@@ -116,9 +105,15 @@ func (s *Server) handleSetLocalWatch(w http.ResponseWriter, r *http.Request) {
 		if len(saved.Processes) > 0 {
 			parts = append(parts, "programs: "+strings.Join(saved.Processes, ", "))
 		}
+		if len(saved.Containers) > 0 {
+			parts = append(parts, "containers: "+strings.Join(saved.Containers, ", "))
+		}
+		if len(saved.VMs) > 0 {
+			parts = append(parts, "virtual machines: "+strings.Join(saved.VMs, ", "))
+		}
 		detail = strings.Join(parts, "; ") + ". The next reading reports them."
 	}
-	s.auditAuth(ctx, "Watched services and programs changed for this computer", detail)
+	s.auditAuth(ctx, "What this computer watches changed", detail)
 	writeJSON(w, http.StatusOK, saved)
 }
 
@@ -200,7 +195,8 @@ func (s *Server) hostSummaries(r *http.Request) ([]model.HostSummary, error) {
 	}
 	out = append(out, local)
 
-	// An agent's inventory is every service and program on that machine. The
+	// An agent's inventory is every service, program, container and guest on
+	// that machine. The
 	// same list for this computer is administrator-only and never an API key's
 	// (handleLocalWatchable), and only the collection picker, which reads
 	// /api/agents, needs it; the hardware list, open to every viewer and every

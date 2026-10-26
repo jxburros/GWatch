@@ -739,20 +739,25 @@ Every other check type leaves `metrics` absent.
   reading in `metrics`, a `status` and a `stale` flag. That status means only "are
   readings still arriving" — whether a figure is *too high* is a hardware check's
   business, because only a check knows the thresholds somebody chose.
-  A registered machine's `agent.inventory` (every service and program on it) is left
+  A registered machine's `agent.inventory` (every service, program, container and
+  virtual machine on it) is left
   out for anyone but an administrator; `GET /api/agents` carries it.
 - `GET /api/hosts/{key}` → one `HostSummary`. The key is `local`, `agent:<id>` or
   `url:<check id>`.
-- `GET /api/hosts/local/watchable` → `{ "services": [InventoryItem], "processes": [InventoryItem], "problems": [string] }`.
+- `GET /api/hosts/local/watchable` → `{ "services": [InventoryItem], "processes": [InventoryItem], "containers": [InventoryItem], "vms": [InventoryItem], "problems": [string] }`.
   Every service on the computer GWatch runs on (`detail` is `running` or `stopped`,
-  then its description) and every program running on it now (`detail` is how many
-  copies), for choosing which to watch. Made when asked for and never otherwise; a
-  platform that cannot list one of them says why in `problems`. Administrator only,
+  then its description), every program running on it now (`detail` is how many
+  copies), every container its Docker or Podman daemon has (`detail` is its state and
+  image) and every guest its Hyper-V has (`detail` is its state and processors), for
+  choosing which to watch. Made when asked for and never otherwise; a platform that
+  cannot list one of them says why in `problems` (a machine with no Docker daemon, or
+  that is not Windows, simply has no containers or guests to list). Administrator only,
   never an API key.
-- `PUT /api/hosts/local/watch` body `{ "services": ["Spooler"], "processes": ["plex"] }` →
-  the stored `{ services, processes }`. Which services and programs the computer
-  GWatch runs on watches; the next sample reports them as `service:<name>` and
-  `process:<name>` metrics (below). An empty body watches nothing. `400` for a name
+- `PUT /api/hosts/local/watch` body `{ "services": ["Spooler"], "processes": ["plex"], "containers": ["web"], "vms": ["dc01"] }` →
+  the stored `{ services, processes, containers, vms }`. What the computer GWatch runs
+  on watches; the next sample reports them as `service:<name>`, `process:<name>`,
+  `docker…:<name>` and `vm…:<name>` metrics (below). An empty body watches nothing.
+  `400` for a name
   that starts with `-` or contains a control character. Administrator only, never an
   API key; written to the audit trail. The current list is `watch` on this computer's
   `HostSummary` (absent when nothing is watched).
@@ -776,9 +781,21 @@ block device. On Linux, `temp:<chip>/<sensor>` (°C), `psi:<resource>.avg10` and
 `.avg60` (%) and `pool:<name>` (unit `state`: 0 healthy, 1 degraded, 2 faulted). For
 the services and programs a machine is told to watch (#62), `service:<name>` (unit
 `running`: 1 running, 0 stopped or not installed) and `process:<name>` (unit `count`:
-how many copies are running); a machine watching none reports none. Units follow the
+how many copies are running); a machine watching none reports none. For the containers
+it is told to watch, `docker:<name>` (unit `container`: 2 running, 1 unhealthy, paused
+or restarting, 0 stopped or not found), `docker-restarts:<name>` (unit `count`:
+restarts by its restart policy in the last hour), `docker-cpu:<name>` and
+`docker-memory:<name>` (% of the container's own limit, or of the machine's); for the
+virtual machines, `vm:<name>` (unit `guest`: 2 running, 1 paused, saved or changing
+state, 0 off or not found), `vm-cpu:<name>` and `vm-memory:<name>` (%). A container
+that is not running, or a guest that is off, has only its state. Units follow the
 family: `%` for everything but `load` (no unit), the throughput keys (`B/s`) and the
-ones just named.
+ones just named. The reading itself carries each watched container as
+`HostMetrics.docker` (`name`, `id`, `image`, `state`, `health`, `status`, `startedAt`,
+`exitCode`, `restartCount`, `recentRestarts`, `cpuPct`, `cpuLimitCores`,
+`memoryUsedBytes`, `memoryLimitBytes`, `memoryPct`) and each guest as `HostMetrics.vms`
+(`name`, `hypervisor`, `id`, `state`, `uptimeSeconds`, `processors`, `cpuPct`,
+`memoryAssignedBytes`, `memoryPct`).
 
 **Per-metric verdicts.** Every run puts one `MetricResult` per reading in
 `Result.details.metricResults`:
@@ -885,14 +902,15 @@ routes — an administrator in the browser, never an API key:
 - `POST /api/agents/{id}/rotate/cancel` → 204. Drops a replacement nobody has used.
 - `PUT /api/agents/{id}/collect` body `CollectSelection` → `Agent`. Which readings the
   administrator wants from the machine: `{ "metrics": ["cpu","net"], "interfaces": ["eth0"],
-  "disks": [], "mounts": [], "services": ["nginx", "smbd"], "processes": ["plex"] }`. An
-  empty list is "automatic" — every kind of reading, every disk and filesystem, and the
-  interfaces that are not obviously virtual — except `services` and `processes`, the names
-  to watch, where empty means none. The agent applies it the next time it checks in,
+  "disks": [], "mounts": [], "services": ["nginx", "smbd"], "processes": ["plex"],
+  "containers": ["web"], "vms": ["dc01"] }`. An empty list is "automatic" — every kind of
+  reading, every disk and filesystem, and the interfaces that are not obviously virtual —
+  except `services`, `processes`, `containers` and `vms`, the names to watch, where
+  empty means none. The agent applies it the next time it checks in,
   always inside the limit set in its own configuration file: GWatch can narrow what a
   machine reports, never widen it. `400` for an unknown metric family (`cpu`, `memory`,
-  `swap`, `load`, `disk`, `inodes`, `net`, `diskio`, `temp`, `psi`, `pool`), or a service
-  or program name that starts with `-` or contains a control character.
+  `swap`, `load`, `disk`, `inodes`, `net`, `diskio`, `temp`, `psi`, `pool`), or a name to
+  watch that starts with `-` or contains a control character.
 - `PUT /api/agents/{id}/collector` body `{ "enabled": bool }` → `Agent`. GWatch's half of
   the agreement that makes a machine a remote collector; the machine's half is
   `"collector": true` in its own `agent.json`. Neither alone does anything: the checks are
@@ -991,7 +1009,7 @@ per-IP failure budget as a wrong password.
 ### Asking for settings
 
 `POST /ingest/checkin` with `Authorization: Bearer gwa_…` and an optional body
-`{ "version": "0.7.0", "collector": true, "inventory": { "interfaces": [{ "name", "detail", "auto" }], "disks": […], "mounts": […], "services": […], "processes": […] } }`.
+`{ "version": "0.7.0", "collector": true, "inventory": { "interfaces": [{ "name", "detail", "auto" }], "disks": […], "mounts": […], "services": […], "processes": […], "containers": […], "vms": […] } }`.
 `collector` says the machine's own configuration allows it to act as a remote collector.
 Answers `200` with an `AgentSettings`:
 
@@ -1021,10 +1039,11 @@ interval is clamped to between one minute and a day, a token is taken up only if
 agent's file owns it, and `latestAgent` changes nothing (an agent still fetches and
 verifies releases itself, from the release feed). The agent sends an inventory of what it
 could report so that GWatch can offer checkboxes for a disk or interface it has not been
-told about; only what the machine's own limit allows is listed. `services` and
-`processes` (at most 1024 each) are every service the machine has and every program
-running at check-in time, listed then and never with a reading, for choosing which to
-watch. Like `/ingest/metrics` the
+told about; only what the machine's own limit allows is listed. `services`,
+`processes`, `containers` and `vms` (at most 1024 each) are every service the machine
+has, every program running at check-in time, every container its Docker daemon has and
+every guest its hypervisor has, listed then and never with a reading, for choosing which
+to watch. Like `/ingest/metrics` the
 route is reached with an agent token and nothing else, shares its failure budget, and is
 outside the authorization table. [`AGENT-DECISIONS.md`](AGENT-DECISIONS.md#12-an-agent-asks-gwatch-for-a-small-fixed-set-of-things)
 says why this does not turn GWatch into a control channel, and

@@ -19,7 +19,9 @@ import (
 // have several of: "disk:/srv", "inodes:/srv", "net:eth0.rx", "net:eth0.tx",
 // "diskio:sda.read", "diskio:sda.write", "diskio:sda.busy",
 // "temp:coretemp/Package id 0", "psi:memory.avg10", "pool:tank",
-// "service:nginx", "process:plex".
+// "service:nginx", "process:plex", "docker:web", "docker-restarts:web",
+// "docker-cpu:web", "docker-memory:web", "vm:dc01", "vm-cpu:dc01",
+// "vm-memory:dc01".
 
 // The metric families a hardware check reports.
 const (
@@ -40,10 +42,24 @@ const (
 	// nobody has asked about reports none and spends nothing finding them.
 	MetricService = "service" // a watched service — one instance per service: 1 running, 0 stopped or missing
 	MetricProcess = "process" // a watched program — one instance per executable name: how many copies are running
+
+	// Containers and virtual machines follow the same rule: only the names a
+	// machine is told to watch (CollectSelection.Containers and .VMs). Each
+	// container or guest is a state reading and up to three more, each its
+	// own family so that its thresholds are its own: a restart count and a
+	// memory percentage cannot share a level.
+	MetricDocker         = "docker"          // a watched container — 2 running, 1 unhealthy, paused or restarting, 0 stopped or missing
+	MetricDockerRestarts = "docker-restarts" // a watched container's restarts in the last hour
+	MetricDockerCPU      = "docker-cpu"      // a watched container's processor use, % of its limit (or of the machine)
+	MetricDockerMemory   = "docker-memory"   // a watched container's memory use, % of its limit (or of the machine)
+	MetricVM             = "vm"              // a watched guest — 2 running, 1 paused, saved or changing state, 0 off or missing
+	MetricVMCPU          = "vm-cpu"          // a watched guest's processor use, % of its virtual processors
+	MetricVMMemory       = "vm-memory"       // a watched guest's memory use, % of what the host assigned it
 )
 
 // MetricFamilies lists every family, in the order the editor shows them.
-var MetricFamilies = []string{MetricCPU, MetricMemory, MetricSwap, MetricLoad, MetricDisk, MetricInodes, MetricNet, MetricDiskIO, MetricTemp, MetricPSI, MetricPool, MetricService, MetricProcess}
+var MetricFamilies = []string{MetricCPU, MetricMemory, MetricSwap, MetricLoad, MetricDisk, MetricInodes, MetricNet, MetricDiskIO, MetricTemp, MetricPSI, MetricPool, MetricService, MetricProcess,
+	MetricDocker, MetricDockerRestarts, MetricDockerCPU, MetricDockerMemory, MetricVM, MetricVMCPU, MetricVMMemory}
 
 // MetricFamilyLabel is the family's name as a person reads it.
 func MetricFamilyLabel(family string) string {
@@ -74,6 +90,20 @@ func MetricFamilyLabel(family string) string {
 		return "Service"
 	case MetricProcess:
 		return "Process"
+	case MetricDocker:
+		return "Container"
+	case MetricDockerRestarts:
+		return "Container restarts"
+	case MetricDockerCPU:
+		return "Container processor"
+	case MetricDockerMemory:
+		return "Container memory"
+	case MetricVM:
+		return "Virtual machine"
+	case MetricVMCPU:
+		return "Virtual machine processor"
+	case MetricVMMemory:
+		return "Virtual machine memory"
 	}
 	return family
 }
@@ -82,7 +112,8 @@ func MetricFamilyLabel(family string) string {
 // interface or device rather than being one reading for the whole machine.
 func MetricFamilyHasInstances(family string) bool {
 	switch family {
-	case MetricDisk, MetricInodes, MetricNet, MetricDiskIO, MetricTemp, MetricPSI, MetricPool, MetricService, MetricProcess:
+	case MetricDisk, MetricInodes, MetricNet, MetricDiskIO, MetricTemp, MetricPSI, MetricPool, MetricService, MetricProcess,
+		MetricDocker, MetricDockerRestarts, MetricDockerCPU, MetricDockerMemory, MetricVM, MetricVMCPU, MetricVMMemory:
 		return true
 	}
 	return false
@@ -109,7 +140,8 @@ func MetricKey(family, instance string) string {
 func SystemMetricUnit(key string) string {
 	family, instance := SplitMetricKey(key)
 	switch family {
-	case MetricCPU, MetricMemory, MetricSwap, MetricDisk, MetricInodes, MetricPSI:
+	case MetricCPU, MetricMemory, MetricSwap, MetricDisk, MetricInodes, MetricPSI,
+		MetricDockerCPU, MetricDockerMemory, MetricVMCPU, MetricVMMemory:
 		return "%"
 	case MetricTemp:
 		return "°C"
@@ -119,8 +151,14 @@ func SystemMetricUnit(key string) string {
 	case MetricService:
 		// Also a state: 1 running, 0 not (ServiceValue).
 		return "running"
-	case MetricProcess:
+	case MetricProcess, MetricDockerRestarts:
 		return "count"
+	case MetricDocker:
+		// States again: 2 running, 1 not well, 0 stopped (DockerValue,
+		// VMValue), each worded in its own way.
+		return "container"
+	case MetricVM:
+		return "guest"
 	case MetricLoad:
 		return ""
 	case MetricNet:

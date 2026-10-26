@@ -1089,7 +1089,7 @@ func newCollector(cfg config) *sysmetrics.Collector {
 	// reporting loop narrows this to GWatch's choice before each reading
 	// (agentRuntime.watch); serve mode, which GWatch never chooses for,
 	// watches exactly these.
-	c.SetWatch(cfg.collect.WatchedServices(), cfg.collect.WatchedProcesses())
+	c.SetWatch(cfg.collect)
 	return c
 }
 

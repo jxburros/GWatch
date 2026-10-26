@@ -448,7 +448,7 @@ export async function mount(root, ctx) {
   function chartGroups(c) {
     const metrics = checkMetrics(c);
     if (c.type !== 'system') return metrics.map((m) => ({ id: m.name, title: m.name, unit: m.unit, metrics: [m], csv: m.name }));
-    const order = ['cpu', 'memory', 'swap', 'load', 'disk', 'inodes', 'net', 'diskio', 'temp', 'psi', 'pool', 'service', 'process'];
+    const order = ['cpu', 'memory', 'swap', 'load', 'disk', 'inodes', 'net', 'diskio', 'temp', 'psi', 'pool', 'service', 'process', 'docker', 'docker-restarts', 'docker-cpu', 'docker-memory', 'vm', 'vm-cpu', 'vm-memory'];
     const groups = new Map();
     for (const m of metrics) {
       const key = m.family === 'cpu' || m.family === 'memory' || m.family === 'swap' ? 'usage' : m.family;

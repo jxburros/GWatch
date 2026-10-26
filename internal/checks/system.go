@@ -328,6 +328,26 @@ func hostMetricResults(cfg model.CheckConfig, m model.HostMetrics) []model.Metri
 		v := float64(p.Count)
 		add(model.MetricKey(model.MetricProcess, p.Name), fmt.Sprintf("Copies of %s running", p.Name), &v)
 	}
+	// Watched containers and guests: a state reading each, and the figures
+	// the daemon or the hypervisor had for it. A container that is not
+	// running has no processor or memory figure, and is judged on its state
+	// alone; so is a guest that is off.
+	for _, c := range m.Docker {
+		v := model.DockerValue(c)
+		add(model.MetricKey(model.MetricDocker, c.Name), fmt.Sprintf("Container %s", c.Name), &v)
+		if c.State != "not found" {
+			r := float64(c.RecentRestarts)
+			add(model.MetricKey(model.MetricDockerRestarts, c.Name), fmt.Sprintf("Restarts of %s in the last hour", c.Name), &r)
+		}
+		add(model.MetricKey(model.MetricDockerCPU, c.Name), fmt.Sprintf("Processor use of %s", c.Name), c.CPUPct)
+		add(model.MetricKey(model.MetricDockerMemory, c.Name), fmt.Sprintf("Memory use of %s", c.Name), c.MemoryPct)
+	}
+	for _, g := range m.VMs {
+		v := model.VMValue(g)
+		add(model.MetricKey(model.MetricVM, g.Name), fmt.Sprintf("Virtual machine %s", g.Name), &v)
+		add(model.MetricKey(model.MetricVMCPU, g.Name), fmt.Sprintf("Processor use of %s", g.Name), g.CPUPct)
+		add(model.MetricKey(model.MetricVMMemory, g.Name), fmt.Sprintf("Memory use of %s", g.Name), g.MemoryPct)
+	}
 	return out
 }
 
@@ -381,6 +401,24 @@ func metricString(v float64, unit string) string {
 		return "stopped"
 	case "count":
 		return fmt.Sprintf("%.0f", v)
+	case "container":
+		// A container's state as DockerValue numbers it, and below a
+		// guest's as VMValue does.
+		switch {
+		case v >= 2:
+			return "running"
+		case v >= 1:
+			return "not healthy"
+		}
+		return "stopped"
+	case "guest":
+		switch {
+		case v >= 2:
+			return "running"
+		case v >= 1:
+			return "paused or saved"
+		}
+		return "off"
 	}
 	return fmt.Sprintf("%.2f", v)
 }

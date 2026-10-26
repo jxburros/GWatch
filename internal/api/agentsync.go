@@ -314,5 +314,7 @@ func describeSelection(sel model.CollectSelection) string {
 	add("filesystems", sel.Mounts)
 	add("services", sel.Services)
 	add("programs", sel.Processes)
+	add("containers", sel.Containers)
+	add("virtual machines", sel.VMs)
 	return strings.Join(parts, "; ") + ". The machine applies this the next time it checks in."
 }

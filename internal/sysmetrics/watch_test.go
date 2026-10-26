@@ -181,12 +181,13 @@ func TestParsePsComm(t *testing.T) {
 // and a reading carries neither list.
 func TestCollectorWatchesNothingByDefault(t *testing.T) {
 	c := NewCollector("")
-	c.SetWatch([]string{" ", ""}, nil)
-	if c.services != nil || c.processes != nil {
-		t.Errorf("blank names should leave nothing watched: %+v %+v", c.services, c.processes)
+	c.SetWatch(model.CollectSelection{Services: []string{" ", ""}, Containers: []string{""}})
+	if c.services != nil || c.processes != nil || c.containers != nil || c.vms != nil {
+		t.Errorf("blank names should leave nothing watched: %+v %+v %+v %+v", c.services, c.processes, c.containers, c.vms)
 	}
-	svcs, procs, warn := readWatched(context.Background(), nil, nil)
-	if svcs != nil || procs != nil || warn != nil {
+	var m model.HostMetrics
+	warn := c.readWatched(context.Background(), &m, watchLists{})
+	if m.Services != nil || m.Processes != nil || m.Docker != nil || m.VMs != nil || warn != nil {
 		t.Error("readWatched with nothing to watch must do nothing")
 	}
 }

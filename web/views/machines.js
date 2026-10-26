@@ -379,7 +379,7 @@ export function hardwarePanel(key, { title = 'Hardware', metricStatus = null, is
   function renderLocalWatch() {
     const picker = watchPicker({
       value: state.host.watch || {},
-      note: 'Name the services and programs on this computer that should be running. Each becomes a reading of the hardware check, and stopping is critical by default. Nothing is watched until you name something.',
+      note: 'Name the services, programs, containers and virtual machines on this computer that should be running. Each becomes a reading of the hardware check, and stopping is critical by default. Nothing is watched, and Docker and Hyper-V are not asked anything, until you name something.',
     });
     const listBtn = h('button', { class: 'btn', type: 'button', onclick: async () => {
       listBtn.disabled = true;
@@ -399,7 +399,7 @@ export function hardwarePanel(key, { title = 'Hardware', metricStatus = null, is
       save.disabled = false;
     } }, icon('save'), 'Save what to watch');
     replace(watchEl, h('div', { class: 'stack-sm', 'data-section': 'watch' },
-      h('div', { class: 'section-title' }, 'Services and programs to watch'),
+      h('div', { class: 'section-title' }, 'What to watch on this computer'),
       picker.el,
       h('div', { class: 'btn-group' }, listBtn, save)));
   }
@@ -565,6 +565,51 @@ export function hardwarePanel(key, { title = 'Hardware', metricStatus = null, is
             const lvl = levelFor(`process:${p.name}`, null) || (p.count > 0 ? '' : ' crit');
             const label = p.count > 0 ? `${num(p.count)} running` : 'not running';
             return [p.name, statusPill(lvl === ' crit' ? 'down' : lvl === ' warn' ? 'degraded' : 'up', { label })];
+          })),
+      ));
+    }
+
+    // Containers and guests: the state as a word, coloured by the check's
+    // verdict on it (or, with no check to ask, by the state itself), and the
+    // figures the daemon or the hypervisor gave beside it.
+    const stateOf = (metricKey, fallback) => {
+      const st = verdicts?.[metricKey];
+      return st === 'down' || st === 'degraded' || st === 'up' ? st : fallback;
+    };
+    const usage = (pctValue, detail) => (pctValue == null ? h('span', { class: 'muted' }, '—') : h('span', null, pct(pctValue), detail ? h('span', { class: 'dim small' }, ` · ${detail}`) : null));
+
+    if (m.docker?.length) {
+      snapEl.append(h('div', null,
+        h('div', { class: 'section-title' }, 'Watched containers'),
+        table(['Container', 'State', 'Restarts (last hour)', 'Processor', 'Memory', 'Image'],
+          m.docker.map((c) => {
+            const fallback = c.state === 'running' && c.health !== 'unhealthy' ? 'up' : c.state === 'paused' || c.state === 'restarting' || c.state === 'running' ? 'degraded' : 'down';
+            const label = c.state === 'not found' ? 'not found' : `${c.state}${c.health ? ` (${c.health})` : ''}`;
+            return [
+              c.name,
+              h('span', { title: c.status || '' }, statusPill(stateOf(`docker:${c.name}`, fallback), { label })),
+              c.state === 'not found' ? h('span', { class: 'muted' }, '—') : `${num(c.recentRestarts || 0)}${c.restartCount ? ` (${num(c.restartCount)} in all)` : ''}`,
+              usage(c.cpuPct, c.cpuLimitCores ? `limit ${num(c.cpuLimitCores)} core${c.cpuLimitCores === 1 ? '' : 's'}` : ''),
+              usage(c.memoryPct, c.memoryLimitBytes ? `${bytes(c.memoryUsedBytes)} of ${bytes(c.memoryLimitBytes)}` : ''),
+              c.image ? h('span', { class: 'mono small' }, c.image) : h('span', { class: 'muted' }, '—'),
+            ];
+          })),
+      ));
+    }
+
+    if (m.vms?.length) {
+      snapEl.append(h('div', null,
+        h('div', { class: 'section-title' }, 'Watched virtual machines'),
+        table(['Virtual machine', 'State', 'Up for', 'Processor', 'Memory'],
+          m.vms.map((v) => {
+            const fallback = v.state === 'running' ? 'up' : v.state === 'not found' || String(v.state || '').startsWith('off') ? 'down' : 'degraded';
+            return [
+              v.name,
+              statusPill(stateOf(`vm:${v.name}`, fallback), { label: v.state || 'unknown' }),
+              v.uptimeSeconds ? duration(v.uptimeSeconds) : h('span', { class: 'muted' }, '—'),
+              usage(v.cpuPct, v.processors ? `${num(v.processors)} virtual processor${v.processors === 1 ? '' : 's'}` : ''),
+              usage(v.memoryPct, v.memoryAssignedBytes ? `of ${bytes(v.memoryAssignedBytes)}` : ''),
+            ];
           })),
       ));
     }

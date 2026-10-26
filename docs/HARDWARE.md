@@ -211,9 +211,10 @@ the last word:
 
 - **On the machine**, `collect` in `agent.json` (or the control panel) is a
   *limit*: `{ "metrics": ["cpu", "memory", "disk", "net"], "interfaces": ["eth0"], "disks": [], "mounts": ["/", "/data"] }`,
-  plus, optionally, the `services` and `processes` to watch (see
-  [Services and programs](#services-and-programs); unlike the other lists, an
-  empty one there means none).
+  plus, optionally, the `services`, `processes`, `containers` and `vms` to watch
+  (see [Services and programs](#services-and-programs) and
+  [Containers and virtual machines](#containers-and-virtual-machines); unlike
+  the other lists, an empty one there means none).
   A list that is empty means "no limit". `metrics` are the kinds of reading
   (`cpu`, `load`, `memory`, `swap`, `disk`, `inodes`, `net`, `diskio`, and on
   Linux `temp`, `psi` and `pool`). A limit written before the Linux kinds
@@ -662,7 +663,7 @@ chosen:
   reports*): `{ "services": ["nginx", "docker", "smbd"], "processes": ["plex"] }`.
   The usual rule holds — names in the machine's own file are both what it
   watches when GWatch has not chosen and all GWatch may choose from;
-- for the computer GWatch runs on, under **Services and programs to watch** on
+- for the computer GWatch runs on, under **What to watch on this computer** on
   its hardware panel.
 
 To pick rather than guess, each place offers the machine's own list: an agent
@@ -689,6 +690,107 @@ container.
 Anything a platform cannot report is recorded as a warning on the reading and
 shown on the machine's page. It never fails the check on its own: knowing the
 disk is full is useful even when the network counters are missing.
+
+### Containers and virtual machines
+
+The same goes for the **Docker containers** a machine runs and the **virtual
+machines** its hypervisor hosts: name the ones you care about, and each becomes
+readings of that machine's hardware check. There is no separate kind of node for
+a Docker host or a hypervisor — it is an ordinary node whose hardware check
+watches some containers or guests. A guest (or a container with an address of
+its own) can still have a node of its own with ping, TCP or HTTP checks; make the
+host its **parent** and the host going down suppresses the guest's alerts.
+
+For each watched **container**:
+
+| Reading | What it is | New checks |
+| --- | --- | --- |
+| `docker:<name>` | **2** running (and healthy, or with no health check, or one still starting), **1** running but unhealthy, paused, or being restarted by its restart policy, **0** stopped, exited, dead or gone | warning at or below 1, critical at or below 0 |
+| `docker-restarts:<name>` | how many times its restart policy restarted it **in the last hour** | warning at 3 |
+| `docker-cpu:<name>` | processor use, % of its own limit (`--cpus`), or of the whole machine when it has none | charted, no level |
+| `docker-memory:<name>` | memory use (less reclaimable file cache, as `docker stats` counts it), % of its own limit (`--memory`), or of the whole machine | warning 90, critical 97 |
+
+The restart figure is what catches a container stuck in a crash loop: sampled
+between crashes it can look running every time, but its restarts keep climbing.
+It is counted by the machine from the restart counts it has seen, so the first
+reading after the agent starts counts none, and it starts again when the
+container is started by hand or recreated (as `docker compose up` does). A
+container is matched by name, as `docker ps` shows it, so one Compose recreates
+keeps its readings. The machine page shows each with its state and health, its
+`docker ps` status line, its image, and its use against its limits.
+
+For each watched **virtual machine** (a Hyper-V guest, for now):
+
+| Reading | What it is | New checks |
+| --- | --- | --- |
+| `vm:<name>` | **2** running, **1** paused, saved, or part way between states (starting, stopping, saving, …), **0** off or gone | warning at or below 1, critical at or below 0 |
+| `vm-cpu:<name>` | how busy its virtual processors are, across all of them | charted, no level |
+| `vm-memory:<name>` | how much of the memory the host assigned it the guest is using, when its integration services report it | charted, no level |
+
+The machine page shows each guest's state, how long it has been up, and its
+processor and memory figures. A guest that is off has none of those, and is
+judged on its state alone.
+
+**A guest or container that is meant to be off** — a lab machine started now
+and then, a one-shot job — should not be watched, or should have an instance
+threshold of its own with both levels blank (in the check's thresholds, *Add a
+threshold for one disk / interface*, family *Virtual machines* or *Containers*,
+its name), which keeps it charted and never alerts on it. A hardware check made
+before this release has none of the new default levels: add them under
+**Containers** and **Virtual machines** in its thresholds, or the readings are
+charted but never alerted on.
+
+Names are chosen in the same places as services, and the same lists are offered
+to pick from: an agent sends every container its Docker has and every guest its
+hypervisor has with its check-in, and the hardware panel and the control panel
+make the list when you ask. In `agent.json`:
+`{ "containers": ["nextcloud", "nextcloud-db"], "vms": ["dc01"] }`.
+
+**Nothing asks Docker or Hyper-V anything until a name is given.** Then:
+
+- **Docker** (and **Podman**, which serves the same API) is read over the
+  daemon's Unix socket: `DOCKER_HOST` when it names one (`unix:///…`), otherwise
+  `/var/run/docker.sock`, `/run/podman/podman.sock`, the rootless Podman socket
+  under `$XDG_RUNTIME_DIR`, or Docker Desktop's on a Mac. Only `GET` requests
+  are made — the container list, then each watched container's inspect record
+  and one set of statistics — and the client has no way to start, stop or
+  change anything. A daemon reached only over TCP is not read, and neither is
+  Docker Desktop's named pipe on Windows.
+- **Hyper-V** is read on the Windows host through WMI
+  (`root\virtualization\v2`: `Msvm_ComputerSystem` for each guest's state and
+  uptime, `Msvm_SummaryInformation` for its processor and memory figures), with
+  no PowerShell; if WMI fails for some other reason than Hyper-V being missing
+  or the account not being allowed, `Get-VM` is tried instead. libvirt, Proxmox
+  and others are not read yet, and a guest watched on another platform says so
+  as a warning on the reading.
+
+**Access, and what it means.** Choose the account that reads these
+deliberately:
+
+- **The Docker socket is all or nothing.** Read-only use of
+  `/var/run/docker.sock` still means whoever can connect to it can read every
+  container's configuration, environment variables (and the secrets people put
+  in them) included — and the daemon does not tell a reader from a writer, so
+  an account that may connect could equally start a privileged container. The
+  agent asks only what is listed above, but giving its account the socket (the
+  `docker` group, or root) is giving it that much. A packaged agent runs as
+  root on Linux and macOS, which can already; an agent run as yourself needs
+  you to be in the `docker` group. Rootless Podman's socket shows only that
+  user's containers.
+- **Hyper-V** needs membership of the local **Hyper-V Administrators** group,
+  or an administrator. The installed agent service runs as LocalSystem, which
+  may; `gwatch-agent once`, `print` or the control panel run as an ordinary
+  user may not, and say so.
+- **In a container**, the agent image (see [In a container](#in-a-container))
+  needs the socket mounted, `- /var/run/docker.sock:/var/run/docker.sock`, and
+  its unprivileged user needs the socket's group: `group_add: ["<gid>"]`, with
+  the host's `docker` group id (`getent group docker`). A `:ro` mount of a socket
+  does not make the API read-only. GWatch's own image watching its host's
+  containers needs the same.
+
+A daemon or hypervisor that cannot be read — not installed, not running, not
+allowed — is a warning on the reading, never a list of stopped containers or
+guests that are off: "could not tell" is not "down".
 
 ### Memory, honestly
 

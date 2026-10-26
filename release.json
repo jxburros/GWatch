@@ -3,11 +3,11 @@
   "apps": {
     "gwatch": {
       "title": "GWatch",
-      "version": "0.8.3"
+      "version": "0.8.4"
     },
     "gwatch-agent": {
       "title": "GWatch Agent",
-      "version": "0.8.2"
+      "version": "0.8.3"
     }
   }
 }

@@ -198,10 +198,15 @@ export function inGroup(n, group) {
 // the readings a machine has one of, and "family:instance" for the rest:
 // "disk:/srv", "inodes:/srv", "net:eth0.rx", "diskio:sda.busy",
 // "temp:coretemp/Package id 0", "psi:memory.avg10", "pool:tank",
-// "service:nginx", "process:plex". These mirror
-// model.SplitMetricKey and model.SystemMetricUnit on the server.
+// "service:nginx", "process:plex", "docker:web", "docker-restarts:web",
+// "docker-cpu:web", "docker-memory:web", "vm:dc01", "vm-cpu:dc01",
+// "vm-memory:dc01". These mirror model.SplitMetricKey and
+// model.SystemMetricUnit on the server.
 
-const METRIC_FAMILY_LABELS = { cpu: 'Processor', memory: 'Memory', swap: 'Swap', load: 'Load per core', disk: 'Disk', inodes: 'Inodes', net: 'Network', diskio: 'Disk I/O', temp: 'Temperature', psi: 'Pressure stall', pool: 'Pool', service: 'Service', process: 'Program' };
+const METRIC_FAMILY_LABELS = { cpu: 'Processor', memory: 'Memory', swap: 'Swap', load: 'Load per core', disk: 'Disk', inodes: 'Inodes', net: 'Network', diskio: 'Disk I/O', temp: 'Temperature', psi: 'Pressure stall', pool: 'Pool', service: 'Service', process: 'Program',
+  docker: 'Container', 'docker-restarts': 'Container restarts', 'docker-cpu': 'Container processor', 'docker-memory': 'Container memory',
+  vm: 'Virtual machine', 'vm-cpu': 'Virtual machine processor', 'vm-memory': 'Virtual machine memory',
+};
 
 /** Splits a metric key into its family and instance ('' for a singleton). */
 export function metricFamily(key) {
@@ -214,11 +219,14 @@ export function metricFamily(key) {
 export function metricUnit(key) {
   const { family, instance } = metricFamily(key);
   switch (family) {
-    case 'cpu': case 'memory': case 'swap': case 'disk': case 'inodes': case 'psi': return '%';
+    case 'cpu': case 'memory': case 'swap': case 'disk': case 'inodes': case 'psi':
+    case 'docker-cpu': case 'docker-memory': case 'vm-cpu': case 'vm-memory': return '%';
     case 'temp': return '°C';
     case 'pool': return 'state';
     case 'service': return 'running';
-    case 'process': return 'count';
+    case 'process': case 'docker-restarts': return 'count';
+    case 'docker': return 'container';
+    case 'vm': return 'guest';
     case 'load': return '';
     case 'net': return 'B/s';
     case 'diskio': return instance.endsWith('.busy') ? '%' : 'B/s';
@@ -233,6 +241,10 @@ export function metricLabel(key) {
   if (!base) return key;
   if (!instance) return base;
   if (family === 'inodes') return `Inodes on ${instance}`;
+  // A container's and a guest's figures read as the server labels them.
+  if (family === 'docker-restarts') return `Restarts of ${instance} in the last hour`;
+  if (family === 'docker-cpu' || family === 'vm-cpu') return `Processor use of ${instance}`;
+  if (family === 'docker-memory' || family === 'vm-memory') return `Memory use of ${instance}`;
   if (family === 'psi') {
     const [res, avg] = instance.split('.');
     return `Pressure on ${res}${avg ? ` (${avg.replace('avg', '')} s)` : ''}`;
@@ -262,6 +274,8 @@ export function metricValue(v, unit) {
   if (unit === '°C') return `${Math.round(v)} °C`;
   if (unit === 'state') return poolState(v);
   if (unit === 'running') return v >= 1 ? 'running' : 'stopped';
+  if (unit === 'container') return v >= 2 ? 'running' : v >= 1 ? 'not healthy' : 'stopped';
+  if (unit === 'guest') return v >= 2 ? 'running' : v >= 1 ? 'paused or saved' : 'off';
   if (unit === 'count') return String(Math.round(v));
   return Number(v).toFixed(2);
 }
@@ -312,9 +326,10 @@ function plainNumber(v) {
  */
 // STATE_UNITS are the hardware "units" that are really states or counts: a
 // pool's health (0, 1, 2), a service's running (1) or stopped (0), how many
-// copies of a program are running. A value reads as its word or a bare
-// count, and an axis as a bare number, never as "1 state" or "3 count".
-const STATE_UNITS = new Set(['state', 'running', 'count']);
+// copies of a program are running, a container's or a guest's state (2, 1,
+// 0). A value reads as its word or a bare count, and an axis as a bare
+// number, never as "1 state" or "3 count".
+const STATE_UNITS = new Set(['state', 'running', 'count', 'container', 'guest']);
 
 export function unitValue(v, unit) {
   if (v == null || isNaN(v)) return '—';

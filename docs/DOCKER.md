@@ -174,6 +174,35 @@ other machine, and point it at the container's published port. The agent is a
 separate download from the [releases page](https://github.com/jxburros/GWatch/releases/latest)
 and [`HARDWARE.md`](HARDWARE.md) walks through registering it.
 
+### Watching the host's containers
+
+The host's **containers** are a different matter: the Docker daemon answers for
+all of them, so GWatch in a container can watch them if it is given the
+daemon's socket. Mount it, and give the container's `gwatch` user the socket's
+group (the host's `docker` group id, from `getent group docker`):
+
+```yaml
+services:
+  gwatch:
+    image: ghcr.io/jxburros/gwatch:latest
+    volumes:
+      - gwatch-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "999"   # the host's docker group id
+```
+
+Then name the containers under **What to watch on this computer** on *This
+computer*'s hardware panel. Each becomes readings of the hardware check — its
+state and health, its restarts in the last hour, and its processor and memory
+use against its limits ([`HARDWARE.md`](HARDWARE.md#containers-and-virtual-machines)).
+GWatch only ever makes `GET` requests of the daemon and asks nothing until a
+container is named, but think before mounting the socket: anything that can
+connect to it can read every container's configuration and environment, and
+could start a container of its own. Adding `:ro` to the mount does not change
+that. Without the socket, run `gwatch-agent` on the host instead and watch the
+containers from there.
+
 ## Upgrading
 
 The in-app updater (Settings → Updates) still checks for new releases and tells
