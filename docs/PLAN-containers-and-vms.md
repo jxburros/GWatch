@@ -66,11 +66,23 @@ every other reading already has.
 
 - Same shape as `docker:`: a reading per ticked guest, collected on the
   hypervisor host.
-- Order by likely use: libvirt (via `virsh`/the libvirt API), then the Proxmox
-  API, then Hyper-V. ESXi last, if at all.
-- Per guest: running/paused/stopped state, plus CPU and memory where the
-  backend exposes them.
-- Which backend goes first depends on what the owner actually runs.
+- **Hyper-V goes first**, because that is what the owner runs. Later, in order
+  of likely use: libvirt (`virsh`/the libvirt API), then the Proxmox API. ESXi
+  last, if at all.
+- Hyper-V: the gwatch-agent runs on the Windows host and lists guests through
+  WMI (`root\virtualization\v2`, `Msvm_ComputerSystem`) or, failing that,
+  PowerShell's `Get-VM`. Prefer WMI, since the agent already avoids shelling out
+  for its other Windows readings. The agent's account needs membership of the
+  local "Hyper-V Administrators" group (or equivalent read rights), and the docs
+  must say so.
+- Per guest: state (running, off, paused, saved, starting, stopping), uptime,
+  and CPU and memory use where Hyper-V exposes them (a guest that is off has
+  none).
+- Guests with their own IP also get ordinary checks (ping, TCP, HTTP) on a child
+  node whose parent is the Hyper-V host, so the host going down suppresses their
+  alerts.
+- Tests: parsing from recorded WMI/PowerShell output, selection filtering, and
+  the verdict for off, paused and saved guests.
 
 ### 3. Optional: create child nodes from discovered guests
 
@@ -87,6 +99,7 @@ every other reading already has.
 
 ## Open questions
 
-- Which hypervisor, if any, does the owner run? That sets the phase 2 order.
+- Does the owner want a guest that is deliberately off to count as down? Likely
+  an opt-in per ticked guest.
 - Should the Docker reading run only through the agent, or also from the local
   collector when GWatch itself is on the Docker host?
