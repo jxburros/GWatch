@@ -125,23 +125,6 @@ func (r wmiRow) num(k string) (float64, bool) {
 	return 0, false
 }
 
-// The queries, kept with the parser that reads their answers. Every
-// Msvm_ComputerSystem is either the host itself or a guest; the host's Name is
-// its computer name and a guest's is its VM id, a GUID, which is how they are
-// told apart (Caption says "Virtual Machine" only in English).
-const (
-	hyperVNamespace    = `root\virtualization\v2`
-	hyperVSystemsQuery = "SELECT Name, ElementName, EnabledState, OnTimeInMilliseconds FROM Msvm_ComputerSystem"
-	hyperVSummaryQuery = "SELECT Name, ProcessorLoad, MemoryUsage, MemoryAvailable, NumberOfProcessors FROM Msvm_SummaryInformation"
-	hyperVGetVMCommand = `$ErrorActionPreference = 'Stop'; ConvertTo-Json -Compress -InputObject @(Get-VM | Select-Object Name, @{n='Id';e={[string]$_.Id}}, @{n='State';e={[string]$_.State}}, @{n='UptimeSeconds';e={[int64]$_.Uptime.TotalSeconds}}, CPUUsage, MemoryAssigned, MemoryDemand, ProcessorCount)`
-)
-
-// The properties each query reads from every row it returns.
-var (
-	hyperVSystemsProps = []string{"Name", "ElementName", "EnabledState", "OnTimeInMilliseconds"}
-	hyperVSummaryProps = []string{"Name", "ProcessorLoad", "MemoryUsage", "MemoryAvailable", "NumberOfProcessors"}
-)
-
 // hyperVGuests turns the two queries' rows into guests. summaries may be
 // empty — the figures are a bonus, and a guest with none is still a state.
 func hyperVGuests(systems, summaries []wmiRow) []model.HostVM {

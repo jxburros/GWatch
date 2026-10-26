@@ -290,6 +290,18 @@ test('an agent is told which services and programs to watch', async (t) => {
   assert.match(describeSelection(saved), /watching 3 services, 1 program and 2 containers/);
 });
 
+// until is waitFor for an asynchronous check: waitFor takes the promise an
+// async function returns as its answer, which is always truthy.
+async function until(check, { timeout = 5000, interval = 20 } = {}) {
+  const start = Date.now();
+  for (;;) {
+    const value = await check();
+    if (value) return value;
+    if (Date.now() - start > timeout) throw new Error('until: condition was never met');
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
+}
+
 // Containers are chosen the same way, from what the machine's Docker said it
 // has, and the hardware panel shows each watched one with its state, its
 // restarts and its use of its limits.
@@ -313,8 +325,10 @@ test('an agent is told which containers to watch, and shows them', async (t) => 
   input.value = 'homeassistant';
   input.dispatchEvent(new window.Event('change'));
   button(section, 'Save what to collect').click();
-  await waitFor(async () => (await (await fetch('/api/agents')).json())[0].collect.containers?.includes('homeassistant'), { timeout: 5000 });
-  const saved = (await (await fetch('/api/agents')).json())[0].collect;
+  const saved = await until(async () => {
+    const collect = (await (await fetch('/api/agents')).json())[0].collect;
+    return collect.containers?.includes('homeassistant') ? collect : null;
+  });
   assert.deepEqual(saved.containers.sort(), ['homeassistant', 'nextcloud', 'nextcloud-db']);
 });
 
@@ -345,8 +359,10 @@ test('this computer\'s services are chosen on its hardware panel', async (t) => 
   vmInput.value = 'lab';
   vmInput.dispatchEvent(new window.Event('change'));
   button(section, 'Save what to watch').click();
-  await waitFor(async () => (await (await fetch('/api/hosts/local')).json()).watch?.vms?.includes('lab'), { timeout: 5000 });
-  const withVM = await (await fetch('/api/hosts/local')).json();
+  const withVM = await until(async () => {
+    const h = await (await fetch('/api/hosts/local')).json();
+    return h.watch?.vms?.includes('lab') ? h : null;
+  });
   assert.equal(withVM.metrics.vms[0].state, 'off');
 
   // A viewer gets the readings but not the editor.
