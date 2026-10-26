@@ -2,6 +2,7 @@ package sysmetrics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"sort"
@@ -40,14 +41,26 @@ import (
 // far longer, and the reading must not wait for it.
 const watchTimeout = 5 * time.Second
 
-// SetWatch names the services and programs every later Collect reports. Empty
-// lists watch nothing, which is the default and costs nothing. The names are
-// copied, so the caller may reuse its slices.
-func (c *Collector) SetWatch(services, processes []string) {
+// SetWatch names the services, programs, containers and virtual machines
+// every later Collect reports: the selection's watch lists, and nothing else
+// from it. Empty lists watch nothing, which is the default and costs nothing.
+// The names are copied, so the caller may reuse its slices.
+func (c *Collector) SetWatch(sel model.CollectSelection) {
 	c.mu.Lock()
-	c.services = cleanNames(services)
-	c.processes = cleanNames(processes)
+	c.services = cleanNames(sel.WatchedServices())
+	c.processes = cleanNames(sel.WatchedProcesses())
+	c.containers = cleanNames(sel.WatchedContainers())
+	c.vms = cleanNames(sel.WatchedVMs())
 	c.mu.Unlock()
+}
+
+// watchLists is one reading's copy of what to watch.
+type watchLists struct {
+	services, processes, containers, vms []string
+}
+
+func (w watchLists) empty() bool {
+	return len(w.services) == 0 && len(w.processes) == 0 && len(w.containers) == 0 && len(w.vms) == 0
 }
 
 func cleanNames(in []string) []string {
@@ -64,31 +77,46 @@ func cleanNames(in []string) []string {
 	return out
 }
 
-// readWatched reads the named services and counts the named programs. A
-// platform that cannot answer adds a warning and leaves that list out, rather
-// than reporting every watched service as stopped: "could not tell" is not
-// "down".
-func readWatched(ctx context.Context, services, processes []string) ([]model.HostService, []model.HostProcess, []string) {
+// readWatched reads what is watched into m and returns any warnings. A
+// source that cannot answer adds a warning and leaves its list out, rather
+// than reporting everything it would have answered for as stopped: "could
+// not tell" is not "down".
+func (c *Collector) readWatched(ctx context.Context, m *model.HostMetrics, w watchLists) []string {
 	var warnings []string
-	var svcs []model.HostService
-	var procs []model.HostProcess
-	if len(services) > 0 {
-		got, err := serviceStates(ctx, services)
+	if len(w.services) > 0 {
+		got, err := serviceStates(ctx, w.services)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("services: %v", err))
 		} else {
-			svcs = got
+			m.Services = got
 		}
 	}
-	if len(processes) > 0 {
+	if len(w.processes) > 0 {
 		names, err := processNames(ctx)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("processes: %v", err))
 		} else {
-			procs = countProcesses(names, processes, runtime.GOOS == "windows")
+			m.Processes = countProcesses(names, w.processes, runtime.GOOS == "windows")
 		}
 	}
-	return svcs, procs, warnings
+	if len(w.containers) > 0 {
+		got, err := c.readDocker(ctx, w.containers)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("containers: %v", err))
+		} else {
+			m.Docker = got
+		}
+	}
+	if len(w.vms) > 0 {
+		got, more, err := readVMs(ctx, w.vms)
+		warnings = append(warnings, more...)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("virtual machines: %v", err))
+		} else {
+			m.VMs = got
+		}
+	}
+	return warnings
 }
 
 // countProcesses counts, for each watched name, the running processes with
@@ -158,6 +186,43 @@ func ListServices(ctx context.Context) ([]model.InventoryItem, error) {
 	}
 	sort.SliceStable(out, func(i, j int) bool { return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name) })
 	return out, nil
+}
+
+// Watchable is everything a machine could be told to watch, for a person
+// choosing, with what could not be listed and why.
+type Watchable struct {
+	Services   []model.InventoryItem `json:"services"`
+	Processes  []model.InventoryItem `json:"processes"`
+	Containers []model.InventoryItem `json:"containers"`
+	VMs        []model.InventoryItem `json:"vms"`
+	Problems   []string              `json:"problems"`
+}
+
+// ListWatchable makes every list at once. A list that cannot be made — no
+// systemd, no Docker, no Hyper-V — is left empty with a problem saying so;
+// the others are still worth having.
+func ListWatchable(ctx context.Context) Watchable {
+	var w Watchable
+	var err error
+	note := func(what string, err error) {
+		if err != nil {
+			w.Problems = append(w.Problems, what+": "+err.Error())
+		}
+	}
+	w.Services, err = ListServices(ctx)
+	note("services", err)
+	w.Processes, err = ListProcesses(ctx)
+	note("programs", err)
+	w.Containers, err = ListContainers(ctx)
+	if !errors.Is(err, errDockerNoSocket) {
+		// A machine with no Docker at all is the usual case, not a problem.
+		note("containers", err)
+	}
+	w.VMs, err = ListVMs(ctx)
+	if !errors.Is(err, errVMUnsupported) {
+		note("virtual machines", err)
+	}
+	return w
 }
 
 // ListProcesses lists the programs running now, once each, with how many

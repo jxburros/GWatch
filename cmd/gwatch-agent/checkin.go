@@ -122,27 +122,30 @@ func (rt *agentRuntime) shape(m model.HostMetrics) model.HostMetrics {
 	return sysmetrics.Apply(visible, rt.effective(), true)
 }
 
-// watch points the collector at the services and programs to watch now: the
-// machine's own list, narrowed to GWatch's choice. It is called before every
-// reading, so a change GWatch sends takes effect on the next one.
+// watch points the collector at the services, programs, containers and
+// guests to watch now: the machine's own lists, narrowed to GWatch's choice.
+// It is called before every reading, so a change GWatch sends takes effect
+// on the next one.
 func (rt *agentRuntime) watch(c *sysmetrics.Collector) {
-	eff := rt.effective()
-	c.SetWatch(eff.WatchedServices(), eff.WatchedProcesses())
+	c.SetWatch(rt.effective())
 }
 
-// watchInventory lists the services and programs this machine could watch,
-// for GWatch to offer as choices. It runs at check-in, not with each
-// reading: listing every service is a systemctl call or a walk of the
-// Service Control Manager, cheap once every quarter of an hour and pointless
-// every minute. When the machine's own file names services or programs,
-// those are all GWatch may choose from, so they are all it is offered.
-func (rt *agentRuntime) watchInventory(ctx context.Context) (services, processes []model.InventoryItem) {
+// watchInventory fills in what this machine could watch, for GWatch to offer
+// as choices. It runs at check-in, not with each reading: listing every
+// service is a systemctl call or a walk of the Service Control Manager, and
+// listing containers or guests a question to Docker or Hyper-V, cheap once
+// every quarter of an hour and pointless every minute. When the machine's
+// own file names any, those are all GWatch may choose from, so they are all
+// it is offered.
+func (rt *agentRuntime) watchInventory(ctx context.Context, inv *model.Inventory) {
 	rt.mu.Lock()
 	ceiling := rt.ceiling
 	rt.mu.Unlock()
-	services, _ = sysmetrics.ListServices(ctx)
-	processes, _ = sysmetrics.ListProcesses(ctx)
-	return withinCeiling(services, ceiling.WatchedServices()), withinCeiling(processes, ceiling.WatchedProcesses())
+	w := sysmetrics.ListWatchable(ctx)
+	inv.Services = withinCeiling(w.Services, ceiling.WatchedServices())
+	inv.Processes = withinCeiling(w.Processes, ceiling.WatchedProcesses())
+	inv.Containers = withinCeiling(w.Containers, ceiling.WatchedContainers())
+	inv.VMs = withinCeiling(w.VMs, ceiling.WatchedVMs())
 }
 
 // withinCeiling narrows an inventory list to the names a machine's own file
@@ -318,7 +321,7 @@ func (p *program) checkInOnce(ctx context.Context, rt *agentRuntime, client *htt
 	token := rt.token
 	rt.mu.Unlock()
 	if req.Inventory != nil {
-		req.Inventory.Services, req.Inventory.Processes = rt.watchInventory(ctx)
+		rt.watchInventory(ctx, req.Inventory)
 		// Bounded here as GWatch would bound it, so a machine with
 		// thousands of services still sends a check-in GWatch accepts.
 		*req.Inventory = req.Inventory.Normalize()

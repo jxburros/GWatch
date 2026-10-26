@@ -71,7 +71,9 @@ func TestServiceStatesAsksSystemctlOnce(t *testing.T) {
 	// A machine without systemd says so, and the reading carries the warning
 	// instead of four stopped services.
 	runSystemctl = func(context.Context, ...string) ([]byte, error) { return nil, errNoSystemctl }
-	svcs, _, warnings := readWatched(context.Background(), []string{"nginx"}, nil)
+	var m model.HostMetrics
+	warnings := NewCollector("").readWatched(context.Background(), &m, watchLists{services: []string{"nginx"}})
+	svcs := m.Services
 	if svcs != nil || len(warnings) != 1 || !strings.Contains(warnings[0], "systemctl is not installed") {
 		t.Errorf("no systemd: %+v %q", svcs, warnings)
 	}

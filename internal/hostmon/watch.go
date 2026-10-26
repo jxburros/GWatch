@@ -8,28 +8,29 @@ import (
 	"github.com/jxburros/GWatch/internal/store"
 )
 
-// The services and programs this computer watches (#62).
+// The services, programs, containers and virtual machines this computer
+// watches (#62).
 //
 // A machine with an agent is told what to watch through its collection
 // settings, which the agent fetches. The computer GWatch runs on has no agent
 // and no check-in, so its list is kept here, in the settings table, and
-// handed straight to the collector. Only the two watch lists are kept: what
-// else this computer reports is not narrowed, as it never has been.
+// handed straight to the collector. Only the watch lists are kept: what else
+// this computer reports is not narrowed, as it never has been.
 
 // localWatchSetting is the settings key the list is stored under.
 const localWatchSetting = "local_watch"
 
-// LocalWatch is the services and programs this computer watches.
+// LocalWatch is what this computer watches.
 func (m *Monitor) LocalWatch() model.CollectSelection {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.watch
 }
 
-// SetLocalWatch stores and applies the services and programs this computer
-// watches. The next sample reports them; an empty selection stops watching.
+// SetLocalWatch stores and applies what this computer watches. The next
+// sample reports it; an empty selection stops watching.
 func (m *Monitor) SetLocalWatch(ctx context.Context, sel model.CollectSelection) (model.CollectSelection, error) {
-	sel = model.CollectSelection{Services: sel.Services, Processes: sel.Processes}.Normalize()
+	sel = sel.WatchOnly().Normalize()
 	if err := sel.Validate(); err != nil {
 		return model.CollectSelection{}, err
 	}
@@ -63,5 +64,5 @@ func (m *Monitor) applyWatch(sel model.CollectSelection) {
 	m.mu.Lock()
 	m.watch = sel
 	m.mu.Unlock()
-	m.collector.SetWatch(sel.WatchedServices(), sel.WatchedProcesses())
+	m.collector.SetWatch(sel)
 }

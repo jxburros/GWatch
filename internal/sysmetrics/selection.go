@@ -225,7 +225,8 @@ func Apply(m model.HostMetrics, sel model.CollectSelection, automatic bool) mode
 		out.Pools = nil
 	}
 
-	// Watched services and programs are chosen by name, not by family: the
+	// Watched services, programs, containers and guests are chosen by name,
+	// not by family: the
 	// collector only looked for the names it was given, so this only has to
 	// keep a machine's own limit when GWatch asked for something outside it.
 	if len(sel.Services) > 0 {
@@ -245,6 +246,24 @@ func Apply(m model.HostMetrics, sel model.CollectSelection, automatic bool) mode
 			}
 		}
 		out.Processes = procs
+	}
+	if len(sel.Containers) > 0 {
+		ctrs := make([]model.HostDockerContainer, 0, len(m.Docker))
+		for _, c := range m.Docker {
+			if listed(sel.Containers, c.Name) {
+				ctrs = append(ctrs, c)
+			}
+		}
+		out.Docker = ctrs
+	}
+	if len(sel.VMs) > 0 {
+		vms := make([]model.HostVM, 0, len(m.VMs))
+		for _, v := range m.VMs {
+			if listed(sel.VMs, v.Name) {
+				vms = append(vms, v)
+			}
+		}
+		out.VMs = vms
 	}
 	return out
 }

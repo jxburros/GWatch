@@ -8,9 +8,10 @@
 // obviously virtual. The picker therefore only writes a list when someone has
 // narrowed something, so leaving it alone changes nothing.
 //
-// Services and programs to watch (#62) are the exception: empty means none,
-// since "every service" is hundreds of readings nobody wants. They are names
-// typed or picked from what the machine said it has (watchPicker).
+// Services and programs to watch (#62), and containers and virtual machines,
+// are the exception: empty means none, since "every service" is hundreds of
+// readings nobody wants. They are names typed or picked from what the machine
+// said it has (watchPicker).
 
 import { h, chipInput } from '../components.js';
 
@@ -98,29 +99,35 @@ export function describeSelection(sel = {}) {
   return watched ? `${parts.join(', ')}; watching ${watched}` : parts.join(', ');
 }
 
-/** The services and programs a selection watches, in words, or '' for none. */
+/** What a selection watches, in words, or '' for nothing. */
 export function describeWatch(sel = {}) {
   const n = (list) => (list || []).filter(Boolean).length;
   const parts = [];
-  if (n(sel.services)) parts.push(`${n(sel.services)} service${n(sel.services) === 1 ? '' : 's'}`);
-  if (n(sel.processes)) parts.push(`${n(sel.processes)} program${n(sel.processes) === 1 ? '' : 's'}`);
-  return parts.join(' and ');
+  const add = (list, one, many) => { if (n(list)) parts.push(`${n(list)} ${n(list) === 1 ? one : many}`); };
+  add(sel.services, 'service', 'services');
+  add(sel.processes, 'program', 'programs');
+  add(sel.containers, 'container', 'containers');
+  add(sel.vms, 'virtual machine', 'virtual machines');
+  return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts.join('');
 }
 
 /**
  * watchPicker({ value, inventory, note }) → { el, value(), setInventory(inv) }
  *
- * The services and programs to watch, each a list of names. A name can be
- * typed, or picked from the machine's own list (`inventory.services`,
- * `inventory.processes`), which an agent sends when it checks in and the
- * computer GWatch runs on makes when asked. The machine's lists are hundreds
- * long, so they are offered as suggestions while typing rather than as a
- * wall of checkboxes. value() is `{ services: [...], processes: [...] }`.
+ * The services, programs, containers and virtual machines to watch, each a
+ * list of names. A name can be typed, or picked from the machine's own list
+ * (`inventory.services`, `.processes`, `.containers`, `.vms`), which an agent
+ * sends when it checks in and the computer GWatch runs on makes when asked.
+ * The machine's lists can be hundreds long, so they are offered as
+ * suggestions while typing rather than as a wall of checkboxes. value() is
+ * `{ services: [...], processes: [...], containers: [...], vms: [...] }`.
  */
 export function watchPicker({ value = {}, inventory = null, note = null } = {}) {
   const kinds = [
     { key: 'services', title: 'Services to watch', placeholder: 'e.g. nginx, docker, smbd', help: 'Each is a reading of its own: 1 running, 0 stopped. The hardware check is critical when a watched service stops. A systemd unit on Linux, a service name or display name on Windows, a launchd label on macOS.' },
     { key: 'processes', title: 'Programs to watch', placeholder: 'e.g. plex, postgres', help: 'Each is a count of the copies running, by executable name. The hardware check is critical when none is running.' },
+    { key: 'containers', title: 'Containers to watch', placeholder: 'e.g. web, nextcloud-db-1', help: 'Docker or Podman containers, by name as docker ps shows it. Each reports its state and health, restarts in the last hour, and processor and memory use against its limit. Critical when one stops, a warning while it is unhealthy or restarting. The machine reads its Docker socket only once a container is named here.' },
+    { key: 'vms', title: 'Virtual machines to watch', placeholder: 'e.g. dc01', help: 'Hyper-V guests on this machine, by name as Hyper-V Manager shows it. Each reports its state, uptime, and processor and memory use. Critical when one is off, a warning while it is paused or saved. Give a guest a threshold of its own if it is meant to be off.' },
   ];
   const parts = kinds.map((k) => {
     const holder = h('div');
@@ -134,7 +141,7 @@ export function watchPicker({ value = {}, inventory = null, note = null } = {}) 
       holder.replaceChildren(chips);
       const running = items.filter((i) => /^running|^\d+ running/.test(i.detail || '')).length;
       listNote.textContent = items.length
-        ? `${items.length} on this machine${k.key === 'services' ? `, ${running} running` : ''} — start typing to pick one.`
+        ? `${items.length} on this machine${k.key === 'processes' ? '' : `, ${running} running`} — start typing to pick one.`
         : '';
     };
     build(inventory);

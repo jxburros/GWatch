@@ -537,28 +537,18 @@ func (s *uiServer) handleState(w http.ResponseWriter, r *http.Request) {
 	writeUIJSON(w, http.StatusOK, s.buildState())
 }
 
-// listWatchable is sysmetrics' service and program listing; tests replace it.
-var listWatchable = func(ctx context.Context) (services, processes []model.InventoryItem, problems []string) {
-	services, err := sysmetrics.ListServices(ctx)
-	if err != nil {
-		problems = append(problems, "services: "+err.Error())
-	}
-	processes, err = sysmetrics.ListProcesses(ctx)
-	if err != nil {
-		problems = append(problems, "programs: "+err.Error())
-	}
-	return services, processes, problems
-}
+// listWatchable is sysmetrics' listing of what could be watched; tests
+// replace it.
+var listWatchable = sysmetrics.ListWatchable
 
-// handleWatchable lists every service on this machine and every program
-// running on it now, so whoever is choosing what to watch can tick names
-// rather than guess at them. It is only made when the panel asks: the list
-// is the whole machine, and nothing else needs it.
+// handleWatchable lists every service, container and guest on this machine
+// and every program running on it now, so whoever is choosing what to watch
+// can tick names rather than guess at them. It is only made when the panel
+// asks: the list is the whole machine, and nothing else needs it.
 func (s *uiServer) handleWatchable(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	services, processes, problems := listWatchable(ctx)
-	writeUIJSON(w, http.StatusOK, map[string]any{"services": services, "processes": processes, "problems": problems})
+	writeUIJSON(w, http.StatusOK, listWatchable(ctx))
 }
 
 // configWritable asks the operating system rather than guessing from modes: can

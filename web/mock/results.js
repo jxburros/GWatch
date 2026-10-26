@@ -88,11 +88,13 @@ export function install(m) {
   // instance's own entry first, then its family's.
   function systemMetricUnit(key) {
     const [family, instance = ''] = key.includes(':') ? [key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1)] : [key];
-    if (['cpu', 'memory', 'swap', 'disk', 'inodes', 'psi'].includes(family)) return '%';
+    if (['cpu', 'memory', 'swap', 'disk', 'inodes', 'psi', 'docker-cpu', 'docker-memory', 'vm-cpu', 'vm-memory'].includes(family)) return '%';
     if (family === 'temp') return '°C';
     if (family === 'pool') return 'state';
     if (family === 'service') return 'running';
-    if (family === 'process') return 'count';
+    if (family === 'process' || family === 'docker-restarts') return 'count';
+    if (family === 'docker') return 'container';
+    if (family === 'vm') return 'guest';
     if (family === 'net') return 'B/s';
     if (family === 'diskio') return instance.endsWith('.busy') ? '%' : 'B/s';
     return '';
@@ -109,7 +111,7 @@ export function install(m) {
       if (dot > 0 && (family === 'net' || family === 'diskio' || family === 'psi')) { const whole = find(`${family}:${instance.slice(0, dot)}`); if (whole) return whole; }
       return find(family) || null;
     };
-    const fmt = (v, unit) => (unit === '%' ? `${Math.round(v)}%` : unit === 'B/s' ? `${Math.round(v / 1000)} kB/s` : unit === '°C' ? `${Math.round(v)} °C` : unit === 'state' ? (v >= 2 ? 'faulted' : v >= 1 ? 'degraded' : 'healthy') : unit === 'running' ? (v >= 1 ? 'running' : 'stopped') : unit === 'count' ? String(Math.round(v)) : v.toFixed(2));
+    const fmt = (v, unit) => (unit === '%' ? `${Math.round(v)}%` : unit === 'B/s' ? `${Math.round(v / 1000)} kB/s` : unit === '°C' ? `${Math.round(v)} °C` : unit === 'state' ? (v >= 2 ? 'faulted' : v >= 1 ? 'degraded' : 'healthy') : unit === 'running' ? (v >= 1 ? 'running' : 'stopped') : unit === 'container' ? (v >= 2 ? 'running' : v >= 1 ? 'not healthy' : 'stopped') : unit === 'guest' ? (v >= 2 ? 'running' : v >= 1 ? 'paused or saved' : 'off') : unit === 'count' ? String(Math.round(v)) : v.toFixed(2));
     const out = [];
     const add = (key, label, value) => {
       if (value == null) return;
@@ -136,6 +138,17 @@ export function install(m) {
     for (const p of m.pools || []) add(`pool:${p.name}`, `Pool ${p.name}`, p.health === 'ONLINE' ? 0 : p.health === 'DEGRADED' ? 1 : 2);
     for (const s of m.services || []) add(`service:${s.name}`, `Service ${s.name}`, s.running ? 1 : 0);
     for (const p of m.processes || []) add(`process:${p.name}`, `Copies of ${p.name} running`, p.count);
+    for (const c of m.docker || []) {
+      add(`docker:${c.name}`, `Container ${c.name}`, c.state === 'running' ? (c.health === 'unhealthy' ? 1 : 2) : c.state === 'paused' || c.state === 'restarting' ? 1 : 0);
+      if (c.state !== 'not found') add(`docker-restarts:${c.name}`, `Restarts of ${c.name} in the last hour`, c.recentRestarts || 0);
+      add(`docker-cpu:${c.name}`, `Processor use of ${c.name}`, c.cpuPct);
+      add(`docker-memory:${c.name}`, `Memory use of ${c.name}`, c.memoryPct);
+    }
+    for (const v of m.vms || []) {
+      add(`vm:${v.name}`, `Virtual machine ${v.name}`, v.state === 'running' ? 2 : v.state === 'not found' || String(v.state).startsWith('off') ? 0 : 1);
+      add(`vm-cpu:${v.name}`, `Processor use of ${v.name}`, v.cpuPct);
+      add(`vm-memory:${v.name}`, `Memory use of ${v.name}`, v.memoryPct);
+    }
     return out;
   }
 

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jxburros/GWatch/internal/model"
+	"github.com/jxburros/GWatch/internal/sysmetrics"
 )
 
 // Watching services and programs (#62) from the agent's side: the machine's
@@ -25,6 +26,14 @@ func TestWatchedNamesFollowTheCeilingRule(t *testing.T) {
 	if !reflect.DeepEqual(eff.WatchedProcesses(), []string{"plex"}) {
 		t.Errorf("no ceiling on programs, so GWatch's choice stands: %v", eff.Processes)
 	}
+
+	// Containers and guests follow the same rule.
+	rt.ceiling.Containers = []string{"web"}
+	rt.selection.Containers, rt.selection.VMs = []string{"web", "db"}, []string{"dc01"}
+	if eff := rt.effective(); !reflect.DeepEqual(eff.WatchedContainers(), []string{"web"}) || !reflect.DeepEqual(eff.WatchedVMs(), []string{"dc01"}) {
+		t.Errorf("containers and guests: %+v", eff)
+	}
+	rt.ceiling.Containers = nil
 
 	// Nothing in common is nothing watched, not everything.
 	rt.selection = model.CollectSelection{Services: []string{"docker"}}
@@ -49,9 +58,13 @@ func TestThePanelListsWatchableNamesOnRequest(t *testing.T) {
 	p := newPanel(t)
 	old := listWatchable
 	calls := 0
-	listWatchable = func(context.Context) ([]model.InventoryItem, []model.InventoryItem, []string) {
+	listWatchable = func(context.Context) sysmetrics.Watchable {
 		calls++
-		return []model.InventoryItem{{Name: "nginx", Detail: "running"}}, []model.InventoryItem{{Name: "plex", Detail: "1 running"}}, nil
+		return sysmetrics.Watchable{
+			Services:   []model.InventoryItem{{Name: "nginx", Detail: "running"}},
+			Processes:  []model.InventoryItem{{Name: "plex", Detail: "1 running"}},
+			Containers: []model.InventoryItem{{Name: "web", Detail: "running · nginx:1.27"}},
+		}
 	}
 	defer func() { listWatchable = old }()
 
@@ -61,11 +74,12 @@ func TestThePanelListsWatchableNamesOnRequest(t *testing.T) {
 		t.Fatal("the state must not list services")
 	}
 	var got struct {
-		Services  []model.InventoryItem `json:"services"`
-		Processes []model.InventoryItem `json:"processes"`
+		Services   []model.InventoryItem `json:"services"`
+		Processes  []model.InventoryItem `json:"processes"`
+		Containers []model.InventoryItem `json:"containers"`
 	}
 	json.Unmarshal(p.ok("GET", "/api/watchable", nil), &got)
-	if calls != 1 || len(got.Services) != 1 || got.Processes[0].Name != "plex" {
+	if calls != 1 || len(got.Services) != 1 || got.Processes[0].Name != "plex" || got.Containers[0].Name != "web" {
 		t.Errorf("got %+v after %d calls", got, calls)
 	}
 	if resp, _ := p.do("GET", "/api/watchable", nil, opts{}); resp.StatusCode != 403 {
@@ -73,9 +87,10 @@ func TestThePanelListsWatchableNamesOnRequest(t *testing.T) {
 	}
 
 	// The names chosen are saved with the rest of the collection settings.
-	p.ok("PUT", "/api/settings", map[string]any{"collect": map[string]any{"services": []string{"nginx"}, "processes": []string{"plex"}}})
+	p.ok("PUT", "/api/settings", map[string]any{"collect": map[string]any{"services": []string{"nginx"}, "processes": []string{"plex"}, "containers": []string{"web"}, "vms": []string{"dc01"}}})
 	c, problems, _ := baseConfig()
-	if len(problems) > 0 || !reflect.DeepEqual(c.collect.Services, []string{"nginx"}) || !reflect.DeepEqual(c.collect.Processes, []string{"plex"}) {
+	if len(problems) > 0 || !reflect.DeepEqual(c.collect.Services, []string{"nginx"}) || !reflect.DeepEqual(c.collect.Processes, []string{"plex"}) ||
+		!reflect.DeepEqual(c.collect.Containers, []string{"web"}) || !reflect.DeepEqual(c.collect.VMs, []string{"dc01"}) {
 		t.Errorf("saved: %+v %v", c.collect, problems)
 	}
 	resp, _ := p.do("PUT", "/api/settings", map[string]any{"collect": map[string]any{"services": []string{"--help"}}}, opts{cookie: true, header: true})

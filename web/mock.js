@@ -995,6 +995,10 @@ import { install as installHistory } from './mock/history.js';
       { name: 'containerd', detail: '1 running' }, { name: 'Plex Media Server', detail: '1 running' },
       { name: 'smbd', detail: '3 running' }, { name: 'sshd', detail: '2 running' },
     ],
+    containers: [
+      { name: 'nextcloud', detail: 'running · nextcloud:29' }, { name: 'nextcloud-db', detail: 'running · mariadb:11' },
+      { name: 'homeassistant', detail: 'running · ghcr.io/home-assistant/home-assistant:stable' }, { name: 'old-backup', detail: 'exited · restic/restic' },
+    ],
   });
   // The services and programs the computer GWatch "runs on" watches, set
   // from its hardware panel, and the NAS agent's own record. Both are `var`
@@ -1002,7 +1006,27 @@ import { install as installHistory } from './mock/history.js';
   // the mock has run, and a reading taken then must still find them.
   var localWatch; // eslint-disable-line no-var
   var nasAgent; // eslint-disable-line no-var
-  function nasWatchDefault() { return { services: ['docker', 'smbd'], processes: ['Plex Media Server'] }; }
+  function nasWatchDefault() { return { services: ['docker', 'smbd'], processes: ['Plex Media Server'], containers: ['nextcloud', 'nextcloud-db'] }; }
+  // The containers the NAS's Docker runs, and the guests on this computer's
+  // Hyper-V, as a reading reports a watched one. Functions, like
+  // nasWatchDefault, so the seeded history can call them before this runs.
+  function mockContainers() {
+    return {
+      nextcloud: { id: '8dfafdbc3a40', image: 'nextcloud:29', state: 'running', health: 'healthy', status: 'Up 6 days (healthy)', restartCount: 0, recentRestarts: 0, cpuPct: 3.2, memoryUsedBytes: 412 << 20, memoryLimitBytes: 2 * 1024 ** 3, memoryPct: 20.1 },
+      'nextcloud-db': { id: '1f0e9d8c7b6a', image: 'mariadb:11', state: 'running', status: 'Up 6 days', restartCount: 0, recentRestarts: 0, cpuPct: 1.1, memoryUsedBytes: 300 << 20, memoryLimitBytes: 8 * 1024 ** 3, memoryPct: 3.7 },
+      homeassistant: { id: '5a4b3c2d1e0f', image: 'ghcr.io/home-assistant/home-assistant:stable', state: 'running', health: 'healthy', status: 'Up 2 days (healthy)', restartCount: 1, recentRestarts: 0, cpuPct: 6.5, memoryUsedBytes: 690 << 20, memoryLimitBytes: 8 * 1024 ** 3, memoryPct: 8.4 },
+      'old-backup': { id: '0a1b2c3d4e5f', image: 'restic/restic', state: 'exited', status: 'Exited (0) 3 weeks ago', restartCount: 0, recentRestarts: 0 },
+    };
+  }
+  function mockVMs() {
+    return {
+      dc01: { hypervisor: 'hyperv', state: 'running', uptimeSeconds: 12 * 86400, processors: 2, cpuPct: 4, memoryAssignedBytes: 4 * 1024 ** 3, memoryPct: 61 },
+      'build-agent': { hypervisor: 'hyperv', state: 'running', uptimeSeconds: 3 * 3600, processors: 4, cpuPct: 37, memoryAssignedBytes: 8 * 1024 ** 3, memoryPct: 72 },
+      lab: { hypervisor: 'hyperv', state: 'off' },
+    };
+  }
+  function watchedContainers(names) { const all = mockContainers(); return (names || []).map((name) => (all[name] ? { name, ...all[name] } : { name, state: 'not found', restartCount: 0, recentRestarts: 0 })); }
+  function watchedVMs(names) { const all = mockVMs(); return (names || []).map((name) => (all[name] ? { name, ...all[name] } : { name, state: 'not found' })); }
   const agents = [
     { id: 1, name: 'Living room NAS', nodeId: null, prefix: 'gwa_k3m9vq2x', enabled: true, createdBy: 'local', createdAt: ago(21 * DAY), revokedAt: null, lastSeenAt: ago(40e3), lastAddr: '192.168.1.24:52104', lastVersion: '0.5.0', hostname: 'nas.lan', os: 'linux', arch: 'arm64', tokenViewable: true, collect: nasWatchDefault(), inventory: mockInventory(), checkedInAt: ago(4 * MIN), collector: false, collectorAllowed: true, collectorChecks: 0, collectorStatus: '' },
   ];
@@ -1099,20 +1123,22 @@ import { install as installHistory } from './mock/history.js';
       // Watched services and programs (#62): the NAS watches what its agent
       // was told to; this computer whatever its panel names, all running.
       ...(key === 'local'
-        ? { services: (localWatch?.services || []).map((name) => ({ name, running: true, state: 'running' })), processes: (localWatch?.processes || []).map((name) => ({ name, count: 1 })) }
+        ? { services: (localWatch?.services || []).map((name) => ({ name, running: true, state: 'running' })), processes: (localWatch?.processes || []).map((name) => ({ name, count: 1 })), docker: watchedContainers(localWatch?.containers), vms: watchedVMs(localWatch?.vms) }
         : {
           services: ((nasAgent ? nasAgent.collect : nasWatchDefault())?.services || []).map((name) => {
             const known = { docker: 'Docker Application Container Engine', smbd: 'Samba SMB Daemon', nginx: 'A high performance web server and a reverse proxy server' }[name];
             return name === 'nginx' ? { name, running: false, state: 'failed', description: known } : known ? { name, running: true, state: 'active (running)', description: known } : { name, running: false, state: 'not found' };
           }),
           processes: ((nasAgent ? nasAgent.collect : nasWatchDefault())?.processes || []).map((name) => ({ name, count: name === 'Plex Media Server' ? 1 : name === 'smbd' ? 3 : 0 })),
+          docker: watchedContainers((nasAgent ? nasAgent.collect : nasWatchDefault())?.containers),
+          vms: watchedVMs((nasAgent ? nasAgent.collect : nasWatchDefault())?.vms),
         }),
       warnings: key === 'local' ? [] : [],
     };
   }
 
   const hostSummaries = () => ([
-    { key: 'local', name: settings.general.instanceName || 'This computer', source: 'local', status: 'up', stale: false, metrics: mockReading('local', 'studio-pc', 11), ...((localWatch?.services?.length || localWatch?.processes?.length) ? { watch: clone(localWatch) } : {}) },
+    { key: 'local', name: settings.general.instanceName || 'This computer', source: 'local', status: 'up', stale: false, metrics: mockReading('local', 'studio-pc', 11), ...((localWatch?.services?.length || localWatch?.processes?.length || localWatch?.containers?.length || localWatch?.vms?.length) ? { watch: clone(localWatch) } : {}) },
     { key: 'agent:1', name: agents[0].name, source: 'agent', agent: clone(agents[0]), nodeId: nas.id, nodeName: nas.name, status: 'up', stale: false, metrics: mockReading('agent:1', 'nas.lan', 29) },
   ]);
 
@@ -1123,12 +1149,14 @@ import { install as installHistory } from './mock/history.js';
       { name: 'wuauserv', detail: 'stopped · Windows Update' }, { name: 'Plex Update Service', detail: 'running · Plex Update Service' },
     ],
     processes: [{ name: 'explorer.exe', detail: '1 running' }, { name: 'Plex Media Server.exe', detail: '1 running' }, { name: 'svchost.exe', detail: '84 running' }],
+    containers: [],
+    vms: [{ name: 'build-agent', detail: 'running · 4 virtual processors' }, { name: 'dc01', detail: 'running · 2 virtual processors' }, { name: 'lab', detail: 'off · 2 virtual processors' }],
     problems: [],
   }));
   on('PUT', /^\/api\/hosts\/local\/watch$/, (m, body) => {
     const tidy = (l) => [...new Set((l || []).map((s) => String(s).trim()).filter(Boolean))].sort();
-    for (const n of [...(body?.services || []), ...(body?.processes || [])]) if (String(n).trim().startsWith('-')) throw err(400, `"${n}" is not a service name`);
-    localWatch = { services: tidy(body?.services), processes: tidy(body?.processes) };
+    for (const n of [...(body?.services || []), ...(body?.processes || []), ...(body?.containers || []), ...(body?.vms || [])]) if (String(n).trim().startsWith('-')) throw err(400, `"${n}" is not a service name`);
+    localWatch = { services: tidy(body?.services), processes: tidy(body?.processes), containers: tidy(body?.containers), vms: tidy(body?.vms) };
     return clone(localWatch);
   });
   on('GET', /^\/api\/hosts\/([^/]+)$/, (m) => {
@@ -1202,7 +1230,7 @@ import { install as installHistory } from './mock/history.js';
     const a = agentById(m[1]);
     const bad = (body?.metrics || []).find((x) => !['cpu', 'memory', 'swap', 'load', 'disk', 'inodes', 'net', 'diskio', 'temp', 'psi', 'pool'].includes(x));
     if (bad) throw err(400, `"${bad}" is not a metric family`);
-    a.collect = { metrics: body?.metrics || [], interfaces: body?.interfaces || [], disks: body?.disks || [], mounts: body?.mounts || [], services: body?.services || [], processes: body?.processes || [] };
+    a.collect = { metrics: body?.metrics || [], interfaces: body?.interfaces || [], disks: body?.disks || [], mounts: body?.mounts || [], services: body?.services || [], processes: body?.processes || [], containers: body?.containers || [], vms: body?.vms || [] };
     return clone(a);
   });
   on('PUT', /^\/api\/agents\/(\d+)$/, (m, body) => { const a = agents.find((x) => x.id === Number(m[1])); if (!a) throw err(404, 'not found'); Object.assign(a, { name: body.name ?? a.name, nodeId: body.nodeId ?? a.nodeId, enabled: body.enabled ?? a.enabled }); return clone(a); });

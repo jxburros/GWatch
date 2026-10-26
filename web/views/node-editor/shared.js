@@ -14,6 +14,8 @@ export const SYSTEM_DEFAULTS = {
     { metric: 'disk', warn: 85, crit: 95 }, { metric: 'inodes', warn: 85, crit: 95 }, { metric: 'load', warn: 2 },
     { metric: 'pool', warn: 1, crit: 2 },
     { metric: 'service', crit: 0, below: true }, { metric: 'process', crit: 0, below: true },
+    { metric: 'docker', warn: 1, crit: 0, below: true }, { metric: 'docker-restarts', warn: 3 },
+    { metric: 'docker-memory', warn: 90, crit: 97 }, { metric: 'vm', warn: 1, crit: 0, below: true },
   ],
 };
 
@@ -37,6 +39,15 @@ export const METRIC_FAMILIES = [
   // or below the number, so critical 0 means "stopped" or "none running".
   { key: 'service', label: 'Services', unit: '', below: true, instances: 'a service, e.g. nginx', note: 'Only the services this machine is told to watch (its hardware settings, or the agent’s own panel). 1 is running, 0 is stopped or not installed; levels are crossed at or below the number, so critical 0 is “critical when stopped”.' },
   { key: 'process', label: 'Processes', unit: '', below: true, instances: 'a program, e.g. plex', note: 'Only the programs this machine is told to watch. The reading is how many copies are running; levels are crossed at or below the number, so critical 0 is “critical when none is running”.' },
+  // Containers and virtual machines: a state each (also "less is worse"),
+  // and the figures the Docker daemon or the hypervisor has for it.
+  { key: 'docker', label: 'Containers', unit: '', below: true, instances: 'a container, e.g. web', note: 'Only the Docker or Podman containers this machine is told to watch. 2 is running, 1 is unhealthy, paused or restarting, 0 is stopped or gone; levels are crossed at or below the number, so warning 1 and critical 0 is “warn when not healthy, critical when stopped”.' },
+  { key: 'docker-restarts', label: 'Container restarts', unit: '', step: 1, instances: 'a container, e.g. web', note: 'How many times a watched container’s restart policy restarted it in the last hour. A container stuck in a crash loop can look running whenever it is sampled; this is what catches it.' },
+  { key: 'docker-cpu', label: 'Container processor', unit: '%', instances: 'a container, e.g. web', note: 'A watched container’s processor use, as a share of its own limit (docker run --cpus), or of the whole machine when it has none.' },
+  { key: 'docker-memory', label: 'Container memory', unit: '%', instances: 'a container, e.g. web', note: 'A watched container’s memory use, as a share of its own limit (docker run --memory), or of the whole machine when it has none. At its limit the kernel kills it.' },
+  { key: 'vm', label: 'Virtual machines', unit: '', below: true, instances: 'a guest, e.g. dc01', note: 'Only the guests this machine’s hypervisor (Hyper-V) is told to watch. 2 is running, 1 is paused, saved or changing state, 0 is off or gone. For a guest that is off on purpose, add an entry for it below with both levels blank.' },
+  { key: 'vm-cpu', label: 'Virtual machine processor', unit: '%', instances: 'a guest, e.g. dc01', note: 'How busy a watched guest’s virtual processors are, across all of them.' },
+  { key: 'vm-memory', label: 'Virtual machine memory', unit: '%', instances: 'a guest, e.g. dc01', note: 'How much of the memory the host assigned a watched guest it is using, when the guest’s integration services report it.' },
 ];
 
 // legacyMetricThresholds converts the flat per-family fields a hardware check

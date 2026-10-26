@@ -12,7 +12,30 @@ release is published as `v<VERSION>` by the Release workflow, dispatched from
 
 ## 0.8.3 (not yet released)
 
-GWatch only; gwatch-agent stays at 0.8.2.
+GWatch and gwatch-agent. The agent changes are the containers and virtual machines
+below; it ships them in its next release.
+
+### Added
+
+- **Watching containers and virtual machines.** A machine can now be told to watch
+  named Docker (or Podman) containers and named Hyper-V guests, chosen where its
+  services and programs are: on the agent card's **What it collects**, in
+  `agent.json` (`"containers"`, `"vms"`), in the agent's control panel, or on the
+  hardware panel of the computer GWatch runs on — each offering the machine's own
+  list to pick from. Each container becomes readings of the hardware check:
+  `docker:<name>` (running, not healthy, or stopped), `docker-restarts:<name>`
+  (restarts in the last hour, which catches a crash loop), and processor and memory
+  use against its own limit; each guest `vm:<name>` (running, paused or saved, or
+  off) with its processor and memory use. New hardware checks are critical when a
+  watched container stops or a guest is off, warn while one is unhealthy,
+  restarting, paused or saved, warn at three restarts in an hour, and judge a
+  container's memory like a machine's; older checks get the levels by adding them
+  in their thresholds. Docker is read over its Unix socket with `GET` requests
+  only; Hyper-V through WMI on the Windows host, with `Get-VM` as a fallback.
+  Nothing is asked of either until a name is chosen. The access this needs — the
+  Docker socket, the "Hyper-V Administrators" group — and what it implies is in
+  [`docs/HARDWARE.md`](docs/HARDWARE.md#containers-and-virtual-machines), and running
+  GWatch's own container with the socket in [`docs/DOCKER.md`](docs/DOCKER.md).
 
 ### Changed
 

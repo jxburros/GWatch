@@ -201,7 +201,7 @@ test('adding a machine takes a name and what to monitor, then shows the code', a
 
 test('the collection picker writes nothing it was not asked to', () => {
   const picker = collectionPicker({ value: {}, inventory: { interfaces: [{ name: 'eth0', auto: true }, { name: 'docker0', auto: false }] } });
-  assert.deepEqual(picker.value(), { metrics: [], interfaces: [], disks: [], mounts: [], services: [], processes: [] }, 'untouched means automatic everywhere, and watches nothing');
+  assert.deepEqual(picker.value(), { metrics: [], interfaces: [], disks: [], mounts: [], services: [], processes: [], containers: [], vms: [] }, 'untouched means automatic everywhere, and watches nothing');
   assert.equal(picker.summary(), 'everything, with virtual interfaces left out');
 
   picker.el.querySelector('input[id$="-cpu"]').checked = false;
@@ -287,7 +287,35 @@ test('an agent is told which services and programs to watch', async (t) => {
   const saved = (await (await fetch('/api/agents')).json())[0].collect;
   assert.deepEqual(saved.services.sort(), ['docker', 'nginx', 'smbd']);
   assert.deepEqual(saved.processes, ['Plex Media Server']);
-  assert.match(describeSelection(saved), /watching 3 services and 1 program/);
+  assert.match(describeSelection(saved), /watching 3 services, 1 program and 2 containers/);
+});
+
+// Containers are chosen the same way, from what the machine's Docker said it
+// has, and the hardware panel shows each watched one with its state, its
+// restarts and its use of its limits.
+test('an agent is told which containers to watch, and shows them', async (t) => {
+  const { root } = await mountNas(t);
+  const card = await waitFor(() => root.querySelector('.agent-card'));
+  const section = card.querySelector('[data-section="collect"]');
+  const box = section.querySelector('[data-watch="containers"]');
+  assert.ok(box, 'the containers box is there');
+  assert.match(box.textContent, /nextcloud-db/, 'what is watched now is shown');
+  assert.match(box.textContent, /4 on this machine, 3 running/, 'the machine\'s own list is offered');
+  assert.ok([...box.querySelectorAll('datalist option')].some((o) => o.value === 'homeassistant'));
+  assert.ok(section.querySelector('[data-watch="vms"]'), 'and a box for virtual machines');
+
+  const table = await waitFor(() => [...root.querySelectorAll('.section-title')].find((e) => e.textContent === 'Watched containers')?.parentElement);
+  assert.match(table.textContent, /nextcloud/);
+  assert.match(table.textContent, /running \(healthy\)/);
+  assert.match(table.textContent, /20.1% · 412 MB of 2.0 GB/, "memory against the container's own limit");
+
+  const input = box.querySelector('input');
+  input.value = 'homeassistant';
+  input.dispatchEvent(new window.Event('change'));
+  button(section, 'Save what to collect').click();
+  await waitFor(async () => (await (await fetch('/api/agents')).json())[0].collect.containers?.includes('homeassistant'), { timeout: 5000 });
+  const saved = (await (await fetch('/api/agents')).json())[0].collect;
+  assert.deepEqual(saved.containers.sort(), ['homeassistant', 'nextcloud', 'nextcloud-db']);
 });
 
 // The computer GWatch runs on has no agent: its list is set on its own
@@ -309,6 +337,17 @@ test('this computer\'s services are chosen on its hardware panel', async (t) => 
   await waitFor(async () => (await (await fetch('/api/hosts/local')).json()).watch?.services?.includes('Spooler'), { timeout: 5000 });
   const host = await (await fetch('/api/hosts/local')).json();
   assert.equal(host.metrics.services[0].name, 'Spooler');
+
+  // Its Hyper-V guests are offered and chosen the same way.
+  const vms = section.querySelector('[data-watch="vms"]');
+  assert.match(vms.textContent, /3 on this machine, 2 running/);
+  const vmInput = vms.querySelector('input');
+  vmInput.value = 'lab';
+  vmInput.dispatchEvent(new window.Event('change'));
+  button(section, 'Save what to watch').click();
+  await waitFor(async () => (await (await fetch('/api/hosts/local')).json()).watch?.vms?.includes('lab'), { timeout: 5000 });
+  const withVM = await (await fetch('/api/hosts/local')).json();
+  assert.equal(withVM.metrics.vms[0].state, 'off');
 
   // A viewer gets the readings but not the editor.
   const viewer = hardwarePanel('local', { isAdmin: false });

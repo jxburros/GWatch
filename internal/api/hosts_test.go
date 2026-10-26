@@ -252,11 +252,12 @@ func TestLocalWatchIsSetListedAndKept(t *testing.T) {
 	}
 
 	var saved model.CollectSelection
-	body := map[string]any{"services": []string{"nginx", " nginx "}, "processes": []string{"plex"}, "metrics": []string{"cpu"}}
+	body := map[string]any{"services": []string{"nginx", " nginx "}, "processes": []string{"plex"}, "metrics": []string{"cpu"},
+		"containers": []string{"web"}, "vms": []string{"dc01"}}
 	if code := call(t, ts, "PUT", "/api/hosts/local/watch", body, &saved); code != 200 {
 		t.Fatalf("set: %d", code)
 	}
-	if len(saved.Services) != 1 || len(saved.Processes) != 1 || len(saved.Metrics) != 0 {
+	if len(saved.Services) != 1 || len(saved.Processes) != 1 || len(saved.Metrics) != 0 || len(saved.Containers) != 1 || len(saved.VMs) != 1 {
 		t.Errorf("only the watch lists are kept, tidied: %+v", saved)
 	}
 	call(t, ts, "GET", "/api/hosts", nil, &hosts)

@@ -564,6 +564,19 @@ func SystemDefaults() CheckConfig {
 			// readings and these never come into play.
 			{Metric: MetricService, Crit: Float(0), Below: true},
 			{Metric: MetricProcess, Crit: Float(0), Below: true},
+			// A watched container or guest is expected to be running too:
+			// critical when it is stopped or off (0), a warning while it is
+			// unhealthy, paused, saved or restarting (1). A container its
+			// restart policy has brought back three times in an hour is
+			// caught in a loop, which the state alone can miss when it is
+			// sampled between crashes. Memory against a container's limit
+			// matters the way a machine's does: at the limit the kernel kills
+			// it. Processor use is charted with no default, as the machine's
+			// own is not critical either.
+			{Metric: MetricDocker, Warn: Float(1), Crit: Float(0), Below: true},
+			{Metric: MetricDockerRestarts, Warn: Float(3)},
+			{Metric: MetricDockerMemory, Warn: Float(90), Crit: Float(97)},
+			{Metric: MetricVM, Warn: Float(1), Crit: Float(0), Below: true},
 		},
 	}
 }
