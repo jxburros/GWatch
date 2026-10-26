@@ -615,6 +615,27 @@ export default [
               "metric": "process",
               "crit": 0,
               "below": true
+            },
+            {
+              "metric": "docker",
+              "warn": 1,
+              "crit": 0,
+              "below": true
+            },
+            {
+              "metric": "docker-restarts",
+              "warn": 3
+            },
+            {
+              "metric": "docker-memory",
+              "warn": 90,
+              "crit": 97
+            },
+            {
+              "metric": "vm",
+              "warn": 1,
+              "crit": 0,
+              "below": true
             }
           ]
         },
@@ -702,6 +723,27 @@ export default [
             },
             {
               "metric": "process",
+              "crit": 0,
+              "below": true
+            },
+            {
+              "metric": "docker",
+              "warn": 1,
+              "crit": 0,
+              "below": true
+            },
+            {
+              "metric": "docker-restarts",
+              "warn": 3
+            },
+            {
+              "metric": "docker-memory",
+              "warn": 90,
+              "crit": 97
+            },
+            {
+              "metric": "vm",
+              "warn": 1,
               "crit": 0,
               "below": true
             }
