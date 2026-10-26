@@ -10,10 +10,10 @@ release is published as `v<VERSION>` by the Release workflow, dispatched from
 `main`. It refuses to publish a tag that disagrees with the file — see
 [`docs/RELEASING.md`](docs/RELEASING.md).
 
-## 0.8.3 (not yet released)
+## 0.8.4 (not yet released)
 
-GWatch and gwatch-agent. The agent changes are the containers and virtual machines
-below; it ships them in its next release.
+GWatch 0.8.4 and gwatch-agent 0.8.3 ship together: the agent reads the containers
+and virtual machines below.
 
 ### Added
 
@@ -36,6 +36,10 @@ below; it ships them in its next release.
   Docker socket, the "Hyper-V Administrators" group — and what it implies is in
   [`docs/HARDWARE.md`](docs/HARDWARE.md#containers-and-virtual-machines), and running
   GWatch's own container with the socket in [`docs/DOCKER.md`](docs/DOCKER.md).
+
+## 0.8.3 (not yet released)
+
+GWatch only; gwatch-agent stays at 0.8.2.
 
 ### Changed
 
