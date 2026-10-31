@@ -117,9 +117,7 @@ export default [
         "timeoutSeconds": 10,
         "retries": 1,
         "failureThreshold": 2,
-        "config": {
-          "pingCount": 4
-        },
+        "config": {},
         "sortOrder": 0,
         "createdAt": "0001-01-01T00:00:00Z",
         "updatedAt": "0001-01-01T00:00:00Z"
@@ -197,9 +195,7 @@ export default [
         "timeoutSeconds": 10,
         "retries": 1,
         "failureThreshold": 2,
-        "config": {
-          "pingCount": 4
-        },
+        "config": {},
         "sortOrder": 0,
         "createdAt": "0001-01-01T00:00:00Z",
         "updatedAt": "0001-01-01T00:00:00Z"
@@ -277,9 +273,7 @@ export default [
         "timeoutSeconds": 10,
         "retries": 1,
         "failureThreshold": 2,
-        "config": {
-          "pingCount": 4
-        },
+        "config": {},
         "sortOrder": 0,
         "createdAt": "0001-01-01T00:00:00Z",
         "updatedAt": "0001-01-01T00:00:00Z"
@@ -416,9 +410,7 @@ export default [
         "timeoutSeconds": 10,
         "retries": 1,
         "failureThreshold": 2,
-        "config": {
-          "pingCount": 4
-        },
+        "config": {},
         "sortOrder": 0,
         "createdAt": "0001-01-01T00:00:00Z",
         "updatedAt": "0001-01-01T00:00:00Z"

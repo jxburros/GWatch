@@ -9,7 +9,7 @@
 import { api } from '../api.js';
 import { h, append, icon, clear, replace, toast, confirmDialog, menuButton, emptyState, skeleton, statusPill, field, selectInput, uid } from '../components.js';
 import { plural, compareNames } from '../fmt.js';
-import { renderNetworkMap, mapConfigEditor, linkStyleEditor, normalizeMapConfig, buildForest } from '../netmap.js';
+import { renderNetworkMap, mapConfigEditor, linkStyleEditor, nodeColourControl, normalizeMapConfig, buildForest } from '../netmap.js';
 
 const STORE_KEY = 'gw.netmap';
 function savedConfig() { try { return normalizeMapConfig(JSON.parse(localStorage.getItem(STORE_KEY) || '{}')); } catch { return normalizeMapConfig({}); } }
@@ -108,7 +108,10 @@ export async function mount(root, ctx) {
       defaults: { color: state.cfg.lineColor, width: state.cfg.lineWidth, dash: state.cfg.lineStyle },
       onChange: (style) => setLinkStyle(n, style),
     }) : null;
+    // The node's own colour: its box here and its row in the node list.
+    const colour = nodeColourControl({ value: n.color || '', disabled: !ctx.me?.isAdmin, label: 'Node colour', onChange: (v) => setColour(n, v) });
     append(selectedCard, [
+      field({ label: 'Colour', input: colour, help: 'Fills this node’s box on the map and its row in the node list.' }),
       field({ label: 'Depends on', input: h('div', { class: 'row netmap-parent u-gap-6 u-nowrap-flex' }, sel, saveBtn), help: 'While the node it depends on is down, this node’s failures are put down to it and its alerts are held back.' }),
       linkEditor,
       chain.length ? h('div', { class: 'netmap-facts' }, h('span', { class: 'section-title' }, 'Upstream'), h('div', null, chain.map((p, i) => [i ? ' › ' : '', h('a', { href: '#', onclick: (ev) => { ev.preventDefault(); select(p.id); } }, p.name)]))) : null,
@@ -131,15 +134,46 @@ export async function mount(root, ctx) {
     } catch (err) { toast(err.message, { kind: 'error' }); }
   }
 
-  // A link's style is saved as it is changed, one request after another so
-  // that the last change is the one that stays; the map redraws from what
-  // came back. A failure puts the panel back as it was saved.
+  // A node's colour is saved as it is picked; the map redraws from what came
+  // back, and a refusal puts the panel back as it was.
+  async function setColour(n, color) {
+    try {
+      await api.patch('/api/nodes/bulk', { nodeIds: [n.id], node: { color } });
+      await load();
+      if (!state.destroyed) state.map?.update(entries(), state.cfg);
+    } catch (err) {
+      toast(err.message, { kind: 'error' });
+      if (!state.destroyed) { await load().catch(() => {}); renderSelected(); }
+    }
+  }
+
+  // A link's style is drawn the moment it is changed and saved just after:
+  // a run of changes (a thickness stepped up one notch at a time) is one
+  // request carrying the last of them, and saves go one after another so the
+  // last change is the one that stays. The map then redraws from what came
+  // back; a failure puts the panel back as it was saved.
   let linkSaving = Promise.resolve();
+  let linkPending = null;
+  // A change still waiting to be saved is kept on top of whatever was just
+  // loaded, so the map never flicks back to an older style in between.
+  function keepPending() {
+    const e = linkPending && entryOf(linkPending.id);
+    if (e) e.node.linkStyle = linkPending.style;
+  }
   function setLinkStyle(n, style) {
+    const e = entryOf(n.id);
+    if (e) { e.node.linkStyle = style; state.map?.update(entries(), state.cfg); }
+    const queued = !!linkPending;
+    linkPending = { id: n.id, style };
+    if (queued) return linkSaving;
     linkSaving = linkSaving.then(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const { id, style: latest } = linkPending;
+      linkPending = null;
       try {
-        await api.patch('/api/nodes/bulk', { nodeIds: [n.id], node: { linkStyle: style } });
+        await api.patch('/api/nodes/bulk', { nodeIds: [id], node: { linkStyle: latest } });
         await load();
+        keepPending();
         if (!state.destroyed) state.map?.update(entries(), state.cfg);
       } catch (err) {
         toast(err.message, { kind: 'error' });
@@ -172,7 +206,7 @@ export async function mount(root, ctx) {
     const pairs = [...el.querySelectorAll('*')].map((x, i) => [x, copy.querySelectorAll('*')[i]]);
     for (const [src, dst] of pairs) {
       const s = getComputedStyle(src);
-      for (const prop of ['fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'stroke-linecap', 'opacity', 'font-family', 'font-weight']) {
+      for (const prop of ['fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'stroke-linecap', 'vector-effect', 'opacity', 'font-family', 'font-weight']) {
         const v = s.getPropertyValue(prop); if (v) dst.style.setProperty(prop, v);
       }
     }
@@ -190,6 +224,7 @@ export async function mount(root, ctx) {
     async refresh() {
       await load();
       if (state.destroyed) return;
+      keepPending();
       state.map?.update(entries(), state.cfg);
       // The side panel holds a form; only redraw it when nothing in it has focus.
       if (!selectedCard.contains(document.activeElement)) renderSelected();

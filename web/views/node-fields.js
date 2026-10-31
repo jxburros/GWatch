@@ -168,6 +168,12 @@ export const BULK_FIELDS = [
     help: 'Ping checks only. Built-in sends the echo requests itself; system ping runs the operating system\'s command.',
     summary: (v) => `set the ping method to ${v || 'the global setting'}`,
   },
+  {
+    key: 'pingCount', scope: 'check', path: 'config.pingCount', group: 'Thresholds',
+    label: 'Pings per check', kind: 'number', unit: 'pings', min: 0, max: 20, value: 0,
+    help: 'Ping checks only. 0 follows Settings › General.',
+    summary: (v) => (Number(v) === 0 ? 'send the pings Settings › General says' : `send ${v} pings per run`),
+  },
 
   // --- checks: alerts ---
   {
@@ -249,6 +255,12 @@ export const BULK_FIELDS = [
     label: 'Nodes enabled', kind: 'toggle', value: 'true',
     help: 'A disabled node keeps its configuration and stops being checked.',
     summary: (v) => (v === 'true' ? 'enable' : 'disable'),
+  },
+  {
+    key: 'nodeColour', scope: 'node', path: 'color', group: 'Nodes',
+    label: 'Colour', kind: 'colour', value: '',
+    help: 'Fills each node’s box on the network map and its row in the node list. None clears it.',
+    summary: (v) => (v ? `colour the nodes ${v}` : 'clear the nodes’ colour'),
   },
   {
     key: 'dependsOn', scope: 'node', path: 'dependsOnNodeId', group: 'Nodes',

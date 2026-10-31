@@ -368,12 +368,17 @@ echoed as written, so an `Authorization` header on an HTTP check is stored in th
 ### Node and Check objects
 
 A `Node` is `{id, name, host, groups, group, tags, notes, importance, enabled,
-dependsOnNodeId, linkStyle, collectorId, template, createdAt, updatedAt, checks}`. `host` is the default target
+dependsOnNodeId, linkStyle, color, collectorId, template, createdAt, updatedAt, checks}`. `host` is the default target
 its checks inherit when their own `config.target` is empty; `importance` is `low`,
 `normal`, `high` or `critical`; `dependsOnNodeId` is the parent used for
 dependency-aware alert suppression; `template` records which template the node was
 created from and is informational only. `group` is the deprecated single-group alias
 described above.
+
+`color` is the node's own colour, `""` for none: `#rgb`, `#rrggbb` or `#rrggbbaa`
+(returned in lower case), and a 400 on create, update or bulk edit when it is
+anything else. The web interface uses it as the background of the node's box on
+the network map and of its name in the node list, and nowhere else.
 
 `linkStyle` is how the line from this node to its parent (`dependsOnNodeId`) is
 drawn on the network map, or `null` for "like the map". It is
@@ -419,7 +424,7 @@ falls back to `general.latencyWarnMs` / `general.packetLossWarnPct`).
 
 | type | config fields |
 | --- | --- |
-| `ping` | `pingCount` (packets per run, default 4, max 20), `pingMethod` (`""` follows `general.pingMethod`, else `auto`/`builtin`/`system`) |
+| `ping` | `pingCount` (packets per run, max 20; 0 or absent follows `general.pingCount`), `pingMethod` (`""` follows `general.pingMethod`, else `auto`/`builtin`/`system`) |
 | `http` | `method` (default `GET`), `expectedStatus` (`"200"`, `"200-299"`, `"200,301,302"`; default `"200-399"`), `followRedirects` (default `true`; a redirect to another host, or from https to http, is followed without the check's `headers` and `body`), `headers`, `body`, `ignoreTlsErrors`, `certCheck` (also judge certificate expiry — default `true` on https), `certWarnDays`, `contentWatch`, `contentHeader` |
 | `keyword` | everything `http` takes, plus `keyword` (the text that must be present) and `keywordAbsent` (`true` inverts it: the text must **not** be present) |
 | `json` | everything `http` takes, plus `jsonPath` (dotted, e.g. `status` or `data.items[0].name`), `jsonExpected` (empty means "the path must merely exist") and the recording fields `jsonRecord`, `jsonMetric`, `jsonUnit`, `jsonWarnAbove`, `jsonCritAbove`, `jsonWarnBelow`, `jsonCritBelow` — see [Named metrics](#named-metrics) |
@@ -542,6 +547,10 @@ answered **409**; the registry is in memory, so a restart forgets the last run.
   address. An address already used as some node's `host` is skipped rather than
   duplicated, as is one the run never saw. `group` and `groups` are the same thing; the
   first entry of `groups` is used when `group` is absent.
+  Two optional fields apply to every node created: `intervalSeconds` (above zero) sets
+  how often each of its checks runs, in place of the template's own — **400** below the
+  minimum interval in Settings › General; `dependsOnNodeId` makes each depend on that
+  node — **400** when there is no such node.
 
 `DiscoveryJob`:
 
@@ -621,7 +630,8 @@ the change would silently not happen.
 `removeGroups`, `tags` (replaces), `addTags`, `removeTags`, `importance`,
 `enabled`, `dependsOnNodeId` (a node id, or `null` to clear it), `linkStyle`
 (an object as above to set the style of the node's link to its parent, or `null`
-to reset it; the network map's side panel uses this). Group and tag
+to reset it; the network map's side panel uses this), `color` (a hex colour, or
+`""` to clear it). Group and tag
 names are trimmed, folded case-insensitively onto the spelling already in use
 and capped at 16 groups, exactly as `PUT /api/nodes/{id}` does; removals match
 ignoring case. A dependency that would form a loop, or point a node at itself,
@@ -636,6 +646,8 @@ explicit `null` clears it.
 
 `config` is a whitelist of keys whose meaning does not depend on the check type:
 `latencyWarnMs`, `packetLossWarnPct`, `pingMethod`, `certWarnDays`, plus
+`pingCount` (1-20 on every `ping` check in the selection, `0` or `null` to follow
+`general.pingCount`; skipped on every other type), plus
 `metricThresholds`, which is merged by metric key onto every `system` check in the
 selection and skipped on every other type (see
 [Hardware check metrics](#hardware-check-metrics)). Any other key is a 400 naming it
@@ -1169,7 +1181,7 @@ Widget types (`Widget.type`) and their `config`:
 | `summary` | `{}` | overall health counts (up/degraded/down/unknown) |
 | `groups` | `{ "groups": ["Home Network", ...] }` (empty = all) | group status cards |
 | `status_list` | `{ "group": "", "tag": "", "nodeIds": [], "sort": "" }` | node/check status list, filtered (`group` matches any of a node's groups); `sort` is `""` (as the overview lists them), `status`, `name`, `name-desc`, `host` or `importance` |
-| `network_map` | `{ "orientation": "down|right|radial", "labels": "name|name-host|none", "size": "small|medium|large", "edges": "curved|straight|elbow", "group": "", "tag": "", "onlyLinked": false, "colorEdges": true, "showLegend": true, "lineColor": "", "lineWidth": 1.5, "lineStyle": "solid|dashed|dotted|dash-dot" }` | the dependency map: every node under the node it depends on (`radial` is the clusters layout: the nodes that depend on a node branch off it in whatever direction has room, with longer lines to bigger branches). `lineColor` (`#rgb`, `#rrggbb` or `#rrggbbaa`; empty = the theme's), `lineWidth` (1–8) and `lineStyle` are how a line looks unless the node at its lower end has a `linkStyle` of its own; saving a dashboard with a colour or style that is not allowed is a 400, and a width out of range is clamped |
+| `network_map` | `{ "orientation": "down|right|radial", "labels": "name|name-host|none", "size": "small|medium|large", "edges": "curved|straight|elbow", "group": "", "tag": "", "onlyLinked": false, "colorEdges": true, "showLegend": true, "lineColor": "", "lineWidth": 1.5, "lineStyle": "solid|dashed|dotted|dash-dot" }` | the dependency map: every node under the node it depends on (`radial` is the clusters layout: the nodes that depend on a node sit in a ring round it, and each that has dependents of its own is the middle of its own ring, further out). `lineColor` (`#rgb`, `#rrggbb` or `#rrggbbaa`; empty = the theme's), `lineWidth` (1–8 pixels on the screen, whatever the map is scaled to) and `lineStyle` are how a line looks unless the node at its lower end has a `linkStyle` of its own; saving a dashboard with a colour or style that is not allowed is a 400, and a width out of range is clamped |
 | `latency_chart` | `{ "checkIds": [1,2], "range": "24h", "metric": "avg" }` | line chart of latency/response time |
 | `response_chart` | same as latency_chart (HTTP checks) | response time |
 | `loss_chart` | `{ "checkIds": [], "range": "24h" }` | packet loss % |
@@ -1412,6 +1424,7 @@ assistant up, not for the assistant: both are admin-only and refuse every API ke
 | `latencyWarnMs` | `0` (off) | the global latency warning threshold a check inherits |
 | `packetLossWarnPct` | `0` (off) | the global packet-loss warning threshold a check inherits |
 | `pingMethod` | `auto` | `auto`, `builtin` (GWatch's own ICMP sender) or `system` (the platform `ping`). Anything else is a `400`; an empty value, which is what settings saved before this existed contain, reads as `auto` |
+| `pingCount` | `4` | echo requests in one run of a ping check whose `config.pingCount` is 0 or absent, 1-20; anything else is a `400`. 0, which is what settings saved before this existed contain, reads as 4 |
 | `theme` | `dark` | `dark`, `light` or `system` |
 | `accentColor` | `#43c9c0` | hex colour used for the accent |
 | `remoteAccess` | `false` | rebinds the listener to every interface, live |

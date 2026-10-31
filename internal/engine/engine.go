@@ -586,6 +586,7 @@ func (e *Engine) runAndProcess(ctx context.Context, checkID int64, depth int) (m
 		LatencyWarnMS:     e.settings.General.LatencyWarnMS,
 		PacketLossWarnPct: e.settings.General.PacketLossWarnPct,
 		PingMethod:        e.settings.General.PingMethod,
+		PingCount:         e.settings.General.PingCount,
 		Hosts:             e.hosts,
 	}
 	if st != nil {
@@ -716,6 +717,7 @@ func (e *Engine) TestCheck(ctx context.Context, c model.Check, nodeHost string) 
 		LatencyWarnMS:     e.settings.General.LatencyWarnMS,
 		PacketLossWarnPct: e.settings.General.PacketLossWarnPct,
 		PingMethod:        e.settings.General.PingMethod,
+		PingCount:         e.settings.General.PingCount,
 	}
 	e.mu.Unlock()
 	if c.TimeoutSeconds <= 0 {

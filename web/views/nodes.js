@@ -4,6 +4,7 @@ import { api } from '../api.js';
 import { h, icon, clear, syncQuery, chipRows, replace, statusSpine, statusWord, checkChip, importanceBadge, tagList, toggle, menuButton, toast, confirmDialog, openModal, emptyState, skeleton } from '../components.js';
 import { relTime, nodeGroups, inGroup, NODE_SORTS, sortNodes, compareNames } from '../fmt.js';
 import { addAgentNode } from './machines.js';
+import { nodeColour, textOn } from '../netmap.js';
 
 const STATUS_ORDER = ['down', 'degraded', 'unknown', 'maintenance', 'up', 'paused'];
 
@@ -218,8 +219,15 @@ export async function mount(root, ctx) {
     const states = n.stateByCheck || {};
     const name = n.name || 'Unnamed node';
 
-    const cls = `node-row ${n.enabled === false ? 'disabled' : ''}`;
+    // A node's own colour is the background of its name box, with text in
+    // whichever of black or white reads on it — as on the network map.
+    const own = nodeColour(n);
+    const cls = `node-row ${n.enabled === false ? 'disabled' : ''}${own ? ' has-colour' : ''}`;
     if (row.className !== cls) row.className = cls;
+    if (row.style.getPropertyValue('--node-color') !== own) {
+      if (own) { row.style.setProperty('--node-color', own); row.style.setProperty('--node-ink', textOn(own)); }
+      else { row.style.removeProperty('--node-color'); row.style.removeProperty('--node-ink'); }
+    }
     if (row.getAttribute('aria-label') !== name) row.setAttribute('aria-label', name);
 
     // The spine flashes when a node changes status, and that flash is decided

@@ -1003,7 +1003,11 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .netmap-svg { width: 100%; height: 100%; flex: 1; display: block; user-select: none; }
 .netmap-tools { position: absolute; top: 8px; right: 8px; z-index: 2; display: flex; gap: 4px; }
 .netmap-tools .icon-btn { background: var(--elev); box-shadow: 0 0 0 1px var(--line); }
-.netmap-edge { fill: none; stroke: var(--line-strong); stroke-width: 1.5; }
+/* A line's thickness is in pixels on the screen, whatever the map is scaled
+   to: a big map fitted into its frame, or one on a small dashboard widget,
+   would otherwise thin every line to a hairline and make the thickness
+   setting look like it does nothing. */
+.netmap-edge { fill: none; stroke: var(--line-strong); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 .netmap-edge-down { stroke: var(--down); stroke-dasharray: 5 4; }
 .netmap-node .netmap-box { fill: var(--elev); stroke: var(--line-strong); stroke-width: 1; }
 .netmap-node .netmap-stripe { fill: var(--unknown); }
@@ -1043,6 +1047,7 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .netmap-linestyle { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.625rem 0.75rem; }
 .netmap-linestyle > .field:first-child { grid-column: 1 / -1; }
 .netmap-colour { display: flex; align-items: center; gap: 0.5rem; }
+.node-colour input[type="color"] { flex: none; }
 .netmap-colour-text { flex: 1; min-width: 0; font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .netmap-linekey { display: inline-block; width: 1.25rem; border-top: 2px dashed var(--down); }
 .netmap-facts { display: grid; gap: 2px; margin-top: 10px; font-size: 0.8125rem; }
@@ -1279,6 +1284,13 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .node-row:last-child { border-bottom: 0; }
 .node-row:hover { background: var(--elev); }
 .node-row.disabled { opacity: 1; }
+/* A node's own colour: its name, address and tags sit in a box of that
+   colour, as the node's box does on the network map, in whichever of black
+   or white reads on it (--node-ink). The status and the checks stay on the
+   row's own background, so their colours keep their meaning. */
+.node-row.has-colour .n-name { background: var(--node-color); color: var(--node-ink); padding: 0.375rem 0.625rem; margin: -0.375rem -0.625rem; border-radius: 3px; }
+.node-row.has-colour .n-name a, .node-row.has-colour .n-name .n-host { color: var(--node-ink); }
+.node-row.has-colour .n-name .tag { color: var(--node-ink); background: transparent; border-color: currentColor; }
 .node-row .n-meta { justify-self: end; text-align: right; align-items: flex-end; }
 .node-row .n-name { font-weight: 600; font-size: var(--list-font); display: flex; flex-direction: column; min-width: 0; }
 .node-row .n-name a { color: var(--text); }

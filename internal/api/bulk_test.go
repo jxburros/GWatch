@@ -224,7 +224,7 @@ func TestBulkEditRefusesWhatItCannotDo(t *testing.T) {
 		{"nothing selected", map[string]any{"check": map[string]any{"intervalSeconds": 120}}},
 		{"nothing to change", map[string]any{"nodeIds": []int64{a.ID}}},
 		{"an empty patch is still nothing to change", map[string]any{"nodeIds": []int64{a.ID}, "node": map[string]any{}}},
-		{"an unknown config key", map[string]any{"nodeIds": []int64{a.ID}, "check": map[string]any{"config": map[string]any{"pingCount": 9}}}},
+		{"an unknown config key", map[string]any{"nodeIds": []int64{a.ID}, "check": map[string]any{"config": map[string]any{"port": 9}}}},
 		{"an unknown check field", map[string]any{"nodeIds": []int64{a.ID}, "check": map[string]any{"name": "renamed"}}},
 		{"an unknown node field", map[string]any{"nodeIds": []int64{a.ID}, "node": map[string]any{"host": "10.0.0.9"}}},
 		{"a check type change", map[string]any{"nodeIds": []int64{a.ID}, "check": map[string]any{"type": "tcp"}}},
@@ -241,9 +241,9 @@ func TestBulkEditRefusesWhatItCannotDo(t *testing.T) {
 	// The unknown-config-key message names the key and the ones that would
 	// have worked, because the caller cannot see this list anywhere else.
 	code, body, _ := as(t, ts, creds{}, "PATCH", "/api/nodes/bulk", map[string]any{
-		"nodeIds": []int64{a.ID}, "check": map[string]any{"config": map[string]any{"pingCount": 9}},
+		"nodeIds": []int64{a.ID}, "check": map[string]any{"config": map[string]any{"port": 9}},
 	}, nil)
-	if code != 400 || !strings.Contains(body, "pingCount") || !strings.Contains(body, "latencyWarnMs") {
+	if code != 400 || !strings.Contains(body, "port") || !strings.Contains(body, "latencyWarnMs") {
 		t.Fatalf("unknown key message: %d %s", code, body)
 	}
 
@@ -386,5 +386,64 @@ func drainConfigUpdates(ch chan engine.Update) int {
 		default:
 			return n
 		}
+	}
+}
+
+// Settings › General holds the pings per check; a bulk edit can give ping
+// checks their own count or hand them back to that setting.
+func TestPingCountSettingAndBulkEdit(t *testing.T) {
+	ts, srv := newTestServer(t)
+	a, b := makeBulkNodes(t, ts)
+
+	var settings model.Settings
+	call(t, ts, "GET", "/api/settings", nil, &settings)
+	if settings.General.PingCount != model.DefaultPingCount {
+		t.Fatalf("a fresh install sends %d pings per check, want %d", settings.General.PingCount, model.DefaultPingCount)
+	}
+	settings.General.PingCount = 21
+	if code := call(t, ts, "PUT", "/api/settings", settings, nil); code != 400 {
+		t.Fatalf("21 pings per check: %d, want 400", code)
+	}
+	settings.General.PingCount = 8
+	if code := call(t, ts, "PUT", "/api/settings", settings, &settings); code != 200 || settings.General.PingCount != 8 {
+		t.Fatalf("8 pings per check: %d %+v", code, settings.General)
+	}
+	if got := srv.Engine.Settings().General.PingCount; got != 8 {
+		t.Fatalf("the engine runs %d pings per check, want 8", got)
+	}
+
+	// Both nodes' ping checks were created with a count of their own (4);
+	// clearing it hands them to the setting. The HTTP checks are left alone.
+	var res bulkResponse
+	body := map[string]any{"nodeIds": []int64{a.ID, b.ID}, "check": map[string]any{"config": map[string]any{"pingCount": nil}}, "checkFilter": map[string]any{"types": []string{"ping"}}}
+	if code := call(t, ts, "PATCH", "/api/nodes/bulk", body, &res); code != 200 {
+		t.Fatalf("bulk: %d", code)
+	}
+	if len(res.Changes) != 1 || res.Changes[0] != "pings per check → global setting" {
+		t.Fatalf("changes: %+v", res.Changes)
+	}
+	pingCountOf := func(id int64) int {
+		var nodes []nodeDoc
+		call(t, ts, "GET", "/api/nodes", nil, &nodes)
+		for _, n := range nodes {
+			for _, c := range n.Checks {
+				if c.ID == id {
+					return c.Config.PingCount
+				}
+			}
+		}
+		t.Fatalf("no check %d", id)
+		return -1
+	}
+	if pingCountOf(a.Checks[0].ID) != 0 || pingCountOf(b.Checks[0].ID) != 0 {
+		t.Fatal("the ping checks still have a count of their own")
+	}
+	body["check"] = map[string]any{"config": map[string]any{"pingCount": 12}}
+	if code := call(t, ts, "PATCH", "/api/nodes/bulk", body, nil); code != 200 || pingCountOf(a.Checks[0].ID) != 12 {
+		t.Fatalf("a count of 12: %d", code)
+	}
+	body["check"] = map[string]any{"config": map[string]any{"pingCount": 50}}
+	if code := call(t, ts, "PATCH", "/api/nodes/bulk", body, nil); code != 400 {
+		t.Fatalf("a count of 50: %d, want 400", code)
 	}
 }

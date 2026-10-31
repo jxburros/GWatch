@@ -253,3 +253,32 @@ func TestPingCheckUsesTheResolvedMethod(t *testing.T) {
 		t.Errorf("per-check override: method = %q", got)
 	}
 }
+
+// A ping check sends its own count when it has one, else the count in
+// Settings › General, else four, and never more than twenty.
+func TestPingCountFollowsTheCheckThenTheGlobalSetting(t *testing.T) {
+	orig := pingFunc
+	defer func() { pingFunc = orig }()
+	var got int
+	pingFunc = func(ctx context.Context, host string, count int, timeout time.Duration, method string) (pingResult, error) {
+		got = count
+		return pingResult{Sent: count, Received: count, RTTs: []time.Duration{time.Millisecond}}, nil
+	}
+	check := model.Check{Type: model.CheckPing, Name: "Ping", IntervalSeconds: 60, TimeoutSeconds: 5}
+	for _, tc := range []struct {
+		name        string
+		own, global int
+		want        int
+	}{
+		{"neither set", 0, 0, 4},
+		{"the global setting", 0, 7, 7},
+		{"the check's own count wins", 2, 7, 2},
+		{"capped", 0, 99, 20},
+	} {
+		check.Config.PingCount = tc.own
+		runPingCheck(context.Background(), check, "127.0.0.1", Options{PingCount: tc.global})
+		if got != tc.want {
+			t.Errorf("%s: sent %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}

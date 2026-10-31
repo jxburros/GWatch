@@ -39,12 +39,14 @@ import { install as installHistory } from './mock/history.js';
     if (!s) return null;
     return { ...(s.color ? { color: s.color } : {}), ...(s.width ? { width: s.width } : {}), ...(s.dash ? { dash: s.dash } : {}) };
   }
+  // A node's own colour, as stored: a hex colour in lower case, or ''.
+  function colourOut(raw) { return normalizeLineColor(raw); }
   function mkNode(o) {
     const id = ++seq.node;
     // group is the deprecated alias for the first group, exactly as the
     // server sends it.
     const groups = (o.groups || (o.group ? [o.group] : [])).slice(0, 16);
-    return { id, name: o.name, host: o.host, groups, group: groups[0] || '', tags: o.tags || [], notes: o.notes || '', importance: o.importance || 'normal', enabled: o.enabled !== false, dependsOnNodeId: o.dependsOnNodeId ?? null, collectorId: o.collectorId ?? null, linkStyle: styleOut(o.linkStyle), template: o.template || '', createdAt: ago(40 * DAY), updatedAt: ago(2 * DAY), checks: [] };
+    return { id, name: o.name, host: o.host, groups, group: groups[0] || '', tags: o.tags || [], notes: o.notes || '', importance: o.importance || 'normal', enabled: o.enabled !== false, dependsOnNodeId: o.dependsOnNodeId ?? null, collectorId: o.collectorId ?? null, linkStyle: styleOut(o.linkStyle), color: colourOut(o.color), template: o.template || '', createdAt: ago(40 * DAY), updatedAt: ago(2 * DAY), checks: [] };
   }
 
   const nodes = [];
@@ -163,6 +165,10 @@ import { install as installHistory } from './mock/history.js';
   for (const n of [swtch, pihole]) n.dependsOnNodeId = gateway.id;
   // The NAS's link is drawn heavier and blue, to show what a link's own style does.
   nas.linkStyle = { color: '#3b82f6', width: 3 };
+  // Two nodes with a colour of their own, a dark one and a light one, so the
+  // map and the node list show both kinds of text on them.
+  swtch.color = '#1f4e8c';
+  backupSrv.color = '#f2c94c';
   for (const n of [nas, backupSrv, ha, printer, newHost]) n.dependsOnNodeId = swtch.id;
   nodes.push(gateway, plex, nas, ha, site, weather, printer, pihole, backupSrv, swtch, newHost);
 
@@ -278,7 +284,7 @@ import { install as installHistory } from './mock/history.js';
     { id: 'nodes-maintenance', name: 'In maintenance', enabled: true, colour: 'yellow', condition: { kind: 'nodesInStatus', status: 'maintenance', minCount: 1 } },
   ];
   let settings = {
-    general: { instanceName: 'Home monitor', defaultIntervalSeconds: 60, defaultTimeoutSeconds: 10, maxConcurrentChecks: 8, minIntervalSeconds: 10, wallboardRefreshSeconds: 15, latencyWarnMs: 0, packetLossWarnPct: 0, pingMethod: 'auto', theme: localStorage.getItem('gw.theme') || 'dark', accentColor: '#43c9c0', remoteAccess: false, accessPassword: '', requireLoginLocally: false, behindHTTPSProxy: false, passwordHashing: 'argon2id', updateRepo: 'jxburros/GWatch' },
+    general: { instanceName: 'Home monitor', defaultIntervalSeconds: 60, defaultTimeoutSeconds: 10, maxConcurrentChecks: 8, minIntervalSeconds: 10, wallboardRefreshSeconds: 15, latencyWarnMs: 0, packetLossWarnPct: 0, pingMethod: 'auto', pingCount: 4, theme: localStorage.getItem('gw.theme') || 'dark', accentColor: '#43c9c0', remoteAccess: false, accessPassword: '', requireLoginLocally: false, behindHTTPSProxy: false, passwordHashing: 'argon2id', updateRepo: 'jxburros/GWatch' },
     alerts: { enabled: true, recipients: ['jeff@example.com', 'sam@example.com'], failureThreshold: 2, cooldownMinutes: 60, notifyRecovery: true, notifyWarnings: true, certWarnDays: 14, groupWindowSeconds: 30, warningDigest: 'off', smtp: { host: 'smtp.example.com', port: 587, username: 'gwatch@example.com', password: '********', from: 'GWatch <gwatch@example.com>', security: 'starttls' },
       // Settings › Alerts › Also notify. Secrets come back masked, as the
       // real server sends them.
@@ -442,6 +448,15 @@ import { install as installHistory } from './mock/history.js';
     return styleOut(raw);
   }
 
+  // A node's own colour on a write: '' clears it, anything that is not a hex
+  // colour is refused as the service does.
+  function cleanColour(raw) {
+    if (!String(raw || '').trim()) return '';
+    const c = normalizeLineColor(raw);
+    if (!c) throw err(400, `node colour "${raw}" must be a hex colour such as #3b82f6`);
+    return c;
+  }
+
   on('GET', /^\/api\/health$/, () => health());
   on('GET', /^\/api\/version$/, () => ({ version: '0.5.0', platform: 'windows/amd64', apiVersion: 1 }));
   const users = [], keys = [], passwords = new Map();
@@ -510,7 +525,7 @@ import { install as installHistory } from './mock/history.js';
   on('GET', /^\/api\/nodes\/(\d+)$/, (m) => { const n = findNode(m[1]); if (!n) throw err(404, 'node not found'); return nodeOut(n, { withResults: true }); });
   on('POST', /^\/api\/nodes$/, (m, body) => {
     if (!body?.name) throw err(400, 'name is required');
-    const n = mkNode({ ...body, linkStyle: cleanLinkStyle(body.linkStyle, body.dependsOnNodeId), template: body.template || '' });
+    const n = mkNode({ ...body, linkStyle: cleanLinkStyle(body.linkStyle, body.dependsOnNodeId), color: cleanColour(body.color), template: body.template || '' });
     n.checks = (body.checks || []).map((c, i) => { const created = mkCheck(n.id, c.type, c.name, { interval: c.intervalSeconds, timeout: c.timeoutSeconds, failureThreshold: c.failureThreshold, config: c.config, alerts: c.alerts, enabled: c.enabled, sortOrder: i, base: c.type === 'ping' ? 3 : 120, status: 'unknown' }); created.retries = c.retries ?? 1; return created; });
     nodes.push(n);
     addEvent('config_changed', { nodeId: n.id, nodeName: n.name, title: 'Node created', detail: `${n.checks.length} checks` });
@@ -519,7 +534,7 @@ import { install as installHistory } from './mock/history.js';
   on('PUT', /^\/api\/nodes\/(\d+)$/, (m, body) => {
     const n = findNode(m[1]); if (!n) throw err(404, 'node not found');
     const groups = (body.groups && body.groups.length ? body.groups : (body.group ? [body.group] : [])).slice(0, 16);
-    Object.assign(n, { name: body.name, host: body.host, groups, group: groups[0] || '', tags: body.tags || [], notes: body.notes || '', importance: body.importance || 'normal', enabled: body.enabled !== false, dependsOnNodeId: body.dependsOnNodeId ?? null, collectorId: body.collectorId ?? null, linkStyle: cleanLinkStyle(body.linkStyle, body.dependsOnNodeId), updatedAt: iso(Date.now()) });
+    Object.assign(n, { name: body.name, host: body.host, groups, group: groups[0] || '', tags: body.tags || [], notes: body.notes || '', importance: body.importance || 'normal', enabled: body.enabled !== false, dependsOnNodeId: body.dependsOnNodeId ?? null, collectorId: body.collectorId ?? null, linkStyle: cleanLinkStyle(body.linkStyle, body.dependsOnNodeId), color: cleanColour(body.color), updatedAt: iso(Date.now()) });
     const keep = new Set();
     const next = (body.checks || []).map((c, i) => {
       const existing = c.id ? n.checks.find((x) => x.id === c.id) : null;
@@ -534,7 +549,7 @@ import { install as installHistory } from './mock/history.js';
   // Bulk edit. It mirrors internal/api/bulk.go closely enough that the screen
   // behaves the same here as against the service: the same selection rules,
   // the same whitelist, the same shape of answer.
-  const BULK_CONFIG_KEYS = ['certWarnDays', 'latencyWarnMs', 'metricThresholds', 'packetLossWarnPct', 'pingMethod'];
+  const BULK_CONFIG_KEYS = ['certWarnDays', 'latencyWarnMs', 'metricThresholds', 'packetLossWarnPct', 'pingCount', 'pingMethod'];
   on('PATCH', /^\/api\/nodes\/bulk$/, (m, body) => {
     const nodeIds = body?.nodeIds || [];
     const checkIds = body?.checkIds || [];
@@ -544,6 +559,10 @@ import { install as installHistory } from './mock/history.js';
     if (!hasNode && !hasCheck) throw err(400, 'choose at least one setting to change');
     if (hasCheck) for (const k of Object.keys(cp.config || {})) {
       if (!BULK_CONFIG_KEYS.includes(k)) throw err(400, `unknown config key(s) "${k}"; a bulk edit may set ${BULK_CONFIG_KEYS.map((x) => `"${x}"`).join(', ')}`);
+    }
+    if (hasCheck && cp.config && 'pingCount' in cp.config) {
+      const v = cp.config.pingCount;
+      if (v != null && v !== 0 && !(Number.isInteger(v) && v >= 1 && v <= 20)) throw err(400, 'config.pingCount: must be between 1 and 20, or 0 to follow Settings › General');
     }
     const types = body?.checkFilter?.types || [];
     const wanted = new Set(types);
@@ -565,6 +584,7 @@ import { install as installHistory } from './mock/history.js';
       const dedupe = (list) => { const out = [], seenL = new Set(); for (const v of list) { const k = String(v).trim().toLowerCase(); if (!k || seenL.has(k)) continue; seenL.add(k); out.push(String(v).trim()); } return out; };
       // Refused before anything changes, as the service does.
       if ('linkStyle' in np) cleanLinkStyle(np.linkStyle, true);
+      if ('color' in np) cleanColour(np.color);
       for (const n of pickedNodes) {
         let groups = np.groups ? [...np.groups] : groupsOf(n);
         groups = dedupe(fold(groups, np.removeGroups).concat(np.addGroups || [])).slice(0, 16);
@@ -575,6 +595,7 @@ import { install as installHistory } from './mock/history.js';
         if (np.enabled != null) n.enabled = !!np.enabled;
         if ('dependsOnNodeId' in np) n.dependsOnNodeId = np.dependsOnNodeId || null;
         if ('linkStyle' in np) n.linkStyle = np.linkStyle;
+        if ('color' in np) n.color = cleanColour(np.color);
         n.linkStyle = cleanLinkStyle(n.linkStyle, n.dependsOnNodeId);
         n.updatedAt = iso(Date.now());
       }
@@ -588,6 +609,7 @@ import { install as installHistory } from './mock/history.js';
       if (np.enabled != null) changes.push(np.enabled ? 'enabled' : 'disabled');
       if ('dependsOnNodeId' in np) changes.push(np.dependsOnNodeId ? `depends on → ${findNode(np.dependsOnNodeId)?.name || np.dependsOnNodeId}` : 'dependency cleared');
       if ('linkStyle' in np) changes.push(np.linkStyle ? 'link style changed' : 'link style reset');
+      if ('color' in np) changes.push(np.color ? `colour → ${cleanColour(np.color)}` : 'colour cleared');
     }
     if (hasCheck) {
       for (const c of picked) {
@@ -598,8 +620,10 @@ import { install as installHistory } from './mock/history.js';
         if (cp.enabled != null) c.enabled = !!cp.enabled;
         if ('alerts' in cp) c.alerts = cp.alerts ? { ...cp.alerts } : null;
         if (cp.config) {
-          const { metricThresholds, ...rest } = cp.config;
+          const { metricThresholds, pingCount, ...rest } = cp.config;
           Object.assign(c.config, rest);
+          // Ping checks only; null or 0 follows Settings › General.
+          if ('pingCount' in cp.config && c.type === 'ping') { if (pingCount) c.config.pingCount = pingCount; else delete c.config.pingCount; }
           // Merged by metric key, and only onto a hardware check, the way
           // the service does it.
           if (metricThresholds && c.type === 'system') {
@@ -623,6 +647,7 @@ import { install as installHistory } from './mock/history.js';
         else if (k === 'packetLossWarnPct') changes.push(`packet loss warning → ${v} %`);
         else if (k === 'certWarnDays') changes.push(`certificate warning → ${v} days`);
         else if (k === 'metricThresholds') for (const t of v) changes.push(`${t.metric} thresholds → warning ${t.warn ?? 'off'}, critical ${t.crit ?? 'off'}`);
+        else if (k === 'pingCount') changes.push(`pings per check → ${v || 'global setting'}`);
         else changes.push(`ping method → ${v || 'global setting'}`);
       }
     }
@@ -772,7 +797,7 @@ import { install as installHistory } from './mock/history.js';
     return { ...c, id: c.id || `ch-mock${Date.now().toString(36)}${i}`, name: (c.name || '').trim() || a.type, minSeverity: c.minSeverity || 'warning', action: a };
   };
   const NOTIFY = ['slack', 'teams', 'discord', 'telegram', 'matrix', 'ntfy', 'gotify', 'pushover', 'twilio', 'pagerduty', 'opsgenie'];
-  on('PUT', /^\/api\/settings$/, (m, body) => { if ((body.alerts?.channels || []).some((c) => !NOTIFY.includes(c.action?.type))) throw err(400, 'alert channels must be notification channels'); const gw = body.alerts?.groupWindowSeconds ?? 0; if (gw < 0 || gw > 300) throw err(400, 'the alert grouping window must be between 0 (off) and 300 seconds'); if (!['', 'off', 'hourly', 'daily', undefined].includes(body.alerts?.warningDigest)) throw err(400, 'the warning digest must be off, hourly or daily'); settings = clone(body); settings.alerts.channels = (settings.alerts.channels || []).map(maskChannel); if (settings.alerts?.smtp?.password) settings.alerts.smtp.password = '********'; if (settings.general?.accessPassword) settings.general.accessPassword = '********'; if (!settings.indicators?.length) settings.indicators = clone(DEFAULT_INDICATORS); addEvent('config_changed', { title: 'Settings changed' }); return clone(settings); });
+  on('PUT', /^\/api\/settings$/, (m, body) => { if ((body.alerts?.channels || []).some((c) => !NOTIFY.includes(c.action?.type))) throw err(400, 'alert channels must be notification channels'); const pc = body.general?.pingCount ?? 4; if (pc !== 0 && !(Number.isInteger(pc) && pc >= 1 && pc <= 20)) throw err(400, 'pings per check must be between 1 and 20'); const gw = body.alerts?.groupWindowSeconds ?? 0; if (gw < 0 || gw > 300) throw err(400, 'the alert grouping window must be between 0 (off) and 300 seconds'); if (!['', 'off', 'hourly', 'daily', undefined].includes(body.alerts?.warningDigest)) throw err(400, 'the warning digest must be off, hourly or daily'); settings = clone(body); if (!settings.general.pingCount) settings.general.pingCount = 4; settings.alerts.channels = (settings.alerts.channels || []).map(maskChannel); if (settings.alerts?.smtp?.password) settings.alerts.smtp.password = '********'; if (settings.general?.accessPassword) settings.general.accessPassword = '********'; if (!settings.indicators?.length) settings.indicators = clone(DEFAULT_INDICATORS); addEvent('config_changed', { title: 'Settings changed' }); return clone(settings); });
   on('POST', /^\/api\/settings\/test-channel$/, (m, body) => { const t = body?.channel?.action?.type; if (!NOTIFY.includes(t)) throw err(400, `"${t}" is not a notification channel`); return { ok: true, output: `${t} → 200 OK (mock)`, startedAt: iso(Date.now()), durationMs: 120, statusCode: 200 }; });
   on('POST', /^\/api\/settings\/test-email$/, (m, body) => { if (!settings.alerts.smtp.host) throw err(400, 'SMTP host is not configured'); return { ok: true, message: `Test email sent to ${body?.to || settings.alerts.recipients.join(', ')} via ${settings.alerts.smtp.host}` }; });
   on('GET', /^\/api\/retention\/status$/, () => retention);
@@ -914,6 +939,10 @@ import { install as installHistory } from './mock/history.js';
     window.__gwatchMockDiscoveryAdds.push(clone(body || {}));
     const items = body?.items || [];
     if (!items.length) throw err(400, 'choose at least one device to add');
+    const every = Number(body?.intervalSeconds) || 0;
+    if (every < 0 || (every > 0 && every < 10)) throw err(400, 'the check interval must be at least 10 seconds (see Settings › General to change the minimum)');
+    const parentId = body?.dependsOnNodeId > 0 ? Number(body.dependsOnNodeId) : null;
+    if (parentId != null && !nodes.some((n) => n.id === parentId)) throw err(400, 'the selected dependency node does not exist');
     const created = []; const skipped = [];
     for (const item of items) {
       const found = (j.results || []).find((r) => r.ip === item.ip);
@@ -921,8 +950,8 @@ import { install as installHistory } from './mock/history.js';
       const existing = nodes.find((n) => (n.host || '').toLowerCase() === String(item.ip).toLowerCase());
       if (existing) { skipped.push({ ip: item.ip, reason: `already monitored as "${existing.name}"` }); continue; }
       const tmpl = templates.find((t) => t.id === (item.template || found.template)) || templates[0];
-      const n = mkNode({ name: item.name || found.hostname || item.ip, host: item.ip, group: body.group || tmpl.node.group, tags: [], template: tmpl.id });
-      n.checks = tmpl.checks.map((c, i) => mkCheck(n.id, c.type, c.name, { interval: c.intervalSeconds, timeout: c.timeoutSeconds, config: clone(c.config), enabled: c.enabled, sortOrder: i, base: c.type === 'ping' ? 3 : 40, status: 'unknown' }));
+      const n = mkNode({ name: item.name || found.hostname || item.ip, host: item.ip, group: body.group || tmpl.node.group, tags: [], template: tmpl.id, dependsOnNodeId: parentId });
+      n.checks = tmpl.checks.map((c, i) => mkCheck(n.id, c.type, c.name, { interval: every || c.intervalSeconds, timeout: c.timeoutSeconds, config: clone(c.config), enabled: c.enabled, sortOrder: i, base: c.type === 'ping' ? 3 : 40, status: 'unknown' }));
       nodes.push(n);
       created.push(nodeOut(n));
     }

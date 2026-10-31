@@ -59,6 +59,15 @@ test('discovery finds the mock devices and adds the ones that are ticked', async
   selectAll.dispatchEvent(new window.Event('change'));
   const groupInput = [...modal().querySelectorAll('input[type="text"]')].pop();
   groupInput.value = 'Discovered';
+  // The checks' interval and the node they all depend on are set here too,
+  // rather than with a bulk edit once they are added.
+  const every = modal().querySelector('select[aria-label="Check interval"]');
+  every.value = '300';
+  every.dispatchEvent(new window.Event('change'));
+  const dependsOn = modal().querySelector('select[aria-label="Depends on"]');
+  const switchOption = [...dependsOn.options].find((o) => o.textContent.startsWith('Office switch'));
+  assert.ok(switchOption, 'every existing node can be chosen to depend on');
+  dependsOn.value = switchOption.value;
 
   const add = buttonNamed('Add selected');
   assert.ok(!add.disabled, 'adding should be possible once something is ticked');
@@ -72,6 +81,8 @@ test('discovery finds the mock devices and adds the ones that are ticked', async
   // change that turns a node's group into a list of them.
   assert.equal(sent.group, 'Discovered');
   assert.deepEqual(sent.groups, ['Discovered']);
+  assert.equal(sent.intervalSeconds, 300);
+  assert.equal(sent.dependsOnNodeId, Number(switchOption.value));
 
   // The caller is told to reload, and the modal gets out of the way.
   await waitFor(() => reloaded > 0 && !modal(), { timeout: 8000 });

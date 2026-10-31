@@ -65,8 +65,8 @@ test('in clusters no two nodes overlap on the page, and a switch sits among the 
       expect(apart, `boxes ${i} and ${j} overlap`).toBe(true);
     }
   }
-  // The Office switch has its five nodes branching off it, at varied
-  // distances rather than round a circle, each with a line of its own.
+  // The Office switch has its five nodes round it, each with a line of its
+  // own.
   const { swtch } = await ids(page);
   const centres = await page.evaluate((id) => {
     const centre = (el) => { const r = el.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; };
@@ -75,9 +75,13 @@ test('in clusters no two nodes overlap on the page, and a switch sits among the 
     return { middle: at(id), kids };
   }, swtch);
   expect(centres.kids.length).toBe(5);
+  // ... on a ring round it: one distance away, on every side of it.
   const radii = centres.kids.map(([x, y]) => Math.hypot(x - centres.middle[0], y - centres.middle[1]));
-  expect(Math.max(...radii) - Math.min(...radii)).toBeGreaterThan(4);
-  await expect(page.locator('.netmap-legend')).toContainText('branches off the node it depends on');
+  expect(Math.max(...radii) - Math.min(...radii)).toBeLessThan(2);
+  const angles = centres.kids.map(([x, y]) => Math.atan2(y - centres.middle[1], x - centres.middle[0])).sort((a, b) => a - b);
+  const gaps = angles.map((a, i) => (i ? a - angles[i - 1] : a + 2 * Math.PI - angles[angles.length - 1]));
+  expect(Math.max(...gaps)).toBeLessThan(Math.PI);
+  await expect(page.locator('.netmap-legend')).toContainText('in a ring round the node it depends on');
 });
 
 test('a link\'s own style wins over the map\'s, and an outage stays red whatever the colour', async ({ page }) => {
@@ -124,14 +128,13 @@ test('changing a link\'s style in the side panel redraws it, from the keyboard',
   await page.keyboard.press('ArrowDown'); // Dotted
   await page.keyboard.press('Tab');
   await expect(dash).toHaveValue('dotted');
-  // Each change is saved on its own, one after the other.
+  // Each change is drawn at once and saved just after.
   await expect.poll(async () => (await edgeStyle(page, swtch, printer)).cap).toBe('round');
   const dotted = await edgeStyle(page, swtch, printer);
   expect(dotted.width).toBe('8px');
   expect(dotted.dash).toMatch(/^0\.01(px)?[ ,]/);
   // It is kept on the node, which is what every other map reads.
-  const kept = await page.evaluate((id) => window.__gwatchMock.nodes.find((n) => n.id === id).linkStyle, printer);
-  expect(kept).toEqual({ width: 8, dash: 'dotted' });
+  await expect.poll(() => page.evaluate((id) => window.__gwatchMock.nodes.find((n) => n.id === id).linkStyle, printer)).toEqual({ width: 8, dash: 'dotted' });
 
   // Reset gives it back to the map.
   await page.locator(`a[aria-label^="Printer,"]`).click();
@@ -176,4 +179,18 @@ test('a dashboard widget holds the same line controls', async ({ page }) => {
   await expect(dialog.getByLabel('Map line colour')).toBeVisible();
   await expect(dialog.getByLabel('Map line thickness in pixels')).toBeVisible();
   await expect(dialog.getByLabel('Map line style')).toBeVisible();
+});
+
+// "The option to change thickness of lines still does not work": a thickness
+// typed into Customise is drawn straight away, without leaving the field, and
+// lines are drawn in pixels on the screen, so a map scaled down to fit its
+// frame (or a dashboard widget) still shows the thickness chosen.
+test('the line thickness applies as it is typed, in pixels on the screen', async ({ page }) => {
+  await openMap(page, { select: '' });
+  const { swtch, printer } = await ids(page);
+  const thickness = page.locator('.netmap-side').getByLabel('Map line thickness in pixels');
+  await thickness.fill('6');
+  await expect.poll(async () => (await edgeStyle(page, swtch, printer)).width).toBe('6px');
+  const drawn = await page.evaluate(([f, t]) => getComputedStyle(document.querySelector(`.netmap-edge[data-from="${f}"][data-to="${t}"]`)).vectorEffect, [swtch, printer]);
+  expect(drawn).toBe('non-scaling-stroke');
 });

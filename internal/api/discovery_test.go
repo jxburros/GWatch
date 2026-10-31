@@ -334,3 +334,57 @@ func TestDiscoveryIsAdminOnly(t *testing.T) {
 		t.Fatalf("an administrator should be able to start a run: %d %s", code, body)
 	}
 }
+
+// The bottom of the discovery results can set a check interval and a node to
+// depend on as well as a group, so what a sweep adds needs no bulk edit after.
+func TestDiscoveryAddSetsIntervalAndDependency(t *testing.T) {
+	ts, srv := newTestServer(t)
+	srv.discovery().Sweep = fakeSweep(
+		discovery.Responder{IP: "192.168.1.20", Hostname: "nas.lan", Template: "home-server"},
+		discovery.Responder{IP: "192.168.1.50", Template: "ping"},
+	)
+	var started jobDoc
+	if code, body, _ := as(t, ts, creds{}, "POST", "/api/discovery", map[string]any{"ranges": []string{"192.168.1.0/28"}}, &started); code != 202 {
+		t.Fatalf("start: %d %s", code, body)
+	}
+	waitForJob(t, srv, started.ID, "done")
+
+	var sw nodeDoc
+	seed := map[string]any{"name": "Office switch", "host": "192.168.1.2", "enabled": true,
+		"checks": []map[string]any{{"type": "ping", "name": "Ping", "enabled": true, "intervalSeconds": 60, "timeoutSeconds": 5}}}
+	if code, body, _ := as(t, ts, creds{}, "POST", "/api/nodes", seed, &sw); code != 201 {
+		t.Fatalf("seed node: %d %s", code, body)
+	}
+	items := []map[string]any{{"ip": "192.168.1.20"}, {"ip": "192.168.1.50"}}
+
+	// Refused before anything is created: an interval under the minimum, and
+	// a parent that is not there.
+	if code, body, _ := as(t, ts, creds{}, "POST", "/api/discovery/"+started.ID+"/add", map[string]any{"items": items, "intervalSeconds": 3}, nil); code != 400 || !strings.Contains(body, "at least") {
+		t.Fatalf("an interval under the minimum: %d %s", code, body)
+	}
+	if code, body, _ := as(t, ts, creds{}, "POST", "/api/discovery/"+started.ID+"/add", map[string]any{"items": items, "dependsOnNodeId": sw.ID + 1000}, nil); code != 400 || !strings.Contains(body, "does not exist") {
+		t.Fatalf("a parent that is not there: %d %s", code, body)
+	}
+
+	var added addDoc
+	req := map[string]any{"items": items, "intervalSeconds": 300, "dependsOnNodeId": sw.ID}
+	if code, body, _ := as(t, ts, creds{}, "POST", "/api/discovery/"+started.ID+"/add", req, &added); code != 201 {
+		t.Fatalf("add: %d %s", code, body)
+	}
+	if len(added.Created) != 2 {
+		t.Fatalf("created %d: %+v", len(added.Created), added)
+	}
+	for _, n := range added.Created {
+		if n.DependsOnNode == nil || *n.DependsOnNode != sw.ID {
+			t.Errorf("%s should depend on the switch, got %v", n.Name, n.DependsOnNode)
+		}
+		if len(n.Checks) == 0 {
+			t.Errorf("%s has no checks", n.Name)
+		}
+		for _, c := range n.Checks {
+			if c.IntervalSeconds != 300 {
+				t.Errorf("%s › %s runs every %d s, want 300", n.Name, c.Name, c.IntervalSeconds)
+			}
+		}
+	}
+}

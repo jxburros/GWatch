@@ -1,6 +1,6 @@
-// web/views/charts.js picks the first saved chart (the mock seeds two — see
-// web/mock.js's savedCharts) and renders it, with the saved-charts list and
-// the config editor beside it.
+// web/views/charts.js opens on a blank chart; a saved one (the mock seeds two
+// — see web/mock.js's savedCharts) is opened from the list beside it, with
+// the config editor.
 
 import '../dom.mjs';
 import '../../../web/mock.js';
@@ -9,11 +9,20 @@ import assert from 'node:assert/strict';
 import * as chartsView from '../../../web/views/charts.js';
 import { mountView, settle, waitFor } from '../view-harness.mjs';
 
-test('charts view opens on the first saved chart and titles the page after it', async (t) => {
+test('charts view opens on a blank chart, not on a saved one', async (t) => {
   const { root, ctx } = await mountView(chartsView, undefined, t);
+  assert.equal(ctx.setTitleCalls.at(-1).title, 'Charts');
+  assert.equal(root.querySelectorAll('.saved-item').length, 2, 'the saved charts are listed');
+  assert.equal(root.querySelectorAll('.saved-item.active').length, 0, 'none of them is open');
+  assert.match(root.querySelector('.chart-card').textContent, /A blank chart/);
+  assert.equal(root.querySelector('.chart-card canvas'), null, 'nothing is plotted');
+  assert.equal(root.querySelectorAll('.metric-picker input:checked').length, 0, 'nothing is ticked');
+  await settle();
+});
+
+test('a saved chart opens with its own title and series', async (t) => {
+  const { root, ctx } = await mountView(chartsView, { params: { id: 'chart-1' } }, t);
   assert.equal(ctx.setTitleCalls.at(-1).title, 'Gateway latency');
-  assert.equal(root.querySelectorAll('.saved-item').length, 2);
-  assert.ok(root.querySelector('.chart-card'), 'expected the main chart card to render');
   // The chart was saved before series existed and opens as one: its check is
   // open in the picker, with its latency ticked.
   const open = root.querySelector('details.metric-check[open]');

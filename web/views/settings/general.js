@@ -4,7 +4,9 @@
 // view's own, moved here unchanged inside create(shell), which hands it the
 // view's shared state and helpers.
 
-import { h, field, textInput, selectInput } from '../../components.js';
+import { h, icon, field, textInput, selectInput, toast, confirmDialog } from '../../components.js';
+import { api } from '../../api.js';
+import { plural } from '../../fmt.js';
 
 // The ping methods GeneralSettings.PingMethod accepts. A check may override
 // the global choice with the same values, plus "" for "follow the setting".
@@ -17,6 +19,25 @@ const PING_METHODS = [
 /** @param {Record<string, any>} shell the view's state and helpers */
 export function create(shell) {
   const { loadSettings, numField, saveBar, saveSettings, state } = shell;
+
+  /** Every ping check that sets a count of its own goes back to following
+   *  the setting above, in one bulk edit. */
+  async function followSetting(g) {
+    let nodes;
+    try { nodes = await api.get('/api/nodes'); } catch (e) { toast(e.message, { kind: 'error' }); return; }
+    const own = (nodes || []).flatMap((n) => (n.checks || []).filter((c) => c.type === 'ping' && c.config?.pingCount > 0).map((c) => c.id));
+    if (!own.length) { toast('Every ping check already follows this setting'); return; }
+    const ok = await confirmDialog({
+      title: `Make ${plural(own.length, 'ping check')} follow this setting?`,
+      body: h('p', null, `${plural(own.length, 'ping check has', 'ping checks have')} a count of its own (most were given 4 when they were made). They will send the number of pings set here instead — save the setting first if you have just changed it.`),
+      confirmLabel: 'Use this setting',
+    });
+    if (!ok) return;
+    try {
+      await api.patch('/api/nodes/bulk', { checkIds: own, check: { config: { pingCount: null } } });
+      toast(`${plural(own.length, 'ping check')} now send${own.length === 1 ? 's' : ''} ${plural(g.pingCount || 4, 'ping')} per run`, { kind: 'success' });
+    } catch (e) { toast(e.message, { kind: 'error' }); }
+  }
 
   async function tabGeneral() {
     const s = state.settings || await loadSettings();
@@ -47,7 +68,11 @@ export function create(shell) {
             input: pingMethod,
             help: 'Auto tries the built-in sender and falls back to the system ping command. Built-in never runs an external program. System ping uses the operating system\'s ping command, which is the way out where raw sockets are not permitted.',
           }),
+          numField(g, 'pingCount', 'Pings per check', { unitLabel: 'pings', min: 1, max: 20, help: 'How many echo requests make up one run of a ping check, 1 to 20 (4 unless changed). More give a steadier average, jitter and loss figure; fewer finish sooner. A check can set its own.' }),
         ),
+        h('div', { class: 'row-between u-gap-6' },
+          h('span', { class: 'help' }, 'Ping checks made before this setting existed send 4 pings of their own.'),
+          h('button', { type: 'button', class: 'btn btn-sm admin-only', onclick: () => followSetting(g) }, icon('refresh'), 'Make every ping check use this')),
         h('hr', { class: 'divider' }), saveBar()));
   }
 

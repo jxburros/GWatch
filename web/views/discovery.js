@@ -8,8 +8,9 @@
 // and the results.
 
 import { api, subscribeUpdates } from '../api.js';
-import { h, icon, clear, replace, openModal, toast, field, textarea, textInput, selectInput, emptyState, banner } from '../components.js';
-import { ms, plural } from '../fmt.js';
+import { h, icon, clear, replace, openModal, toast, field, textarea, textInput, numberInput, selectInput, emptyState, banner } from '../components.js';
+import { ms, plural, compareNames } from '../fmt.js';
+import { intervalOptions } from './node-fields.js';
 
 // The ports the server probes unless it is told otherwise. They are spelled
 // out here rather than fetched so the field has something in it the moment the
@@ -31,6 +32,7 @@ export async function openDiscovery(ctx, onDone) {
     job: null,          // the run being watched, as the server last described it
     templates: [],      // for the per-row template picker
     groups: [],         // for the group field's suggestions
+    nodes: [],          // for the "depends on" picker
     selected: new Set(),// the addresses ticked in the results table
     closed: false,
     adding: false,
@@ -118,6 +120,29 @@ export async function openDiscovery(ctx, onDone) {
     help: 'Optional. Leave it blank to use each template’s own group.',
   });
   groupField.append(groupList);
+
+  // How often the new nodes' checks run, and what they hang off — the two
+  // things otherwise set with a bulk edit straight after adding a sweep.
+  // Left alone, each template keeps its own interval and nothing depends on
+  // anything.
+  const intervalSel = selectInput({ options: [{ value: '', label: 'Each template’s own' }, ...intervalOptions(), { value: 'custom', label: 'Custom…' }], value: '', 'aria-label': 'Check interval' });
+  const intervalCustom = numberInput({ min: 5, step: 1, placeholder: 'Seconds', hidden: true, 'aria-label': 'Custom check interval in seconds' });
+  intervalSel.addEventListener('change', () => {
+    intervalCustom.hidden = intervalSel.value !== 'custom';
+    if (!intervalCustom.hidden) intervalCustom.focus();
+  });
+  const intervalField = field({
+    label: 'Check every',
+    input: h('div', { class: 'row u-gap-6' }, intervalSel, intervalCustom),
+    help: 'Optional. Applies to every check of every node added.',
+  });
+  const dependsSel = selectInput({ options: [{ value: '', label: 'Nothing' }], value: '', 'aria-label': 'Depends on' });
+  const dependsField = field({
+    label: 'Depends on',
+    input: dependsSel,
+    help: 'Optional. The router or switch they all sit behind: while it is down, their alerts are held back.',
+  });
+  const addOptions = h('div', { class: 'form-grid-3 discovery-add-options' }, groupField, intervalField, dependsField);
   const errorEl = h('div');
 
   // ---- wiring ----
@@ -229,6 +254,12 @@ export async function openDiscovery(ctx, onDone) {
       showError('Tick at least one device first.');
       return;
     }
+    const every = intervalSel.value === 'custom' ? Number(intervalCustom.value) : Number(intervalSel.value || 0);
+    if (intervalSel.value === 'custom' && (!Number.isInteger(every) || every <= 0)) {
+      showError('Type the custom check interval as a whole number of seconds.');
+      intervalCustom.focus();
+      return;
+    }
     showError('');
     state.adding = true;
     addBtn.disabled = true;
@@ -244,6 +275,8 @@ export async function openDiscovery(ctx, onDone) {
       // understands.
       const body = { items };
       if (group) { body.group = group; body.groups = [group]; }
+      if (every > 0) body.intervalSeconds = every;
+      if (dependsSel.value) body.dependsOnNodeId = Number(dependsSel.value);
       const res = await api.post(`/api/discovery/${encodeURIComponent(state.job.id)}/add`, body);
       const created = res?.created?.length || 0;
       const skipped = res?.skipped || [];
@@ -289,7 +322,7 @@ export async function openDiscovery(ctx, onDone) {
       return;
     }
     updateProgress();
-    replace(body, errorEl, summaryLine(), pingNote(), ...notesBanners(), resultsTable(), groupField);
+    replace(body, errorEl, summaryLine(), pingNote(), ...notesBanners(), resultsTable(), addOptions);
     foot.append(closeBtn, againBtn, addBtn);
     addBtn.disabled = state.adding || !state.selected.size;
   }
@@ -421,19 +454,22 @@ export async function openDiscovery(ctx, onDone) {
 
   render();
 
-  const [templates, groups, network, latest] = await Promise.all([
+  const [templates, groups, network, latest, nodes] = await Promise.all([
     api.get('/api/templates').catch(() => []),
     api.get('/api/groups').catch(() => ({ groups: [] })),
     api.get('/api/network').catch(() => null),
     // A run that is already going, or the last one that finished: reopening
     // the modal rejoins it rather than starting from an empty form.
     api.get('/api/discovery').catch(() => null),
+    api.get('/api/nodes').catch(() => []),
   ]);
   if (state.closed) return;
 
   state.templates = templates || [];
   state.groups = (groups?.groups || []).map((g) => g.name);
   replace(groupList, state.groups.map((g) => h('option', { value: g })));
+  state.nodes = [...(nodes || [])].sort((a, b) => compareNames(a.name, b.name));
+  replace(dependsSel, h('option', { value: '' }, 'Nothing'), state.nodes.map((n) => h('option', { value: n.id }, `${n.name}${n.host ? ` (${n.host})` : ''}`)));
 
   const guess = guessRange(network);
   if (guess) rangesInput.value = guess;
