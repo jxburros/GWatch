@@ -10,6 +10,20 @@ release is published as `v<VERSION>` by the Release workflow, dispatched from
 `main`. It refuses to publish a tag that disagrees with the file — see
 [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## 0.8.6 (not yet released)
+
+GWatch 0.8.6 and gwatch-agent 0.8.5 ship together. No change to GWatch or the
+agent themselves: both are rebuilt by an updated release workflow.
+
+### Changed
+
+- **Release workflow.** The build and signing jobs no longer refuse to run until
+  the release commit is already on `main`; releases are dispatched from `main` and
+  the `release` Environment restricts its deployment branches, so the check only
+  duplicated that. The GitHub Actions the workflows run on are updated:
+  `actions/setup-node` 7, `docker/setup-buildx-action` 4, `docker/setup-qemu-action`
+  4, `docker/build-push-action` 7 and `docker/login-action` 4.
+
 ## 0.8.5 (not yet released)
 
 GWatch 0.8.5 and gwatch-agent 0.8.4 ship together. The agent has no changes of its
