@@ -24,6 +24,12 @@ is where the current scope and its limits are kept.
 > release. [`CHANGELOG.md`](CHANGELOG.md) lists what is in each version, and
 > [`ROADMAP.md`](ROADMAP.md#known-gaps) the known gaps it still ships with. Please [report anything that looks wrong](https://github.com/jxburros/GWatch/issues).
 
+## What's new in 0.8.6
+
+0.8.6, with gwatch-agent 0.8.5, changes nothing in GWatch or the agent: both are
+rebuilt by a release workflow that no longer waits for the release commit to be on
+`main` and runs on updated GitHub Actions. See [`CHANGELOG.md`](CHANGELOG.md).
+
 ## What's new in 0.8.5
 
 0.8.5, with gwatch-agent 0.8.4, draws the network map's **clusters as rings** — each node in the middle of
