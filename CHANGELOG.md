@@ -12,7 +12,10 @@ release is published as `v<VERSION>` by the Release workflow, dispatched from
 
 ## 0.8.5 (not yet released)
 
-GWatch only; gwatch-agent stays at 0.8.3.
+GWatch 0.8.5 and gwatch-agent 0.8.4 ship together. The agent has no changes of its
+own: it is rebuilt with the code it shares with GWatch, which gained node colours
+and the pings-per-check setting, and as a remote collector it sends the number of
+pings GWatch hands it for each check.
 
 ### Added
 

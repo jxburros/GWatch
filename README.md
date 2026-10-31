@@ -26,7 +26,7 @@ is where the current scope and its limits are kept.
 
 ## What's new in 0.8.5
 
-0.8.5 draws the network map's **clusters as rings** — each node in the middle of
+0.8.5, with gwatch-agent 0.8.4, draws the network map's **clusters as rings** — each node in the middle of
 what depends on it, each switch starting a ring of its own — and gives nodes a
 **colour of their own** on the map and in the node list. Line thickness now works
 on any size of map, **Charts** open blank, **Discover** can set the check interval
