@@ -19,6 +19,7 @@ export default [
       "enabled": true,
       "dependsOnNodeId": null,
       "linkStyle": null,
+      "color": "",
       "template": "website",
       "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
@@ -100,6 +101,7 @@ export default [
       "enabled": true,
       "dependsOnNodeId": null,
       "linkStyle": null,
+      "color": "",
       "template": "home-server",
       "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
@@ -117,9 +119,7 @@ export default [
         "timeoutSeconds": 10,
         "retries": 1,
         "failureThreshold": 2,
-        "config": {
-          "pingCount": 4
-        },
+        "config": {},
         "sortOrder": 0,
         "createdAt": "0001-01-01T00:00:00Z",
         "updatedAt": "0001-01-01T00:00:00Z"
@@ -180,6 +180,7 @@ export default [
       "enabled": true,
       "dependsOnNodeId": null,
       "linkStyle": null,
+      "color": "",
       "template": "router",
       "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
@@ -197,9 +198,7 @@ export default [
         "timeoutSeconds": 10,
         "retries": 1,
         "failureThreshold": 2,
-        "config": {
-          "pingCount": 4
-        },
+        "config": {},
         "sortOrder": 0,
         "createdAt": "0001-01-01T00:00:00Z",
         "updatedAt": "0001-01-01T00:00:00Z"
@@ -260,6 +259,7 @@ export default [
       "enabled": true,
       "dependsOnNodeId": null,
       "linkStyle": null,
+      "color": "",
       "template": "snmp-device",
       "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
@@ -277,9 +277,7 @@ export default [
         "timeoutSeconds": 10,
         "retries": 1,
         "failureThreshold": 2,
-        "config": {
-          "pingCount": 4
-        },
+        "config": {},
         "sortOrder": 0,
         "createdAt": "0001-01-01T00:00:00Z",
         "updatedAt": "0001-01-01T00:00:00Z"
@@ -339,6 +337,7 @@ export default [
       "enabled": true,
       "dependsOnNodeId": null,
       "linkStyle": null,
+      "color": "",
       "template": "matter-device",
       "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
@@ -399,6 +398,7 @@ export default [
       "enabled": true,
       "dependsOnNodeId": null,
       "linkStyle": null,
+      "color": "",
       "template": "ping",
       "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
@@ -416,9 +416,7 @@ export default [
         "timeoutSeconds": 10,
         "retries": 1,
         "failureThreshold": 2,
-        "config": {
-          "pingCount": 4
-        },
+        "config": {},
         "sortOrder": 0,
         "createdAt": "0001-01-01T00:00:00Z",
         "updatedAt": "0001-01-01T00:00:00Z"
@@ -444,6 +442,7 @@ export default [
       "enabled": true,
       "dependsOnNodeId": null,
       "linkStyle": null,
+      "color": "",
       "template": "api",
       "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
@@ -509,6 +508,7 @@ export default [
       "enabled": true,
       "dependsOnNodeId": null,
       "linkStyle": null,
+      "color": "",
       "template": "tcp-service",
       "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
@@ -554,6 +554,7 @@ export default [
       "enabled": true,
       "dependsOnNodeId": null,
       "linkStyle": null,
+      "color": "",
       "template": "this-computer",
       "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
@@ -664,6 +665,7 @@ export default [
       "enabled": true,
       "dependsOnNodeId": null,
       "linkStyle": null,
+      "color": "",
       "template": "agent-machine",
       "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",
@@ -774,6 +776,7 @@ export default [
       "enabled": true,
       "dependsOnNodeId": null,
       "linkStyle": null,
+      "color": "",
       "template": "dns",
       "collectorId": null,
       "createdAt": "0001-01-01T00:00:00Z",

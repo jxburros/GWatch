@@ -32,6 +32,7 @@ type Options struct {
 	LatencyWarnMS     float64 // global latency warning threshold (used when Config.LatencyWarnMS == 0; 0 = off)
 	PacketLossWarnPct float64 // global packet loss warning threshold (used when Config.PacketLossWarnPct == 0; 0 = off)
 	PingMethod        string  // global ping method (used when Config.PingMethod == ""; "" = auto)
+	PingCount         int     // global packets per ping run (used when Config.PingCount == 0; 0 = defaultPingCount)
 
 	// Hosts supplies hardware readings taken elsewhere — by the engine's
 	// sampler for this computer, or by an agent that pushed them in. It is nil
@@ -49,8 +50,8 @@ const (
 	maxRedirects     = 10
 	minIntervalSecs  = 10
 	maxTimeoutSecs   = 300
-	defaultPingCount = 4
-	maxPingCount     = 20
+	defaultPingCount = model.DefaultPingCount
+	maxPingCount     = model.MaxPingCount
 )
 
 // Run executes the check once including its configured immediate retries.

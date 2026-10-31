@@ -61,7 +61,7 @@ func Templates() []model.NodeTemplate {
 			Icon:        "server",
 			Node:        node("Home server", "Home", "home-server"),
 			Checks: []model.Check{
-				mk(model.CheckPing, "Reachable (ping)", model.CheckConfig{PingCount: 4}),
+				mk(model.CheckPing, "Reachable (ping)", model.CheckConfig{}),
 				mk(model.CheckTCP, "SSH port 22", model.CheckConfig{Port: 22}),
 				mk(model.CheckHTTP, "Web interface", model.CheckConfig{ExpectedStatus: "200-399", IgnoreTLSErrors: true}),
 			},
@@ -75,7 +75,7 @@ func Templates() []model.NodeTemplate {
 			Icon:        "router",
 			Node:        node("Network device", "Network", "router"),
 			Checks: []model.Check{
-				mk(model.CheckPing, "Reachable (ping)", model.CheckConfig{PingCount: 4}),
+				mk(model.CheckPing, "Reachable (ping)", model.CheckConfig{}),
 				mk(model.CheckDNS, "Internet name lookup", model.CheckConfig{Target: "google.com", RecordType: "A"}),
 				mk(model.CheckTCP, "Admin page port 80", model.CheckConfig{Port: 80}),
 			},
@@ -91,7 +91,7 @@ func Templates() []model.NodeTemplate {
 			Icon:        "router",
 			Node:        node("SNMP device", "Network", "snmp-device"),
 			Checks: []model.Check{
-				mk(model.CheckPing, "Reachable (ping)", model.CheckConfig{PingCount: 4}),
+				mk(model.CheckPing, "Reachable (ping)", model.CheckConfig{}),
 				mk(model.CheckSNMP, "SNMP readings", model.CheckConfig{
 					SNMPVersion: "2c", SNMPPort: 161, SNMPCommunity: "public",
 					SNMPOIDs: []model.SNMPOID{
@@ -127,7 +127,7 @@ func Templates() []model.NodeTemplate {
 			Icon:        "activity",
 			Node:        node("Device", "Network", "ping"),
 			Checks: []model.Check{
-				mk(model.CheckPing, "Reachable (ping)", model.CheckConfig{PingCount: 4}),
+				mk(model.CheckPing, "Reachable (ping)", model.CheckConfig{}),
 			},
 		},
 		{

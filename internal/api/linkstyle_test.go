@@ -247,3 +247,46 @@ func TestNetworkMapWidgetLineSettingsAreChecked(t *testing.T) {
 		t.Fatalf("other widget: %d", code)
 	}
 }
+
+// A node's own colour is kept in lower case, set and cleared by a bulk edit,
+// and refused when it is not a hex colour.
+func TestNodeColourRoundTripsAndIsChecked(t *testing.T) {
+	ts, _ := newTestServer(t)
+	parent, child := newLinkedNodes(t, ts)
+
+	var created nodeDoc
+	body := map[string]any{"name": "Camera", "host": "10.0.0.9", "enabled": true, "color": "#E5A50A", "checks": []map[string]any{}}
+	if code := call(t, ts, "POST", "/api/nodes", body, &created); code != 201 {
+		t.Fatalf("create: %d", code)
+	}
+	if created.Color != "#e5a50a" {
+		t.Fatalf("created colour = %q, want #e5a50a", created.Color)
+	}
+	if got := getNode(t, ts, created.ID).Color; got != "#e5a50a" {
+		t.Fatalf("read back colour = %q", got)
+	}
+	for _, bad := range []string{"red", "url(#x)", "#12345", "#ggg"} {
+		body["color"] = bad
+		body["host"] = "10.0.1." + fmt.Sprint(len(bad))
+		if code := call(t, ts, "POST", "/api/nodes", body, nil); code != 400 {
+			t.Errorf("colour %q: got %d, want 400", bad, code)
+		}
+	}
+
+	var res bulkResponse
+	if code := call(t, ts, "PATCH", "/api/nodes/bulk", map[string]any{"nodeIds": []int64{parent.ID, child.ID}, "node": map[string]any{"color": "#336699"}}, &res); code != 200 {
+		t.Fatalf("bulk colour: %d", code)
+	}
+	if len(res.Changes) != 1 || res.Changes[0] != "colour → #336699" {
+		t.Fatalf("changes: %+v", res.Changes)
+	}
+	if getNode(t, ts, parent.ID).Color != "#336699" || getNode(t, ts, child.ID).Color != "#336699" {
+		t.Fatal("the bulk colour did not stick")
+	}
+	if code := call(t, ts, "PATCH", "/api/nodes/bulk", map[string]any{"nodeIds": []int64{parent.ID}, "node": map[string]any{"color": "blue"}}, nil); code != 400 {
+		t.Fatalf("a bulk colour that is not hex: %d", code)
+	}
+	if code := call(t, ts, "PATCH", "/api/nodes/bulk", map[string]any{"nodeIds": []int64{parent.ID}, "node": map[string]any{"color": ""}}, nil); code != 200 || getNode(t, ts, parent.ID).Color != "" {
+		t.Fatalf("clearing the colour: %d", code)
+	}
+}

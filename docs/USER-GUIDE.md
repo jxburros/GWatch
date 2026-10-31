@@ -196,6 +196,10 @@ Each node carries:
   parent is chosen, a **Link style** group beside it sets the colour,
   thickness and dash style of the line between the two on the
   [network map](#the-network-map).
+- **Colour** — optional. The node's box on the network map is filled with it,
+  and so is its name in the node list, with the text switched to black or
+  white so it stays readable. It is shown nowhere else; *None* takes it off.
+  Several nodes can be given one at once with **Bulk edit › Colour**.
 - **Notes** — free text, for the thing you will not remember in six months.
 - **Enabled** — a disabled node keeps its configuration and its history and
   stops being checked.
@@ -305,7 +309,8 @@ node's host.
 
 Reachability and latency over ICMP.
 
-- **Packets per run** — default 4, maximum 20.
+- **Packets per run** — maximum 20. Leave it blank to send what
+  **Settings › General › Pings per check** says (4 unless you change it).
 - **Warn when slower than** (ms) and **warn when packet loss exceeds** (%) mark
   the check degraded rather than down. `0` turns either off.
 - **Ping method** — *Auto*, *Built-in sender*, or *System ping command*.
@@ -501,6 +506,10 @@ answers, tries a few ports on it, and offers the lot as a list you can tick.
 - **Ports to try on whatever answers** — what it probes to guess what each
   device is.
 - **Put them in a group** — everything you add lands in that group.
+- **Check every** — how often every check of the nodes you add runs; left on
+  *Each template's own*, each keeps its template's interval.
+- **Depends on** — the router or switch they all sit behind, so they hang off
+  it on the network map and their alerts are held back while it is down.
 
 Each responder comes back with its address, its name, its round-trip time, its
 open ports, its **MAC address and the maker** of its network card, and a
@@ -538,7 +547,7 @@ in words, and confirm once.
 | Group | Fields |
 |---|---|
 | Schedule | Check interval, timeout, retries, failures before down, checks enabled |
-| Thresholds | Warn when slower than, warn when packet loss exceeds, certificate warning, **hardware threshold**, ping method |
+| Thresholds | Warn when slower than, warn when packet loss exceeds, certificate warning, **hardware threshold**, ping method, pings per check |
 | Alerts | Send alerts, alert cooldown, notify on recovery, notify on warnings, alert recipients, **clear all alert overrides** |
 
 **Node fields**
@@ -608,7 +617,9 @@ dashed, so the reach of an outage — everything whose alerts are being held bac
 because of it — can be followed by eye. Nodes with no dependency either way are
 set apart in a block of their own.
 
-Choose a node to see what is upstream of it and what depends on it, and to
+Choose a node to see what is upstream of it and what depends on it, to give
+it a **colour** of its own (its box here and its row in the node list; the
+status stays on the stripe, the dot and the border), and to
 change what it **depends on** without opening the editor (a node cannot be
 made to depend on anything below it, which would be a loop). **Customise**
 lays the map out top to bottom, left to right or as **clusters**; shows names,
@@ -618,23 +629,26 @@ lines curved, straight or right-angled; narrows the map to a group or a tag
 nodes with no dependency. Those choices are remembered in this browser.
 
 **Clusters** (this replaces the layout that was called *Radial*; a map saved
-that way keeps working and now draws as clusters) draws each node with the
-things that depend on it spread round it, branching off in whatever direction
-has room — the way you would sketch the network on a whiteboard. Nothing is
-put on a circle: lines to single devices are short, a line to a switch with a
-crowd of machines behind it is longer so that crowd has space, and a node's
-children fan out away from the node above it. A switch with many machines
-staggers them at two distances rather than stringing them round one huge
-circle. Where there are several separate trees, the biggest is drawn in the
-middle and the others are set down in the nearest free space round it; nodes
-with no dependency are kept in rows underneath. No two boxes overlap and no
-line runs through a box it does not join, and the same nodes always give the
-same picture.
+that way keeps working and now draws as clusters) puts the things that depend
+on a node in a **ring round it**, and every one of those that has things of its
+own in the middle of a **ring of its own**, further out — the router in the
+middle with its switches round it, each switch with its machines round it, the
+way you would sketch the network on a whiteboard. Single devices sit close to
+the node they depend on; a switch with a crowd behind it is on a longer line, so
+its whole ring has room. Round any node but the one in the middle, the side
+facing its own parent is left open, so the line in stays clear, and a node with
+only a couple of dependents keeps them on its far side. A switch with a long run
+of machines puts them on two or more rings rather than one huge circle. Where
+there are several separate trees, the biggest is drawn in the middle and the
+others are set down in the nearest free space round it; nodes with no
+dependency are kept in rows underneath. No two boxes overlap and no line runs
+through a box it does not join, and the same nodes always give the same picture.
 In this layout a line is straight, or gently curved if **Line shape** is
 *Curved*; right-angled lines belong to the tree layouts and are drawn straight.
 
 **How a line looks.** Every line can have its own **colour**, **thickness**
-(1 to 8) and **style** — solid, dashed, dotted, or dash and dot — and there are
+(1 to 8 pixels on the screen, however far the map is zoomed or scaled down to
+fit, and applied as you type it) and **style** — solid, dashed, dotted, or dash and dot — and there are
 two places to say so:
 
 - **Line style** under **Customise** sets the look of every line on the map
@@ -1142,7 +1156,7 @@ visible to viewer accounts; the rest are administrator-only.
 
 | Tab | What lives there |
 |---|---|
-| **General** | Instance name (shown in the wallboard and in alert emails), default interval and timeout for new checks, how many checks run at once, the minimum interval allowed, wallboard refresh, the global latency and packet-loss warnings, and the ping method |
+| **General** | Instance name (shown in the wallboard and in alert emails), default interval and timeout for new checks, how many checks run at once, the minimum interval allowed, wallboard refresh, the global latency and packet-loss warnings, the ping method, and **pings per check** — how many echo requests a ping check sends each run unless it sets its own (*Make every ping check use this* hands checks that have their own count back to the setting) |
 | **Appearance** | Theme, accent colour, density, and the switch for contextual tips |
 | **Indicators** | The rules behind the coloured circles in the header |
 | **Users & access** | Accounts, roles, API keys, sign-in on this computer, and the password hashing method |

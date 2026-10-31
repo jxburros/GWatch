@@ -44,8 +44,25 @@ func resolvePingMethod(override, global string) string {
 	return model.PingMethodAuto
 }
 
-// runPingCheck sends Config.PingCount echo requests and summarises latency,
-// jitter, spread and loss.
+// resolvePingCount is how many echo requests a run sends: the check's own
+// count, else the global one, else the default, and never more than the most.
+func resolvePingCount(own, global int) int {
+	count := own
+	if count <= 0 {
+		count = global
+	}
+	if count <= 0 {
+		count = defaultPingCount
+	}
+	if count > maxPingCount {
+		count = maxPingCount
+	}
+	return count
+}
+
+// runPingCheck sends Config.PingCount echo requests — or, when the check does
+// not set a count, the one in Settings › General (Options.PingCount) — and
+// summarises latency, jitter, spread and loss.
 func runPingCheck(ctx context.Context, check model.Check, target string, opts Options) model.Result {
 	cfg := check.Config
 	timeout := attemptTimeout(check)
@@ -53,13 +70,7 @@ func runPingCheck(ctx context.Context, check model.Check, target string, opts Op
 	if err != nil {
 		return failResult(err.Error())
 	}
-	count := cfg.PingCount
-	if count <= 0 {
-		count = defaultPingCount
-	}
-	if count > maxPingCount {
-		count = maxPingCount
-	}
+	count := resolvePingCount(cfg.PingCount, opts.PingCount)
 
 	pr, err := pingFunc(ctx, host, count, timeout, resolvePingMethod(cfg.PingMethod, opts.PingMethod))
 	res := model.Result{}

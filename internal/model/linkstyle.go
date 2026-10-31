@@ -224,3 +224,26 @@ func CleanMapLineConfig(raw json.RawMessage) (json.RawMessage, error) {
 	}
 	return json.Marshal(cfg)
 }
+
+// CleanColor validates the node's own colour on a write: "" (none) or a hex
+// colour in the same forms a link takes, kept in lower case.
+func (n *Node) CleanColor() error {
+	c := strings.TrimSpace(n.Color)
+	if c == "" {
+		n.Color = ""
+		return nil
+	}
+	norm, ok := NormalizeLinkColor(c)
+	if !ok {
+		return fmt.Errorf("node colour %q must be a hex colour such as #3b82f6", n.Color)
+	}
+	n.Color = norm
+	return nil
+}
+
+// SanitizedNodeColor is CleanColor for data already on disk or in a backup:
+// what is not a valid colour is dropped rather than refused.
+func SanitizedNodeColor(c string) string {
+	norm, _ := NormalizeLinkColor(strings.TrimSpace(c))
+	return norm
+}

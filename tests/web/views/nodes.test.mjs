@@ -65,3 +65,15 @@ test('the Nodes list filters by check group', async (t) => {
   assert.ok(rows.length > 0 && rows.length < all, `only the nodes with a check in the group are shown (${rows.length} of ${all})`);
   assert.match(root.textContent, /Check group/);
 });
+
+// A node's own colour is the background of its name box in the list, with
+// text that reads on it; a node without one is drawn as before.
+test('a node with a colour of its own shows it in the node list', async (t) => {
+  const { root } = await mountView(nodesView, undefined, t);
+  const row = (name) => root.querySelector(`.node-row[aria-label="${name}"]`);
+  assert.ok(row('Office switch').classList.contains('has-colour'));
+  assert.equal(row('Office switch').style.getPropertyValue('--node-color'), '#1f4e8c');
+  assert.equal(row('Office switch').style.getPropertyValue('--node-ink'), '#ffffff');
+  assert.equal(row('Backup server').style.getPropertyValue('--node-ink'), '#111418');
+  assert.ok(!row('Gateway').classList.contains('has-colour'));
+});

@@ -69,12 +69,15 @@ type bulkNodePatch struct {
 	// line to the node's parent, an explicit null clears it, and an absent
 	// field leaves it as it is.
 	LinkStyle json.RawMessage `json:"linkStyle"`
+
+	// Color sets the node's own colour; "" clears it.
+	Color *string `json:"color"`
 }
 
 func (p *bulkNodePatch) empty() bool {
 	return p == nil || (p.Groups == nil && len(p.AddGroups) == 0 && len(p.RemoveGroups) == 0 &&
 		p.Tags == nil && len(p.AddTags) == 0 && len(p.RemoveTags) == 0 &&
-		p.Importance == nil && p.Enabled == nil && len(p.DependsOn) == 0 && len(p.LinkStyle) == 0)
+		p.Importance == nil && p.Enabled == nil && len(p.DependsOn) == 0 && len(p.LinkStyle) == 0 && p.Color == nil)
 }
 
 // bulkCheckPatch is the set of check fields a bulk edit may change. The check
@@ -108,7 +111,7 @@ func (p *bulkCheckPatch) empty() bool {
 // bulkConfigKeys are the check-configuration keys a bulk edit may set. They
 // are the ones whose meaning does not depend on the check type, so applying
 // one across a mixed selection still says something true.
-var bulkConfigKeys = []string{"certWarnDays", "latencyWarnMs", "metricThresholds", "packetLossWarnPct", "pingMethod"}
+var bulkConfigKeys = []string{"certWarnDays", "latencyWarnMs", "metricThresholds", "packetLossWarnPct", "pingCount", "pingMethod"}
 
 // bulkChange is one line of "what this edit did", kept with the scope it
 // applied to so the audit entry can say "on 14 checks" rather than "on 14".
@@ -421,6 +424,12 @@ func (s *Server) applyNodePatch(ctx context.Context, p *bulkNodePatch, n *model.
 		}
 		n.LinkStyle = ls
 	}
+	if p.Color != nil {
+		n.Color = *p.Color
+		if err := n.CleanColor(); err != nil {
+			return err
+		}
+	}
 	// Last, so a patch that clears the dependency takes the style of that
 	// link with it, and one that sets a style is held to the same rules as a
 	// node saved whole.
@@ -497,6 +506,23 @@ func applyCheckPatch(p *bulkCheckPatch, c *model.Check) error {
 			err = json.Unmarshal(raw, &c.Config.CertWarnDays)
 		case "pingMethod":
 			err = json.Unmarshal(raw, &c.Config.PingMethod)
+		case "pingCount":
+			// Packets per run, on ping checks only; null or 0 hands the
+			// check back to Settings › General.
+			if c.Type != model.CheckPing {
+				continue
+			}
+			var v *int
+			if err = json.Unmarshal(raw, &v); err == nil {
+				switch {
+				case v == nil || *v == 0:
+					c.Config.PingCount = 0
+				case *v < 1 || *v > model.MaxPingCount:
+					err = fmt.Errorf("must be between 1 and %d, or 0 to follow Settings › General", model.MaxPingCount)
+				default:
+					c.Config.PingCount = *v
+				}
+			}
 		case "metricThresholds":
 			// Hardware thresholds, merged by metric key: an entry in the
 			// patch replaces the check's entry for that key and leaves the
@@ -611,6 +637,13 @@ func describeNodePatch(p *bulkNodePatch, byNode map[int64]model.Node) []bulkChan
 			add("link style changed")
 		}
 	}
+	if p.Color != nil {
+		if c := strings.TrimSpace(*p.Color); c == "" {
+			add("colour cleared")
+		} else {
+			add("colour → " + strings.ToLower(c))
+		}
+	}
 	return out
 }
 
@@ -657,6 +690,12 @@ func describeCheckPatch(p *bulkCheckPatch) []bulkChange {
 			add("packet loss warning → " + value + " %")
 		case "certWarnDays":
 			add("certificate warning → " + value + " days")
+		case "pingCount":
+			if value == "" || value == "0" || value == "null" {
+				add("pings per check → global setting")
+			} else {
+				add("pings per check → " + value)
+			}
 		case "pingMethod":
 			if value == "" {
 				add("ping method → global setting")

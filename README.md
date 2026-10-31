@@ -18,11 +18,20 @@ product brief is [`local-network-monitoring-product-brief.md`](local-network-mon
 some of its non-goals have since shipped in a narrow form, and [`ROADMAP.md`](ROADMAP.md)
 is where the current scope and its limits are kept.
 
-> **GWatch is in beta (0.8.4).** It works and it looks after your data, but the
+> **GWatch is in beta (0.8.5).** It works and it looks after your data, but the
 > interface and the JSON API can still change between releases, and bugs are likelier
 > now than they will be at 1.0 — which is reserved for the first public, stable
 > release. [`CHANGELOG.md`](CHANGELOG.md) lists what is in each version, and
 > [`ROADMAP.md`](ROADMAP.md#known-gaps) the known gaps it still ships with. Please [report anything that looks wrong](https://github.com/jxburros/GWatch/issues).
+
+## What's new in 0.8.5
+
+0.8.5, with gwatch-agent 0.8.4, draws the network map's **clusters as rings** — each node in the middle of
+what depends on it, each switch starting a ring of its own — and gives nodes a
+**colour of their own** on the map and in the node list. Line thickness now works
+on any size of map, **Charts** open blank, **Discover** can set the check interval
+and what the new nodes depend on, and **Settings › General › Pings per check**
+sets how many pings a ping check sends. See [`CHANGELOG.md`](CHANGELOG.md).
 
 ## What's new in 0.8.4
 

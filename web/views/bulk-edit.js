@@ -13,6 +13,7 @@ import { api } from '../api.js';
 import { h, icon, clear, replace, field, textInput, numberInput, selectInput, chipInput, toast, confirmDialog, emptyState, skeleton, checkTypeLabel, chipRows, renderKeyed, busy, statusWord, uid } from '../components.js';
 import { interval as fmtInterval, nodeGroups, inGroup } from '../fmt.js';
 import { BULK_FIELDS, bulkField, bulkValue, setPath, ON_OFF_OPTIONS, TRI } from './node-fields.js';
+import { nodeColourControl } from '../netmap.js';
 
 const STATUS_ORDER = ['down', 'degraded', 'unknown', 'maintenance', 'up', 'paused'];
 
@@ -287,6 +288,9 @@ export async function mount(root, ctx) {
         }
         break;
       }
+      case 'colour':
+        input = nodeColourControl({ value: row.value || '', onChange: (v) => { row.value = v; renderSummary(); } });
+        break;
       case 'none':
         input = h('p', { class: 'dim small', style: { margin: '6px 0 0' } }, 'No value needed.');
         break;

@@ -390,6 +390,14 @@ func (s *Server) validateSettings(st *model.Settings, current model.Settings, co
 	if !model.ValidPingMethod(g.PingMethod) {
 		return badSettings(`ping method must be "auto", "builtin" or "system"`)
 	}
+	// Zero is how a settings document from before the ping count existed
+	// looks, so it means the default rather than an error.
+	if g.PingCount == 0 {
+		g.PingCount = model.DefaultPingCount
+	}
+	if g.PingCount < 1 || g.PingCount > model.MaxPingCount {
+		return badSettings(fmt.Sprintf("pings per check must be between 1 and %d", model.MaxPingCount))
+	}
 	switch g.Theme {
 	case "dark", "light", "system":
 	default:

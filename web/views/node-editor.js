@@ -4,7 +4,7 @@ import { api } from '../api.js';
 import { scrollBehavior, h, icon, clear, replace, field, textInput, numberInput, textarea, selectInput, checkbox, toggle, chipInput, toast, confirmDialog, openModal, emptyState, skeleton, CHECK_TYPES, checkTypeLabel, uid, busy } from '../components.js';
 import { nodeGroups } from '../fmt.js';
 import { resultInspector } from './inspector.js';
-import { linkStyleEditor } from '../netmap.js';
+import { linkStyleEditor, nodeColourControl } from '../netmap.js';
 import { INTERVALS, intervalOptions, TRI, IMPORTANCE_OPTIONS, PING_METHOD_OPTIONS, ALERT_OVERRIDE_FIELDS } from './node-fields.js';
 import { METRIC_FAMILIES, SNMP_PRESETS, SNMP_THRESHOLD_KEYS, SYSTEM_DEFAULTS, legacyMetricThresholds, oidRow } from './node-editor/shared.js';
 import { create as createSnmp } from './node-editor/snmp.js';
@@ -20,7 +20,8 @@ function defaultCheck(type, settings) {
   const g = settings?.general || {};
   const base = { _key: uid('c'), type, name: checkTypeLabel(type), enabled: true, intervalSeconds: g.defaultIntervalSeconds || 60, timeoutSeconds: g.defaultTimeoutSeconds || 10, retries: 1, failureThreshold: 0, config: {}, alerts: null };
   switch (type) {
-    case 'ping': base.config = { pingCount: 4 }; break;
+    // No count of its own: a new ping check follows Settings › General.
+    case 'ping': base.config = {}; break;
     case 'http': base.config = { method: 'GET', expectedStatus: '200-399', followRedirects: true, certCheck: true, certWarnDays: settings?.alerts?.certWarnDays || 14 }; base.name = 'HTTP/S'; break;
     case 'cert': base.config = { port: 443, certWarnDays: settings?.alerts?.certWarnDays || 14 }; base.name = 'Certificate'; break;
     case 'tcp': base.config = { port: 443 }; base.name = 'TCP port'; break;
@@ -351,6 +352,7 @@ export async function mount(root, ctx) {
       field({ label: 'Groups', input: groupsInput, help: 'A node can be in more than one. Groups drive dashboard filters, maintenance windows and the wallboard.' }),
       field({ label: 'Tags', input: tagsInput }),
       field({ label: 'Importance', input: importanceSel, help: 'Critical and high nodes are listed first on the wallboard.' }),
+      field({ label: 'Colour', input: nodeColourControl({ value: d.color || '', onChange: (v) => { d.color = v; } }), help: 'Optional. Fills the node’s box on the network map and its row in the node list.' }),
       field({ label: 'Depends on', input: dependsSel, help: 'Alerts for this node are suppressed while the parent is down, and its failures are shown as "affected by" the parent.' }),
       linkStyleField,
       field({ label: 'Check from', input: h('div', { class: 'stack-sm' }, collectorSel, collectorNote), help: 'Where this node’s network checks run: this server, or a paired agent at another site acting as a remote collector.' }),
@@ -543,7 +545,10 @@ export async function mount(root, ctx) {
     const cfg = c.config;
     switch (c.type) {
       case 'ping': {
-        const count = numberInput({ value: cfg.pingCount || 4, min: 1, max: 20, oninput: () => { cfg.pingCount = Number(count.value); } });
+        // Blank follows Settings › General; cleanCheck drops it from the
+        // config, so the setting is what the check reads.
+        const globalCount = state.settings?.general?.pingCount || 4;
+        const count = numberInput({ value: cfg.pingCount || '', min: 1, max: 20, placeholder: `${globalCount} (the setting)`, oninput: () => { cfg.pingCount = count.value === '' ? '' : Number(count.value); } });
         // An empty value means "whatever Settings › General says", which is
         // what cleanCheck drops from the config before it is saved.
         const method = selectInput({
@@ -552,7 +557,7 @@ export async function mount(root, ctx) {
           onchange: () => { cfg.pingMethod = method.value; },
         });
         return h('div', { class: 'form-grid-3' }, targetField(c, err, 'Host override'),
-          field({ label: 'Packets per run', input: count, error: err.pingCount, help: 'Packets per run, default 4, max 20. More packets give a steadier average and a more meaningful jitter and standard deviation.' }),
+          field({ label: 'Packets per run', input: count, error: err.pingCount, help: `Up to 20. Leave it blank to send what Settings › General says (${globalCount}). More packets give a steadier average and a more meaningful jitter and standard deviation.` }),
           field({ label: 'Ping method', input: method, help: 'Built-in sends the echo requests itself; system ping runs the operating system\'s ping command.' }),
           ...warnFields(c, { loss: true }));
       }

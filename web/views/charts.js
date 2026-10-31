@@ -1,6 +1,10 @@
 // Charts: a dedicated page for exploring history. Configure metric, checks,
 // range and appearance, save named charts, export them and pin them to a
 // dashboard as widgets.
+//
+// Opening the page (#/charts) starts from a blank slate: no saved chart is
+// opened and nothing is plotted until something is picked. A saved chart is
+// opened by choosing it in the list (#/charts/<id>).
 
 import { api } from '../api.js';
 import { h, icon, clear, replace, toast, confirmDialog, promptDialog, menuButton, emptyState, skeleton, rangeChips, busy, uid, field } from '../components.js';
@@ -12,7 +16,7 @@ import { TIMESTACK_PERIODS } from '../chart-config.js';
 const RANGE_TO_STACK = { '1h': '1h', '24h': '24h', '7d': '7d', '30d': '30d', '1y': '30d' };
 
 export async function mount(root, ctx) {
-  const state = { nodes: [], saved: [], currentId: ctx.params.id || null, cfg: normalizeChartConfig({}), dirty: false, view: null, destroyed: false, cache: new Map(), editor: null };
+  const state = { nodes: [], saved: [], currentId: ctx.params.id || null, cfg: normalizeChartConfig({}), dirty: false, view: null, destroyed: false, cache: new Map(), editor: null, blank: !ctx.params.id };
 
   const side = h('aside', { class: 'charts-side' });
   const main = h('div', { class: 'charts-main' });
@@ -25,8 +29,9 @@ export async function mount(root, ctx) {
   }
   function pickCurrent() {
     const found = state.currentId && state.saved.find((c) => c.id === state.currentId);
-    if (found) { state.cfg = normalizeChartConfig(parseCfg(found.config)); state.dirty = false; }
-    else if (!state.currentId && state.saved.length && !state.dirty) { state.currentId = state.saved[0].id; state.cfg = normalizeChartConfig(parseCfg(state.saved[0].config)); }
+    // No saved chart is ever opened on its own: without an id in the address
+    // the page is a new, empty chart.
+    if (found) { state.cfg = normalizeChartConfig(parseCfg(found.config)); state.dirty = false; state.blank = false; }
     else if (state.currentId && !found) { state.currentId = null; }
   }
   function parseCfg(c) { if (typeof c === 'string') { try { return JSON.parse(c); } catch { return {}; } } return c || {}; }
@@ -84,7 +89,7 @@ export async function mount(root, ctx) {
   function onEdit(cfg) {
     const before = JSON.stringify(state.cfg);
     state.cfg = cfg;
-    if (JSON.stringify(cfg) !== before) { state.dirty = true; setTitle(); rerender(); }
+    if (JSON.stringify(cfg) !== before) { state.dirty = true; state.blank = false; setTitle(); rerender(); }
   }
 
   /* ---------- Main chart ---------- */
@@ -99,23 +104,30 @@ export async function mount(root, ctx) {
         h('div', { class: 'card-actions' },
           // A timestacked chart's chips choose the period stacked, not a range.
           state.cfg.timestack
-            ? rangeChips(state.cfg.timestack.period, (p) => { state.cfg.timestack = { ...state.cfg.timestack, period: p }; state.dirty = true; renderSide(); setTitle(); renderMain(); }, { ranges: TIMESTACK_PERIODS.map((p) => p.value) })
-            : rangeChips(state.cfg.range, (r) => { state.cfg.range = r; state.dirty = true; renderSide(); setTitle(); renderMain(); }),
+            ? rangeChips(state.cfg.timestack.period, (p) => { state.cfg.timestack = { ...state.cfg.timestack, period: p }; state.dirty = true; state.blank = false; renderSide(); setTitle(); renderMain(); }, { ranges: TIMESTACK_PERIODS.map((p) => p.value) })
+            : rangeChips(state.cfg.range, (r) => { state.cfg.range = r; state.dirty = true; state.blank = false; renderSide(); setTitle(); renderMain(); }),
           h('button', { type: 'button', class: `chip ${state.cfg.timestack ? 'active' : ''}`, 'aria-pressed': state.cfg.timestack ? 'true' : 'false', title: 'Overlay this metric against itself: the last period over the ones before it', onclick: toggleStack }, icon('layers'), 'Timestack'))),
       host);
     main.append(card);
+    // A new chart nobody has touched yet draws nothing: an automatic chart
+    // only starts once something in Configure has been changed.
+    if (state.blank && !c) {
+      state.view = null; state.lastSeries = [];
+      host.append(emptyState({ icon: 'chart', title: 'A blank chart', text: 'Tick the metrics to plot under Configure, or open a saved chart from the list.', compact: true }));
+      return;
+    }
     state.view = renderConfiguredChart(host, state.cfg, { title: c ? c.name : 'Chart', fetch: fetchHistory, onData: (list) => { state.lastSeries = list; } });
     main.append(h('p', { class: 'note' }, 'Tip: hover the chart for values, press ', h('b', null, 'Timestack'), ' to lay this metric over its own earlier days, weeks or months, and use ', h('b', null, 'Pin to a dashboard'), ' to keep this exact chart on a dashboard.'));
   }
 
   function toggleStack() {
     state.cfg = normalizeChartConfig({ ...state.cfg, timestack: state.cfg.timestack ? null : { period: RANGE_TO_STACK[state.cfg.range] || '24h', layers: 4 } });
-    state.dirty = true; renderSide(); setTitle(); renderMain();
+    state.dirty = true; state.blank = false; renderSide(); setTitle(); renderMain();
   }
 
   /* ---------- CRUD ---------- */
   async function newChart() {
-    state.currentId = null; state.cfg = normalizeChartConfig({}); state.dirty = true;
+    state.currentId = null; state.cfg = normalizeChartConfig({}); state.dirty = false; state.blank = true;
     ctx.navigate('/charts'); render();
   }
   async function save() {
@@ -130,7 +142,7 @@ export async function mount(root, ctx) {
     const entry = { id: uid('chart'), name: name.trim(), config: state.cfg };
     if (!await persist([...state.saved, entry])) return;
     const saved = state.saved.find((x) => x.name === entry.name) || state.saved[state.saved.length - 1];
-    state.currentId = saved.id; state.dirty = false;
+    state.currentId = saved.id; state.dirty = false; state.blank = false;
     toast('Chart saved', { kind: 'success' });
     ctx.navigate(`/charts/${saved.id}`); render();
   }
@@ -145,8 +157,9 @@ export async function mount(root, ctx) {
     const c = current(); if (!c) return;
     if (!await confirmDialog({ title: `Delete "${c.name}"?`, confirmLabel: 'Delete', danger: true })) return;
     if (!await persist(state.saved.filter((x) => x.id !== c.id))) return;
-    state.currentId = null; state.dirty = false; pickCurrent(); toast('Chart deleted', { kind: 'success' });
-    ctx.navigate(state.currentId ? `/charts/${state.currentId}` : '/charts'); render();
+    state.currentId = null; state.dirty = false; state.blank = true; state.cfg = normalizeChartConfig({});
+    toast('Chart deleted', { kind: 'success' });
+    ctx.navigate('/charts'); render();
   }
   async function pinToDashboard() {
     let dashboards = [];
@@ -172,7 +185,12 @@ export async function mount(root, ctx) {
       // The route has no id for #/charts, and currentId is null for an unsaved
       // chart: the two are the same chart, or "New chart" (which goes to
       // #/charts) would land on the first saved one instead.
-      if ((params.id || null) !== state.currentId) { state.currentId = params.id || null; state.dirty = false; pickCurrent(); if (!params.id) state.cfg = state.cfg; render(); }
+      if ((params.id || null) !== state.currentId) {
+        state.currentId = params.id || null; state.dirty = false;
+        // Back to #/charts from a saved chart: a fresh, empty chart.
+        if (!params.id) { state.cfg = normalizeChartConfig({}); state.blank = true; }
+        pickCurrent(); render();
+      }
       return true;
     },
     destroy() { state.destroyed = true; state.view?.destroy(); },

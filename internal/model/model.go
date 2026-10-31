@@ -145,7 +145,11 @@ type Node struct {
 	Enabled       bool       `json:"enabled"`
 	DependsOnNode *int64     `json:"dependsOnNodeId"` // parent node for dependency-aware alerting
 	LinkStyle     *LinkStyle `json:"linkStyle"`       // how the line to that parent is drawn on the network map
-	Template      string     `json:"template"`        // template used when created (informational)
+	// Color is the node's own colour, a hex colour or "" for none. It is the
+	// background of the node's box on the network map and of its row in the
+	// node list, and is shown nowhere else.
+	Color    string `json:"color"`
+	Template string `json:"template"` // template used when created (informational)
 	// CollectorID is where the node's network checks run from: nil for this
 	// server, or the id of a paired agent acting as a remote collector
 	// (model/collector.go). Checks of other types run here either way.
@@ -270,7 +274,7 @@ type CheckConfig struct {
 	Groups []string `json:"groups,omitempty"`
 
 	// Ping
-	PingCount  int    `json:"pingCount,omitempty"`  // packets per run (default 4, max 20)
+	PingCount  int    `json:"pingCount,omitempty"`  // packets per run; 0 follows GeneralSettings.PingCount (max 20)
 	PingMethod string `json:"pingMethod,omitempty"` // "" = use GeneralSettings.PingMethod, else "auto" | "builtin" | "system"
 
 	// HTTP / keyword / JSON
@@ -1081,6 +1085,13 @@ const (
 	PingMethodSystem  = "system"
 )
 
+// The number of echo requests in one run of a ping check: what it is unless
+// changed in Settings › General or on the check, and the most it may be.
+const (
+	DefaultPingCount = 4
+	MaxPingCount     = 20
+)
+
 // ValidPingMethod reports whether s names a ping method. The empty string is
 // not one: a check config uses it to mean "follow the global setting", and the
 // global setting itself is normalised to "auto" when it is saved empty.
@@ -1106,11 +1117,16 @@ type GeneralSettings struct {
 	LatencyWarnMS        float64 `json:"latencyWarnMs"`     // global default; 0 = off
 	PacketLossWarnPct    float64 `json:"packetLossWarnPct"` // global default; 0 = off
 	PingMethod           string  `json:"pingMethod"`        // "auto" (default) | "builtin" | "system"
-	Theme                string  `json:"theme"`             // "dark" | "light" | "system"
-	AccentColor          string  `json:"accentColor"`       // hex colour used for the accent, e.g. "#43c9c0"
-	RemoteAccess         bool    `json:"remoteAccess"`      // listen on every interface so other devices on the LAN can open the UI
-	AccessPassword       string  `json:"accessPassword"`    // legacy: password required from non-loopback clients (HTTP basic auth)
-	UpdateRepo           string  `json:"updateRepo"`        // GitHub "owner/repo" checked for new releases
+	// PingCount is how many echo requests make up one run of a ping check
+	// that does not set its own (CheckConfig.PingCount 0): DefaultPingCount
+	// unless changed, at most MaxPingCount. Zero, in a settings document
+	// written before the setting existed, means DefaultPingCount.
+	PingCount      int    `json:"pingCount"`
+	Theme          string `json:"theme"`          // "dark" | "light" | "system"
+	AccentColor    string `json:"accentColor"`    // hex colour used for the accent, e.g. "#43c9c0"
+	RemoteAccess   bool   `json:"remoteAccess"`   // listen on every interface so other devices on the LAN can open the UI
+	AccessPassword string `json:"accessPassword"` // legacy: password required from non-loopback clients (HTTP basic auth)
+	UpdateRepo     string `json:"updateRepo"`     // GitHub "owner/repo" checked for new releases
 	// RequireLoginLocally makes a browser on this computer sign in like every
 	// other client. It only takes effect once at least one account exists, so
 	// it can never lock the owner out of a fresh install.
@@ -1337,6 +1353,7 @@ func DefaultSettings() Settings {
 			LatencyWarnMS:        0,
 			PacketLossWarnPct:    0,
 			PingMethod:           PingMethodAuto,
+			PingCount:            DefaultPingCount,
 			Theme:                "dark",
 			AccentColor:          "#43c9c0",
 			UpdateRepo:           "jxburros/GWatch",

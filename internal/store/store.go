@@ -163,6 +163,7 @@ CREATE TABLE IF NOT EXISTS nodes (
   enabled INTEGER NOT NULL DEFAULT 1,
   depends_on_node_id INTEGER REFERENCES nodes(id) ON DELETE SET NULL,
   link_style TEXT NOT NULL DEFAULT '',
+  color TEXT NOT NULL DEFAULT '',
   template TEXT NOT NULL DEFAULT '',
   collector_id INTEGER,
   created_at TEXT NOT NULL,
@@ -361,6 +362,8 @@ var addedColumns = []struct{ table, column, ddl string }{
 	// How the line from a node to the node it depends on is drawn on the
 	// network map: the JSON of a model.LinkStyle, or '' for the map's own.
 	{"nodes", "link_style", "ALTER TABLE nodes ADD COLUMN link_style TEXT NOT NULL DEFAULT ''"},
+	// A node's own colour (model.Node.Color): a hex colour, or '' for none.
+	{"nodes", "color", "ALTER TABLE nodes ADD COLUMN color TEXT NOT NULL DEFAULT ''"},
 	// The named metrics a check measured beyond its latency, as a JSON object
 	// of name -> number. An SNMP check writes one entry per OID here; every
 	// other check leaves it empty.

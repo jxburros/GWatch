@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import {
   buildForest, layoutMap, mapEntries, normalizeMapConfig, renderNetworkMap, mapConfigEditor, linkStyleEditor, lineStyleControls,
   MAP_ORIENTATIONS, MAP_LINE_STYLES, LINE_WIDTH, normalizeLineColor, normalizeLineWidth, normalizeLineDash, normalizeLinkStyle, lineDash, edgeLook, edgeStyle,
+  nodeColour, textOn, nodeColourControl,
 } from '../../web/netmap.js';
 
 const node = (id, name, parent = null, extra = {}) => ({ id, name, host: `10.0.0.${id}`, dependsOnNodeId: parent, groups: [], tags: [], ...extra });
@@ -154,32 +155,44 @@ const OFFICE = [node(1, 'Core')];
   }
 }
 
-test('clusters: nothing is put on a ring; things branch off their parent, with longer lines to bigger branches', () => {
+// What the clusters layout is for: every node with dependents is the middle
+// of a ring of them, and one of those with dependents of its own is the
+// middle of its own ring, further out (see the diagram in #198's request).
+test('clusters: every branch is the middle of a ring of what depends on it, and its branches start rings of their own', () => {
   const { f, l } = clusters(OFFICE);
   assert.deepEqual([at(l, 1).x, at(l, 1).y], [0, 0], 'the root of the tree is at the origin');
-  // The children of a busy switch are not all one distance from it.
-  const sw3 = at(l, 15); // Switch 3, with twelve devices
-  const kids = f.children.get('15').map((k) => distance(sw3, at(l, k)));
-  assert.ok(Math.max(...kids) - Math.min(...kids) > BOX.h, 'its devices are at different distances, not on a circle');
-  // A line to a switch with a crowd behind it is longer than a line to a lone device.
-  const core = at(l, 1);
-  const toSwitch = distance(core, sw3);
-  const leafLines = [];
-  for (const [child, parent] of f.parentOf) if (!f.children.get(child)?.length) leafLines.push(distance(at(l, parent), at(l, child)));
-  const shortestLeaf = Math.min(...leafLines);
-  assert.ok(toSwitch > shortestLeaf, `the line to Switch 3 (${toSwitch}) is longer than the shortest line to a device (${shortestLeaf})`);
-  // Children branch away from the node above their parent: most of them are
-  // on the far side of their parent from it.
-  let away = 0, total = 0;
-  for (const [id, kidsOf] of f.children) {
-    const up = f.parentOf.get(id);
-    if (!up) continue;
-    const p = at(l, id), g = at(l, up);
-    for (const k of kidsOf) { const c = at(l, k); total++; if ((c.x - p.x) * (p.x - g.x) + (c.y - p.y) * (p.y - g.y) > 0) away++; }
+  const angleOf = (from, to) => Math.atan2(to.y - from.y, to.x - from.x);
+  for (const sw of f.children.get('1')) {
+    const centre = at(l, sw);
+    const kids = f.children.get(sw).map((k) => at(l, k));
+    // The devices of a switch are on a ring round it: one distance (or a
+    // few, for a long run), each closer to its own switch than to any other.
+    const d = kids.map((k) => distance(centre, k));
+    assert.ok(new Set(d.map((x) => Math.round(x))).size <= 3, `Switch ${sw}: its devices are on a ring (${d.map(Math.round)})`);
+    for (const k of kids) for (const other of f.children.get('1')) if (other !== sw) assert.ok(distance(centre, k) < distance(at(l, other), k), 'a device is nearest its own switch');
+    // ... and round it, not off to one side: a switch with a crowd of
+    // devices has them on more than half the turn.
+    if (kids.length >= 5) {
+      const a = kids.map((k) => angleOf(centre, k)).sort((x, y) => x - y);
+      const gaps = a.map((x, i) => (i ? x - a[i - 1] : x + 2 * Math.PI - a[a.length - 1]));
+      assert.ok(Math.max(...gaps) < Math.PI, `Switch ${sw}: its devices surround it (largest gap ${Math.max(...gaps).toFixed(2)} rad)`);
+    }
+    // The gap that is left faces the core, so the line in stays clear.
+    const toCore = angleOf(centre, at(l, 1));
+    for (const k of kids) {
+      let diff = Math.abs(angleOf(centre, k) - toCore) % (2 * Math.PI);
+      if (diff > Math.PI) diff = 2 * Math.PI - diff;
+      assert.ok(diff > 0.15 * Math.PI, `Switch ${sw}: no device sits on the line to the core`);
+    }
   }
-  assert.ok(away / total >= 0.7, `${away} of ${total} children branch away from their grandparent`);
+  // A line to a switch, with its ring behind it, is longer than a line to a
+  // lone device.
+  const home = clusters(HOME);
+  const router = at(home.l, 1);
+  assert.ok(distance(router, at(home.l, 2)) > distance(router, at(home.l, 3)), 'the switch is further out than the Pi-hole');
+  assert.equal(distance(router, at(home.l, 3)).toFixed(3), distance(router, at(home.l, 4)).toFixed(3), 'the router’s own leaves are on one ring');
   assert.equal(l.levels, 3);
-  assert.deepEqual(l.rings, [], 'no rings are drawn');
+  assert.deepEqual(l.rings, [], 'no ring lines are drawn');
 });
 
 test('clusters: no two boxes overlap and no line runs through a box it does not join', () => {
@@ -487,7 +500,7 @@ test('renderNetworkMap in clusters: a node per node, a line per dependency, noth
   for (let i = 0; i < centres.length; i++) for (let j = i + 1; j < centres.length; j++) {
     assert.ok(Math.abs(centres[i][0] - centres[j][0]) >= 148 || Math.abs(centres[i][1] - centres[j][1]) >= 32, 'boxes do not overlap on the page');
   }
-  assert.match(root.querySelector('.netmap-legend').textContent, /branches off the node it depends on/);
+  assert.match(root.querySelector('.netmap-legend').textContent, /in a ring round the node it depends on/);
   // Lines end at the boxes rather than running under them; curved bows, straight does not.
   const d = edgeOf(root, 1, 3).getAttribute('d');
   assert.match(d, /^M[-\d.e]+,[-\d.e]+ Q/, 'curved: a gentle bend');
@@ -617,4 +630,39 @@ test('a stored #rgb or #rrggbbaa colour is shown, and kept unless another is pic
   // A link whose style says something untrustworthy shows nothing of it.
   const junk = lineStyleControls({ value: { color: 'red;x', width: 'x', dash: 'wavy' }, inherit: true });
   assert.deepEqual(junk.value, { color: '', width: 0, dash: '' });
+});
+
+// A node's own colour fills its box, with text in black or white — whichever
+// reads on it — and the status still on the stripe and the dot.
+test('a node with a colour of its own is drawn in it, with readable text', () => {
+  assert.equal(nodeColour({ color: '#1F4E8C' }), '#1f4e8c');
+  assert.equal(nodeColour({ color: 'red' }), '', 'only hex colours');
+  assert.equal(nodeColour({}), '');
+  assert.equal(textOn('#1f4e8c'), '#ffffff', 'white on dark blue');
+  assert.equal(textOn('#f2c94c'), '#111418', 'black on yellow');
+  assert.equal(textOn('#fff'), '#111418');
+  assert.equal(textOn(''), '');
+
+  const root = freshRoot();
+  const nodes = [node(1, 'Router'), node(2, 'Switch', 1, { color: '#1f4e8c' })];
+  renderNetworkMap(root, nodes.map((n) => ({ node: n, status: 'down' })), {}, { title: 'Colours' });
+  const box = (id) => root.querySelector(`.netmap-node[data-node="${id}"] .netmap-box`);
+  const name = (id) => root.querySelector(`.netmap-node[data-node="${id}"] .netmap-name`);
+  assert.match(box(2).getAttribute('style'), /fill:#1f4e8c/);
+  assert.match(name(2).getAttribute('style'), /fill:#ffffff/);
+  assert.ok(root.querySelector('.netmap-node[data-node="2"]').classList.contains('status-down'), 'the status still shows');
+  assert.equal(box(1).getAttribute('style'), null, 'a node without a colour is left to the theme');
+});
+
+test('the node colour control holds a colour or none', () => {
+  const seen = [];
+  const el = nodeColourControl({ value: '#ABCDEF', onChange: (v) => seen.push(v) });
+  assert.equal(el.value, '#abcdef');
+  const picker = el.querySelector('input[type="color"]');
+  picker.value = '#336699';
+  picker.dispatchEvent(new window.Event('change'));
+  assert.deepEqual(seen, ['#336699']);
+  [...el.querySelectorAll('button')].find((b) => b.textContent === 'None').click();
+  assert.equal(el.value, '');
+  assert.deepEqual(seen, ['#336699', '']);
 });

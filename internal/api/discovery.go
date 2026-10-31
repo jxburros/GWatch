@@ -105,6 +105,14 @@ type discoveryAddRequest struct {
 	// entry wins when both are sent.
 	Group  string   `json:"group"`
 	Groups []string `json:"groups"`
+	// IntervalSeconds, when above zero, is how often every check of every
+	// created node runs, in place of the template's own; zero keeps the
+	// template's.
+	IntervalSeconds int `json:"intervalSeconds"`
+	// DependsOnNodeID, when set, is the node every created node depends on,
+	// so a sweep of what hangs off one switch lands under it on the map and
+	// in dependency-aware alerting without a bulk edit afterwards.
+	DependsOnNodeID *int64 `json:"dependsOnNodeId"`
 }
 
 type discoveryAddItem struct {
@@ -134,6 +142,17 @@ func (s *Server) handleAddFromDiscovery(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "choose at least one device to add")
 		return
 	}
+	if req.IntervalSeconds < 0 {
+		writeError(w, http.StatusBadRequest, "the check interval cannot be negative")
+		return
+	}
+	if minInterval := s.Engine.Settings().General.MinIntervalSecs; req.IntervalSeconds > 0 && req.IntervalSeconds < minInterval {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("the check interval must be at least %d seconds (see Settings › General to change the minimum)", minInterval))
+		return
+	}
+	if req.DependsOnNodeID != nil && *req.DependsOnNodeID <= 0 {
+		req.DependsOnNodeID = nil
+	}
 
 	// What the sweep found, so a request cannot name an address the run never
 	// saw: the hostname and the suggested template come from here, and an
@@ -150,6 +169,21 @@ func (s *Server) handleAddFromDiscovery(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		s.fail(w, err)
 		return
+	}
+	if req.DependsOnNodeID != nil {
+		// A new node cannot be part of a loop, so all there is to check is
+		// that the node named is there.
+		found := false
+		for _, n := range existing {
+			if n.ID == *req.DependsOnNodeID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeError(w, http.StatusBadRequest, "the selected dependency node does not exist")
+			return
+		}
 	}
 	taken := map[string]string{}
 	for _, n := range existing {
@@ -199,6 +233,15 @@ func (s *Server) handleAddFromDiscovery(w http.ResponseWriter, r *http.Request) 
 		}
 
 		n := nodeFromTemplate(tmpl, ip, name, groups)
+		if req.IntervalSeconds > 0 {
+			for i := range n.Checks {
+				n.Checks[i].IntervalSeconds = req.IntervalSeconds
+			}
+		}
+		if req.DependsOnNodeID != nil {
+			parent := *req.DependsOnNodeID
+			n.DependsOnNode = &parent
+		}
 		if err := s.normalizeNode(&n); err != nil {
 			skipped = append(skipped, discoverySkipped{IP: ip, Reason: err.Error()})
 			continue

@@ -1147,6 +1147,9 @@ func normalizeNodeWith(n *model.Node, settings model.Settings) error {
 	if err := n.CleanLinkStyle(); err != nil {
 		return err
 	}
+	if err := n.CleanColor(); err != nil {
+		return err
+	}
 	if n.Checks == nil {
 		n.Checks = []model.Check{}
 	}
@@ -1402,6 +1405,13 @@ func describeNodeChange(before, after model.Node, deletedChecks int) string {
 	}
 	if !before.LinkStyle.Equal(after.LinkStyle) {
 		parts = append(parts, "link style changed")
+	}
+	if before.Color != after.Color {
+		if after.Color == "" {
+			parts = append(parts, "colour cleared")
+		} else {
+			parts = append(parts, "colour → "+after.Color)
+		}
 	}
 	if (before.CollectorID == nil) != (after.CollectorID == nil) || (before.CollectorID != nil && after.CollectorID != nil && *before.CollectorID != *after.CollectorID) {
 		if after.CollectorID == nil {

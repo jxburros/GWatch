@@ -10,6 +10,54 @@ release is published as `v<VERSION>` by the Release workflow, dispatched from
 `main`. It refuses to publish a tag that disagrees with the file — see
 [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## 0.8.5 (not yet released)
+
+GWatch 0.8.5 and gwatch-agent 0.8.4 ship together. The agent has no changes of its
+own: it is rebuilt with the code it shares with GWatch, which gained node colours
+and the pings-per-check setting, and as a remote collector it sends the number of
+pings GWatch hands it for each check.
+
+### Added
+
+- **Node colours.** A node can have a colour of its own — in the node editor,
+  on the network map's side panel, or for many at once in Bulk edit. It fills the
+  node's box on the network map and its name in the node list, with the text in
+  black or white, whichever reads on it; the status keeps its stripe, dot and
+  border. It is shown nowhere else (`color` on a node in the API).
+- **Pings per check.** *Settings › General › Pings per check* (1–20, 4 unless
+  changed) is how many echo requests a ping check sends when it does not set
+  its own; *Make every ping check use this* hands existing checks back to it,
+  and Bulk edit can set or clear a check's own count (`general.pingCount`,
+  bulk `config.pingCount`).
+- **Discovery sets the check interval and dependency.** Beside *Put them in a
+  group*, the results now offer *Check every* and *Depends on*, applied to every
+  node added (`intervalSeconds` and `dependsOnNodeId` on
+  `POST /api/discovery/{id}/add`).
+
+### Changed
+
+- **Network map clusters are rings.** In the *Clusters* layout every node is the
+  middle of a ring of what depends on it, and each of those with dependents of
+  its own starts a ring of its own, further out on a longer line — the router in
+  the middle, its switches round it, each switch with its machines round it.
+  The side facing a node's parent is left open so the line in stays clear, and a
+  long run of machines goes on two or more rings. Each ring is worked out the
+  way it is drawn, so boxes no longer need nudging apart afterwards.
+- **Charts open blank.** Opening Charts no longer opens the first saved chart
+  or plots anything until something is ticked; a saved chart is opened from the
+  list.
+- **Ping checks follow a setting for how many pings they send.** New ping checks,
+  and those from the templates, no longer store a count of their own (it was
+  always 4) and send what *Settings › General › Pings per check* says.
+
+### Fixed
+
+- **Network map line thickness.** A thickness typed into the line controls is
+  drawn straight away rather than once the field is left, and lines are drawn in
+  pixels on the screen: a large map fitted into its frame, or one on a dashboard
+  widget, used to thin every line to a hairline whatever thickness was chosen.
+  A link's style is drawn as it is changed and saved just after.
+
 ## 0.8.4 (not yet released)
 
 GWatch 0.8.4 and gwatch-agent 0.8.3 ship together: the agent reads the containers

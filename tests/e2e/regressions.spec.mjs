@@ -46,7 +46,7 @@ test('wallboard layout survives a live refresh', async ({ page }) => {
 });
 
 test('chart canvas keeps keyboard focus through refresh', async ({ page }) => {
-  await openApp(page, 'charts');
+  await openApp(page, 'charts/chart-1'); // #/charts itself opens blank
   const canvas = page.locator('canvas').first();
   await expect(canvas).toBeVisible();
   await canvas.focus();
@@ -59,7 +59,7 @@ test('chart canvas keeps keyboard focus through refresh', async ({ page }) => {
 // exportPNG used to throw before it reached the download ("h is not a
 // function": the chart's height shadowed the element builder).
 test('a chart exports as a PNG download', async ({ page }) => {
-  await openApp(page, 'charts');
+  await openApp(page, 'charts/chart-1'); // #/charts itself opens blank
   await expect(page.locator('.chart-card canvas').first()).toBeVisible();
   await page.getByRole('button', { name: 'Chart options' }).click();
   const download = page.waitForEvent('download');

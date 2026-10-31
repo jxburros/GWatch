@@ -94,7 +94,14 @@ func (e *Engine) CollectorAssignment(agentID int64) model.CollectorAssignment {
 		if len(out.Checks) == model.MaxCollectorChecks {
 			break
 		}
-		out.Checks = append(out.Checks, model.NewCollectorCheck(c, e.nodes[c.NodeID].Host))
+		cc := model.NewCollectorCheck(c, e.nodes[c.NodeID].Host)
+		// A ping check without a count of its own follows Settings ›
+		// General; the count is written into what the collector is handed,
+		// so an agent that predates the setting sends the same number.
+		if cc.Type == model.CheckPing && cc.Config.PingCount <= 0 && e.settings.General.PingCount > 0 {
+			cc.Config.PingCount = min(e.settings.General.PingCount, model.MaxPingCount)
+		}
+		out.Checks = append(out.Checks, cc)
 	}
 	return out
 }

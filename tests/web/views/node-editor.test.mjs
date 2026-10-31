@@ -31,7 +31,11 @@ test('node editor offers the ping count and the ping method override', async (t)
   const card = [...root.querySelectorAll('.editor-check')]
     .find((el) => [...el.querySelectorAll('label, .field-label')].some((l) => l.textContent.includes('Packets per run')));
   assert.ok(card, 'the ping check card is on the page');
-  assert.match(card.textContent, /default 4, max 20/);
+  assert.match(card.textContent, /Up to 20\. Leave it blank to send what Settings › General says \(4\)/);
+  // The mock's ping checks carry a count of their own, which the field shows.
+  const count = [...card.querySelectorAll('input[type="number"]')].find((el) => el.placeholder.includes('the setting'));
+  assert.ok(count, 'the count field says what blank means');
+  assert.equal(count.value, String(node.checks.find((c) => c.type === 'ping').config.pingCount));
 
   const select = [...card.querySelectorAll('select')].find((el) => [...el.options].some((o) => o.value === 'system'));
   assert.ok(select, 'the ping method override select is on the card');
