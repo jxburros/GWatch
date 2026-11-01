@@ -78,7 +78,7 @@ test('a refused delete keeps the chart in the list', async (t) => {
 test('the pin-to-dashboard dialog names its dashboard select', async (t) => {
   const { ctx } = await mountView(chartsView, { params: { id: 'chart-2' } }, t);
   ctx.setTitleCalls.at(-1).opts.actions.find((a) => a.getAttribute('aria-label') === 'Chart options').click();
-  [...document.querySelectorAll('.menu-item')].find((b) => b.textContent.includes('Pin to a dashboard')).click();
+  [...document.querySelectorAll('.menu-item')].find((b) => b.textContent.includes('Add to a dashboard')).click();
   const dialog = await waitFor(() => document.querySelector('[role="dialog"]'));
   const sel = await waitFor(() => dialog.querySelector('select'));
   const label = sel.id && dialog.querySelector(`label[for="${sel.id}"]`);

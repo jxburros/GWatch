@@ -51,6 +51,7 @@ var contractRoutes = []string{
 	"/api/events",
 	"/api/maintenance",
 	"/api/dashboards",
+	"/api/map/layout",
 	"/api/wallboards",
 	"/api/settings",
 	"/api/triggers",

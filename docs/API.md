@@ -1181,7 +1181,7 @@ Widget types (`Widget.type`) and their `config`:
 | `summary` | `{}` | overall health counts (up/degraded/down/unknown) |
 | `groups` | `{ "groups": ["Home Network", ...] }` (empty = all) | group status cards |
 | `status_list` | `{ "group": "", "tag": "", "nodeIds": [], "sort": "" }` | node/check status list, filtered (`group` matches any of a node's groups); `sort` is `""` (as the overview lists them), `status`, `name`, `name-desc`, `host` or `importance` |
-| `network_map` | `{ "orientation": "down|right|radial", "labels": "name|name-host|none", "size": "small|medium|large", "edges": "curved|straight|elbow", "group": "", "tag": "", "onlyLinked": false, "colorEdges": true, "showLegend": true, "lineColor": "", "lineWidth": 1.5, "lineStyle": "solid|dashed|dotted|dash-dot" }` | the dependency map: every node under the node it depends on (`radial` is the clusters layout: the nodes that depend on a node sit in a ring round it, and each that has dependents of its own is the middle of its own ring, further out). `lineColor` (`#rgb`, `#rrggbb` or `#rrggbbaa`; empty = the theme's), `lineWidth` (1–8 pixels on the screen, whatever the map is scaled to) and `lineStyle` are how a line looks unless the node at its lower end has a `linkStyle` of its own; saving a dashboard with a colour or style that is not allowed is a 400, and a width out of range is clamped |
+| `network_map` | `{ "orientation": "radial|down|right", "labels": "name|name-host|none", "size": "small|medium|large", "edges": "straight|elbow|curved", "group": "", "tag": "", "onlyLinked": false, "nodeFill": "both|colour|status", "lineColour": "outage|chosen|status", "highlightPath": true, "showLegend": true, "lineColor": "", "lineWidth": 2, "lineStyle": "solid|dashed|dotted|dash-dot" }` | the dependency map: every node off the node it depends on (`radial` is the clusters layout, the default: the nodes that depend on a node sit in a ring round it, and each that has dependents of its own is the middle of its own ring, further out; its lines are always straight), drawn as arranged on the map page (`GET /api/map/layout`). `nodeFill` is what a node's box shows: its own colour with a status light beside it, only the colour, or only the status. `lineColour` is what colours a line: the colour chosen, red where an outage reaches (`outage`), the colour chosen only, or the status of the node it leads to; an older `colorEdges: false` reads as `chosen`. `lineColor` (`#rgb`, `#rrggbb` or `#rrggbbaa`; empty = the theme's), `lineWidth` (1–8; screen pixels at the least, growing up to three times when zoomed in) and `lineStyle` are how a line looks unless the node at its lower end has a `linkStyle` of its own; saving a dashboard with a colour or style that is not allowed is a 400, and a width out of range is clamped |
 | `latency_chart` | `{ "checkIds": [1,2], "range": "24h", "metric": "avg" }` | line chart of latency/response time |
 | `response_chart` | same as latency_chart (HTTP checks) | response time |
 | `loss_chart` | `{ "checkIds": [], "range": "24h" }` | packet loss % |
@@ -1191,6 +1191,25 @@ Widget types (`Widget.type`) and their `config`:
 | `attention` | `{}` | needs-attention list |
 | `monitor_health` | `{}` | service health |
 | `table` | `{ "group": "", "tag": "", "sort": "" }` | filtered node table (`sort` as for `status_list`) |
+
+## The network map's arrangement
+
+The network map's clusters layout can be arranged by hand: nodes dragged to
+where they make sense (pinned), and clusters folded into their node. There is
+one arrangement, shared by every map — the page, dashboard widgets and the
+presentation — and it is part of the configuration (backups carry it).
+
+- `GET /api/map/layout` (viewer, read-only keys) → `{ "positions": { "<nodeId>": { "x", "y", "pinned"? } }, "collapsed": [nodeId], "updatedAt" }`. Nothing arranged yet is `{ "positions": {}, "collapsed": [] }`. Places of nodes deleted since are left out.
+- `PUT /api/map/layout` (administrator, read-write keys) with the same shape replaces it and answers what was stored.
+
+A position is in the layout's cells — a node's box and the spacing round it, the
+same at every node size — with the biggest tree's root near `0,0`; `pinned`
+marks a node someone put there, and a position without it is one a tidy-up
+kept. A node with no position is placed by the layout next to the node it
+depends on. On a `PUT`, a key that is not a node id, or a coordinate that is not
+finite or is beyond ±1,000,000, is a 400; places for nodes that do not exist are
+dropped, as are repeated or unknown ids in `collapsed`; coordinates are rounded
+to a tenth; at most 20,000 of each.
 
 ## Wallboards
 

@@ -999,37 +999,96 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .netmap-stage { position: relative; flex: 1; min-height: 8rem; display: flex; overflow: hidden; }
 .netmap-interactive .netmap-stage { height: 62vh; min-height: 24rem; padding-top: 2.5rem; cursor: grab; border: 1px solid var(--line); background: var(--bg, transparent); background-image: radial-gradient(var(--line) 1px, transparent 1px); background-size: 22px 22px; }
 .netmap-interactive .netmap-stage.panning { cursor: grabbing; }
+/* A finger on the map pans it or drags a node, rather than scrolling the page
+   (zoom with the + and − buttons). */
+.netmap-interactive .netmap-stage { touch-action: none; }
 .netmap-stage:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .netmap-svg { width: 100%; height: 100%; flex: 1; display: block; user-select: none; }
 .netmap-tools { position: absolute; top: 8px; right: 8px; z-index: 2; display: flex; gap: 4px; }
 .netmap-tools .icon-btn { background: var(--elev); box-shadow: 0 0 0 1px var(--line); }
-/* A line's thickness is in pixels on the screen, whatever the map is scaled
-   to: a big map fitted into its frame, or one on a small dashboard widget,
-   would otherwise thin every line to a hairline and make the thickness
-   setting look like it does nothing. */
-.netmap-edge { fill: none; stroke: var(--line-strong); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
-.netmap-edge-down { stroke: var(--down); stroke-dasharray: 5 4; }
+/* A line's thickness is screen pixels at the least, whatever the map is
+   scaled to: the drawing sets it on each line from the zoom (netmap.js,
+   strokeScale), so a big map fitted into its frame, or one on a small
+   dashboard widget, never thins a line to a hairline, and zooming in thickens
+   it with the boxes. */
+/* The theme's line colour is a mid grey that reads on either background: the
+   panel-border grey it used to be all but vanished on the dark theme. */
+.netmap-edge { fill: none; stroke: var(--dim); stroke-opacity: 0.6; stroke-width: 2; transition: opacity var(--dur) var(--ease); }
+.netmap-edge[style*="stroke:"], .netmap-edge-cut, .netmap-edge-down, .netmap-edge-quiet, .netmap-edge-st-degraded, .netmap-edge-st-down, .netmap-edge-st-maintenance, .netmap-edge-st-paused, .netmap-edge-st-unknown { stroke-opacity: 1; }
+/* What an outage does to a line: red out of the node that is down, a fainter
+   red further into what it cuts off, blue into what is quiet for maintenance.
+   A line coloured by status takes the colour of the node it leads to. */
+.netmap-edge-cut, .netmap-edge-down { stroke: var(--down); }
+.netmap-edge-affected { stroke: var(--down); stroke-opacity: 0.55; }
+.netmap-edge-quiet { stroke: var(--maint); }
+.netmap-edge-st-up { stroke: var(--up); stroke-opacity: 0.75; }
+.netmap-edge-st-degraded { stroke: var(--warn); }
+.netmap-edge-st-down { stroke: var(--down); }
+.netmap-edge-st-maintenance { stroke: var(--maint); }
+.netmap-edge-st-paused { stroke: var(--paused); }
+.netmap-edge-st-unknown { stroke: var(--unknown); }
 .netmap-node .netmap-box { fill: var(--elev); stroke: var(--line-strong); stroke-width: 1; }
 .netmap-node .netmap-stripe { fill: var(--unknown); }
 .netmap-node .netmap-dot { fill: var(--unknown); }
 .netmap-node .netmap-name { fill: var(--text); font-family: inherit; font-weight: 600; }
 .netmap-node .netmap-host { fill: var(--muted); font-family: "IBM Plex Mono", ui-monospace, monospace; }
 .netmap-node .netmap-kids { fill: var(--dim); font-family: inherit; }
-.netmap-node.status-up .netmap-stripe, .netmap-node.status-up .netmap-dot { fill: var(--up); }
-.netmap-node.status-down .netmap-stripe, .netmap-node.status-down .netmap-dot { fill: var(--down); }
-.netmap-node.status-down .netmap-box { stroke: var(--down); fill: var(--down-soft); }
-.netmap-node.status-degraded .netmap-stripe, .netmap-node.status-degraded .netmap-dot { fill: var(--warn); }
-.netmap-node.status-degraded .netmap-box { stroke: var(--warn); }
-.netmap-node.status-maintenance .netmap-stripe, .netmap-node.status-maintenance .netmap-dot { fill: var(--maint); }
-.netmap-node.status-paused .netmap-stripe, .netmap-node.status-paused .netmap-dot { fill: var(--paused); }
+/* The status box beside a node's own colour: dark in either theme, so its
+   light reads whatever colour the node was given. */
+.netmap-node .netmap-pod { fill: #121418; stroke: rgba(255, 255, 255, 0.08); stroke-width: 1; }
+.netmap-node .netmap-light { fill: var(--unknown); }
+.netmap-node .netmap-glow { fill: var(--unknown); opacity: 0.22; }
+.netmap-node .netmap-dot-ring { fill: none; stroke: var(--unknown); stroke-width: 2.5; }
+.netmap-node.status-up :is(.netmap-stripe, .netmap-dot, .netmap-light, .netmap-glow) { fill: var(--up); }
+.netmap-node.status-down :is(.netmap-stripe, .netmap-dot, .netmap-light, .netmap-glow) { fill: var(--down); }
+.netmap-node.status-degraded :is(.netmap-stripe, .netmap-dot, .netmap-light, .netmap-glow) { fill: var(--warn); }
+.netmap-node.status-maintenance :is(.netmap-stripe, .netmap-dot, .netmap-light, .netmap-glow) { fill: var(--maint); }
+.netmap-node.status-paused :is(.netmap-stripe, .netmap-dot, .netmap-light, .netmap-glow) { fill: var(--paused); }
+.netmap-node.status-up .netmap-dot-ring { stroke: var(--up); }
+.netmap-node.status-down .netmap-dot-ring { stroke: var(--down); }
+.netmap-node.status-degraded .netmap-dot-ring { stroke: var(--warn); }
+.netmap-node.status-maintenance .netmap-dot-ring { stroke: var(--maint); }
 .netmap-node.status-paused .netmap-name { fill: var(--muted); }
+.netmap-node.status-down .netmap-glow { opacity: 0.4; animation: pulse 1.6s ease-in-out infinite; }
+/* The border says the status too, unless the map shows chosen colours only —
+   then status is not shown at all, as whoever set it up asked. */
+.netmap-svg:not(.fill-colour) .netmap-node.status-down .netmap-box { stroke: var(--down); stroke-width: 1.5; }
+.netmap-svg:not(.fill-colour) .netmap-node.status-degraded .netmap-box { stroke: var(--warn); }
+.netmap-svg:not(.fill-colour) .netmap-node.status-maintenance .netmap-box { stroke: var(--maint); }
+/* Status only: the box itself is tinted by status. */
+.netmap-svg.fill-status .netmap-node.status-down .netmap-box { fill: var(--down-soft); }
+.netmap-svg.fill-status .netmap-node.status-degraded .netmap-box { fill: var(--warn-soft); }
+.netmap-svg.fill-status .netmap-node.status-maintenance .netmap-box { fill: var(--maint-soft); }
+.netmap-svg.fill-status .netmap-node.status-up .netmap-box { fill: var(--up-soft); }
+.netmap-svg.fill-colour .netmap-node:not(.netmap-coloured) .netmap-dot { fill: var(--unknown); }
+/* Cut off by something above it (dashed red), or quiet while something above
+   it is in maintenance (dashed blue); a simulated failure, a heavy red. */
+.netmap-svg:not(.fill-colour) .netmap-node.is-cut-off .netmap-box { stroke: var(--down); stroke-dasharray: 5 3; stroke-width: 1.5; }
+.netmap-svg:not(.fill-colour) .netmap-node.is-quiet .netmap-box { stroke: var(--maint); stroke-dasharray: 5 3; stroke-width: 1.5; }
+.netmap-node.sim-failed .netmap-box { stroke-width: 3; }
+.netmap-node.sim-failed.status-down .netmap-box { stroke: var(--down); }
+.netmap-node.sim-failed.status-maintenance .netmap-box { stroke: var(--maint); }
+/* A folded cluster: how much is in it, in the colour of the worst of it. */
+.netmap-fold .netmap-fold-chip { fill: var(--elev-2); stroke: var(--up); stroke-width: 1.5; }
+.netmap-fold .netmap-fold-text { fill: var(--text); font-family: inherit; font-weight: 700; }
+.netmap-fold.status-down .netmap-fold-chip { stroke: var(--down); fill: var(--down-soft); }
+.netmap-fold.status-degraded .netmap-fold-chip { stroke: var(--warn); }
+.netmap-fold.status-unknown .netmap-fold-chip { stroke: var(--unknown); }
+.netmap-fold.status-maintenance .netmap-fold-chip { stroke: var(--maint); }
+.netmap-node .netmap-pin { fill: var(--accent); stroke: var(--card); stroke-width: 1.5; }
 .netmap-context { opacity: 0.45; }
 .netmap-nodes a { cursor: pointer; }
 .netmap-nodes a:hover .netmap-box, .netmap-nodes a:focus-visible .netmap-box { stroke: var(--accent); stroke-width: 1.5; }
 .netmap-nodes a:focus-visible { outline: none; }
 .netmap-nodes a:focus-visible .netmap-box, .netmap-nodes a:focus-visible .netmap-dot { stroke: var(--accent); stroke-width: 2.5; }
-.netmap-node.selected .netmap-box { stroke: var(--accent); stroke-width: 2.5; }
+.netmap-node.selected .netmap-box { stroke: var(--accent); stroke-width: 2.5; stroke-dasharray: none; }
 .netmap-node.selected .netmap-dot { stroke: var(--accent); stroke-width: 2.5; }
+/* The chosen node's chain up and everything below it, with the rest faded. */
+.netmap-node { transition: opacity var(--dur) var(--ease); }
+.netmap-svg.has-path .netmap-node:not(.on-path) { opacity: 0.25; }
+.netmap-svg.has-path .netmap-edge:not(.on-path) { opacity: 0.12; }
+.netmap-stage.dragging, .netmap-stage.dragging .netmap-nodes a { cursor: grabbing; }
+@media (prefers-reduced-motion: reduce) { .netmap-node .netmap-glow { animation: none !important; } }
 .netmap-legend { display: flex; flex-wrap: wrap; gap: 0.375rem 1rem; align-items: center; font-size: 0.75rem; color: var(--muted); padding-top: 0.5rem; }
 .netmap-legend:empty { display: none; }
 .netmap-key { display: inline-flex; align-items: center; gap: 6px; }
@@ -1049,8 +1108,76 @@ select { appearance: none; -webkit-appearance: none; padding-right: 1.875rem; ba
 .netmap-colour { display: flex; align-items: center; gap: 0.5rem; }
 .node-colour input[type="color"] { flex: none; }
 .netmap-colour-text { flex: 1; min-width: 0; font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.netmap-linekey { display: inline-block; width: 1.25rem; border-top: 2px dashed var(--down); }
+.netmap-linekey { display: inline-block; width: 1.25rem; border-top: 2px solid var(--down); }
+.netmap-linekey-affected { border-top-style: dashed; opacity: 0.6; }
+.netmap-linekey-quiet { border-top: 2px dashed var(--maint); }
 .netmap-facts { display: grid; gap: 2px; margin-top: 10px; font-size: 0.8125rem; }
+/* The map's head: its counts and a box to find a node by name. */
+.netmap-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; }
+.netmap-find { display: inline-flex; align-items: center; gap: 0.375rem; color: var(--muted); }
+.netmap-find-input { width: 13rem; max-width: 100%; }
+/* The chosen node: what to do with it, and — for an administrator — how to change it. */
+.netmap-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.netmap-edit { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+.netmap-edit > summary { cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 0.8125rem; }
+.netmap-edit[open] > summary { margin-bottom: 10px; }
+.netmap-edit > .field + .field, .netmap-edit > .field + fieldset, .netmap-edit > fieldset + a { margin-top: 10px; }
+.netmap-risks { margin: 0; padding-left: 1.25rem; display: grid; gap: 4px; font-size: 0.8125rem; }
+/* A what-if in progress: a banner over the map that cannot be mistaken for the real thing. */
+.netmap-sim { display: grid; gap: 6px; margin: 0 0 0.75rem; padding: 0.625rem 0.75rem; border: 1px dashed var(--warn); background: var(--warn-soft); font-size: 0.8125rem; }
+.netmap-sim-head { display: flex; align-items: center; gap: 0.5rem; }
+.netmap-sim-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.netmap-sim-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 2px 1px 8px; border: 1px solid var(--down); background: var(--down-soft); }
+.netmap-sim-chip.netmap-sim-maintenance { border-color: var(--maint); background: var(--maint-soft); }
+.netmap-sim-sum { font-weight: 600; }
+/* The map's head: a toolbar of what acts on the whole map. */
+.netmap-count { margin-right: auto; }
+.netmap-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.netmap-locked { color: var(--warn); }
+.netmap-howto { font-size: 0.75rem; color: var(--dim); line-height: 1.45; margin: 0.5rem 0 0; }
+/* The side panel: two tabs, the chosen node and how the map looks. */
+.netmap-tabbed { display: flex; flex-direction: column; }
+.netmap-tabs { margin: 0; background: var(--card); border: 1px solid var(--line); border-bottom: 0; padding: 0 0.25rem; }
+.netmap-tabs .tab { display: inline-flex; align-items: center; gap: 6px; }
+.netmap-tabs + .card { border-top-left-radius: 0; border-top-right-radius: 0; }
+.netmap-node-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.5rem; }
+.netmap-node-name { margin: 0; font-size: 1.0625rem; line-height: 1.3; overflow-wrap: anywhere; }
+.netmap-node-host { margin: 2px 0 6px; font-size: 0.8125rem; }
+.netmap-impact { margin: 10px 0 0; font-size: 0.8125rem; color: var(--muted); }
+.netmap-group { margin-top: 14px; }
+.netmap-group .netmap-actions { margin-top: 6px; }
+.netmap-empty-hint { margin: 0 0 0.75rem; color: var(--muted); font-size: 0.8125rem; line-height: 1.5; }
+.netmap-risks-block { border-top: 1px solid var(--line); padding-top: 0.75rem; }
+.netmap-risks-block .help { font-size: 0.75rem; color: var(--dim); margin: 2px 0 6px; }
+.netmap-options-title { margin-top: 0.5rem; }
+.netmap-options-title:first-child { margin-top: 0; }
+.netmap-options-foot { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--line); }
+.netmap-options-foot .help { font-size: 0.75rem; color: var(--dim); }
+/* No colour chosen: the swatch is faded and struck through, not a colour. */
+.node-colour.is-none input[type="color"] { opacity: 0.35; background: linear-gradient(to top right, transparent 46%, var(--muted) 47%, var(--muted) 53%, transparent 54%); }
+/* A simulation in progress: one compact band over the map. */
+.netmap-sim { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.875rem; }
+.netmap-sim > .row { margin-left: auto; }
+/* Presenting on a narrow screen: the bar's buttons are icons. */
+.netmap-present-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+@media (max-width: 52rem) {
+  .netmap-present-tools .btn-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .netmap-present-bar { gap: 0.5rem; }
+}
+/* Presenting the map: the whole screen, a bar of its own, nothing to edit. */
+.netmap-present { position: relative; display: flex; flex-direction: column; height: calc(100dvh - var(--mock-banner-height, 0px)); background: var(--bg); }
+.netmap-present-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; padding: 0.625rem 1rem; border-bottom: 1px solid var(--line); background: var(--card); }
+.netmap-present-title { display: flex; align-items: center; gap: 0.625rem; margin-right: auto; }
+.netmap-present-title h1 { font-size: 1.25rem; margin: 0; }
+.netmap-present-map { flex: 1; min-height: 0; display: flex; padding: 0.5rem 1rem 0.75rem; }
+.netmap-present-map .netmap { flex: 1; }
+.netmap-present-map .netmap-interactive .netmap-stage { height: auto; flex: 1; min-height: 0; }
+.netmap-present-map .netmap-legend { font-size: 0.9375rem; }
+.netmap-present-map .netmap-list { display: none; }
+.netmap-present-card, .netmap-present-risks { position: absolute; z-index: 3; width: min(24rem, calc(100% - 2rem)); box-shadow: var(--shadow); }
+.netmap-present-card { right: 1.5rem; bottom: 4.5rem; font-size: 0.9375rem; }
+.netmap-present-risks { left: 1.5rem; top: 5rem; max-height: 60vh; overflow: auto; }
+.netmap-present-sim { position: absolute; z-index: 3; left: 50%; transform: translateX(-50%); top: 4.5rem; width: min(40rem, calc(100% - 2rem)); background: var(--card); box-shadow: var(--shadow); font-size: 0.9375rem; }
 .widget-map { overflow: hidden; }
 .widget-map .netmap-list { display: none; }
 .charts-layout { display: grid; grid-template-columns: 18.75rem minmax(0, 1fr); gap: 0.875rem; align-items: start; }

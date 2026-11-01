@@ -10,6 +10,67 @@ release is published as `v<VERSION>` by the Release workflow, dispatched from
 `main`. It refuses to publish a tag that disagrees with the file — see
 [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## 0.8.8 (not yet released)
+
+GWatch 0.8.8 and gwatch-agent 0.8.6 ship together. The agent has no changes of
+its own: it is rebuilt with the configuration model it shares with GWatch,
+which gained the network map's arrangement.
+
+### Added
+
+- **Arrange the network map by hand.** In the *Clusters* layout, drag a node to
+  where it makes sense: it is pinned there, and what hangs off it comes along,
+  its ring turning to face away from the line in (Shift moves it alone). Nodes
+  nobody pinned are placed next to what they depend on. *Tidy up the unpinned
+  nodes* and *Tidy up everything* are in the map menu with Undo, *Unpin* sends a
+  node back, and *Lock the layout* stops accidental moves. An administrator's
+  arrangement is kept on the service — every map, dashboard widget and
+  presentation shows it, on every computer, and backups carry it
+  (`GET`/`PUT /api/map/layout`); anyone else's stays in their own tab.
+- **Fold a cluster** into its node: what is in it is not drawn, and the node
+  shows how many it holds in the colour of the worst status among them.
+- **What if…?** Choose a node and *Simulate a failure* or *Simulate
+  maintenance*: the effect spreads one ring at a time over the map (Step, Play),
+  a banner says how many nodes would be cut off and have their alerts held back,
+  and nothing real changes.
+- **Present the map** (`#/map/present`): full screen and read-only, frozen at
+  the moment it was opened unless switched to live, with *Hide addresses*,
+  *Biggest risks*, the simulation and *Save as PNG*.
+- **Find a node** by name or address, **Biggest risks** (the nodes whose loss
+  takes the most with them), **Export as PNG**, and choosing a node lights up
+  what it depends on and what depends on it.
+- **Node colour and status together.** A node's box is filled with its own
+  colour and its status is a light in a small box beside it; *Node colour
+  shows* can make it status only or colour only. *Line colour shows* chooses
+  between chosen colours with outages in red (the default), chosen colours only,
+  and the status of the node a line leads to.
+
+### Changed
+
+- **The clusters layout is redone for big networks.** It is worked out in one
+  pass in a space where a box and its spacing are one cell, so its rings are
+  tight round wide name labels (ovals, wider than tall) and neighbouring
+  clusters keep clear space between them. A 250-node network lays out in about
+  ten milliseconds instead of most of a second, on every live update; no box
+  overlaps another and no line crosses a box it does not join. Lines in clusters
+  are always straight, and Clusters is the layout a new map opens in.
+- **An outage's reach follows the service.** Past the red lines out of a node
+  that is down, a node is drawn cut off (dashed red) only when the service
+  records it as affected by that outage — a node whose own checks pass is no
+  longer drawn as if it were down. Lines below maintenance are dashed blue.
+- **The side panel** shows what a node depends on and what depends on it first;
+  changing it is an administrator's *Change it* section, and the map's own
+  options fold away under *Customise the map*. Zooming goes in until a box is
+  four times life size, however big the map.
+
+### Fixed
+
+- **Line thickness on a big map.** Lines are their chosen thickness in screen
+  pixels at the least, however far a big map is zoomed out to fit, and thicken
+  with the boxes when zoomed in (up to three times). The default is 2 pixels,
+  up from 1.5. Before 0.8.5 a line's thickness shrank with the drawing, which
+  is why a map of a few hundred nodes showed hairlines.
+
 ## 0.8.7 (not yet released)
 
 GWatch only; gwatch-agent stays at 0.8.5. No change to the program: this

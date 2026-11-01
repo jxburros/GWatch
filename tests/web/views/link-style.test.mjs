@@ -16,8 +16,8 @@ const mock = () => window.__gwatchMock;
 const nodeNamed = (name) => mock().nodes.find((n) => n.name === name);
 const change = (el) => el.dispatchEvent(new window.Event('change', { bubbles: true }));
 const fieldset = (root) => root.querySelector('fieldset.netmap-linegroup');
-// The selected node's card is the side panel's first; the map's own options come after it.
-const selectedCard = (root) => root.querySelector('.netmap-side > section:first-child');
+// The side panel's Node tab: the chosen node; its Customise tab holds the map's own options.
+const selectedCard = (root) => root.querySelector('.netmap-inspect');
 const widthOf = (el) => el.querySelector('input[type="number"]');
 const edge = (root, from, to) => root.querySelector(`.netmap-edge[data-from="${from}"][data-to="${to}"]`);
 const styleOf = (root, from, to) => edge(root, from, to).getAttribute('style');
@@ -46,16 +46,16 @@ test('the network map side panel offers a link style for the node\'s line to its
   // ... and the map draws that line in it.
   assert.match(styleOf(root, swtch.id, nas.id), /stroke:#3b82f6/);
   assert.match(styleOf(root, swtch.id, nas.id), /stroke-width:3/);
-  assert.equal(styleOf(root, swtch.id, nodeNamed('Printer').id), 'stroke-width:1.5', 'a link with no style of its own is as it was');
+  assert.equal(styleOf(root, swtch.id, nodeNamed('Printer').id), 'stroke-width:2', 'a link with no style of its own is drawn as the map says');
 
   // A node with nothing it depends on has no link to style.
   const { root: rootNode } = await mountView(networkMapView, { query: new URLSearchParams({ node: String(gateway.id) }) }, t);
   assert.equal(fieldset(selectedCard(rootNode)), null);
 });
 
-test('the network map\'s pin-to-dashboard dialog names its dashboard select', async (t) => {
+test('the network map\'s add-to-dashboard dialog names its dashboard select', async (t) => {
   const { ctx } = await mountView(networkMapView, undefined, t);
-  ctx.setTitleCalls.at(-1).opts.actions.find((a) => a.textContent.includes('Pin to a dashboard')).click();
+  ctx.setTitleCalls.at(-1).opts.actions.find((a) => a.textContent.includes('Add to a dashboard')).click();
   const dialog = await waitFor(() => document.querySelector('[role="dialog"]'));
   const sel = await waitFor(() => dialog.querySelector('select'));
   const label = sel.id && dialog.querySelector(`label[for="${sel.id}"]`);
@@ -83,17 +83,21 @@ test('changing a link\'s style in the side panel is saved on the node and redraw
   // Reset gives it back to the map.
   button(group, 'Reset').click();
   await waitFor(() => printer.linkStyle === null);
-  await waitFor(() => styleOf(root, swtch.id, printer.id) === 'stroke-width:1.5');
+  await waitFor(() => styleOf(root, swtch.id, printer.id) === 'stroke-width:2');
   assert.equal(widthOf(group).value, '');
   assert.equal(group.querySelector('select').value, '');
 });
 
-test('a viewer sees the link style but cannot change it', async (t) => {
+test('a viewer sees the link drawn in its style, and nothing to change it with', async (t) => {
   resetLinkStyles();
-  const { root } = await mountView(networkMapView, { query: new URLSearchParams({ node: String(nodeNamed('NAS').id) }), isAdmin: false }, t);
-  const group = fieldset(selectedCard(root));
-  assert.equal(widthOf(group).value, '3');
-  for (const el of group.querySelectorAll('input, select')) assert.ok(el.disabled, `${el.outerHTML.slice(0, 50)} is disabled`);
+  const nas = nodeNamed('NAS'), swtch = nodeNamed('Office switch');
+  const { root } = await mountView(networkMapView, { query: new URLSearchParams({ node: String(nas.id) }), isAdmin: false }, t);
+  assert.match(styleOf(root, swtch.id, nas.id), /stroke-width:3/);
+  // The side panel says what the node depends on and what depends on it;
+  // changing any of that is an administrator's, so a viewer is not shown it.
+  assert.match(selectedCard(root).textContent, /Depends on/);
+  assert.equal(fieldset(selectedCard(root)), null);
+  assert.equal(selectedCard(root).querySelector('.netmap-edit'), null);
 });
 
 test('the map options on the page hold the line colour, thickness and style', async (t) => {

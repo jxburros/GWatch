@@ -6,6 +6,7 @@
 // else the map's, else the theme's.
 
 import { freshRoot, window } from './dom.mjs';
+import { bigNetwork } from './big-network.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -73,10 +74,18 @@ test('mapEntries keeps the chain upstream of a filtered node, marked as context'
 
 test('normalizeMapConfig falls back to defaults for anything unknown', () => {
   const c = normalizeMapConfig({ orientation: 'sideways', labels: 'name-host', size: 'huge' });
-  assert.equal(c.orientation, 'down');
+  assert.equal(c.orientation, 'radial', 'clusters, the layout most asked for');
   assert.equal(c.labels, 'name-host');
   assert.equal(c.size, 'medium');
   assert.equal(c.colorEdges, true);
+  assert.equal(c.edges, 'straight');
+  assert.equal(c.nodeFill, 'both', 'its own colour, and a status light beside it');
+  assert.equal(c.lineColour, 'outage');
+  assert.equal(c.highlightPath, true);
+  // An older map that turned the outage colour off keeps it off.
+  assert.equal(normalizeMapConfig({ colorEdges: false }).lineColour, 'chosen');
+  assert.equal(normalizeMapConfig({ colorEdges: false, lineColour: 'status' }).lineColour, 'status');
+  assert.equal(normalizeMapConfig({ nodeFill: 'rainbow', lineColour: 'plaid' }).nodeFill, 'both');
 });
 
 test('renderNetworkMap draws every node and dependency, and colours an outage', () => {
@@ -161,15 +170,20 @@ const OFFICE = [node(1, 'Core')];
 test('clusters: every branch is the middle of a ring of what depends on it, and its branches start rings of their own', () => {
   const { f, l } = clusters(OFFICE);
   assert.deepEqual([at(l, 1).x, at(l, 1).y], [0, 0], 'the root of the tree is at the origin');
+  // The layout is worked out in cells — a box and the spacing round it — and
+  // stretched to the page at the end, which turns its rings into ovals; so
+  // rings and nearness are measured in cells.
+  assert.ok(l.cell.w > BOX.w && l.cell.h > BOX.h, 'a cell is a box and its spacing');
+  const inCells = (id) => ({ x: at(l, id).x / l.cell.w, y: at(l, id).y / l.cell.h });
   const angleOf = (from, to) => Math.atan2(to.y - from.y, to.x - from.x);
   for (const sw of f.children.get('1')) {
-    const centre = at(l, sw);
-    const kids = f.children.get(sw).map((k) => at(l, k));
+    const centre = inCells(sw);
+    const kids = f.children.get(sw).map(inCells);
     // The devices of a switch are on a ring round it: one distance (or a
     // few, for a long run), each closer to its own switch than to any other.
     const d = kids.map((k) => distance(centre, k));
-    assert.ok(new Set(d.map((x) => Math.round(x))).size <= 3, `Switch ${sw}: its devices are on a ring (${d.map(Math.round)})`);
-    for (const k of kids) for (const other of f.children.get('1')) if (other !== sw) assert.ok(distance(centre, k) < distance(at(l, other), k), 'a device is nearest its own switch');
+    assert.ok(new Set(d.map((x) => x.toFixed(2))).size <= 3, `Switch ${sw}: its devices are on a ring (${d.map((x) => x.toFixed(2))})`);
+    for (const k of kids) for (const other of f.children.get('1')) if (other !== sw) assert.ok(distance(centre, k) < distance(inCells(other), k), 'a device is nearest its own switch');
     // ... and round it, not off to one side: a switch with a crowd of
     // devices has them on more than half the turn.
     if (kids.length >= 5) {
@@ -178,7 +192,7 @@ test('clusters: every branch is the middle of a ring of what depends on it, and 
       assert.ok(Math.max(...gaps) < Math.PI, `Switch ${sw}: its devices surround it (largest gap ${Math.max(...gaps).toFixed(2)} rad)`);
     }
     // The gap that is left faces the core, so the line in stays clear.
-    const toCore = angleOf(centre, at(l, 1));
+    const toCore = angleOf(centre, inCells(1));
     for (const k of kids) {
       let diff = Math.abs(angleOf(centre, k) - toCore) % (2 * Math.PI);
       if (diff > Math.PI) diff = 2 * Math.PI - diff;
@@ -188,9 +202,10 @@ test('clusters: every branch is the middle of a ring of what depends on it, and 
   // A line to a switch, with its ring behind it, is longer than a line to a
   // lone device.
   const home = clusters(HOME);
-  const router = at(home.l, 1);
-  assert.ok(distance(router, at(home.l, 2)) > distance(router, at(home.l, 3)), 'the switch is further out than the Pi-hole');
-  assert.equal(distance(router, at(home.l, 3)).toFixed(3), distance(router, at(home.l, 4)).toFixed(3), 'the router’s own leaves are on one ring');
+  const hc = (id) => ({ x: at(home.l, id).x / home.l.cell.w, y: at(home.l, id).y / home.l.cell.h });
+  const router = hc(1);
+  assert.ok(distance(router, hc(2)) > distance(router, hc(3)), 'the switch is further out than the Pi-hole');
+  assert.equal(distance(router, hc(3)).toFixed(3), distance(router, hc(4)).toFixed(3), 'the router’s own leaves are on one ring');
   assert.equal(l.levels, 3);
   assert.deepEqual(l.rings, [], 'no ring lines are drawn');
 });
@@ -322,6 +337,23 @@ test('clusters: nodes are kept apart by the spacing asked for, and a line is nev
   assert.equal(bare.pos.size, HOME.length);
 });
 
+// The size the map is actually run at: one install it is tried against has
+// over 250 nodes. Laid out in one pass, it is quick enough to redo on every
+// live update, and still clean.
+test('clusters: a 250-node network is laid out quickly, with no overlaps and no line through a box', () => {
+  const nodes = bigNetwork(250);
+  const started = performance.now();
+  const { f, l } = clusters(nodes);
+  const took = performance.now() - started;
+  assert.ok(took < 250, `laid out in ${took.toFixed(0)} ms`);
+  assert.equal(l.pos.size, 250);
+  assert.deepEqual(overlaps(l, SPACING - 1e-6), []);
+  assert.deepEqual(linesThroughBoxes(f, l), []);
+  // Wider than tall, like the screen it is shown on.
+  const b = l.bounds;
+  assert.ok(b.maxX - b.minX > b.maxY - b.minY, 'landscape');
+});
+
 test('the radial orientation is still the stored value, now labelled as clusters', () => {
   assert.equal(normalizeMapConfig({ orientation: 'radial' }).orientation, 'radial');
   const o = MAP_ORIENTATIONS.find((x) => x.value === 'radial');
@@ -341,7 +373,7 @@ test('line colours are #rgb, #rrggbb or #rrggbbaa and nothing else', () => {
 });
 
 test('line widths are clamped, and what is not a number is not a width', () => {
-  assert.equal(LINE_WIDTH.default, 1.5);
+  assert.equal(LINE_WIDTH.default, 2, 'two screen pixels: 1.5 was too thin to see on a big map');
   assert.equal(normalizeLineWidth(99, 1.5), LINE_WIDTH.max);
   assert.equal(normalizeLineWidth(0.2, 1.5), LINE_WIDTH.min);
   assert.equal(normalizeLineWidth('3', 1.5), 3);
@@ -355,17 +387,17 @@ test('line widths are clamped, and what is not a number is not a width', () => {
 
 test('a map configuration has line defaults, and refuses a bad colour, width or style', () => {
   const d = normalizeMapConfig({});
-  assert.deepEqual([d.lineColor, d.lineWidth, d.lineStyle], ['', 1.5, 'solid']);
+  assert.deepEqual([d.lineColor, d.lineWidth, d.lineStyle], ['', 2, 'solid']);
   const c = normalizeMapConfig({ lineColor: '#E5A50A', lineWidth: 4, lineStyle: 'dash-dot' });
   assert.deepEqual([c.lineColor, c.lineWidth, c.lineStyle], ['#e5a50a', 4, 'dash-dot']);
   const bad = normalizeMapConfig({ lineColor: 'url(#x)', lineWidth: 'wide', lineStyle: 'wavy' });
-  assert.deepEqual([bad.lineColor, bad.lineWidth, bad.lineStyle], ['', 1.5, 'solid']);
+  assert.deepEqual([bad.lineColor, bad.lineWidth, bad.lineStyle], ['', 2, 'solid']);
   assert.equal(normalizeMapConfig({ lineWidth: 500 }).lineWidth, 8);
-  assert.equal(normalizeMapConfig({ lineWidth: -1 }).lineWidth, 1.5);
+  assert.equal(normalizeMapConfig({ lineWidth: -1 }).lineWidth, 2);
   // An older saved configuration, with none of it, still loads as it was.
   const old = normalizeMapConfig({ orientation: 'radial', labels: 'name-host', size: 'large', edges: 'straight', onlyLinked: true });
   assert.equal(old.orientation, 'radial');
-  assert.equal(old.lineWidth, 1.5);
+  assert.equal(old.lineWidth, LINE_WIDTH.default);
 });
 
 test('a link style keeps what is valid and is null when it sets nothing', () => {
@@ -378,14 +410,14 @@ test('a line is drawn in its own style, else the map\'s, else the theme\'s', () 
   const plain = normalizeMapConfig({});
   const styled = normalizeMapConfig({ lineColor: '#112233', lineWidth: 3, lineStyle: 'dashed' });
   // theme: nothing is set, so the stylesheet decides colour and dashes
-  assert.deepEqual(edgeLook(plain, null), { color: '', width: 1.5, dash: '', cut: false });
+  assert.deepEqual(edgeLook(plain, null), { color: '', width: 2, dash: '', cut: false, state: '' });
   // map: its colour, thickness and style
-  assert.deepEqual(edgeLook(styled, null), { color: '#112233', width: 3, dash: 'dashed', cut: false });
+  assert.deepEqual(edgeLook(styled, null), { color: '#112233', width: 3, dash: 'dashed', cut: false, state: '' });
   // link: each field wins over the map's, and a field it leaves out follows the map
-  assert.deepEqual(edgeLook(styled, { color: '#ff0000', width: 5, dash: 'dotted' }), { color: '#ff0000', width: 5, dash: 'dotted', cut: false });
-  assert.deepEqual(edgeLook(styled, { dash: 'solid' }), { color: '#112233', width: 3, dash: 'solid', cut: false });
-  assert.deepEqual(edgeLook(styled, { width: 2 }), { color: '#112233', width: 2, dash: 'dashed', cut: false });
-  assert.deepEqual(edgeLook(plain, { color: '#fff' }), { color: '#fff', width: 1.5, dash: '', cut: false });
+  assert.deepEqual(edgeLook(styled, { color: '#ff0000', width: 5, dash: 'dotted' }), { color: '#ff0000', width: 5, dash: 'dotted', cut: false, state: '' });
+  assert.deepEqual(edgeLook(styled, { dash: 'solid' }), { color: '#112233', width: 3, dash: 'solid', cut: false, state: '' });
+  assert.deepEqual(edgeLook(styled, { width: 2 }), { color: '#112233', width: 2, dash: 'dashed', cut: false, state: '' });
+  assert.deepEqual(edgeLook(plain, { color: '#fff' }), { color: '#fff', width: 2, dash: '', cut: false, state: '' });
   // junk in a link's style is no style at all
   assert.deepEqual(edgeLook(styled, { color: 'red', width: 'x', dash: 'wavy' }), edgeLook(styled, null));
 });
@@ -465,7 +497,7 @@ test('renderNetworkMap draws every line in the map\'s style, and a link\'s own o
 test('an unstyled map draws its lines as it always did', () => {
   const root = freshRoot();
   renderNetworkMap(root, NODES.map((n) => ({ node: n, status: 'up' })), {}, {});
-  for (const e of root.querySelectorAll('.netmap-edge')) assert.equal(styleOf(e), 'stroke-width:1.5');
+  for (const e of root.querySelectorAll('.netmap-edge')) assert.equal(styleOf(e), 'stroke-width:2');
 });
 
 test('an outage shows in the down colour on a custom coloured line, and the legend says what red means', () => {
@@ -500,11 +532,12 @@ test('renderNetworkMap in clusters: a node per node, a line per dependency, noth
   for (let i = 0; i < centres.length; i++) for (let j = i + 1; j < centres.length; j++) {
     assert.ok(Math.abs(centres[i][0] - centres[j][0]) >= 148 || Math.abs(centres[i][1] - centres[j][1]) >= 32, 'boxes do not overlap on the page');
   }
-  assert.match(root.querySelector('.netmap-legend').textContent, /in a ring round the node it depends on/);
-  // Lines end at the boxes rather than running under them; curved bows, straight does not.
-  const d = edgeOf(root, 1, 3).getAttribute('d');
-  assert.match(d, /^M[-\d.e]+,[-\d.e]+ Q/, 'curved: a gentle bend');
-  map.update(entries, { orientation: 'radial', edges: 'straight' });
+  assert.match(root.querySelector('.netmap-legend').textContent, /Up 9.*Down 1/, 'the legend counts statuses');
+  // Lines end at the boxes rather than running under them, and are straight
+  // round a ring whatever shape was chosen: a bend there only tangles them.
+  assert.match(edgeOf(root, 1, 3).getAttribute('d'), /^M[-\d.e]+,[-\d.e]+ L/);
+  map.update(entries, { orientation: 'radial', edges: 'curved' });
+  assert.match(edgeOf(root, 1, 3).getAttribute('d'), /^M[-\d.e]+,[-\d.e]+ L/, 'curved is straight in clusters');
   assert.match(edgeOf(root, 1, 3).getAttribute('d'), /^M[-\d.e]+,[-\d.e]+ L/);
   map.update(entries, { orientation: 'radial', edges: 'elbow' });
   assert.match(edgeOf(root, 1, 3).getAttribute('d'), / L/, 'right angles make no sense round a ring: a straight line');
@@ -551,7 +584,7 @@ test('the map options carry the line colour, thickness and style, and reset them
   assert.equal(seen.at(-1).lineWidth, 8, 'clamped');
   assert.equal(widthOf(ed).value, '8', 'and shown clamped');
   widthOf(ed).value = 'abc'; change(widthOf(ed));
-  assert.equal(seen.at(-1).lineWidth, 1.5, 'junk is the default');
+  assert.equal(seen.at(-1).lineWidth, LINE_WIDTH.default, 'junk is the default');
   styleSelectOf(ed).value = 'dash-dot'; change(styleSelectOf(ed));
   assert.equal(seen.at(-1).lineStyle, 'dash-dot');
 
@@ -561,7 +594,7 @@ test('the map options carry the line colour, thickness and style, and reset them
   assert.ok(buttonNamed(ed, 'Default').disabled, 'nothing to reset once it is the theme\'s');
   assert.match(ed.textContent, /Theme colour/);
   buttonNamed(ed, 'Reset the lines').click();
-  assert.deepEqual([seen.at(-1).lineColor, seen.at(-1).lineWidth, seen.at(-1).lineStyle], ['', 1.5, 'solid']);
+  assert.deepEqual([seen.at(-1).lineColor, seen.at(-1).lineWidth, seen.at(-1).lineStyle], ['', LINE_WIDTH.default, 'solid']);
 
   // Everything has a label for a screen reader, and keyboard reach (native controls).
   for (const control of ed.querySelectorAll('input, select')) {
@@ -573,7 +606,7 @@ test('the map options carry the line colour, thickness and style, and reset them
 
 test('the map options without a colour still show the theme\'s default', () => {
   const ed = mapConfigEditor({});
-  assert.deepEqual([ed.value.lineColor, ed.value.lineWidth, ed.value.lineStyle], ['', 1.5, 'solid']);
+  assert.deepEqual([ed.value.lineColor, ed.value.lineWidth, ed.value.lineStyle], ['', LINE_WIDTH.default, 'solid']);
   assert.match(ed.textContent, /Theme colour/);
   assert.ok(buttonNamed(ed, 'Default').disabled);
 });
@@ -662,7 +695,7 @@ test('the node colour control holds a colour or none', () => {
   picker.value = '#336699';
   picker.dispatchEvent(new window.Event('change'));
   assert.deepEqual(seen, ['#336699']);
-  [...el.querySelectorAll('button')].find((b) => b.textContent === 'None').click();
+  [...el.querySelectorAll('button')].find((b) => b.textContent === 'Clear').click();
   assert.equal(el.value, '');
   assert.deepEqual(seen, ['#336699', '']);
 });

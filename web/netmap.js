@@ -31,7 +31,7 @@ import { compareNames, inGroup, plural } from './fmt.js';
 export const MAP_ORIENTATIONS = [
   { value: 'down', label: 'Top to bottom' },
   { value: 'right', label: 'Left to right' },
-  { value: 'radial', label: 'Clusters (radial)' },
+  { value: 'radial', label: 'Clusters' },
 ];
 export const MAP_LABELS = [
   { value: 'name', label: 'Name' },
@@ -44,9 +44,21 @@ export const MAP_SIZES = [
   { value: 'large', label: 'Large' },
 ];
 export const MAP_EDGES = [
-  { value: 'curved', label: 'Curved' },
   { value: 'straight', label: 'Straight' },
   { value: 'elbow', label: 'Right-angled' },
+  { value: 'curved', label: 'Curved' },
+];
+/** What fills a node's box: its own colour with a status light beside it, one or the other. */
+export const MAP_NODE_FILLS = [
+  { value: 'both', label: 'Colour and status' },
+  { value: 'colour', label: 'Chosen colour only' },
+  { value: 'status', label: 'Status only' },
+];
+/** What colours a line: the colours chosen for it (red where an outage reaches), only those, or status. */
+export const MAP_LINE_COLOURS = [
+  { value: 'outage', label: 'Chosen colours, red for outages' },
+  { value: 'chosen', label: 'Chosen colours only' },
+  { value: 'status', label: 'Status' },
 ];
 export const MAP_LINE_STYLES = [
   { value: 'solid', label: 'Solid' },
@@ -54,8 +66,14 @@ export const MAP_LINE_STYLES = [
   { value: 'dotted', label: 'Dotted' },
   { value: 'dash-dot', label: 'Dash and dot' },
 ];
-/** The thickness a line may take, in drawing units; 1.5 is what it always was. */
-export const LINE_WIDTH = { min: 1, max: 8, step: 0.5, default: 1.5 };
+/**
+ * The thickness a line may take. It is screen pixels at the least: however far
+ * out a big map is zoomed, a line is never drawn thinner than this; zoomed in,
+ * it grows with the boxes, up to three times as thick.
+ */
+export const LINE_WIDTH = { min: 1, max: 8, step: 0.5, default: 2 };
+/** How much thicker than its own width a line may grow when zoomed in. */
+export const LINE_ZOOM_MAX = 3;
 
 /* ---------- Line styles ---------- */
 
@@ -146,32 +164,56 @@ export function lineDash(style, width = LINE_WIDTH.default) {
 
 /**
  * How one line is drawn: its own style first, then the map's, then the
- * theme's (a colour of '' leaves the stylesheet to choose). `cut` is a line
- * out of a node that is down, drawn in the down colour whatever colour was
- * chosen — an outage must never be hidden by a pretty map — but still in the
- * thickness and dashes it was given. A dash of '' means nobody chose one, so
- * the stylesheet's own (a down line is dashed unless told otherwise) stands.
- * `cfg` is a normalised map configuration.
+ * theme's (a colour of '' leaves the stylesheet to choose). `state` says what
+ * an outage or the status is doing to the line: true or 'cut' (out of a node
+ * that is down), 'affected' (further below one), 'quiet' (below a node in
+ * maintenance), or a status colour ('st-up', 'st-down', …). Any of them is
+ * drawn in its own colour whatever colour was chosen — an outage must never be
+ * hidden by a pretty map — but still in the thickness and dashes it was
+ * given. `cfg` is a normalised map configuration.
+ *
+ * @param {any} cfg
+ * @param {any} linkStyle
+ * @param {boolean | string} [state]
  */
-export function edgeLook(cfg, linkStyle, cut = false) {
+export function edgeLook(cfg, linkStyle, state = false) {
   const own = normalizeLinkStyle(linkStyle) || { color: '', width: 0, dash: '' };
+  const st = state === true ? 'cut' : (state || '');
   return {
-    color: cut ? '' : own.color || cfg.lineColor,
+    color: st ? '' : own.color || cfg.lineColor,
     width: own.width || cfg.lineWidth,
     dash: own.dash || (cfg.lineStyle !== 'solid' ? cfg.lineStyle : ''),
-    cut: !!cut,
+    cut: st === 'cut',
+    state: st,
   };
 }
 
-/** The inline style for an edgeLook. Inline so it outranks the stylesheet and travels with an exported SVG. */
-export function edgeStyle(look) {
-  const parts = [`stroke-width:${look.width}`];
+/**
+ * The inline style for an edgeLook. Inline so it outranks the stylesheet and
+ * travels with an exported SVG. `scale` is drawing units per screen pixel at
+ * the zoom shown (see strokeScale), so the thickness chosen is screen pixels.
+ */
+export function edgeStyle(look, scale = 1) {
+  const r = (n) => Math.round(n * 1000) / 1000;
+  const parts = [`stroke-width:${r(look.width * scale)}`];
   if (look.color) parts.push(`stroke:${look.color}`);
   if (look.dash) {
     const d = lineDash(look.dash, look.width);
-    parts.push(`stroke-dasharray:${d.array}`, `stroke-linecap:${d.cap}`);
+    parts.push(`stroke-dasharray:${d.array === 'none' ? 'none' : d.array.split(' ').map((x) => r(Number(x) * scale)).join(' ')}`, `stroke-linecap:${d.cap}`);
   }
   return parts.join(';');
+}
+
+/**
+ * Drawing units per screen pixel for a line at a zoom of `pxPerUnit` screen
+ * pixels per drawing unit. A line is its thickness in screen pixels when the
+ * map is shown smaller than life (a big map fitted to the screen), and grows
+ * with the drawing when it is zoomed in, up to LINE_ZOOM_MAX times.
+ */
+export function strokeScale(pxPerUnit) {
+  const s = Number(pxPerUnit);
+  if (!Number.isFinite(s) || s <= 0) return 1;
+  return Math.min(LINE_ZOOM_MAX, Math.max(1, s)) / s;
 }
 
 /** A complete map configuration with its defaults filled in. */
@@ -179,17 +221,24 @@ export function edgeStyle(look) {
 export function normalizeMapConfig(cfg = {}) {
   const c = cfg && typeof cfg === 'object' ? cfg : {};
   const pick = (list, v, fb) => (list.some((o) => o.value === v) ? v : fb);
+  // Lines out of a parent that is down are drawn in the down colour, so the
+  // reach of an outage can be followed by eye — unless whoever set the map up
+  // chose otherwise. Older maps said so with colorEdges.
+  const lineColour = pick(MAP_LINE_COLOURS, c.lineColour, c.colorEdges === false ? 'chosen' : 'outage');
   return {
-    orientation: pick(MAP_ORIENTATIONS, c.orientation, 'down'),
+    // Clusters, the layout most asked for, unless another was chosen.
+    orientation: pick(MAP_ORIENTATIONS, c.orientation, 'radial'),
     labels: pick(MAP_LABELS, c.labels, 'name'),
     size: pick(MAP_SIZES, c.size, 'medium'),
-    edges: pick(MAP_EDGES, c.edges, 'curved'),
+    edges: pick(MAP_EDGES, c.edges, 'straight'),
     group: typeof c.group === 'string' ? c.group : '',
     tag: typeof c.tag === 'string' ? c.tag : '',
     onlyLinked: !!c.onlyLinked,
-    // Lines out of a parent that is down are drawn in the down colour, so
-    // the reach of an outage can be followed by eye.
-    colorEdges: c.colorEdges !== false,
+    nodeFill: pick(MAP_NODE_FILLS, c.nodeFill, 'both'),
+    lineColour,
+    colorEdges: lineColour !== 'chosen',
+    // Choosing a node lights up what it depends on and what depends on it.
+    highlightPath: c.highlightPath !== false,
     showLegend: c.showLegend !== false,
     // The look of every line that has no style of its own. A colour of ''
     // is the theme's.
@@ -307,284 +356,165 @@ export function layoutMap(forest, { orientation = 'down', onlyLinked = false, is
  * round it, each switch with its machines round it, the way someone would
  * sketch a network on a whiteboard.
  *
- * It is worked out from the leaves up, deterministically (the same nodes give
- * the same picture every time, whatever order they arrive in):
+ * It is worked out in "cell space", where a node's box with the spacing
+ * round it is one cell, 1 across and 1/CLUSTER_STRETCH tall. Name boxes are
+ * several times wider than they are tall; in cell space they are nearly
+ * square, so a ring of them is tight round its node however the ring turns,
+ * and the picture is only stretched back to boxes at the end (which makes the
+ * rings ovals, wider than tall, the shape a row of name labels wants).
+ * Stretching never brings two cells closer or a line nearer a box, so what
+ * holds in cell space holds on the page.
  *
- *  1. Each node's cluster is laid out in a frame of its own, the way out from
- *     its parent pointing right. The children that have none of their own sit
- *     close, on one ring round the node (a long run of them on two or more
- *     rings, alternately, so a switch with forty machines is not one huge
- *     circle).
- *     A child with a cluster of its own sits further out, on a line long
- *     enough that its whole cluster clears the ring, in a slice of the turn as
- *     wide as that cluster needs; the slices and the ring places are dealt out
- *     in turn so the bigger clusters are spread round evenly. Round the root
- *     they take the whole turn, the first at the top (a lone child to the
- *     right); round any other node they leave a gap facing the node's parent,
- *     so the line in stays clear, and a node with only a few children keeps
- *     them on its far side.
- *  2. The clusters are put together: each child's cluster is turned to face
- *     the way its slice points and set down at the end of its line.
- *  3. Rules that are then made to hold exactly: no two boxes closer than
- *     `spacing`, no line shorter than `reach` between the boxes it joins,
- *     and no line running through a box it does not join. If a few rounds
- *     of nudging cannot settle it, the picture is spread out a little and
- *     tried again, which always ends. The rings are built to keep these, so
- *     this rarely has anything to do.
+ * In cell space every node is a circle of radius R0 round its box, and every
+ * cluster a circle that holds all of it. A cluster is laid out once, from the
+ * leaves up, in a frame of its own (the way out from the parent along +x),
+ * and only turned and moved into place afterwards, so the whole layout is a
+ * single pass — no nudging, and the same nodes always give the same picture:
+ *
+ *  1. The children with no dependents of their own (leaves) go on a ring
+ *     round the node, or on two or three rings, alternately, when there are
+ *     many of them; a line to an outer leaf passes between inner ones.
+ *  2. A child with dependents (a branch) goes further out, far enough that
+ *     its whole cluster's circle clears the rings, in a slice of the turn as
+ *     wide as that circle needs. Its line in runs through a gap in the rings.
+ *  3. The ring is the smallest at which the leaves' places and the branches'
+ *     slices fit round the node: the whole turn round a root (the first child
+ *     at the top, a lone one to the right), and round anything else the turn
+ *     less a gap facing its parent, so the line in stays clear. A node with
+ *     only a few children keeps them on its far side.
  *
  * Several trees are laid out one by one; the biggest keeps its root at 0,0
  * and the others are set down round it in the nearest free space. Nodes with
  * no link at all are a block of rows under everything, as in the tree
  * layouts.
  */
+const CLUSTER_STRETCH = 1.6;
 function layoutClusters(forest, trees, isolated, linked, { onlyLinked, isolatedPerRow, node, spacing, reach: wantReach }) {
-  // A line shorter than the space kept round a box would be all box.
   const reach = Math.max(wantReach, spacing / 2);
-  const half = Math.hypot(node.w / 2, node.h / 2); // a box fits in a circle this big
-  const own = half + spacing / 2; // ... with half the space to its neighbours all round
+  const cw = node.w + spacing, ch = (node.h + spacing) * CLUSTER_STRETCH;
+  // A cell's circle, and a box's (the least room a line passing by needs).
+  const R0 = Math.hypot(0.5, 0.5 / CLUSTER_STRETCH);
+  const RL = Math.hypot(node.w / 2 / cw, node.h / 2 / ch) + 0.02;
+  const GAP = 0.12; // between a ring and the clusters beyond it
+  // Between two neighbouring clusters: clear space, so each reads as a group
+  // of its own and nothing looks nearer another cluster's node than its own.
+  const SIBLING_GAP = 1.1;
+  // The least distance, in cells, from a node to a child in any direction,
+  // so the line between their boxes is at least `reach` long on the page.
+  let rMin = 2 * R0;
+  // Sampled round the turn, and exactly at the box's corners, where the
+  // edge's distance from the centre is longest.
+  const corner = Math.atan2(node.h * cw, node.w * ch);
+  for (const t of [...Array.from({ length: 180 }, (_, i) => (i / 180) * Math.PI), corner, Math.PI - corner]) {
+    const dx = Math.cos(t) * cw, dy = Math.sin(t) * ch, len = Math.hypot(dx, dy);
+    const edge = Math.min(node.w / 2 / Math.max(Math.abs(dx / len), 1e-9), node.h / 2 / Math.max(Math.abs(dy / len), 1e-9));
+    rMin = Math.max(rMin, (reach + 2 * edge) / len + 1e-6);
+  }
+  const TURN = 2 * Math.PI;
+  const BACK_GAP = 0.4 * Math.PI;
+  const asin = (x) => Math.asin(Math.min(1, x));
+
+  // One node's cluster in its own frame: { kids: [{ id, angle, dist, branch }],
+  // c, R } — the children's places, and the circle that holds it all, centred
+  // on (c, 0).
+  const shapes = new Map();
+  const shape = (id, isRoot) => {
+    const key = `${id}:${isRoot ? 1 : 0}`;
+    if (shapes.has(key)) return shapes.get(key);
+    const kids = forest.children.get(id) || [];
+    let out;
+    if (!kids.length) out = { kids: [], c: 0, R: R0 };
+    else {
+      const sub = new Map();
+      for (const k of kids) if ((forest.children.get(k) || []).length) sub.set(k, shape(k, false));
+      const leaves = kids.filter((k) => !sub.has(k));
+      const branches = kids.filter((k) => sub.has(k));
+      // Round the ring: the leaves by name, the branches dealt in among them evenly.
+      const order = [];
+      {
+        const n = kids.length;
+        const at = new Set(branches.map((_, i) => Math.min(n - 1, Math.floor(((i + 0.5) * n) / branches.length))));
+        let li = 0, bi = 0;
+        for (let i = 0; i < n; i++) order.push(at.has(i) && bi < branches.length ? branches[bi++] : (li < leaves.length ? leaves[li++] : branches[bi++]));
+      }
+      const m = leaves.length;
+      const arc = isRoot ? TURN : TURN - BACK_GAP;
+      // Everything that depends on the ring radius r (and the number of rings).
+      const plan = (r, rings) => {
+        const outer = m ? r + (rings - 1) * 2 * R0 : 0;
+        const phi = rings === 1 ? 2 * asin(R0 / r) : Math.max(asin(RL / r), (2 / rings) * asin(R0 / r));
+        const width = new Map();
+        const dist = new Map();
+        let total = m * phi + (isRoot && rings > 1 && m > 1 ? 2 * asin(R0 / r) : 0);
+        for (const b of branches) {
+          const s = sub.get(b);
+          // Far enough that its circle clears the rings (and this node's box).
+          const d = Math.max(r, (m ? outer + R0 : R0) + GAP + s.R - s.c, rMin);
+          const w = Math.max(2 * asin((s.R + SIBLING_GAP / 2) / (d + s.c)), m ? 2 * asin(RL / r) + phi / 2 : 0);
+          dist.set(b, d); width.set(b, w); total += w;
+        }
+        return { r, rings, outer, phi, width, dist, total };
+      };
+      // The smallest ring that fits, for one, two or three rings of leaves;
+      // whichever reaches out least is used.
+      let best = null;
+      for (let rings = 1; rings <= Math.min(3, Math.max(1, m)); rings++) {
+        let lo = rMin, hi = rMin;
+        while (plan(hi, rings).total > arc) { lo = hi; hi *= 1.5; }
+        if (hi > lo) for (let i = 0; i < 30; i++) { const mid = (lo + hi) / 2; if (plan(mid, rings).total > arc) lo = mid; else hi = mid; }
+        const p = plan(hi, rings);
+        let reachOut = m ? p.outer + R0 : 0;
+        for (const b of branches) reachOut = Math.max(reachOut, p.dist.get(b) + sub.get(b).c + sub.get(b).R);
+        if (!best || reachOut < best.reachOut - 1e-9) best = { ...p, reachOut };
+      }
+      // Spread them: round a root over the whole turn; round anything else
+      // over what they need, or a little more when there are only a few.
+      const used = isRoot ? arc : Math.min(arc, Math.max(best.total, kids.length * Math.PI / 4));
+      const scale = best.total > 0 ? used / best.total : 1;
+      const widthOf = (k) => (sub.has(k) ? best.width.get(k) : best.phi) * scale;
+      let cursor;
+      if (isRoot) cursor = kids.length === 1 ? -widthOf(order[0]) / 2 : -Math.PI / 2 - widthOf(order[0]) / 2;
+      else cursor = -used / 2;
+      const placed = [];
+      let li = 0;
+      for (const k of order) {
+        const w = widthOf(k);
+        const angle = cursor + w / 2;
+        cursor += w;
+        if (sub.has(k)) placed.push({ id: k, angle, dist: best.dist.get(k), branch: true });
+        else placed.push({ id: k, angle, dist: best.r + (li++ % best.rings) * 2 * R0, branch: false });
+      }
+      // The circle that holds it all, centred on the axis: the centre that
+      // needs the smallest radius (the farthest reach is convex in it).
+      const disks = [{ x: 0, y: 0, r: R0 }, ...placed.map((p) => {
+        const s = sub.get(p.id);
+        const d = p.dist + (s ? s.c : 0);
+        return { x: d * Math.cos(p.angle), y: d * Math.sin(p.angle), r: s ? s.R : R0 };
+      })];
+      const need = (c) => disks.reduce((a, q) => Math.max(a, Math.hypot(q.x - c, q.y) + q.r), 0);
+      let lo = -best.reachOut, hi = best.reachOut;
+      for (let i = 0; i < 60; i++) { const a = lo + (hi - lo) / 3, b = hi - (hi - lo) / 3; if (need(a) <= need(b)) hi = b; else lo = a; }
+      const c = isRoot ? 0 : (lo + hi) / 2;
+      out = { kids: placed, c, R: need(c) };
+    }
+    shapes.set(key, out);
+    return out;
+  };
+
   const pos = new Map();
   let deepest = trees.length ? 0 : -1;
-  // How far a box's border is from its centre, along a direction.
-  const edge = (cos, sin) => Math.min(node.w / 2 / Math.max(Math.abs(cos), 1e-9), node.h / 2 / Math.max(Math.abs(sin), 1e-9));
-  // Whether two boxes at these centres are at least `spacing` apart.
-  const apart = (a, b) => {
-    const gx = Math.abs(a.x - b.x) - node.w, gy = Math.abs(a.y - b.y) - node.h;
-    return (gx >= 0 && gy >= 0 ? Math.hypot(gx, gy) : Math.max(gx, gy)) >= spacing;
-  };
-  const TURN = 2 * Math.PI;
-  // How far apart two rings of leaves are, along a direction: a box's width
-  // and the spacing out to the sides, its height and the spacing up and down.
-  const ringStep = (a) => 1.1 * Math.min((node.w + spacing) / Math.max(Math.abs(Math.cos(a)), 1e-9), (node.h + spacing) / Math.max(Math.abs(Math.sin(a)), 1e-9));
-  const maxStep = 1.1 * (node.w + spacing);
-  // The gap left facing a node's parent, and the least slice a ring place gets.
-  const BACK_GAP = 0.4 * Math.PI;
-  const MIN_SLOT = Math.PI / 36;
-
-  /**
-   * One node's cluster in its own frame: the node at 0,0, the way out from
-   * its parent along +x. That frame is turned by `rot` on the page, and the
-   * rings are worked out as they will be drawn — boxes are always level, so
-   * whether two of them clear each other depends on which way the ring is
-   * turned. Returns how far the cluster reaches behind the node (`back`),
-   * ahead of it (`fwd`) and to either side (`side`), boxes included, and with
-   * `final` the positions of everything in it (with the depth below the node).
-   * The children's clusters are measured first (once each, unturned) to share
-   * out the turn, then laid out for good facing the way they ended up.
-   */
-  const measured = new Map();
-  const measure = (id) => {
-    if (!measured.has(id)) measured.set(id, cluster(id, false, 0, false));
-    return measured.get(id);
-  };
-  const cluster = (id, isRoot, rot, final) => {
-    const pts = new Map([[id, { x: 0, y: 0, lvl: 0 }]]);
-    const kids = forest.children.get(id) || [];
-    if (!kids.length) return { pts, back: own, side: own, fwd: own };
-    const sub = new Map();
-    for (const k of kids) if ((forest.children.get(k) || []).length) sub.set(k, measure(k));
-    const leaves = kids.filter((k) => !sub.has(k));
-    const branches = kids.filter((k) => sub.has(k));
-    // The order round the ring: the leaves by name, with the branches dealt
-    // in among them evenly.
-    const order = [];
-    {
-      let li = 0;
-      const n = kids.length;
-      const at = new Set(branches.map((_, i) => Math.min(n - 1, Math.floor(((i + 0.5) * n) / branches.length))));
-      let bi = 0;
-      for (let i = 0; i < n; i++) order.push(at.has(i) && bi < branches.length ? branches[bi++] : (li < leaves.length ? leaves[li++] : branches[bi++]));
-    }
-    const m = leaves.length;
-    // Which ring the i-th leaf is on when there are `rings` of them: in turn,
-    // except that round a whole turn the few left over after the last full
-    // round go on rings 1, 2, … so none is next to a leaf on its own ring.
-    const ringOf = (i, rings) => {
-      const rem = m % rings;
-      return isRoot && rem && i >= m - rem ? 1 + (i - (m - rem)) : i % rings;
-    };
-    const minLine = (a) => 2 * edge(Math.cos(a + rot), Math.sin(a + rot)) + reach; // centre to centre, along a
-
-    let ring = 0, stagger = 0, layers = 1, angle = new Map(), dist = new Map(), arc = TURN;
-    let outer = own; // how far the ring reaches out from the node, boxes included
-    let push = 1; // how much further out the branches are put when the slices do not fit
-    for (let pass = 0; pass < 6; pass++) {
-      // Each branch as far out as clears the ring, and the slice it needs there.
-      const need = new Map();
-      for (const b of branches) {
-        const c = sub.get(b);
-        const d = Math.max(node.w + reach, outer + spacing + c.back) * push;
-        dist.set(b, d);
-        need.set(b, 2 * Math.atan2(c.side + spacing / 2, Math.max(own, d - c.back)));
-      }
-      const needB = [...need.values()].reduce((a, b) => a + b, 0);
-      arc = isRoot ? TURN : Math.min(TURN - BACK_GAP, Math.max(kids.length * Math.PI / 3, needB + m * Math.PI / 8));
-      if (needB + m * MIN_SLOT > arc && pass < 5) { push *= 1.25; continue; }
-      const slot = m ? Math.max(MIN_SLOT, (arc - needB) / m) : 0;
-      // Where each one sits: one after another round the arc. Boxes are
-      // wide, so two leaves side by side at the top or bottom of a ring need
-      // far more room between them than two stacked at its sides; a leaf's
-      // share of the turn follows how much it needs where it sits (worked
-      // out from where an even share would put it).
-      const place = (width) => {
-        const total = order.reduce((a, k) => a + width(k), 0);
-        const scale = total > arc ? arc / total : 1;
-        let cursor = isRoot ? (kids.length === 1 ? -width(order[0]) * scale / 2 : -Math.PI / 2 - (width(order[0]) * scale) / 2) : -Math.min(arc, total * scale) / 2;
-        const out = new Map();
-        for (const k of order) { const w = width(k) * scale; out.set(k, cursor + w / 2); cursor += w; }
-        return out;
-      };
-      angle = place((k) => (sub.has(k) ? Math.max(need.get(k), slot) : slot));
-      if (m > 3) {
-        const roomAt = (a) => Math.min((node.w + spacing) / Math.max(Math.abs(Math.sin(a)), 1e-9), (node.h + spacing) / Math.max(Math.abs(Math.cos(a)), 1e-9));
-        const mean = leaves.reduce((t, k) => t + roomAt(angle.get(k) + rot), 0) / m;
-        const first = angle;
-        angle = place((k) => (sub.has(k) ? Math.max(need.get(k), slot) : Math.max(MIN_SLOT / 2, (slot * roomAt(first.get(k) + rot)) / mean)));
-      }
-      if (!m) break;
-      // The ring: the smallest radius at which every leaf clears the node by
-      // the reach and its neighbours by the spacing. A long run of leaves is
-      // also tried on several rings, alternately, and whichever reaches out
-      // least is used.
-      const leafAngles = leaves.map((k) => angle.get(k));
-      const fits = (r, st, rings) => {
-        const at = leafAngles.map((a, i) => { const g = a + rot, rr = r + ringOf(i, rings) * st * ringStep(g); return { x: rr * Math.cos(g), y: rr * Math.sin(g) }; });
-        const middle = { x: 0, y: 0 };
-        for (let i = 0; i < at.length; i++) {
-          if (!apart(at[i], middle)) return false;
-          for (let j = i + 1; j < at.length; j++) if (!apart(at[i], at[j])) return false;
-        }
-        return true;
-      };
-      const smallest = (st, rings) => {
-        let r = Math.max(...leafAngles.map(minLine));
-        for (let i = 0; i < 400 && !fits(r, st, rings); i++) r *= 1.04;
-        return r;
-      };
-      let r = smallest(0, 1), st = 0, rings = 1;
-      // A long run of leaves: up to three rings past 8, four past 40.
-      const step = 1;
-      for (let k = 2; k <= (m > 40 ? 4 : m > 8 ? 3 : 1); k++) {
-        // Round a whole turn the last leaf is next to the first, so the
-        // rings have to alternate across that join as well.
-        if (isRoot && k === 2 && m % 2) continue;
-        const rk = smallest(step, k);
-        if (rk + (k - 1) * maxStep < r + (rings - 1) * st * maxStep) { r = rk; st = step; rings = k; }
-      }
-      const changed = Math.abs(r - ring) > 0.5 || st !== stagger || rings !== layers;
-      ring = r; stagger = st; layers = rings; outer = ring + (layers - 1) * stagger * maxStep + own;
-      if (!changed && pass > 0) break;
-    }
-
-    leaves.forEach((k, i) => {
-      const a = angle.get(k), r = ring + ringOf(i, layers) * stagger * ringStep(a + rot);
-      pts.set(k, { x: r * Math.cos(a), y: r * Math.sin(a), lvl: 1 });
-    });
-    let back = own, side = own, fwd = own;
-    for (const p of pts.values()) { back = Math.max(back, -p.x + own); fwd = Math.max(fwd, p.x + own); side = Math.max(side, Math.abs(p.y) + own); }
-    for (const b of branches) {
-      const a = angle.get(b), d = dist.get(b), c = Math.cos(a), sn = Math.sin(a);
-      const ox = d * c, oy = d * sn;
-      if (final) {
-        for (const [k, p] of cluster(b, false, rot + a, true).pts) pts.set(k, { x: ox + p.x * c - p.y * sn, y: oy + p.x * sn + p.y * c, lvl: p.lvl + 1 });
-      } else {
-        // Measuring only: the child's cluster as the box it was measured in.
-        const f = sub.get(b);
-        for (const [u, v] of [[-f.back, -f.side], [-f.back, f.side], [f.fwd, -f.side], [f.fwd, f.side]]) {
-          const x = ox + u * c - v * sn, y = oy + u * sn + v * c;
-          back = Math.max(back, -x); fwd = Math.max(fwd, x); side = Math.max(side, Math.abs(y));
-        }
-      }
-    }
-    return { pts, back, side, fwd };
-  };
-
   const layoutTree = (root) => {
     const at = new Map();
-    const level = new Map();
-    for (const [id, p] of cluster(root, true, 0, true).pts) {
-      at.set(id, { x: p.x, y: p.y });
-      level.set(id, p.lvl);
-      deepest = Math.max(deepest, p.lvl);
-    }
-    const ids = [...at.keys()];
-    const edges = [];
-    for (const id of ids) for (const k of forest.children.get(id) || []) edges.push([k, id]);
-    const subtree = (id) => { const out = [id]; for (let i = 0; i < out.length; i++) out.push(...(forest.children.get(out[i]) || [])); return out; };
-    settle(at, ids, edges, subtree, 40);
-    // The root back at the origin.
-    const r0 = at.get(root);
-    const ox = r0.x, oy = r0.y;
-    for (const p of at.values()) { p.x -= ox; p.y -= oy; }
-    return { at, level };
-  };
-
-  // Nudges until no two boxes are too close, no line is too short and no line
-  // crosses a box it does not join; if that will not settle, spreads the
-  // whole picture out from its middle a little and tries again.
-  const settle = (at, ids, edges, subtree, attempts) => {
-    const margin = Math.max(2, spacing / 4);
-    for (let attempt = 0; attempt < attempts; attempt++) {
-      let clean = false;
-      for (let round = 0; round < 40 && !clean; round++) {
-        clean = true;
-        for (let i = 0; i < ids.length; i++) {
-          for (let j = i + 1; j < ids.length; j++) {
-            const a = at.get(ids[i]), b = at.get(ids[j]);
-            let dx = b.x - a.x, dy = b.y - a.y;
-            if (!dx && !dy) dx = 1;
-            const gx = Math.abs(dx) - node.w, gy = Math.abs(dy) - node.h;
-            const far = gx >= 0 && gy >= 0 ? Math.hypot(gx, gy) : Math.max(gx, gy);
-            if (far >= spacing - 1e-9) continue;
-            clean = false;
-            // The least move that clears it: across, or up and down.
-            const needX = node.w + spacing - Math.abs(dx), needY = node.h + spacing - Math.abs(dy);
-            if (gx >= 0 && gy >= 0) {
-              const d = Math.hypot(gx, gy) || 1, push = (spacing - d) / 2 + 0.5;
-              a.x -= (gx / d) * push * Math.sign(dx); a.y -= (gy / d) * push * Math.sign(dy);
-              b.x += (gx / d) * push * Math.sign(dx); b.y += (gy / d) * push * Math.sign(dy);
-            } else if (needX * node.h < needY * node.w) {
-              const push = needX / 2 + 0.5; a.x -= Math.sign(dx) * push; b.x += Math.sign(dx) * push;
-            } else {
-              const push = needY / 2 + 0.5; a.y -= Math.sign(dy || 1) * push; b.y += Math.sign(dy || 1) * push;
-            }
-          }
-        }
-        for (const [k, p] of edges) {
-          const a = at.get(p), b = at.get(k);
-          const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1;
-          const line = d - 2 * edge(dx / d, dy / d);
-          if (line >= reach - 1e-9) continue;
-          clean = false;
-          const out = reach - line + 0.5;
-          for (const id of subtree(k)) { const q = at.get(id); q.x += (dx / d) * out; q.y += (dy / d) * out; }
-        }
-        for (const [k, p] of edges) {
-          const a = at.get(p), b = at.get(k);
-          for (const id of ids) {
-            if (id === k || id === p) continue;
-            const o = at.get(id);
-            if (!segmentHitsBox(a, b, o, node.w / 2 + margin, node.h / 2 + margin)) continue;
-            clean = false;
-            // Off the line, the short way.
-            const vx = b.x - a.x, vy = b.y - a.y, len2 = vx * vx + vy * vy || 1;
-            const t = Math.max(0, Math.min(1, ((o.x - a.x) * vx + (o.y - a.y) * vy) / len2));
-            let nx = o.x - (a.x + vx * t), ny = o.y - (a.y + vy * t);
-            let nl = Math.hypot(nx, ny);
-            if (nl < 1e-6) { nx = -vy; ny = vx; nl = Math.hypot(nx, ny) || 1; }
-            const step = node.h / 2 + margin + 1;
-            o.x += (nx / nl) * step; o.y += (ny / nl) * step;
-          }
-        }
+    const put = (id, isRoot, x, y, rot, lvl) => {
+      at.set(id, { x: x * cw, y: y * ch, level: lvl });
+      deepest = Math.max(deepest, lvl);
+      for (const k of shape(id, isRoot).kids) {
+        const a = rot + k.angle;
+        put(k.id, false, x + k.dist * Math.cos(a), y + k.dist * Math.sin(a), a, lvl + 1);
       }
-      if (clean) return true;
-      if (attempt === attempts - 1) return false;
-      // Spread out from the middle and try again.
-      let cx = 0, cy = 0;
-      for (const id of ids) { cx += at.get(id).x; cy += at.get(id).y; }
-      cx /= ids.length; cy /= ids.length;
-      for (const id of ids) { const q = at.get(id); q.x = cx + (q.x - cx) * 1.15; q.y = cy + (q.y - cy) * 1.15; }
-    }
-    return false;
+    };
+    put(root, true, 0, 0, 0, 0);
+    return at;
   };
 
   // Lay out every tree, the biggest first, and set each later one down in the
@@ -592,7 +522,7 @@ function layoutClusters(forest, trees, isolated, linked, { onlyLinked, isolatedP
   const placedBoxes = [];
   const clear = (b) => placedBoxes.every((o) => b.maxX + spacing * 2 <= o.minX || o.maxX + spacing * 2 <= b.minX || b.maxY + spacing * 2 <= o.minY || o.maxY + spacing * 2 <= b.minY);
   for (const [ti, root] of trees.entries()) {
-    const { at, level } = layoutTree(root);
+    const at = layoutTree(root);
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const p of at.values()) {
       minX = Math.min(minX, p.x - node.w / 2); maxX = Math.max(maxX, p.x + node.w / 2);
@@ -605,7 +535,7 @@ function layoutClusters(forest, trees, isolated, linked, { onlyLinked, isolatedP
       const b0 = placedBoxes[0];
       const cx = (b0.minX + b0.maxX) / 2, cy = (b0.minY + b0.maxY) / 2;
       const w = maxX - minX, hgt = maxY - minY;
-      const step = Math.max(own, 20);
+      const step = Math.max(R0 * cw, 20);
       for (let i = 0; i < 20000; i++) {
         const ang = i * 0.5, rad = step * Math.sqrt(i) * 1.2;
         const x = cx + rad * Math.cos(ang) - (minX + w / 2), y = cy + rad * Math.sin(ang) - (minY + hgt / 2);
@@ -613,7 +543,7 @@ function layoutClusters(forest, trees, isolated, linked, { onlyLinked, isolatedP
       }
     }
     placedBoxes.push({ minX: minX + ox, maxX: maxX + ox, minY: minY + oy, maxY: maxY + oy });
-    for (const [id, p] of at) pos.set(id, { x: p.x + ox, y: p.y + oy, level: level.get(id), ring: 0 });
+    for (const [id, p] of at) pos.set(id, { x: p.x + ox, y: p.y + oy, level: p.level, ring: 0 });
   }
 
   const extent = () => {
@@ -642,23 +572,8 @@ function layoutClusters(forest, trees, isolated, linked, { onlyLinked, isolatedP
       pos.set(id, { x: cx + ((i % cols) - (inRow - 1) / 2) * cellW, y: top + node.h / 2 + row * cellH, level: 0, ring: 0 });
     });
   }
-  return { pos, rings: [], bounds: extent(), levels: Math.max(pos.size ? 1 : 0, deepest + 1), linked, isolated: onlyLinked ? [] : isolated, radial: true };
+  return { pos, rings: [], bounds: extent(), levels: Math.max(pos.size ? 1 : 0, deepest + 1), linked, isolated: onlyLinked ? [] : isolated, radial: true, cell: { w: cw, h: ch } };
 }
-
-/** Whether the segment a→b passes through the box of half-size hw×hh centred on o. */
-function segmentHitsBox(a, b, o, hw, hh) {
-  // Liang–Barsky clipping against the box.
-  let t0 = 0, t1 = 1;
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const clip = (p, q) => {
-    if (Math.abs(p) < 1e-12) return q >= 0;
-    const r = q / p;
-    if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; } else { if (r < t0) return false; if (r < t1) t1 = r; }
-    return true;
-  };
-  return clip(-dx, a.x - (o.x - hw)) && clip(dx, (o.x + hw) - a.x) && clip(-dy, a.y - (o.y - hh)) && clip(dy, (o.y + hh) - a.y) && t0 < t1;
-}
-
 /**
  * Which overview entries a map draws: those matching the group and tag
  * filters, plus every node upstream of one of them (drawn faded), so the
@@ -682,6 +597,215 @@ export function mapEntries(entries, cfg) {
     }
   }
   return [...out.values()];
+}
+
+/* ---------- Status, outage reach and what-if ---------- */
+
+const STATUSES = { up: 1, down: 1, degraded: 1, paused: 1, maintenance: 1, unknown: 1 };
+const SEVERITY = { down: 5, degraded: 4, unknown: 3, maintenance: 2, paused: 1, up: 0 };
+
+/** Everything below `id` in a forest, nearest first. */
+export function descendantsOf(forest, id) {
+  const out = [];
+  const queue = [...(forest.children.get(String(id)) || [])];
+  for (let i = 0; i < queue.length; i++) { out.push(queue[i]); queue.push(...(forest.children.get(queue[i]) || [])); }
+  return out;
+}
+
+/** The chain above `id`, nearest first. */
+export function ancestorsOf(forest, id) {
+  const out = [];
+  for (let p = forest.parentOf.get(String(id)); p != null && !out.includes(p); p = forest.parentOf.get(p)) out.push(p);
+  return out;
+}
+
+/**
+ * The nodes whose loss would take the most with them: every node with
+ * anything below it, by how much (most first, then by name), with what is
+ * below it and how much of that is up now.
+ */
+export function biggestRisks(forest, entryOf, limit = 8) {
+  const out = [];
+  for (const id of forest.byId.keys()) {
+    const below = descendantsOf(forest, id);
+    if (!below.length) continue;
+    out.push({ id, node: forest.byId.get(id), below: below.length, direct: (forest.children.get(id) || []).length });
+  }
+  out.sort((a, b) => b.below - a.below || compareNames(a.node?.name, b.node?.name));
+  return out.slice(0, limit);
+}
+
+/**
+ * What each node on a map is showing. Returns Map id → { status, sim, cause },
+ * where `status` is its own (paused when switched off), or what a what-if
+ * makes it, and `cause` — when something above it is down or in maintenance —
+ * is { kind: 'down' | 'maintenance', by, depth, sim }: the nearest such node
+ * and how many links away it is.
+ *
+ * `sim` is a what-if: { failed: Map id → 'down' | 'maintenance', depth }.
+ * The failed nodes take that status; what hangs below them is cut off, but
+ * only `depth` links down is shown yet (a simulation spreads one ring at a
+ * time). Nothing real is changed: it is only how the map is drawn.
+ */
+export function mapStates(forest, entryOf, sim = null) {
+  const out = new Map();
+  const failed = sim?.failed instanceof Map ? sim.failed : new Map(Object.entries(sim?.failed || {}));
+  const reveal = sim && Number.isFinite(sim.depth) ? sim.depth : Infinity;
+  const visit = (id, inherited) => {
+    const e = entryOf.get(id);
+    const own = e ? (e.node.enabled === false ? 'paused' : (STATUSES[e.status] ? e.status : 'unknown')) : 'unknown';
+    const simmed = failed.get(id);
+    const status = simmed === 'down' || simmed === 'maintenance' ? simmed : own;
+    // A real outage reaches only what the service says it reaches: a node
+    // failing while something it depends on is down is "affected by" it
+    // (its alerts are held back); one whose own checks pass is not cut off,
+    // and neither is anything it carries. Maintenance above a node that is
+    // failing too makes it quiet. A what-if reaches everything below, but
+    // shows only as far as it has spread so far.
+    let cause = null;
+    if (inherited?.sim) cause = inherited.depth <= reveal ? inherited : null;
+    else if (inherited?.kind === 'down') cause = e?.affectedBy ? inherited : null;
+    else if (inherited && own !== 'up' && own !== 'paused') cause = inherited;
+    out.set(id, { status, own, sim: !!simmed, cause });
+    const passOn = inherited?.sim ? inherited : cause;
+    const mine = status === 'down' || status === 'maintenance'
+      ? { kind: status, by: id, depth: 1, sim: !!simmed }
+      : passOn ? { ...passOn, depth: passOn.depth + 1 } : null;
+    for (const k of forest.children.get(id) || []) visit(k, mine);
+  };
+  for (const r of forest.roots) visit(r, null);
+  return out;
+}
+
+/**
+ * What an outage does to the line from `parent` into `id`: 'cut' out of a node
+ * that is down, 'quiet' out of one in maintenance, 'affected' or 'quiet'
+ * further into what they cut off, or '' when nothing is. A simulated failure
+ * shows on its lines once the simulation has spread to them.
+ */
+export function edgeState(states, parent, id, sim = null) {
+  const p = states.get(String(parent));
+  const reveal = sim && Number.isFinite(sim.depth) ? sim.depth : Infinity;
+  if (p && (p.status === 'down' || p.status === 'maintenance') && (!p.sim || reveal >= 1)) return p.status === 'down' ? 'cut' : 'quiet';
+  const c = states.get(String(id))?.cause;
+  if (!c || c.depth < 2) return '';
+  return c.kind === 'maintenance' ? 'quiet' : 'affected';
+}
+
+/* ---------- Arranged positions ---------- */
+
+/**
+ * Where every node is drawn in the clusters layout once it has been arranged
+ * by hand. `auto` is the layout's own places (page units), `cell` its cell
+ * size, and `arranged` the stored arrangement: positions in cells, each
+ * pinned (put there by someone) or not (kept where a tidy-up left it).
+ *
+ * A node with a stored place is drawn there. One without follows the node it
+ * depends on, at the place the layout gave it next to that node — so moving a
+ * switch carries its devices with it — and the whole group is turned to face
+ * the way the switch now hangs from its own parent, so its ring still opens
+ * away from the line in. Returns Map id → { x, y, pinned, stored }.
+ */
+export function arrangePositions(forest, auto, cell, arranged) {
+  const stored = arranged?.positions || {};
+  const out = new Map();
+  const turn = new Map();
+  const toCells = (p) => ({ x: p.x / cell.w, y: p.y / cell.h });
+  const angle = (a, b) => Math.atan2(b.y - a.y, b.x - a.x);
+  const place = (id) => {
+    const p = forest.parentOf.get(id);
+    const s = stored[id];
+    const base = auto.get(id) || { x: 0, y: 0 };
+    if (s && Number.isFinite(s.x) && Number.isFinite(s.y)) {
+      out.set(id, { x: s.x * cell.w, y: s.y * cell.h, pinned: !!s.pinned, stored: true });
+      // How far round this node now hangs from its parent, compared with
+      // where the layout hung it: its own group turns by as much.
+      if (p != null && out.has(p) && auto.has(p)) {
+        const was = angle(toCells(auto.get(p)), toCells(base));
+        const now = angle(toCells(out.get(p)), toCells(out.get(id)));
+        turn.set(id, now - was);
+      } else turn.set(id, 0);
+    } else if (p != null && out.has(p) && auto.has(p)) {
+      const t = turn.get(p) || 0;
+      const pa = toCells(auto.get(p)), me = toCells(base), at = toCells(out.get(p));
+      const dx = me.x - pa.x, dy = me.y - pa.y;
+      const x = at.x + dx * Math.cos(t) - dy * Math.sin(t), y = at.y + dx * Math.sin(t) + dy * Math.cos(t);
+      out.set(id, { x: x * cell.w, y: y * cell.h, pinned: false, stored: false });
+      turn.set(id, t);
+    } else {
+      out.set(id, { x: base.x, y: base.y, pinned: false, stored: false });
+      turn.set(id, 0);
+    }
+    for (const k of forest.children.get(id) || []) place(k);
+  };
+  for (const r of forest.roots) if (auto.has(r)) place(r);
+  // Anything the layout placed that is not under a root it placed (the
+  // unlinked block) keeps its place, or its stored one.
+  for (const [id, p] of auto) {
+    if (out.has(id)) continue;
+    const s = stored[id];
+    out.set(id, s ? { x: s.x * cell.w, y: s.y * cell.h, pinned: !!s.pinned, stored: true } : { x: p.x, y: p.y, pinned: false, stored: false });
+  }
+  return out;
+}
+
+/** The nodes that move with `id` when it is dragged: those below it with no place of their own, down to the next that has one. */
+export function carriedBy(forest, id, arranged) {
+  const stored = arranged?.positions || {};
+  const out = [];
+  const walk = (x) => { for (const k of forest.children.get(x) || []) { if (stored[k]?.pinned) continue; out.push(k); walk(k); } };
+  walk(String(id));
+  return out;
+}
+
+/**
+ * "Tidy up unpinned": the nodes nobody placed go back to where the layout puts
+ * them next to their parents, and each group that then sits on top of
+ * something is turned round the node it hangs from until it is clear (or as
+ * clear as it can be); pinned nodes do not move. Returns the new arrangement:
+ * the pins, and the places of the groups that had to turn.
+ */
+export function tidyUnpinned(forest, auto, cell, arranged, { node, spacing }) {
+  const pins = {};
+  for (const [id, p] of Object.entries(arranged?.positions || {})) if (p.pinned) pins[id] = { ...p };
+  const base = { ...(arranged || {}), positions: pins };
+  const at = arrangePositions(forest, auto, cell, base);
+  const kept = {};
+  const clash = (a, b) => Math.abs(a.x - b.x) < node.w + spacing && Math.abs(a.y - b.y) < node.h + spacing;
+  // Pinned nodes from the top down: each one's group, turned as little as clears it.
+  const order = [];
+  const walk = (id) => { order.push(id); for (const k of forest.children.get(id) || []) walk(k); };
+  for (const r of forest.roots) walk(r);
+  const settled = new Set();
+  for (const id of order) {
+    if (!pins[id]) continue;
+    const group = carriedBy(forest, id, base);
+    if (!group.length) continue;
+    const inGroup = new Set([id, ...group]);
+    const others = [...at].filter(([k]) => !inGroup.has(k) && (settled.has(k) || !forest.parentOf.has(k) || pins[k] || ![...inGroup].some((g) => g === forest.parentOf.get(k)))).map(([, p]) => p);
+    const anchor = at.get(id);
+    const ac = { x: anchor.x / cell.w, y: anchor.y / cell.h };
+    const turned = (t) => group.map((k) => {
+      const p = at.get(k), dx = p.x / cell.w - ac.x, dy = p.y / cell.h - ac.y;
+      return [k, { x: (ac.x + dx * Math.cos(t) - dy * Math.sin(t)) * cell.w, y: (ac.y + dx * Math.sin(t) + dy * Math.cos(t)) * cell.h }];
+    });
+    let best = null;
+    for (let i = 0; i <= 24; i++) {
+      const t = (i % 2 ? 1 : -1) * Math.ceil(i / 2) * (Math.PI / 12);
+      const placed = turned(t);
+      let n = 0;
+      for (const [, p] of placed) for (const o of others) if (clash(p, o)) n++;
+      if (!best || n < best.n) best = { n, t, placed };
+      if (!n) break;
+    }
+    for (const [k, p] of best.placed) {
+      at.set(k, { ...at.get(k), x: p.x, y: p.y });
+      settled.add(k);
+      if (best.t) kept[k] = { x: Math.round((p.x / cell.w) * 10) / 10, y: Math.round((p.y / cell.h) * 10) / 10 };
+    }
+    settled.add(id);
+  }
+  return { ...(arranged || {}), positions: { ...kept, ...pins } };
 }
 
 /* ---------- Drawing ---------- */
@@ -716,39 +840,52 @@ function fit(text, chars) {
 }
 
 /**
- * The path of a line in the clusters layout: from the edge of the parent's
- * box to the edge of the child's, along the line between their centres. The
- * line stops at the boxes rather than running under them so a dash pattern
- * begins where the line does, and a faded box does not show it through.
- * `curved` bows it a little, always the same way round, which keeps a ring of
- * lines from looking ragged.
+ * The path of a straight line between two boxes: from the edge of one to the
+ * edge of the other, along the line between their centres. The line stops at
+ * the boxes rather than running under them so a dash pattern begins where the
+ * line does, and a faded box does not show it through.
  */
-function clusterEdge(a, b, w, h, round, curved) {
+function boxEdge(a, b, w, h, round) {
   const dx = b.x - a.x, dy = b.y - a.y;
   const len = Math.hypot(dx, dy);
-  if (!len) return `M${a.x},${a.y}`;
+  const f = (n) => Math.round(n * 10) / 10;
+  if (!len) return `M${f(a.x)},${f(a.y)}`;
   const ux = dx / len, uy = dy / len;
   // How far from a box's centre its edge is, along the line.
   const t = round ? w / 2 : Math.min(ux ? w / 2 / Math.abs(ux) : Infinity, uy ? h / 2 / Math.abs(uy) : Infinity);
-  const f = (n) => Math.round(n * 10) / 10;
   if (t * 2 >= len) return `M${f(a.x)},${f(a.y)} L${f(b.x)},${f(b.y)}`;
-  const s = { x: a.x + ux * t, y: a.y + uy * t }, e = { x: b.x - ux * t, y: b.y - uy * t };
-  if (!curved) return `M${f(s.x)},${f(s.y)} L${f(e.x)},${f(e.y)}`;
-  const bow = (len - 2 * t) * 0.12;
-  return `M${f(s.x)},${f(s.y)} Q${f((s.x + e.x) / 2 - uy * bow)},${f((s.y + e.y) / 2 + ux * bow)} ${f(e.x)},${f(e.y)}`;
+  return `M${f(a.x + ux * t)},${f(a.y + uy * t)} L${f(b.x - ux * t)},${f(b.y - uy * t)}`;
 }
 
 /**
  * Draws a map into `host`. `entries` are overview node entries
- * ({ node, status, affectedBy }). Options: `interactive` adds zooming and
- * panning (wheel, drag, the +/− buttons and the keyboard) and `onSelect(node)`
- * is called when a node is chosen; without it a node is a link to its page.
- * Returns { update(entries, cfg?), fit(), destroy(), svg }.
+ * ({ node, status, affectedBy }). Options:
+ *
+ * - `interactive`: zooming and panning (wheel, drag, the +/− buttons and the
+ *   keyboard); `onSelect(node | null)` is called when a node is chosen (or the
+ *   empty map is clicked); without it a node is a link to its page.
+ * - `arranged`: the hand arrangement ({ positions, collapsed }) the clusters
+ *   layout is drawn with. `canArrange` lets nodes be dragged and clusters
+ *   folded; each change is handed to `onArrange(arranged, { saved })` —
+ *   whoever drew the map decides whether to keep it.
+ * - `sim`: a what-if (see mapStates), `hideHosts`: no addresses anywhere.
+ *
+ * Returns { update(entries, cfg?), select(id), focus(id), fit(), setArranged(a),
+ * setSim(sim), setHideHosts(b), setCanArrange(b), view(), destroy(), svg }.
  */
-export function renderNetworkMap(host, entries, cfg, { interactive = false, onSelect = null, selectedId = null, title = 'Network map' } = {}) {
+export function renderNetworkMap(host, entries, cfg, {
+  interactive = false, onSelect = null, selectedId = null, title = 'Network map',
+  arranged = null, canArrange = false, onArrange = null, sim = null, hideHosts = false,
+} = {}) {
   let c = normalizeMapConfig(cfg);
   let data = entries || [];
   let selected = selectedId != null ? String(selectedId) : null;
+  let layoutState = cloneArranged(arranged);
+  let simState = sim;
+  let noHosts = !!hideHosts;
+  let mayArrange = !!canArrange;
+  let dragging = null;
+  let pendingDraw = false;
   const wrap = h('div', { class: `netmap${interactive ? ' netmap-interactive' : ''}` });
   const stage = h('div', { class: 'netmap-stage' });
   const legend = h('div', { class: 'netmap-legend' });
@@ -759,21 +896,55 @@ export function renderNetworkMap(host, entries, cfg, { interactive = false, onSe
   // The visible window onto the drawing, in drawing units.
   let box = null; let full = null;
   let root = null;
-  const setBox = (b) => { box = b; root?.setAttribute('viewBox', `${b.x} ${b.y} ${b.w} ${b.h}`); };
+  // What the last drawing was made from, for dragging and highlighting.
+  let drawn = null;
+
+  /** Screen pixels per drawing unit at the window shown. */
+  const pxPerUnit = () => {
+    const r = root?.getBoundingClientRect?.();
+    if (!r || !r.width || !r.height || !box) return 0;
+    return Math.min(r.width / box.w, r.height / box.h);
+  };
+  // Lines are given their thickness in screen pixels (see strokeScale), so
+  // they are worked out again whenever the zoom or the stage size changes.
+  let lastScale = -1;
+  const applyStrokes = (force = false) => {
+    if (!root) return;
+    const k = strokeScale(pxPerUnit());
+    if (!force && Math.abs(k - lastScale) < 1e-6) return;
+    lastScale = k;
+    root.style.setProperty('--netmap-k', String(k));
+    for (const el of root.querySelectorAll('.netmap-edge')) el.setAttribute('style', edgeStyle(el.__look, k));
+  };
+  const setBox = (b) => { box = b; root?.setAttribute('viewBox', `${b.x} ${b.y} ${b.w} ${b.h}`); applyStrokes(); };
 
   function draw() {
-    stage.replaceChildren();
+    if (dragging) { pendingDraw = true; return; }
+    // Where the chosen node was, so a redraw that moves things (a cluster
+    // folded, a tidy-up) keeps it where it was on the screen.
+    const anchorId = selected;
+    const anchorWas = anchorId && drawn?.centre.get(anchorId) ? { ...drawn.centre.get(anchorId) } : null;
+    stage.querySelector('.netmap-svg')?.remove();
+    stage.querySelector('.netmap-empty')?.remove();
     const shown = mapEntries(data, c);
-    const forest = buildForest(shown.map((e) => e.node));
+    const all = buildForest(shown.map((e) => e.node));
     const entryOf = new Map(shown.map((e) => [String(e.node.id), e]));
+    const states = mapStates(all, entryOf, simState);
+    // Folded clusters: what is below them is not drawn, and they say how much
+    // is folded into them and the worst of it.
+    const collapsed = new Set((layoutState.collapsed || []).map(String).filter((id) => (all.children.get(id) || []).length));
+    const hidden = new Set();
+    for (const id of collapsed) if (!hidden.has(id)) for (const d of descendantsOf(all, id)) hidden.add(d);
+    const visible = shown.filter((e) => !hidden.has(String(e.node.id)));
+    const forest = buildForest(visible.map((e) => e.node));
     const S = SIZES[c.size];
     const bare = c.labels === 'none';
-    const boxH = bare ? BARE[c.size] : c.labels === 'name-host' ? S.hHost : S.hName;
+    const boxH = bare ? BARE[c.size] : c.labels === 'name-host' && !noHosts ? S.hHost : S.hName;
     const boxW = bare ? BARE[c.size] : S.w;
-    const chars = Math.floor((boxW - 26) / (S.font * 0.56));
     const layout = layoutMap(forest, { orientation: c.orientation, onlyLinked: c.onlyLinked, node: { w: boxW, h: boxH }, spacing: S.gapX, reach: Math.round(S.gapY * 0.7) });
 
     if (!layout.pos.size) {
+      drawn = null; root = null;
       stage.append(h('div', { class: 'netmap-empty' },
         icon('network'),
         h('strong', null, data.length ? 'Nothing to map with these options' : 'No nodes yet'),
@@ -787,10 +958,10 @@ export function renderNetworkMap(host, entries, cfg, { interactive = false, onSe
 
     // Pixel centres for every node.
     const centre = new Map();
-    let cx0 = 0, cy0 = 0;
+    let placed = null;
     if (layout.radial) {
-      // The clusters layout is already in pixels.
-      for (const [id, p] of layout.pos) centre.set(id, { x: p.x, y: p.y });
+      placed = arrangePositions(forest, layout.pos, layout.cell, layoutState);
+      for (const [id, p] of placed) centre.set(id, { x: p.x, y: p.y });
     } else {
       const stepAcross = (c.orientation === 'right' ? boxH : boxW) + S.gapX;
       const stepDown = (c.orientation === 'right' ? boxW + S.gapY * 1.4 : boxH + S.gapY);
@@ -799,156 +970,272 @@ export function renderNetworkMap(host, entries, cfg, { interactive = false, onSe
         centre.set(id, c.orientation === 'right' ? { x: down, y: across } : { x: across, y: down });
       }
     }
-    const xs = [...centre.values()].map((p) => p.x), ys = [...centre.values()].map((p) => p.y);
     const pad = 18;
-    full = { x: Math.min(...xs) - boxW / 2 - pad, y: Math.min(...ys) - boxH / 2 - pad, w: Math.max(...xs) - Math.min(...xs) + boxW + pad * 2, h: Math.max(...ys) - Math.min(...ys) + boxH + pad * 2 };
-    cx0 = full.x; cy0 = full.y;
+    const extent = () => {
+      const xs = [...centre.values()].map((p) => p.x), ys = [...centre.values()].map((p) => p.y);
+      return { x: Math.min(...xs) - boxW / 2 - pad, y: Math.min(...ys) - boxH / 2 - pad, w: Math.max(...xs) - Math.min(...xs) + boxW + pad * 2, h: Math.max(...ys) - Math.min(...ys) + boxH + pad * 2 };
+    };
+    full = extent();
 
     root = svg('svg', {
-      class: 'netmap-svg', role: 'group', 'aria-label': `${title}: ${plural(layout.pos.size, 'node')}, ${plural(forest.parentOf.size, 'dependency', 'dependencies')}`,
-      viewBox: `${cx0} ${cy0} ${full.w} ${full.h}`, preserveAspectRatio: 'xMidYMid meet',
+      class: `netmap-svg fill-${c.nodeFill}${selected && c.highlightPath ? ' has-path' : ''}`, role: 'group',
+      'aria-label': `${title}: ${plural(layout.pos.size, 'node')}, ${plural(forest.parentOf.size, 'dependency', 'dependencies')}${hidden.size ? `, ${plural(hidden.size, 'node')} folded away` : ''}`,
+      viewBox: `${full.x} ${full.y} ${full.w} ${full.h}`, preserveAspectRatio: 'xMidYMid meet',
     });
     const edgesG = svg('g', { class: 'netmap-edges', 'aria-hidden': 'true' });
     const nodesG = svg('g', { class: 'netmap-nodes' });
     root.append(edgesG, nodesG);
+    const edgeEls = new Map(); // child id → path
+    const nodeEls = new Map(); // id → g
+
+    const pathFor = (p, id) => {
+      const a = centre.get(p), b = centre.get(id);
+      if (layout.radial || c.edges === 'straight') return boxEdge(a, b, boxW, boxH, bare);
+      if (c.orientation === 'right') {
+        const x1 = a.x + boxW / 2, x2 = b.x - boxW / 2, mx = (x1 + x2) / 2;
+        return c.edges === 'elbow' ? `M${x1},${a.y} H${mx} V${b.y} H${x2}` : `M${x1},${a.y} C${mx},${a.y} ${mx},${b.y} ${x2},${b.y}`;
+      }
+      const y1 = a.y + boxH / 2, y2 = b.y - boxH / 2, my = (y1 + y2) / 2;
+      return c.edges === 'elbow' ? `M${a.x},${y1} V${my} H${b.x} V${y2}` : `M${a.x},${y1} C${a.x},${my} ${b.x},${my} ${b.x},${y2}`;
+    };
 
     // Edges: from the parent's near side to the child's.
-    let cutCount = 0;
+    const lineCounts = { cut: 0, affected: 0, quiet: 0 };
     for (const [id, p] of forest.parentOf) {
-      const a = centre.get(p), b = centre.get(id);
-      if (!a || !b) continue;
-      const parentStatus = entryOf.get(p)?.status || 'unknown';
-      const cut = c.colorEdges && (parentStatus === 'down');
-      if (cut) cutCount++;
-      let d;
-      if (layout.radial) {
-        d = clusterEdge(a, b, boxW, boxH, bare, c.edges === 'curved');
-      } else if (c.edges === 'straight') {
-        d = `M${a.x},${a.y} L${b.x},${b.y}`;
-      } else if (c.orientation === 'right') {
-        const x1 = a.x + boxW / 2, x2 = b.x - boxW / 2, mx = (x1 + x2) / 2;
-        d = c.edges === 'elbow' ? `M${x1},${a.y} H${mx} V${b.y} H${x2}` : `M${x1},${a.y} C${mx},${a.y} ${mx},${b.y} ${x2},${b.y}`;
-      } else {
-        const y1 = a.y + boxH / 2, y2 = b.y - boxH / 2, my = (y1 + y2) / 2;
-        d = c.edges === 'elbow' ? `M${a.x},${y1} V${my} H${b.x} V${y2}` : `M${a.x},${y1} C${a.x},${my} ${b.x},${my} ${b.x},${y2}`;
-      }
+      if (!centre.has(p) || !centre.has(id)) continue;
+      const outage = edgeState(states, p, id, simState);
+      if (outage) lineCounts[outage]++;
+      const childStatus = states.get(id)?.status || 'unknown';
+      // What colours the line, as the map was set up: an outage over the
+      // colour chosen (the default), the colour chosen only, or the status of
+      // the node it leads to.
+      const state = c.lineColour === 'status' ? (outage || `st-${childStatus}`) : c.lineColour === 'outage' ? outage : '';
       const ctx = entryOf.get(id)?.context || entryOf.get(p)?.context;
-      // The look of the line: its own style (kept on the node at its lower
-      // end), else the map's, else the theme's — with an outage always red.
-      const look = edgeLook(c, entryOf.get(id)?.node.linkStyle, cut);
-      edgesG.append(svg('path', { d, class: `netmap-edge${cut ? ' netmap-edge-down' : ''}${ctx ? ' netmap-context' : ''}`, style: edgeStyle(look), 'data-from': p, 'data-to': id }));
+      const sim = states.get(id)?.cause?.sim;
+      let look = edgeLook(c, entryOf.get(id)?.node.linkStyle, state);
+      // Further into an outage, and into maintenance, the line is dashed
+      // unless it has dashes of its own: colour must not be the only cue.
+      if ((state === 'affected' || state === 'quiet') && !look.dash) look = { ...look, dash: 'dashed' };
+      const el = svg('path', { d: pathFor(p, id), class: `netmap-edge${state ? ` netmap-edge-${state}` : ''}${state === 'cut' ? ' netmap-edge-down' : ''}${sim ? ' netmap-edge-sim' : ''}${ctx ? ' netmap-context' : ''}`, 'data-from': p, 'data-to': id });
+      el.__look = look;
+      el.setAttribute('style', edgeStyle(look, 1));
+      edgesG.append(el);
+      edgeEls.set(id, el);
     }
 
     // Nodes.
+    const statusCounts = {};
+    const showPod = c.nodeFill === 'both';
+    const showStatus = c.nodeFill !== 'colour';
     for (const [id] of layout.pos) {
       const e = entryOf.get(id); if (!e) continue;
       const n = e.node; const p = centre.get(id);
-      const status = n.enabled === false ? 'paused' : (e.status || 'unknown');
+      const st = states.get(id) || { status: 'unknown', cause: null };
+      const status = st.status;
+      statusCounts[status] = (statusCounts[status] || 0) + 1;
       const m = statusMeta(status);
-      const kids = forest.children.get(id)?.length || 0;
-      const parent = forest.parentOf.get(id);
+      const kids = all.children.get(id)?.length || 0;
+      const isFolded = collapsed.has(id);
+      const folded = isFolded ? descendantsOf(all, id) : [];
+      const worst = folded.reduce((w, k) => {
+        const s = states.get(k)?.status || 'unknown';
+        return SEVERITY[s] > SEVERITY[w] ? s : w;
+      }, 'up');
+      const parent = all.parentOf.get(id);
       const parentName = parent ? entryOf.get(parent)?.node.name : '';
-      const desc = `${n.name}, ${m.label}${n.host ? `, ${n.host}` : ''}${parentName ? `, depends on ${parentName}` : ''}${kids ? `, ${plural(kids, 'node')} depend${kids === 1 ? 's' : ''} on it` : ''}${e.affectedBy ? `, affected by ${e.affectedBy}` : ''}`;
-      const g = svg('g', { class: `netmap-node status-${status in { up: 1, down: 1, degraded: 1, paused: 1, maintenance: 1 } ? status : 'unknown'}${e.context ? ' netmap-context' : ''}${selected === id ? ' selected' : ''}`, transform: `translate(${p.x},${p.y})`, 'data-node': id });
-      const title = svg('title', {}, desc);
-      // The node's own colour fills its box, with its text in whichever of
-      // black or white reads on it. The status keeps the stripe, the dot and
-      // the border, so a coloured node that goes down still shows it.
-      const own = nodeColour(n);
+      const cause = st.cause;
+      const causeName = cause ? entryOf.get(cause.by)?.node.name : '';
+      const causeText = cause ? (cause.kind === 'maintenance' ? `quiet while ${causeName} is in maintenance` : `cut off while ${causeName} is down`) + (cause.sim ? ' (simulated)' : '') : '';
+      const desc = `${n.name}, ${m.label}${st.sim ? ' (simulated)' : ''}${n.host && !noHosts ? `, ${n.host}` : ''}${parentName ? `, depends on ${parentName}` : ''}${kids ? `, ${plural(kids, 'node')} depend${kids === 1 ? 's' : ''} on it` : ''}${isFolded ? `, ${plural(folded.length, 'node')} folded into it` : ''}${causeText ? `, ${causeText}` : ''}${!cause && e.affectedBy ? `, affected by ${e.affectedBy}` : ''}${placed?.get(id)?.pinned ? ', pinned' : ''}`;
+      const cls = ['netmap-node', `status-${STATUSES[status] ? status : 'unknown'}`];
+      if (e.context) cls.push('netmap-context');
+      if (selected === id) cls.push('selected');
+      if (st.sim) cls.push('sim-failed');
+      if (cause) cls.push(cause.kind === 'maintenance' ? 'is-quiet' : 'is-cut-off');
+      if (cause?.sim) cls.push('is-sim');
+      if (placed?.get(id)?.pinned) cls.push('is-pinned');
+      if (isFolded) cls.push('is-folded');
+      const g = svg('g', { class: cls.join(' '), transform: `translate(${p.x},${p.y})`, 'data-node': id });
+      const titleEl = svg('title', {}, desc);
+      // The node's own colour fills its box (unless the map shows status
+      // only), with its text in whichever of black or white reads on it. The
+      // status has a small box of its own at the side with a light in it.
+      const own = c.nodeFill !== 'status' ? nodeColour(n) : '';
       const ink = own ? textOn(own) : '';
       if (own) g.classList.add('netmap-coloured');
       if (bare) {
-        g.append(title, svg('circle', { r: boxW / 2, class: 'netmap-dot' }));
+        g.append(titleEl, svg('circle', { r: boxW / 2, class: 'netmap-dot', style: own ? `fill:${own}` : null }));
+        if (showPod && own) g.append(svg('circle', { r: boxW / 2 + 2.5, class: 'netmap-dot-ring' }));
       } else {
-        g.append(title,
-          svg('rect', { x: -boxW / 2, y: -boxH / 2, width: boxW, height: boxH, rx: 3, class: 'netmap-box', style: own ? `fill:${own}` : null }),
-          svg('rect', { x: -boxW / 2, y: -boxH / 2, width: 4, height: boxH, class: 'netmap-stripe' }),
-          svg('circle', { cx: -boxW / 2 + 14, cy: c.labels === 'name-host' ? -boxH / 2 + S.hName / 2 : 0, r: S.font * 0.36, class: 'netmap-dot' }),
-          svg('text', { x: -boxW / 2 + 24, y: c.labels === 'name-host' ? -boxH / 2 + S.hName / 2 : 0, 'dominant-baseline': 'central', class: 'netmap-name', 'font-size': S.font, style: ink ? `fill:${ink}` : null }, fit(n.name, chars)));
-        if (c.labels === 'name-host') g.append(svg('text', { x: -boxW / 2 + 24, y: -boxH / 2 + S.hName / 2 + S.font * 1.15, 'dominant-baseline': 'central', class: 'netmap-host', 'font-size': S.font * 0.84, style: ink ? `fill:${ink};opacity:0.85` : null }, fit(n.host, chars + 2)));
-        if (kids) g.append(svg('text', { x: boxW / 2 - 6, y: -boxH / 2 + 9, 'text-anchor': 'end', class: 'netmap-kids', 'font-size': S.font * 0.72, style: ink ? `fill:${ink};opacity:0.8` : null }, `▾${kids}`));
+        const rowY = c.labels === 'name-host' && !noHosts ? -boxH / 2 + S.hName / 2 : 0;
+        g.append(titleEl, svg('rect', { x: -boxW / 2, y: -boxH / 2, width: boxW, height: boxH, rx: 3, class: 'netmap-box', style: own ? `fill:${own}` : null }));
+        let textX;
+        if (showPod) {
+          // The status box: as tall as the node, square, with a light.
+          const pod = boxH;
+          const lx = -boxW / 2 + pod / 2;
+          const r = Math.max(3, Math.min(pod * 0.2, S.font * 0.42));
+          g.append(
+            svg('rect', { x: -boxW / 2, y: -boxH / 2, width: pod, height: boxH, rx: 3, class: 'netmap-pod' }),
+            svg('circle', { cx: lx, cy: 0, r: r * 2, class: 'netmap-glow' }),
+            svg('circle', { cx: lx, cy: 0, r, class: 'netmap-light' }));
+          textX = -boxW / 2 + pod + 6;
+        } else if (showStatus) {
+          g.append(
+            svg('rect', { x: -boxW / 2, y: -boxH / 2, width: 4, height: boxH, class: 'netmap-stripe' }),
+            svg('circle', { cx: -boxW / 2 + 14, cy: rowY, r: S.font * 0.36, class: 'netmap-dot' }));
+          textX = -boxW / 2 + 24;
+        } else textX = -boxW / 2 + 9;
+        const chars = Math.floor((boxW / 2 - textX - (kids ? 18 : 6)) / (S.font * 0.56));
+        g.append(svg('text', { x: textX, y: rowY, 'dominant-baseline': 'central', class: 'netmap-name', 'font-size': S.font, style: ink ? `fill:${ink}` : null }, fit(n.name, chars)));
+        if (c.labels === 'name-host' && !noHosts) g.append(svg('text', { x: textX, y: rowY + S.font * 1.15, 'dominant-baseline': 'central', class: 'netmap-host', 'font-size': S.font * 0.84, style: ink ? `fill:${ink};opacity:0.85` : null }, fit(n.host, chars + 2)));
+        if (isFolded) {
+          // What is folded in: how many, in the colour of the worst of them.
+          const label = `+${folded.length}`;
+          const cw = S.font * 0.62 * label.length + 10;
+          g.append(svg('g', { class: `netmap-fold status-${worst}`, transform: `translate(${boxW / 2 - cw / 2 - 3},${-boxH / 2})` },
+            svg('rect', { x: -cw / 2, y: -7, width: cw, height: 14, rx: 7, class: 'netmap-fold-chip' }),
+            svg('text', { x: 0, y: 0, 'text-anchor': 'middle', 'dominant-baseline': 'central', class: 'netmap-fold-text', 'font-size': S.font * 0.72 }, label)));
+        } else if (kids) g.append(svg('text', { x: boxW / 2 - 6, y: -boxH / 2 + 9, 'text-anchor': 'end', class: 'netmap-kids', 'font-size': S.font * 0.72, style: ink ? `fill:${ink};opacity:0.8` : null }, `▾${kids}`));
+        if (placed?.get(id)?.pinned) g.append(svg('circle', { cx: boxW / 2 - 1, cy: boxH / 2 - 1, r: 3.2, class: 'netmap-pin' }));
       }
       // A link to the node's page, or a button that selects it.
       const target = onSelect
-        ? svg('a', { href: `#/nodes/${n.id}`, role: 'button', 'aria-label': desc, 'aria-pressed': selected === id ? 'true' : 'false', onclick: (ev) => { ev.preventDefault(); selected = id; onSelect(n, e); highlight(); } })
+        ? svg('a', { href: `#/nodes/${n.id}`, role: 'button', 'aria-label': desc, 'aria-pressed': selected === id ? 'true' : 'false', onclick: (ev) => { ev.preventDefault(); if (wrap.__suppressClick) { wrap.__suppressClick = false; return; } selected = id; onSelect(n, e); highlight(); } })
         : svg('a', { href: `#/nodes/${n.id}`, 'aria-label': desc });
       target.append(g);
       nodesG.append(target);
+      nodeEls.set(id, g);
     }
     stage.append(root);
-    if (interactive && box && box.w && box.h) setBox(box); else box = { ...full };
+    drawn = { forest, all, entryOf, states, centre, placed, layout, edgeEls, nodeEls, boxW, boxH, bare, pathFor, collapsed, hidden, spacing: S.gapX };
+    const anchorNow = anchorWas && centre.get(anchorId);
+    if (interactive && box && box.w && box.h) setBox(anchorNow ? { ...box, x: box.x + anchorNow.x - anchorWas.x, y: box.y + anchorNow.y - anchorWas.y } : box);
+    else setBox({ ...full });
+    applyStrokes(true);
+    highlight();
 
     // Legend and the text equivalent.
-    const counts = {};
-    for (const [id] of layout.pos) { const e = entryOf.get(id); const s = e?.node.enabled === false ? 'paused' : (e?.status || 'unknown'); counts[s] = (counts[s] || 0) + 1; }
     legend.replaceChildren();
     if (c.showLegend) {
       for (const s of ['up', 'degraded', 'down', 'maintenance', 'paused', 'unknown']) {
-        if (!counts[s]) continue;
-        legend.append(h('span', { class: 'netmap-key' }, h('span', { class: `orb orb-sm orb-${s}`, 'aria-hidden': 'true' }), `${statusMeta(s).label} ${counts[s]}`));
+        if (!statusCounts[s]) continue;
+        legend.append(h('span', { class: 'netmap-key' }, h('span', { class: `orb orb-sm orb-${s}`, 'aria-hidden': 'true' }), `${statusMeta(s).label} ${statusCounts[s]}`));
       }
-      legend.append(h('span', { class: 'netmap-key muted' }, c.orientation === 'right' ? 'Each node sits to the right of the node it depends on' : layout.radial ? 'Each node sits in a ring round the node it depends on' : 'Each node sits under the node it depends on'));
-      // Lines can be any colour and dash by now, so what a red one means is
-      // said in words — colour and dashes alone must not be the whole cue.
-      if (cutCount) legend.append(h('span', { class: 'netmap-key' }, h('span', { class: 'netmap-linekey', 'aria-hidden': 'true' }), `Red lines lead out of a node that is down (${plural(cutCount, 'link')})`));
-      if (forest.cycles.length) legend.append(h('span', { class: 'netmap-key text-degraded' }, icon('alert'), `${plural(forest.cycles.length, 'dependency loop')} broken to draw this`));
+      // Lines can be any colour and dash by now, so what a coloured one means
+      // is said in words — colour and dashes alone must not be the whole cue.
+      if (c.lineColour !== 'chosen') {
+        if (lineCounts.cut) legend.append(h('span', { class: 'netmap-key' }, h('span', { class: 'netmap-linekey', 'aria-hidden': 'true' }), `Red lines lead out of a node that is down (${plural(lineCounts.cut, 'link')})`));
+        if (lineCounts.affected) legend.append(h('span', { class: 'netmap-key' }, h('span', { class: 'netmap-linekey netmap-linekey-affected', 'aria-hidden': 'true' }), `Faded red lines lead further into what it cuts off (${plural(lineCounts.affected, 'link')})`));
+        if (lineCounts.quiet) legend.append(h('span', { class: 'netmap-key' }, h('span', { class: 'netmap-linekey netmap-linekey-quiet', 'aria-hidden': 'true' }), `Blue lines lead into what is quiet for maintenance (${plural(lineCounts.quiet, 'link')})`));
+      }
+      if (hidden.size) legend.append(h('span', { class: 'netmap-key muted' }, `${plural(hidden.size, 'node')} folded into ${plural(collapsed.size, 'cluster')}`));
+      if (all.cycles.length) legend.append(h('span', { class: 'netmap-key text-degraded' }, icon('alert'), `${plural(all.cycles.length, 'dependency loop')} broken to draw this`));
     }
-    renderList(forest, entryOf, layout);
+    renderList(all, entryOf, states, layout, hidden);
   }
 
-  function renderList(forest, entryOf, layout) {
+  function renderList(forest, entryOf, states, layout, hidden) {
     const item = (id) => {
       const e = entryOf.get(id); if (!e) return null;
-      const status = e.node.enabled === false ? 'paused' : (e.status || 'unknown');
+      const status = states.get(id)?.status || 'unknown';
       const kids = (forest.children.get(id) || []).map(item).filter(Boolean);
       return h('li', null, h('span', { class: `orb orb-sm orb-${status}`, 'aria-hidden': 'true' }), ' ', h('a', { href: `#/nodes/${e.node.id}` }, e.node.name), h('span', { class: 'muted' }, ` — ${statusMeta(status).label}`), kids.length ? h('ul', null, kids) : null);
     };
-    const roots = forest.roots.filter((r) => layout.pos.has(r));
+    const roots = forest.roots.filter((r) => layout.pos.has(r) || hidden.has(r));
     const list = h('ul', { class: 'netmap-tree' }, roots.map(item));
     listDetails.replaceChildren(listDetails.firstChild, list);
   }
 
+  // The chosen node, and — unless the map was set not to — the chain it
+  // hangs from and everything below it, with the rest faded.
   function highlight() {
-    for (const g of stage.querySelectorAll('.netmap-node')) {
-      const on = g.getAttribute('data-node') === selected;
-      g.classList.toggle('selected', on);
-      g.parentNode?.setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (!drawn) return;
+    const on = new Set();
+    if (selected && c.highlightPath && drawn.forest.byId.has(selected)) {
+      on.add(selected);
+      for (const a of ancestorsOf(drawn.forest, selected)) on.add(a);
+      for (const d of descendantsOf(drawn.forest, selected)) on.add(d);
     }
+    root?.classList.toggle('has-path', on.size > 0);
+    for (const [id, g] of drawn.nodeEls) {
+      g.classList.toggle('selected', id === selected);
+      g.classList.toggle('on-path', on.has(id));
+      g.parentNode?.setAttribute('aria-pressed', id === selected ? 'true' : 'false');
+    }
+    for (const [id, el] of drawn.edgeEls) el.classList.toggle('on-path', on.has(id) && on.has(drawn.forest.parentOf.get(id)));
   }
 
   /* ---------- Zoom and pan (the page only) ---------- */
+  // How far in and out the map goes: out to a quarter of the whole map, in to
+  // where a box is four times its size.
   const zoomBy = (f, cx, cy) => {
     if (!box || !full) return;
-    const w = Math.min(full.w * 4, Math.max(full.w / 8, box.w * f));
+    const s = pxPerUnit() || 1;
+    const minW = box.w * s / 4; // 4 screen px per unit at the most
+    const w = Math.min(full.w * 4, Math.max(Math.min(minW, full.w), box.w * f));
     const k = w / box.w;
     const px = cx ?? box.x + box.w / 2, py = cy ?? box.y + box.h / 2;
     setBox({ x: px - (px - box.x) * k, y: py - (py - box.y) * k, w, h: box.h * k });
   };
   const fitAll = () => { if (full) setBox({ ...full }); };
+  // Centres a node and zooms in until its box is about life size.
+  const focusOn = (id) => {
+    const p = drawn?.centre.get(String(id));
+    if (!p || !box) return;
+    const s = pxPerUnit() || 1;
+    const k = Math.min(1, s / 1.1); // the window shrinks until 1.1 px per unit
+    const w = box.w * k, hh = box.h * k;
+    setBox({ x: p.x - w / 2, y: p.y - hh / 2, w, h: hh });
+  };
   let off = () => {};
+  const toDrawing = (ev) => {
+    const r = root.getBoundingClientRect();
+    // preserveAspectRatio "meet": the drawing is scaled by the smaller ratio and centred.
+    const s = Math.min(r.width / box.w, r.height / box.h);
+    const ox = (r.width - box.w * s) / 2, oy = (r.height - box.h * s) / 2;
+    return { x: box.x + (ev.clientX - r.left - ox) / s, y: box.y + (ev.clientY - r.top - oy) / s, s };
+  };
   if (interactive) {
-    const toDrawing = (ev) => {
-      const r = root.getBoundingClientRect();
-      // preserveAspectRatio "meet": the drawing is scaled by the smaller ratio and centred.
-      const s = Math.min(r.width / box.w, r.height / box.h);
-      const ox = (r.width - box.w * s) / 2, oy = (r.height - box.h * s) / 2;
-      return { x: box.x + (ev.clientX - r.left - ox) / s, y: box.y + (ev.clientY - r.top - oy) / s, s };
-    };
     const onWheel = (ev) => { if (!root) return; ev.preventDefault(); const p = toDrawing(ev); zoomBy(ev.deltaY > 0 ? 1.15 : 1 / 1.15, p.x, p.y); };
-    let drag = null;
+    let pan = null;
     const onDown = (ev) => {
-      if (ev.button !== 0 || !root || ev.target.closest('a')) return;
-      drag = { x: ev.clientX, y: ev.clientY, box: { ...box }, s: toDrawing(ev).s };
+      if (ev.button !== 0 || !root) return;
+      const nodeLink = ev.target.closest?.('.netmap-nodes a');
+      if (nodeLink) {
+        // A node: dragged (when the map may be arranged) or chosen.
+        const id = nodeLink.querySelector('.netmap-node')?.getAttribute('data-node');
+        if (id && mayArrange && drawn?.layout.radial) {
+          const start = toDrawing(ev);
+          dragging = { id, start, moved: false, alone: ev.shiftKey || ev.altKey, pointer: ev.pointerId };
+        }
+        return;
+      }
+      pan = { x: ev.clientX, y: ev.clientY, box: { ...box }, s: toDrawing(ev).s, moved: false };
       stage.setPointerCapture?.(ev.pointerId); stage.classList.add('panning');
     };
-    const onMove = (ev) => { if (!drag) return; setBox({ ...drag.box, x: drag.box.x - (ev.clientX - drag.x) / drag.s, y: drag.box.y - (ev.clientY - drag.y) / drag.s }); };
-    const onUp = () => { drag = null; stage.classList.remove('panning'); };
+    const onMove = (ev) => {
+      if (dragging) { dragMove(ev); return; }
+      if (!pan) return;
+      if (Math.hypot(ev.clientX - pan.x, ev.clientY - pan.y) > 3) pan.moved = true;
+      setBox({ ...pan.box, x: pan.box.x - (ev.clientX - pan.x) / pan.s, y: pan.box.y - (ev.clientY - pan.y) / pan.s });
+    };
+    const onUp = (ev) => {
+      if (dragging) { dragEnd(); return; }
+      // A click on the empty map lets go of the chosen node.
+      if (pan && !pan.moved && selected && onSelect) { selected = null; highlight(); onSelect(null, null); }
+      pan = null; stage.classList.remove('panning');
+    };
     const onKey = (ev) => {
-      if (ev.target.closest('a')) return;
+      if (ev.target.closest('a')) {
+        if (ev.key === 'Escape' && selected && onSelect) { selected = null; highlight(); onSelect(null, null); }
+        return;
+      }
       const step = box ? box.w * 0.1 : 0;
       const k = { '+': () => zoomBy(1 / 1.25), '=': () => zoomBy(1 / 1.25), '-': () => zoomBy(1.25), '0': fitAll,
         ArrowLeft: () => setBox({ ...box, x: box.x - step }), ArrowRight: () => setBox({ ...box, x: box.x + step }),
-        ArrowUp: () => setBox({ ...box, y: box.y - step }), ArrowDown: () => setBox({ ...box, y: box.y + step }) }[ev.key];
+        ArrowUp: () => setBox({ ...box, y: box.y - step }), ArrowDown: () => setBox({ ...box, y: box.y + step }),
+        Escape: () => { if (selected && onSelect) { selected = null; highlight(); onSelect(null, null); } } }[ev.key];
       if (k && box) { ev.preventDefault(); k(); }
     };
     stage.tabIndex = 0;
@@ -966,6 +1253,67 @@ export function renderNetworkMap(host, entries, cfg, { interactive = false, onSe
     wrap.insertBefore(tools, stage);
     off = () => { stage.removeEventListener('wheel', onWheel); };
   }
+  // The stage changing size changes how many pixels a drawing unit is.
+  const resize = typeof ResizeObserver === 'function' ? new ResizeObserver(() => applyStrokes()) : null;
+  resize?.observe(stage);
+
+  /* ---------- Dragging a node ---------- */
+  // The node moves with the pointer, and so does everything it carries (the
+  // nodes below it with no place of their own) unless Shift or Alt is held,
+  // which moves it alone. Letting go pins it there.
+  function dragMove(ev) {
+    const d = dragging;
+    if (!d || !drawn) return;
+    const p = toDrawing(ev);
+    const dx = p.x - d.start.x, dy = p.y - d.start.y;
+    if (!d.moved) {
+      if (Math.hypot(dx, dy) * p.s < 4) return;
+      d.moved = true;
+      stage.setPointerCapture?.(d.pointer);
+      stage.classList.add('dragging');
+      d.group = d.alone ? [] : carriedBy(drawn.forest, d.id, layoutState);
+      d.from = new Map([d.id, ...d.group].map((id) => [id, { ...drawn.centre.get(id) }]));
+    }
+    for (const [id, from] of d.from) {
+      const at = { x: from.x + dx, y: from.y + dy };
+      drawn.centre.set(id, at);
+      drawn.nodeEls.get(id)?.setAttribute('transform', `translate(${at.x},${at.y})`);
+    }
+    // Lines into and out of anything that moved.
+    for (const id of d.from.keys()) {
+      const e = drawn.edgeEls.get(id);
+      const parent = drawn.forest.parentOf.get(id);
+      if (e && parent != null) e.setAttribute('d', drawn.pathFor(parent, id));
+      for (const k of drawn.forest.children.get(id) || []) { const ce = drawn.edgeEls.get(k); if (ce) ce.setAttribute('d', drawn.pathFor(id, k)); }
+    }
+  }
+  function dragEnd() {
+    const d = dragging;
+    dragging = null;
+    stage.classList.remove('dragging');
+    if (!d?.moved || !drawn) { if (pendingDraw) { pendingDraw = false; draw(); } return; }
+    wrap.__suppressClick = true;
+    setTimeout(() => { wrap.__suppressClick = false; }, 0);
+    const cell = drawn.layout.cell;
+    const positions = { ...(layoutState.positions || {}) };
+    const at = drawn.centre.get(d.id);
+    positions[d.id] = { x: Math.round((at.x / cell.w) * 10) / 10, y: Math.round((at.y / cell.h) * 10) / 10, pinned: true };
+    if (d.alone) {
+      // Moved alone: what it would have carried stays where it is.
+      for (const k of carriedBy(drawn.forest, d.id, layoutState)) {
+        const q = drawn.centre.get(k);
+        if (q) positions[k] = { x: Math.round((q.x / cell.w) * 10) / 10, y: Math.round((q.y / cell.h) * 10) / 10 };
+      }
+    } else {
+      // Carried: the group forgets any tidied places, and swings round to
+      // face away from the line in.
+      for (const k of carriedBy(drawn.forest, d.id, layoutState)) if (positions[k] && !positions[k].pinned) delete positions[k];
+    }
+    layoutState = { ...layoutState, positions };
+    pendingDraw = false;
+    draw();
+    onArrange?.(cloneArranged(layoutState), { moved: d.id });
+  }
 
   draw();
   return {
@@ -976,9 +1324,45 @@ export function renderNetworkMap(host, entries, cfg, { interactive = false, onSe
       draw();
     },
     select(id) { selected = id != null ? String(id) : null; highlight(); },
+    focus(id) { selected = id != null ? String(id) : selected; highlight(); focusOn(id); },
     fit: fitAll,
-    destroy() { off(); wrap.remove(); },
+    setArranged(next) { layoutState = cloneArranged(next); draw(); },
+    setSim(next) { simState = next; draw(); },
+    setHideHosts(on) { noHosts = !!on; draw(); },
+    setCanArrange(on) { mayArrange = !!on; },
+    /** What the last drawing was made from: the forests, the states, where every node is, and the layout. */
+    view: () => drawn,
+    destroy() { off(); resize?.disconnect(); wrap.remove(); },
   };
+}
+
+/** A copy of an arrangement, always with positions and collapsed. */
+function cloneArranged(a) {
+  const src = a && typeof a === 'object' ? a : {};
+  return { positions: { ...(src.positions || {}) }, collapsed: [...(src.collapsed || [])] };
+}
+
+/**
+ * The arrangement with a cluster folded (or unfolded): `id` is added to or
+ * removed from `collapsed`.
+ */
+export function toggleFolded(arranged, id, fold) {
+  const a = cloneArranged(arranged);
+  const n = Number(id);
+  const has = a.collapsed.map(Number).includes(n);
+  const want = fold ?? !has;
+  a.collapsed = want ? (has ? a.collapsed : [...a.collapsed, n]) : a.collapsed.filter((x) => Number(x) !== n);
+  return a;
+}
+
+/** The arrangement with `id` unpinned: it goes back next to its parent, taking what it carried with it. */
+export function unpin(forest, arranged, id) {
+  const a = cloneArranged(arranged);
+  const key = String(id);
+  const group = carriedBy(forest, key, a);
+  delete a.positions[key];
+  for (const k of group) if (a.positions[k] && !a.positions[k].pinned) delete a.positions[k];
+  return a;
 }
 
 /** The group and tag choices a map can be filtered by, from /api/groups. */
@@ -1064,16 +1448,19 @@ export function nodeColourControl({ value = '', disabled = false, label = 'Node 
   let colour = normalizeLineColor(value);
   const picker = h('input', { type: 'color', value: hex6(colour) || '#3b82f6', 'aria-label': label, disabled });
   const shown = h('span', { class: 'netmap-colour-text mono muted' });
-  const none = h('button', { type: 'button', class: 'btn btn-sm', 'aria-label': `No ${label.toLowerCase()}`, onclick: () => { colour = ''; paint(); onChange && onChange(colour); } }, 'None');
+  const none = h('button', { type: 'button', class: 'btn btn-sm', 'aria-label': `No ${label.toLowerCase()}`, onclick: () => { colour = ''; paint(); onChange && onChange(colour); } }, 'Clear');
   function paint() {
     shown.textContent = colour || 'None';
     if (colour) picker.value = hex6(colour);
     none.disabled = disabled || !colour;
+    // A colour input always shows some colour; with none chosen it is shown
+    // faded and crossed out, so it does not look like a colour is set.
+    el.classList.toggle('is-none', !colour);
   }
   picker.addEventListener('input', () => { colour = normalizeLineColor(picker.value); paint(); });
   picker.addEventListener('change', () => { colour = normalizeLineColor(picker.value); paint(); onChange && onChange(colour); });
-  paint();
   const el = h('div', { class: 'netmap-colour node-colour' }, picker, shown, none);
+  paint();
   Object.defineProperty(el, 'value', { get: () => colour });
   return el;
 }
@@ -1113,30 +1500,45 @@ export function mapConfigEditor(cfg, { groups = null, onChange } = {}) {
   const labels = selectInput({ options: MAP_LABELS, value: c.labels, onchange: emit });
   const size = selectInput({ options: MAP_SIZES, value: c.size, onchange: emit });
   const edges = selectInput({ options: MAP_EDGES, value: c.edges, onchange: emit });
+  const nodeFill = selectInput({ options: MAP_NODE_FILLS, value: c.nodeFill, onchange: emit });
+  const lineColour = selectInput({ options: MAP_LINE_COLOURS, value: c.lineColour, onchange: emit });
   const group = selectInput({ options: opts.groups, value: c.group, onchange: emit });
   const tag = selectInput({ options: opts.tags, value: c.tag, onchange: emit });
   const onlyLinked = checkbox({ label: 'Only nodes with a dependency', checked: c.onlyLinked, onChange: emit });
-  const colorEdges = checkbox({ label: 'Colour the links out of a node that is down', checked: c.colorEdges, onChange: emit });
+  const highlightPath = checkbox({ label: 'Light up what a chosen node depends on, and what depends on it', checked: c.highlightPath, onChange: emit });
   const showLegend = checkbox({ label: 'Show the legend', checked: c.showLegend, onChange: emit });
   // How every line looks unless a link has a style of its own.
   const lines = lineStyleControls({ value: { color: c.lineColor, width: c.lineWidth, dash: c.lineStyle }, label: 'Map line', onChange: emit });
   const resetLines = h('button', { type: 'button', class: 'btn btn-sm', onclick: () => lines.reset() }, icon('refresh'), 'Reset the lines');
+  // Grouped the way people look for them: how it is laid out, what the
+  // colours say, which nodes are on it, and how lines look.
+  const section = (title) => h('div', { class: 'section-title netmap-options-title' }, title);
   const wrap = h('div', { class: 'stack-sm netmap-options' },
+    section('Layout'),
     h('div', { class: 'form-grid' },
-      field({ label: 'Layout', input: orientation, help: 'Clusters put each node in the middle of a ring of what depends on it; a switch with things of its own starts a ring of its own.' }),
+      field({ label: 'Layout', input: orientation, help: 'Clusters put each node in the middle of a ring of what depends on it, and can be arranged by dragging.' }),
       field({ label: 'Labels', input: labels }),
       field({ label: 'Node size', input: size }),
-      field({ label: 'Line shape', input: edges, help: 'Clusters draw straight or gently curved lines.' }),
+      field({ label: 'Line shape', input: edges, help: 'Clusters always draw straight lines.' })),
+    section('Colours'),
+    h('div', { class: 'stack-sm' },
+      field({ label: 'Node colour shows', input: nodeFill, help: 'Colour and status: the node’s own colour, with its status as a light beside it.' }),
+      field({ label: 'Line colour shows', input: lineColour, help: 'Status: each line in the colour of the status of the node it leads to.' })),
+    section('Which nodes'),
+    h('div', { class: 'form-grid' },
       field({ label: 'Group', input: group, help: 'The nodes a filtered node depends on stay on the map, faded.' }),
       field({ label: 'Tag', input: tag })),
+    onlyLinked,
     h('fieldset', { class: 'netmap-linegroup' },
       h('legend', null, 'Line style'),
       lines.el,
-      h('div', { class: 'row-between' }, h('span', { class: 'help' }, 'A link can have its own colour, thickness and style: choose a node on the map.'), resetLines)),
-    h('div', { class: 'stack-sm u-gap-6' }, onlyLinked, colorEdges, showLegend));
+      h('div', { class: 'row-between' }, h('span', { class: 'help' }, 'Thickness is screen pixels at the least, and grows as you zoom in. A single link can have its own style: choose its node and edit it.'), resetLines)),
+    section('Showing'),
+    h('div', { class: 'stack-sm u-gap-6' }, highlightPath, showLegend));
   Object.defineProperty(wrap, 'value', { get: () => normalizeMapConfig({
     orientation: orientation.value, labels: labels.value, size: size.value, edges: edges.value, group: group.value, tag: tag.value,
-    onlyLinked: onlyLinked.input.checked, colorEdges: colorEdges.input.checked, showLegend: showLegend.input.checked,
+    nodeFill: nodeFill.value, lineColour: lineColour.value,
+    onlyLinked: onlyLinked.input.checked, highlightPath: highlightPath.input.checked, showLegend: showLegend.input.checked,
     lineColor: lines.value.color, lineWidth: lines.value.width, lineStyle: lines.value.dash,
   }) });
   return wrap;
