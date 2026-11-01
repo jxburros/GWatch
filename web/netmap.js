@@ -31,7 +31,7 @@ import { compareNames, inGroup, plural } from './fmt.js';
 export const MAP_ORIENTATIONS = [
   { value: 'down', label: 'Top to bottom' },
   { value: 'right', label: 'Left to right' },
-  { value: 'radial', label: 'Clusters (radial)' },
+  { value: 'radial', label: 'Clusters' },
 ];
 export const MAP_LABELS = [
   { value: 'name', label: 'Name' },
@@ -56,9 +56,9 @@ export const MAP_NODE_FILLS = [
 ];
 /** What colours a line: the colours chosen for it (red where an outage reaches), only those, or status. */
 export const MAP_LINE_COLOURS = [
-  { value: 'outage', label: 'Chosen colours, red where an outage reaches' },
+  { value: 'outage', label: 'Chosen colours, red for outages' },
   { value: 'chosen', label: 'Chosen colours only' },
-  { value: 'status', label: 'Status of the node each line leads to' },
+  { value: 'status', label: 'Status' },
 ];
 export const MAP_LINE_STYLES = [
   { value: 'solid', label: 'Solid' },
@@ -1122,7 +1122,6 @@ export function renderNetworkMap(host, entries, cfg, {
         if (!statusCounts[s]) continue;
         legend.append(h('span', { class: 'netmap-key' }, h('span', { class: `orb orb-sm orb-${s}`, 'aria-hidden': 'true' }), `${statusMeta(s).label} ${statusCounts[s]}`));
       }
-      legend.append(h('span', { class: 'netmap-key muted' }, c.orientation === 'right' ? 'Each node sits to the right of the node it depends on' : layout.radial ? 'Each node sits in a ring round the node it depends on' : 'Each node sits under the node it depends on'));
       // Lines can be any colour and dash by now, so what a coloured one means
       // is said in words — colour and dashes alone must not be the whole cue.
       if (c.lineColour !== 'chosen') {
@@ -1449,16 +1448,19 @@ export function nodeColourControl({ value = '', disabled = false, label = 'Node 
   let colour = normalizeLineColor(value);
   const picker = h('input', { type: 'color', value: hex6(colour) || '#3b82f6', 'aria-label': label, disabled });
   const shown = h('span', { class: 'netmap-colour-text mono muted' });
-  const none = h('button', { type: 'button', class: 'btn btn-sm', 'aria-label': `No ${label.toLowerCase()}`, onclick: () => { colour = ''; paint(); onChange && onChange(colour); } }, 'None');
+  const none = h('button', { type: 'button', class: 'btn btn-sm', 'aria-label': `No ${label.toLowerCase()}`, onclick: () => { colour = ''; paint(); onChange && onChange(colour); } }, 'Clear');
   function paint() {
     shown.textContent = colour || 'None';
     if (colour) picker.value = hex6(colour);
     none.disabled = disabled || !colour;
+    // A colour input always shows some colour; with none chosen it is shown
+    // faded and crossed out, so it does not look like a colour is set.
+    el.classList.toggle('is-none', !colour);
   }
   picker.addEventListener('input', () => { colour = normalizeLineColor(picker.value); paint(); });
   picker.addEventListener('change', () => { colour = normalizeLineColor(picker.value); paint(); onChange && onChange(colour); });
-  paint();
   const el = h('div', { class: 'netmap-colour node-colour' }, picker, shown, none);
+  paint();
   Object.defineProperty(el, 'value', { get: () => colour });
   return el;
 }
@@ -1503,26 +1505,36 @@ export function mapConfigEditor(cfg, { groups = null, onChange } = {}) {
   const group = selectInput({ options: opts.groups, value: c.group, onchange: emit });
   const tag = selectInput({ options: opts.tags, value: c.tag, onchange: emit });
   const onlyLinked = checkbox({ label: 'Only nodes with a dependency', checked: c.onlyLinked, onChange: emit });
-  const highlightPath = checkbox({ label: 'Choosing a node lights up what it depends on and what depends on it', checked: c.highlightPath, onChange: emit });
+  const highlightPath = checkbox({ label: 'Light up what a chosen node depends on, and what depends on it', checked: c.highlightPath, onChange: emit });
   const showLegend = checkbox({ label: 'Show the legend', checked: c.showLegend, onChange: emit });
   // How every line looks unless a link has a style of its own.
   const lines = lineStyleControls({ value: { color: c.lineColor, width: c.lineWidth, dash: c.lineStyle }, label: 'Map line', onChange: emit });
   const resetLines = h('button', { type: 'button', class: 'btn btn-sm', onclick: () => lines.reset() }, icon('refresh'), 'Reset the lines');
+  // Grouped the way people look for them: how it is laid out, what the
+  // colours say, which nodes are on it, and how lines look.
+  const section = (title) => h('div', { class: 'section-title netmap-options-title' }, title);
   const wrap = h('div', { class: 'stack-sm netmap-options' },
+    section('Layout'),
     h('div', { class: 'form-grid' },
       field({ label: 'Layout', input: orientation, help: 'Clusters put each node in the middle of a ring of what depends on it, and can be arranged by dragging.' }),
       field({ label: 'Labels', input: labels }),
       field({ label: 'Node size', input: size }),
-      field({ label: 'Line shape', input: edges, help: 'Clusters always draw straight lines.' }),
-      field({ label: 'Node colour shows', input: nodeFill, help: 'Both: the node’s own colour, with its status as a light beside it.' }),
-      field({ label: 'Line colour shows', input: lineColour }),
+      field({ label: 'Line shape', input: edges, help: 'Clusters always draw straight lines.' })),
+    section('Colours'),
+    h('div', { class: 'stack-sm' },
+      field({ label: 'Node colour shows', input: nodeFill, help: 'Colour and status: the node’s own colour, with its status as a light beside it.' }),
+      field({ label: 'Line colour shows', input: lineColour, help: 'Status: each line in the colour of the status of the node it leads to.' })),
+    section('Which nodes'),
+    h('div', { class: 'form-grid' },
       field({ label: 'Group', input: group, help: 'The nodes a filtered node depends on stay on the map, faded.' }),
       field({ label: 'Tag', input: tag })),
+    onlyLinked,
     h('fieldset', { class: 'netmap-linegroup' },
       h('legend', null, 'Line style'),
       lines.el,
-      h('div', { class: 'row-between' }, h('span', { class: 'help' }, 'A link can have its own colour, thickness and style: choose a node on the map. Thickness is screen pixels at the least, and grows as you zoom in.'), resetLines)),
-    h('div', { class: 'stack-sm u-gap-6' }, onlyLinked, highlightPath, showLegend));
+      h('div', { class: 'row-between' }, h('span', { class: 'help' }, 'Thickness is screen pixels at the least, and grows as you zoom in. A single link can have its own style: choose its node and edit it.'), resetLines)),
+    section('Showing'),
+    h('div', { class: 'stack-sm u-gap-6' }, highlightPath, showLegend));
   Object.defineProperty(wrap, 'value', { get: () => normalizeMapConfig({
     orientation: orientation.value, labels: labels.value, size: size.value, edges: edges.value, group: group.value, tag: tag.value,
     nodeFill: nodeFill.value, lineColour: lineColour.value,

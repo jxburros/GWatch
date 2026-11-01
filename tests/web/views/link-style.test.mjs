@@ -16,8 +16,8 @@ const mock = () => window.__gwatchMock;
 const nodeNamed = (name) => mock().nodes.find((n) => n.name === name);
 const change = (el) => el.dispatchEvent(new window.Event('change', { bubbles: true }));
 const fieldset = (root) => root.querySelector('fieldset.netmap-linegroup');
-// The selected node's card is the side panel's first; the map's own options come after it.
-const selectedCard = (root) => root.querySelector('.netmap-side > section:first-child');
+// The side panel's Node tab: the chosen node; its Customise tab holds the map's own options.
+const selectedCard = (root) => root.querySelector('.netmap-inspect');
 const widthOf = (el) => el.querySelector('input[type="number"]');
 const edge = (root, from, to) => root.querySelector(`.netmap-edge[data-from="${from}"][data-to="${to}"]`);
 const styleOf = (root, from, to) => edge(root, from, to).getAttribute('style');
@@ -53,9 +53,9 @@ test('the network map side panel offers a link style for the node\'s line to its
   assert.equal(fieldset(selectedCard(rootNode)), null);
 });
 
-test('the network map\'s pin-to-dashboard dialog names its dashboard select', async (t) => {
+test('the network map\'s add-to-dashboard dialog names its dashboard select', async (t) => {
   const { ctx } = await mountView(networkMapView, undefined, t);
-  ctx.setTitleCalls.at(-1).opts.actions.find((a) => a.textContent.includes('Pin to a dashboard')).click();
+  ctx.setTitleCalls.at(-1).opts.actions.find((a) => a.textContent.includes('Add to a dashboard')).click();
   const dialog = await waitFor(() => document.querySelector('[role="dialog"]'));
   const sel = await waitFor(() => dialog.querySelector('select'));
   const label = sel.id && dialog.querySelector(`label[for="${sel.id}"]`);

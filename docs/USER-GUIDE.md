@@ -615,7 +615,7 @@ round it, the machines plugged into each switch round that. Nodes with no
 dependency either way are set apart in a block of their own.
 
 **Clusters** is the layout it opens in (the others, top to bottom and left to
-right, are under **Customise the map**). It puts the things that depend on a
+right, are on the side panel's **Customise** tab). It puts the things that depend on a
 node in a **ring round it**, and every one of those that has things of its own in
 the middle of a **ring of its own**, further out — the way you would sketch the
 network on a whiteboard. Rings are ovals, wider than tall, which is the shape a
@@ -640,7 +640,7 @@ status among them.
 **Status and colour.** A node's box is filled with its own **colour**, if it has
 one, and its status is a light in a small box of its own at the side — green,
 amber, red (pulsing), blue for maintenance, grey — with the border saying it
-too. **Customise the map › Node colour shows** chooses *Colour and status* (the
+too. **Customise › Node colour shows** chooses *Colour and status* (the
 default), *Status only* (no colours of your own; the box is tinted by its
 status) or *Chosen colour only* (no status at all — your choice, so the map
 shows nothing of an outage in that mode).
@@ -654,11 +654,15 @@ if it were. Lines into what sits under a node in maintenance are dashed blue.
 line by the status of the node it leads to. The legend says what each colour
 means in words.
 
+The side panel has two tabs: **Node**, for the node you choose (and, with
+nothing chosen, the biggest risks), and **Customise**, for how the map looks.
+What acts on the whole map — **Find a node…** and **Arrange** — sits above it.
+
 **Choosing a node** lights up the chain it depends on and everything that
 depends on it, and fades the rest (turn this off under Customise); click the
 empty map or press **Esc** to let go. The side panel says what it depends on,
 what depends on it, and how many nodes an outage there would cut off. An
-administrator also has **Change it**: what it **depends on** (a node cannot be
+administrator also has **Edit its dependency and colours**: what it **depends on** (a node cannot be
 made to depend on anything below it, which would be a loop), its **colour**
 (its box here and its row in the node list), and the look of its line. **Biggest
 risks** lists the nodes whose loss takes the most with it.
@@ -667,8 +671,8 @@ risks** lists the nodes whose loss takes the most with it.
 makes sense: it is **pinned** there (a small mark at its corner), and what hangs
 off it comes along, its ring turning to face away from the line in — hold
 **Shift** to move it alone. Nodes nobody pinned are placed by the layout next to
-what they depend on, and new nodes find their own place. From the map menu
-(**⋯**):
+what they depend on, and new nodes find their own place. From **Arrange**, above
+the map:
 
 - **Tidy up the unpinned nodes** puts every node nobody pinned back next to what
   it depends on, and turns a group that would land on something else until it
@@ -708,11 +712,11 @@ is screen pixels at the least: fitted to the screen, however big the map, a
 line is drawn as thick as chosen, and zooming in thickens it with the boxes, up
 to three times. There are two places to set them:
 
-- **Line style** under **Customise the map** sets the look of every line on the
+- **Line style** on the **Customise** tab sets the look of every line on the
   map (and in the *Network map* widget's editor on a dashboard). *Default* puts
   the colour back to the theme's; **Reset the lines** puts all three back.
 - A single link has its own look, kept on the node at its lower end (the one
-  that **depends on** the other). Choose that node, open **Change it** and use
+  that **depends on** the other). Choose that node, open **Edit its dependency and colours** and use
   **Link to *its parent***, or the **Link style** group beside **Depends on** in
   the node editor. Anything left at "like the map" follows the map; **Reset**
   gives the whole link back to it. Every map shows it, and it is included in
@@ -724,7 +728,7 @@ colour beats them all (unless *Line colour shows* says otherwise), though it
 keeps the thickness and dashes chosen. Colours are hex values (`#3b82f6`); the
 service refuses anything else.
 
-**Pin to a dashboard** adds the map, as customised and arranged, as a *Network
+**Add to a dashboard** adds the map, as customised and arranged, as a *Network
 map* widget. **Export as SVG** saves the whole drawing, with every line's
 colour, thickness and dashes; **Export as PNG** saves what is in view. "View as
 list" under the map gives the same tree as text. The map's options are
@@ -769,7 +773,7 @@ Then:
 
 - **Save**, and **Save as a copy** for a variant.
 - **Rename** and **Delete chart**.
-- **Pin to a dashboard** — the saved chart becomes a *Chart* widget there.
+- **Add to a dashboard** — the saved chart becomes a *Chart* widget there.
 - **Export chart as PNG** for a report or a message, or **Export CSV**, one
   file per series.
 

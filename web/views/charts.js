@@ -57,7 +57,7 @@ export async function mount(root, ctx) {
       menuButton(() => [
         c ? { label: 'Save as a copy', icon: 'copy', onClick: saveAs } : null,
         c ? { label: 'Rename', icon: 'edit', onClick: rename } : null,
-        { label: 'Pin to a dashboard', icon: 'grid', onClick: pinToDashboard },
+        { label: 'Add to a dashboard', icon: 'grid', onClick: pinToDashboard },
         { sep: true },
         { label: 'Export chart as PNG', icon: 'image', onClick: () => state.view?.exportPNG(`${slug(c?.name || 'chart')}-${state.cfg.range}.png`) },
         ...exportCsvItems(),
@@ -117,7 +117,7 @@ export async function mount(root, ctx) {
       return;
     }
     state.view = renderConfiguredChart(host, state.cfg, { title: c ? c.name : 'Chart', fetch: fetchHistory, onData: (list) => { state.lastSeries = list; } });
-    main.append(h('p', { class: 'note' }, 'Tip: hover the chart for values, press ', h('b', null, 'Timestack'), ' to lay this metric over its own earlier days, weeks or months, and use ', h('b', null, 'Pin to a dashboard'), ' to keep this exact chart on a dashboard.'));
+    main.append(h('p', { class: 'note' }, 'Tip: hover the chart for values, press ', h('b', null, 'Timestack'), ' to lay this metric over its own earlier days, weeks or months, and use ', h('b', null, 'Add to a dashboard'), ' to keep this exact chart on a dashboard.'));
   }
 
   function toggleStack() {
@@ -166,11 +166,11 @@ export async function mount(root, ctx) {
     try { dashboards = await api.get('/api/dashboards'); } catch (e) { toast(e.message, { kind: 'error' }); return; }
     if (!dashboards.length) { toast('Create a dashboard first', { kind: 'error' }); return; }
     const sel = h('select', null, dashboards.map((d) => h('option', { value: d.id }, d.name)));
-    const ok = await confirmDialog({ title: 'Pin chart to a dashboard', confirmLabel: 'Pin', body: field({ label: 'Dashboard', input: sel }) });
+    const ok = await confirmDialog({ title: 'Add the chart to a dashboard', confirmLabel: 'Add', body: field({ label: 'Dashboard', input: sel }) });
     if (!ok) return;
     const d = dashboards.find((x) => String(x.id) === sel.value);
     const widgets = [...(d.widgets || []), { id: uid('w'), type: 'chart', title: current()?.name || '', width: 2, height: 2, config: state.cfg }];
-    try { await api.put(`/api/dashboards/${d.id}`, { ...d, widgets }); toast(`Pinned to ${d.name}`, { kind: 'success', action: { label: 'Open', onClick: () => ctx.navigate(`/dashboard/${d.id}`) } }); } catch (e) { toast(e.message, { kind: 'error' }); }
+    try { await api.put(`/api/dashboards/${d.id}`, { ...d, widgets }); toast(`Added to ${d.name}`, { kind: 'success', action: { label: 'Open', onClick: () => ctx.navigate(`/dashboard/${d.id}`) } }); } catch (e) { toast(e.message, { kind: 'error' }); }
   }
 
   function render() { setTitle(); renderSide(); renderMain(); }

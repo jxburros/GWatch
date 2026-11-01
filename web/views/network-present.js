@@ -46,24 +46,27 @@ export async function mount(root, ctx) {
   }
 
   const fmtTime = (d) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  // A button of the bar: an icon and a label; on a narrow screen the label is
+  // hidden and stays the button's name (and its tooltip).
+  const tool = (iconName, label, attrs = {}) => h(attrs.href ? 'a' : 'button', { type: attrs.href ? null : 'button', class: 'btn btn-sm', 'aria-label': label, title: label, ...attrs }, icon(iconName), h('span', { class: 'btn-label' }, label));
   function renderBar() {
-    const liveBtn = h('button', { type: 'button', class: 'btn btn-sm', 'aria-pressed': state.live ? 'true' : 'false', onclick: async () => {
+    const liveBtn = tool(state.live ? 'activity' : 'pause', state.live ? 'Live' : `Frozen at ${fmtTime(state.frozenAt || new Date())}`, { 'aria-pressed': state.live ? 'true' : 'false', onclick: async () => {
       state.live = !state.live;
       if (state.live) { await load().catch((e) => toast(e.message, { kind: 'error' })); state.map?.update(entries(), cfg); }
       renderBar();
-    } }, icon(state.live ? 'activity' : 'pause'), state.live ? 'Live' : `Frozen at ${fmtTime(state.frozenAt || new Date())}`);
-    const hostsBtn = h('button', { type: 'button', class: 'btn btn-sm', 'aria-pressed': state.hideHosts ? 'true' : 'false', onclick: () => {
+    } });
+    const hostsBtn = tool('eye', state.hideHosts ? 'Addresses hidden' : 'Hide addresses', { 'aria-pressed': state.hideHosts ? 'true' : 'false', onclick: () => {
       state.hideHosts = !state.hideHosts; state.map?.setHideHosts(state.hideHosts); renderBar(); renderCard();
-    } }, icon('eye'), state.hideHosts ? 'Addresses hidden' : 'Hide addresses');
+    } });
     bar.replaceChildren(
       h('div', { class: 'netmap-present-title' }, icon('network'), h('h1', null, 'Network map'), h('span', { class: 'muted' }, `${plural(entries().length, 'node')}`)),
       nodeFinder(entries, (id) => choose(id, true)),
-      h('div', { class: 'row u-gap-6' },
+      h('div', { class: 'netmap-present-tools' },
         liveBtn, hostsBtn,
-        h('button', { type: 'button', class: 'btn btn-sm', 'aria-pressed': risks.hidden ? 'false' : 'true', onclick: () => { risks.hidden = !risks.hidden; renderRisks(); renderBar(); } }, icon('alert'), 'Biggest risks'),
-        h('button', { type: 'button', class: 'btn btn-sm', onclick: () => exportMapPng(state.map?.svg()) }, icon('image'), 'Save as PNG'),
-        document.fullscreenEnabled ? h('button', { type: 'button', class: 'btn btn-sm', onclick: () => (document.fullscreenElement ? document.exitFullscreen() : wrap.requestFullscreen?.()) }, icon('maximize'), 'Full screen') : null,
-        h('a', { class: 'btn btn-sm', href: '#/map' }, icon('x'), 'Leave')));
+        tool('alert', 'Biggest risks', { 'aria-pressed': risks.hidden ? 'false' : 'true', onclick: () => { risks.hidden = !risks.hidden; renderRisks(); renderBar(); } }),
+        tool('image', 'Save as PNG', { onclick: () => exportMapPng(state.map?.svg()) }),
+        document.fullscreenEnabled ? tool('maximize', 'Full screen', { onclick: () => (document.fullscreenElement ? document.exitFullscreen() : wrap.requestFullscreen?.()) }) : null,
+        tool('x', 'Leave', { href: '#/map' })));
   }
 
   function renderRisks() {

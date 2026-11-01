@@ -532,7 +532,7 @@ test('renderNetworkMap in clusters: a node per node, a line per dependency, noth
   for (let i = 0; i < centres.length; i++) for (let j = i + 1; j < centres.length; j++) {
     assert.ok(Math.abs(centres[i][0] - centres[j][0]) >= 148 || Math.abs(centres[i][1] - centres[j][1]) >= 32, 'boxes do not overlap on the page');
   }
-  assert.match(root.querySelector('.netmap-legend').textContent, /in a ring round the node it depends on/);
+  assert.match(root.querySelector('.netmap-legend').textContent, /Up 9.*Down 1/, 'the legend counts statuses');
   // Lines end at the boxes rather than running under them, and are straight
   // round a ring whatever shape was chosen: a bend there only tangles them.
   assert.match(edgeOf(root, 1, 3).getAttribute('d'), /^M[-\d.e]+,[-\d.e]+ L/);
@@ -695,7 +695,7 @@ test('the node colour control holds a colour or none', () => {
   picker.value = '#336699';
   picker.dispatchEvent(new window.Event('change'));
   assert.deepEqual(seen, ['#336699']);
-  [...el.querySelectorAll('button')].find((b) => b.textContent === 'None').click();
+  [...el.querySelectorAll('button')].find((b) => b.textContent === 'Clear').click();
   assert.equal(el.value, '');
   assert.deepEqual(seen, ['#336699', '']);
 });

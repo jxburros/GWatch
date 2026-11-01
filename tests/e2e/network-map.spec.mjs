@@ -16,16 +16,16 @@ async function openMap(page, { theme = 'dark', cfg = { orientation: 'radial' }, 
   await openApp(page, 'map', { theme });
   if (select) {
     await page.locator(`a[aria-label^="${select},"]`).click();
-    // Changing a node is in the administrator's "Change it" section, folded until wanted.
+    // Changing a node is in the administrator's "Edit its dependency and colours" section, folded until wanted.
     await page.locator('.netmap-edit > summary').click();
     await expect(page.locator('.netmap-side fieldset legend').first()).toContainText('Link to');
   }
 }
 
-/** Opens the map's own options, which are folded away until wanted. */
+/** Opens the side panel's Customise tab, where the map's own options are. */
 async function openCustomise(page) {
-  const card = page.locator('.netmap-options-card');
-  if (!(await card.evaluate((d) => d.open))) await card.locator('summary').click();
+  await page.getByRole('tab', { name: 'Customise' }).click();
+  await expect(page.locator('.netmap-options')).toBeVisible();
 }
 
 /**
@@ -105,7 +105,7 @@ test('in clusters no two nodes overlap on the page, and a switch sits among the 
   const angles = centres.kids.map(([x, y]) => Math.atan2(y - centres.middle[1], x - centres.middle[0])).sort((a, b) => a - b);
   const gaps = angles.map((a, i) => (i ? a - angles[i - 1] : a + 2 * Math.PI - angles[angles.length - 1]));
   expect(Math.max(...gaps)).toBeLessThan(Math.PI);
-  await expect(page.locator('.netmap-legend')).toContainText('in a ring round the node it depends on');
+  await expect(page.locator('.netmap-legend')).toContainText('Red lines lead out of a node that is down');
 });
 
 test('a link\'s own style wins over the map\'s, and an outage stays red whatever the colour', async ({ page }) => {
@@ -186,7 +186,7 @@ test('the map\'s line colour, thickness and style are in Customise, and the lege
   expect(style.dash.split(/[ ,]+/).length).toBe(4);
 
   // Exported as SVG, the lines keep their colour, thickness and dashes.
-  await page.getByRole('button', { name: 'Map options' }).click();
+  await page.getByRole('button', { name: 'More map actions' }).click();
   const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('menuitem', { name: 'Export as SVG' }).click()]);
   const svg = await (await import('node:fs/promises')).readFile(await download.path(), 'utf8');
   expect(svg).toContain('xmlns="http://www.w3.org/2000/svg"');
@@ -258,7 +258,7 @@ test('dragging a node pins it where it is dropped, carries its cluster, and is k
   // Saved on the service, pinned (the mock signs in as an administrator).
   await expect.poll(() => page.evaluate((id) => fetch('/api/map/layout').then((r) => r.json()).then((l) => l.positions[id]?.pinned), swtch)).toBe(true);
   // Tidying up everything forgets it, and Undo brings it back.
-  await page.getByRole('button', { name: 'Map options' }).click();
+  await page.getByRole('button', { name: 'Arrange' }).click();
   await page.getByRole('menuitem', { name: /Tidy up everything/ }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Tidy up everything' }).click();
   await expect(page.locator(`.netmap-node[data-node="${swtch}"]`)).not.toHaveClass(/is-pinned/);
@@ -280,7 +280,8 @@ test('a locked layout does not move', async ({ page }) => {
   // The map panned instead, which moves everything alike: the switch keeps its place among the others.
   const gap = (r) => page.evaluate((id) => { const g = document.querySelector(`.netmap-node[data-node="${id}"] .netmap-box`).getBoundingClientRect(); return g.x; }, swtch).then((x) => x - r.x);
   expect(Math.abs(await gap(after))).toBeLessThan(1);
-  await expect(page.locator('.netmap-howto')).toContainText('locked');
+  await expect(page.getByRole('button', { name: 'Locked' })).toBeVisible();
+  await expect(page.locator('.netmap-howto')).toHaveCount(0);
 });
 
 test('a cluster folds into its node and unfolds again', async ({ page }) => {
@@ -312,7 +313,7 @@ test('finding a node by name chooses it and brings it into view', async ({ page 
   await openMap(page, { select: '' });
   await page.getByLabel('Find a node on the map').fill('Printer');
   await page.getByLabel('Find a node on the map').press('Enter');
-  await expect(page.locator('.netmap-inspect .card-title')).toContainText('Printer');
+  await expect(page.locator('.netmap-inspect .netmap-node-name')).toHaveText('Printer');
   await expect(page.locator('.netmap-node.selected')).toHaveCount(1);
 });
 
