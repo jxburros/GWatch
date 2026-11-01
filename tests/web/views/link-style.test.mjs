@@ -46,7 +46,7 @@ test('the network map side panel offers a link style for the node\'s line to its
   // ... and the map draws that line in it.
   assert.match(styleOf(root, swtch.id, nas.id), /stroke:#3b82f6/);
   assert.match(styleOf(root, swtch.id, nas.id), /stroke-width:3/);
-  assert.equal(styleOf(root, swtch.id, nodeNamed('Printer').id), 'stroke-width:1.5', 'a link with no style of its own is as it was');
+  assert.equal(styleOf(root, swtch.id, nodeNamed('Printer').id), 'stroke-width:2', 'a link with no style of its own is drawn as the map says');
 
   // A node with nothing it depends on has no link to style.
   const { root: rootNode } = await mountView(networkMapView, { query: new URLSearchParams({ node: String(gateway.id) }) }, t);
@@ -83,17 +83,21 @@ test('changing a link\'s style in the side panel is saved on the node and redraw
   // Reset gives it back to the map.
   button(group, 'Reset').click();
   await waitFor(() => printer.linkStyle === null);
-  await waitFor(() => styleOf(root, swtch.id, printer.id) === 'stroke-width:1.5');
+  await waitFor(() => styleOf(root, swtch.id, printer.id) === 'stroke-width:2');
   assert.equal(widthOf(group).value, '');
   assert.equal(group.querySelector('select').value, '');
 });
 
-test('a viewer sees the link style but cannot change it', async (t) => {
+test('a viewer sees the link drawn in its style, and nothing to change it with', async (t) => {
   resetLinkStyles();
-  const { root } = await mountView(networkMapView, { query: new URLSearchParams({ node: String(nodeNamed('NAS').id) }), isAdmin: false }, t);
-  const group = fieldset(selectedCard(root));
-  assert.equal(widthOf(group).value, '3');
-  for (const el of group.querySelectorAll('input, select')) assert.ok(el.disabled, `${el.outerHTML.slice(0, 50)} is disabled`);
+  const nas = nodeNamed('NAS'), swtch = nodeNamed('Office switch');
+  const { root } = await mountView(networkMapView, { query: new URLSearchParams({ node: String(nas.id) }), isAdmin: false }, t);
+  assert.match(styleOf(root, swtch.id, nas.id), /stroke-width:3/);
+  // The side panel says what the node depends on and what depends on it;
+  // changing any of that is an administrator's, so a viewer is not shown it.
+  assert.match(selectedCard(root).textContent, /Depends on/);
+  assert.equal(fieldset(selectedCard(root)), null);
+  assert.equal(selectedCard(root).querySelector('.netmap-edit'), null);
 });
 
 test('the map options on the page hold the line colour, thickness and style', async (t) => {

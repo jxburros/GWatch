@@ -26,7 +26,7 @@ export const WIDGET_TYPES = [
   { type: 'cert_warnings', label: 'Certificate warnings', desc: 'Certificates that expire soon or are invalid.', w: 1, h: 1, config: {} },
   { type: 'attention', label: 'Needs attention', desc: 'Everything that is currently down or degraded, with dependency context.', w: 2, h: 1, config: {} },
   { type: 'monitor_health', label: 'Monitor health', desc: 'Is the GWatch service itself running and checking?', w: 1, h: 1, config: {} },
-  { type: 'network_map', label: 'Network map', desc: 'Every node under the node it depends on, coloured by status.', w: 4, h: 3, config: { orientation: 'down', labels: 'name' } },
+  { type: 'network_map', label: 'Network map', desc: 'The dependency map, as customised and arranged on the map page.', w: 4, h: 3, config: { orientation: 'radial', labels: 'name' } },
   { type: 'table', label: 'Node table', desc: 'A table of nodes for a group or tag.', w: 4, h: 2, config: { group: '', tag: '' } },
 ];
 const LEGACY_CHARTS = { latency_chart: { metric: 'avg', unit: 'ms' }, response_chart: { metric: 'avg', unit: 'ms' }, loss_chart: { metric: 'loss', unit: '%' } };
@@ -783,9 +783,23 @@ export async function mount(root, ctx) {
   /* ---------- Network map ---------- */
   // Drawn into the body each time it is rendered; the map is SVG built in one
   // synchronous step, so a live update rewriting it does not flash.
+  // The widget draws the map as it has been arranged on the map page; the
+  // arrangement is asked for once, and each widget redrawn when it arrives.
+  let mapArranged = null;
+  let mapArrangedAsked = false;
+  const mapWidgets = new Set();
   function renderMapWidget(w, body, cfg) {
     body.classList.add('widget-map');
-    renderNetworkMap(body, state.overview?.nodes || [], cfg, { title: w.title || 'Network map' });
+    const map = renderNetworkMap(body, state.overview?.nodes || [], cfg, { title: w.title || 'Network map', arranged: mapArranged });
+    for (const m of [...mapWidgets]) if (m.body === body || !m.body.isConnected) mapWidgets.delete(m);
+    if (!mapArranged) mapWidgets.add({ body, map });
+    if (!mapArrangedAsked) {
+      mapArrangedAsked = true;
+      api.get('/api/map/layout').then((a) => {
+        mapArranged = a;
+        for (const m of [...mapWidgets]) { if (m.body.isConnected) m.map.setArranged(a); else mapWidgets.delete(m); }
+      }).catch(() => { /* drawn as laid out */ });
+    }
     const open = h('a', { class: 'icon-btn', href: '#/map', title: 'Open the network map', 'aria-label': 'Open the network map' }, icon('external'));
     if (!body.closest('.widget')?.querySelector('.widget-edit-bar a[href="#/map"]')) body.closest('.widget')?.querySelector('.widget-edit-bar')?.prepend(open);
   }

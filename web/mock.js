@@ -172,6 +172,49 @@ import { install as installHistory } from './mock/history.js';
   for (const n of [nas, backupSrv, ha, printer, newHost]) n.dependsOnNodeId = swtch.id;
   nodes.push(gateway, plex, nas, ha, site, weather, printer, pihole, backupSrv, swtch, newHost);
 
+  // ?mock=1&big=250 grows the demo network to about that many nodes, the way
+  // a real one is built — a core switch, access switches, access points,
+  // hypervisors with their guests, and a few services hanging off nothing —
+  // so the network map can be tried at the size people actually run.
+  {
+    const want = Math.min(2000, Number(new URLSearchParams(location.search).get('big')) || 0);
+    if (want > nodes.length) {
+      const r = rng(250);
+      const add = (o, status = 'up') => {
+        const n = mkNode({ group: 'Home Network', importance: 'normal', ...o });
+        n.checks = [mkCheck(n.id, 'ping', 'Ping', { config: { pingCount: 4 }, base: 1 + r() * 8, noise: 0.4, status, message: status === 'down' ? `No reply from ${o.host} (4 of 4 packets lost)` : '', downSince: status === 'down' ? 12 * MIN : undefined })];
+        nodes.push(n);
+        return n;
+      };
+      let ip = 30;
+      const host = () => `10.0.${Math.floor(ip / 250)}.${(ip++ % 250) + 2}`;
+      const core = add({ name: 'Core switch', host: host(), dependsOnNodeId: gateway.id, template: 'switch', importance: 'critical' });
+      const kinds = ['Desk PC', 'Laptop', 'Phone', 'TV', 'Speaker', 'Camera', 'Thermostat', 'Printer', 'Light hub', 'Tablet', 'Console', 'Doorbell'];
+      const rooms = ['Office', 'Lounge', 'Kitchen', 'Garage', 'Loft', 'Studio', 'Workshop', 'Basement', 'Annex', 'Porch'];
+      const access = [];
+      for (let i = 0; i < 9 && nodes.length < want; i++) access.push(add({ name: `${rooms[i]} switch`, host: host(), dependsOnNodeId: core.id, template: 'switch', color: i === 2 ? '#2f855a' : '' }, i === 4 ? 'down' : 'up'));
+      const hyper = [];
+      for (let i = 0; i < 2 && nodes.length < want; i++) hyper.push(add({ name: `Hypervisor ${i + 1}`, host: host(), dependsOnNodeId: core.id, template: 'home-server', color: '#6b46c1' }));
+      for (let i = 0; i < 5 && nodes.length < want; i++) add({ name: `Service ${String.fromCharCode(65 + i)} website`, host: `https://svc-${i}.example.com`, group: 'Websites', template: 'website' });
+      const aps = [];
+      let k = 0;
+      while (nodes.length < want) {
+        const roll = r();
+        if (roll < 0.06 && aps.length < 12) {
+          const sw = access[aps.length % access.length];
+          aps.push(add({ name: `${sw.name.replace(' switch', '')} AP ${aps.length + 1}`, host: host(), dependsOnNodeId: sw.id, template: 'access-point' }));
+        } else if (roll < 0.2 && hyper.length) {
+          const hv = hyper[k % hyper.length];
+          add({ name: `VM ${String(++k).padStart(3, '0')}`, host: host(), dependsOnNodeId: hv.id, group: 'Servers', template: 'linux-server' }, r() < 0.05 ? 'degraded' : 'up');
+        } else {
+          const parents = aps.length && r() < 0.45 ? aps : access;
+          const p = parents[Math.floor(r() * parents.length)];
+          add({ name: `${kinds[Math.floor(r() * kinds.length)]} ${String(++k).padStart(3, '0')}`, host: host(), dependsOnNodeId: p.id }, r() < 0.03 ? 'degraded' : 'up');
+        }
+      }
+    }
+  }
+
   /* ---------- Maintenance ---------- */
   const maintenance = [
     { id: ++seq.maint, name: 'Backup server patching', nodeId: backupSrv.id, group: '', enabled: true, startAt: ago(35 * MIN), endAt: ahead(85 * MIN), weekdays: [], durationMinutes: 0, notes: 'Manual OS updates and reboot.', createdAt: ago(2 * HOUR) },
@@ -481,6 +524,21 @@ import { install as installHistory } from './mock/history.js';
   let reports = [];
   on('GET', /^\/api\/reports$/, () => clone(reports));
   on('PUT', /^\/api\/reports$/, (m, body) => { reports = clone(body); return reports; });
+  // The network map's hand arrangement, as the service keeps it: places for
+  // nodes that still exist, rounded to a tenth, and the folded clusters.
+  let mapLayout = { positions: {}, collapsed: [], updatedAt: iso(0) };
+  const cleanLayout = (l) => {
+    const known = new Set(nodes.map((n) => String(n.id)));
+    const positions = {};
+    for (const [k, p] of Object.entries(l?.positions || {})) {
+      if (!/^\d+$/.test(k) || !Number.isFinite(p?.x) || !Number.isFinite(p?.y) || Math.abs(p.x) > 1e6 || Math.abs(p.y) > 1e6) throw err(400, `map layout: the position of node ${k} is out of range`);
+      if (known.has(k)) positions[k] = { x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10, ...(p.pinned ? { pinned: true } : {}) };
+    }
+    const collapsed = [...new Set((l?.collapsed || []).map(Number))].filter((id) => known.has(String(id))).sort((a, b) => a - b);
+    return { positions, collapsed, updatedAt: l?.updatedAt || iso(0) };
+  };
+  on('GET', /^\/api\/map\/layout$/, () => clone(cleanLayout(mapLayout)));
+  on('PUT', /^\/api\/map\/layout$/, (m, body) => { mapLayout = { ...cleanLayout(body), updatedAt: iso(Date.now()) }; return clone(mapLayout); });
   const incidents = [{ id: 1, nodeId: gateway.id, nodeName: gateway.name, state: 'open', openedAt: ago(23 * MIN), durationSeconds: 23 * 60, checkIds: gateway.checks.map((c) => c.id), notes: [] }];
   on('GET', /^\/api\/incidents$/, (m, body, u) => clone(incidents.filter((i) => { const state = u.searchParams.get('state') || 'active'; return state === 'all' || (state === 'active' ? i.state !== 'resolved' : i.state === state); })));
   on('GET', /^\/api\/incidents\/(\d+)$/, (m) => { const i = incidents.find((x) => x.id === Number(m[1])); if (!i) throw err(404, 'Incident not found'); return { incident: clone(i), events: clone(events.filter((e) => e.nodeId === i.nodeId)) }; });

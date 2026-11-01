@@ -10,7 +10,7 @@ export const FIRST_NODE = 21;
  *  section, since each is its own page. */
 export const ROUTES = [
   'dashboard', 'nodes', 'nodes/new', 'nodes/bulk', `nodes/${FIRST_NODE}`, `nodes/${FIRST_NODE}/edit`,
-  'charts', 'map', 'incidents', 'incidents?tab=events', 'incidents?tab=reports', 'audit', 'audit/log', 'audit/exports',
+  'charts', 'map', 'map/present', 'incidents', 'incidents?tab=events', 'incidents?tab=reports', 'audit', 'audit/log', 'audit/exports',
   'settings/general', 'settings/appearance', 'settings/indicators', 'settings/users', 'settings/network', 'settings/alerts',
   'settings/automation', 'settings/rules', 'settings/mcp', 'settings/retention', 'settings/maintenance', 'settings/backups', 'settings/database',
   'settings/updates', 'settings/health', 'settings/about',

@@ -598,7 +598,7 @@ There are fourteen widgets:
 | **Response-time chart** | Response time over time |
 | **Packet-loss chart** | Loss over time |
 | **Uptime** | Availability as a bar |
-| **Network map** | Every node under the node it depends on, coloured by status (see [the network map](#the-network-map)) |
+| **Network map** | The dependency map as customised and arranged on the map page (see [the network map](#the-network-map)) |
 
 **Arranging them.** Drag a widget by its grip to move it, and its corner to
 resize. From the keyboard, focus the grip and use the **arrow keys** to move it
@@ -610,72 +610,125 @@ rows further down until the page was reloaded).
 ### The network map
 
 **Network map** in the sidebar draws the dependencies between nodes: every node
-sits under the node it **depends on** — the firewall at the top, the switch
-under it, the machines plugged into the switch under that. Nodes are coloured
-by their status, and the lines out of a node that is down are drawn red and
-dashed, so the reach of an outage — everything whose alerts are being held back
-because of it — can be followed by eye. Nodes with no dependency either way are
-set apart in a block of their own.
+hangs off the node it **depends on** — the firewall in the middle, the switches
+round it, the machines plugged into each switch round that. Nodes with no
+dependency either way are set apart in a block of their own.
 
-Choose a node to see what is upstream of it and what depends on it, to give
-it a **colour** of its own (its box here and its row in the node list; the
-status stays on the stripe, the dot and the border), and to
-change what it **depends on** without opening the editor (a node cannot be
-made to depend on anything below it, which would be a loop). **Customise**
-lays the map out top to bottom, left to right or as **clusters**; shows names,
-names and addresses, or just status dots; makes nodes smaller or larger; draws
-lines curved, straight or right-angled; narrows the map to a group or a tag
-(the nodes a filtered node depends on stay on the map, faded); and can hide
-nodes with no dependency. Those choices are remembered in this browser.
+**Clusters** is the layout it opens in (the others, top to bottom and left to
+right, are under **Customise the map**). It puts the things that depend on a
+node in a **ring round it**, and every one of those that has things of its own in
+the middle of a **ring of its own**, further out — the way you would sketch the
+network on a whiteboard. Rings are ovals, wider than tall, which is the shape a
+row of name labels wants; a switch with a long run of machines puts them on two
+or three rings rather than one huge circle; round any node but the one in the
+middle, the side facing its own parent is left open so the line in stays clear;
+and neighbouring clusters keep clear space between them. No two boxes overlap,
+no line runs through a box it does not join, lines are straight, and the same
+nodes always give the same picture. It is worked out in one pass, so a map of
+several hundred nodes draws in a few milliseconds and keeps up with live
+updates. Several separate trees are set down round the biggest one.
 
-**Clusters** (this replaces the layout that was called *Radial*; a map saved
-that way keeps working and now draws as clusters) puts the things that depend
-on a node in a **ring round it**, and every one of those that has things of its
-own in the middle of a **ring of its own**, further out — the router in the
-middle with its switches round it, each switch with its machines round it, the
-way you would sketch the network on a whiteboard. Single devices sit close to
-the node they depend on; a switch with a crowd behind it is on a longer line, so
-its whole ring has room. Round any node but the one in the middle, the side
-facing its own parent is left open, so the line in stays clear, and a node with
-only a couple of dependents keeps them on its far side. A switch with a long run
-of machines puts them on two or more rings rather than one huge circle. Where
-there are several separate trees, the biggest is drawn in the middle and the
-others are set down in the nearest free space round it; nodes with no
-dependency are kept in rows underneath. No two boxes overlap and no line runs
-through a box it does not join, and the same nodes always give the same picture.
-In this layout a line is straight, or gently curved if **Line shape** is
-*Curved*; right-angled lines belong to the tree layouts and are drawn straight.
+**A big map.** Fitted to the screen, a map of a couple of hundred nodes is an
+overview: the clusters and where an outage is are clear, the names are not.
+Scroll or use **+** and **−** to zoom (it goes in until a box is four times life
+size), drag the empty map to pan, press **0** to fit. **Find a node…** above the
+map takes a name or an address, chooses the node and zooms to it. A cluster can
+be **folded** into its node (**Fold its cluster** on the chosen node): what is in
+it is not drawn, and the node shows how many it holds, in the colour of the worst
+status among them.
+
+**Status and colour.** A node's box is filled with its own **colour**, if it has
+one, and its status is a light in a small box of its own at the side — green,
+amber, red (pulsing), blue for maintenance, grey — with the border saying it
+too. **Customise the map › Node colour shows** chooses *Colour and status* (the
+default), *Status only* (no colours of your own; the box is tinted by its
+status) or *Chosen colour only* (no status at all — your choice, so the map
+shows nothing of an outage in that mode).
+
+**Outages.** Lines out of a node that is down are drawn red; further into what
+it cuts off — the nodes the service records as *affected by* it, whose alerts
+are held back — they are a fainter, dashed red, and those boxes get a dashed red
+border. A node whose own checks still pass is not cut off, and is not drawn as
+if it were. Lines into what sits under a node in maintenance are dashed blue.
+**Line colour shows** can make them your chosen colours only, or colour every
+line by the status of the node it leads to. The legend says what each colour
+means in words.
+
+**Choosing a node** lights up the chain it depends on and everything that
+depends on it, and fades the rest (turn this off under Customise); click the
+empty map or press **Esc** to let go. The side panel says what it depends on,
+what depends on it, and how many nodes an outage there would cut off. An
+administrator also has **Change it**: what it **depends on** (a node cannot be
+made to depend on anything below it, which would be a loop), its **colour**
+(its box here and its row in the node list), and the look of its line. **Biggest
+risks** lists the nodes whose loss takes the most with it.
+
+**Arranging the map by hand.** In the clusters layout, drag a node to where it
+makes sense: it is **pinned** there (a small mark at its corner), and what hangs
+off it comes along, its ring turning to face away from the line in — hold
+**Shift** to move it alone. Nodes nobody pinned are placed by the layout next to
+what they depend on, and new nodes find their own place. From the map menu
+(**⋯**):
+
+- **Tidy up the unpinned nodes** puts every node nobody pinned back next to what
+  it depends on, and turns a group that would land on something else until it
+  is clear. Pins stay where they are.
+- **Tidy up everything** forgets every place and lays the map out afresh
+  (folded clusters stay folded). Both offer **Undo**.
+- **Unpin** on the chosen node sends it back next to its parent.
+- **Lock the layout** stops nodes being dragged in this browser, so nothing is
+  moved by accident while showing someone round.
+
+An administrator's arrangement is saved on the service and is the one every
+map shows — the page, dashboard widgets, a presentation — on every computer,
+and it is included in backups. Anyone else can drag nodes about to see what
+looks better, in their own tab only; nothing they do is saved.
+
+**What if…?** Choose a node and **Simulate a failure** (or **Simulate
+maintenance**): the map shows it down and spreads the effect one ring at a
+time — red into what it cuts off, blue into what goes quiet — while a banner
+over the map says it is a simulation, which nodes are in it, and how many nodes
+would be cut off ("their alerts would be held back"). **Step** spreads it one
+ring at a time for talking through, **Play** runs it again, more nodes can be
+added, and **End the simulation** puts everything back. Nothing real changes:
+no status, no alert, nothing saved. It is useful for planning too: "if I move
+the NAS behind the new switch, what goes when that switch dies?"
+
+**Presenting.** **Present** opens the map full screen at `#/map/present`: no
+sidebar, nothing that edits anything, larger nodes and heavier lines, as
+arranged. It is **frozen** at the moment it was opened, so a real alert cannot
+change the picture mid-sentence (**Live** follows the service again), **Hide
+addresses** leaves every host name and IP off, **Biggest risks** is a good
+opening slide, and choosing a node offers the same simulation. **Save as PNG**
+saves what is in view; **Full screen** uses the whole display.
 
 **How a line looks.** Every line can have its own **colour**, **thickness**
-(1 to 8 pixels on the screen, however far the map is zoomed or scaled down to
-fit, and applied as you type it) and **style** — solid, dashed, dotted, or dash and dot — and there are
-two places to say so:
+(1 to 8) and **style** — solid, dashed, dotted, or dash and dot. The thickness
+is screen pixels at the least: fitted to the screen, however big the map, a
+line is drawn as thick as chosen, and zooming in thickens it with the boxes, up
+to three times. There are two places to set them:
 
-- **Line style** under **Customise** sets the look of every line on the map
-  (and in the *Network map* widget's editor on a dashboard). *Default* puts the
-  colour back to the theme's; **Reset the lines** puts all three back.
+- **Line style** under **Customise the map** sets the look of every line on the
+  map (and in the *Network map* widget's editor on a dashboard). *Default* puts
+  the colour back to the theme's; **Reset the lines** puts all three back.
 - A single link has its own look, kept on the node at its lower end (the one
-  that **depends on** the other). Choose that node on the map and use **Link to
-  *its parent*** under **Depends on** — or the **Link style** group beside
-  **Depends on** in the node editor. Anything left at "like the map" follows the
-  map; **Reset** gives the whole link back to it. Because it is kept on the
-  node, every map shows it — the page, a dashboard widget, an exported picture —
-  and it is included in backups and configuration exports. It goes when the node
-  stops depending on anything, and when its parent is deleted; pointing the node
-  at a different parent keeps it.
+  that **depends on** the other). Choose that node, open **Change it** and use
+  **Link to *its parent***, or the **Link style** group beside **Depends on** in
+  the node editor. Anything left at "like the map" follows the map; **Reset**
+  gives the whole link back to it. Every map shows it, and it is included in
+  backups and configuration exports. It goes when the node stops depending on
+  anything, and when its parent is deleted.
 
-A link's own style beats the map's, and the map's beats the theme's. The one
-thing no colour overrides is an outage: the lines out of a node that is down
-are always drawn red, so a map with a green house style still shows how far a
-failure reaches — though they take the thickness and dashes chosen for them,
-and are dashed by default. The legend says what red means in words, since a
-colour or a dash style is never the only cue. Colours are hex values
-(`#3b82f6`); the service refuses anything else.
+A link's own style beats the map's, and the map's beats the theme's; an outage's
+colour beats them all (unless *Line colour shows* says otherwise), though it
+keeps the thickness and dashes chosen. Colours are hex values (`#3b82f6`); the
+service refuses anything else.
 
-Scroll or use **+** and **−** to zoom, drag to pan, press **0** to fit. **Pin to
-a dashboard** adds the map, as customised, as a *Network map* widget; **Export
-as SVG** saves the drawing, with every line's colour, thickness and dashes.
-"View as list" under the map gives the same tree as text.
+**Pin to a dashboard** adds the map, as customised and arranged, as a *Network
+map* widget. **Export as SVG** saves the whole drawing, with every line's
+colour, thickness and dashes; **Export as PNG** saves what is in view. "View as
+list" under the map gives the same tree as text. The map's options are
+remembered in this browser.
 
 ---
 

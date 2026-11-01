@@ -291,6 +291,7 @@ func (s *Server) Handler() http.Handler {
 
 	s.incidentRoutes(mux)
 	s.reportRoutes(mux)
+	s.mapRoutes(mux)
 	if s.Web != nil {
 		mux.Handle("/", s.staticHandler())
 	}

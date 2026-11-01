@@ -66,10 +66,13 @@ type Config struct {
 	Endpoints   []model.Endpoint          `json:"endpoints,omitempty"`
 	Rules       []model.Rule              `json:"rules,omitempty"` // notification rules (#31); absent from archives written before them
 	Charts      []model.SavedChart        `json:"charts,omitempty"`
-	Wallboards  []model.Wallboard         `json:"wallboards,omitempty"`
-	Users       []store.UserRecord        `json:"users,omitempty"`
-	APIKeys     []store.APIKeyRecord      `json:"apiKeys,omitempty"`
-	Agents      []store.AgentRecord       `json:"agents,omitempty"`
+	// MapLayout is the network map's hand arrangement; absent from archives
+	// written before there was one.
+	MapLayout  *model.MapLayout     `json:"mapLayout,omitempty"`
+	Wallboards []model.Wallboard    `json:"wallboards,omitempty"`
+	Users      []store.UserRecord   `json:"users,omitempty"`
+	APIKeys    []store.APIKeyRecord `json:"apiKeys,omitempty"`
+	Agents     []store.AgentRecord  `json:"agents,omitempty"`
 }
 
 // Summary reports what a restore (or a migrate-db copy) imported.
@@ -172,6 +175,12 @@ func ExportConfig(ctx context.Context, st *store.Store) (Config, error) {
 		return cfg, err
 	}
 	if err = st.GetSetting(ctx, "reports", &cfg.Reports); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return cfg, err
+	}
+	var layout model.MapLayout
+	if err = st.GetSetting(ctx, model.MapLayoutSettingKey, &layout); err == nil {
+		cfg.MapLayout = &layout
+	} else if !errors.Is(err, store.ErrNotFound) {
 		return cfg, err
 	}
 	if cfg.Settings, err = st.LoadSettings(ctx); err != nil {
@@ -711,6 +720,13 @@ func restoreConfigTx(ctx context.Context, st *store.Store, cfg Config, sum *Summ
 	}
 	if err := st.PutSetting(ctx, "reports", cfg.Reports); err != nil {
 		return err
+	}
+	// Node ids come back as they were, so the arrangement's places still
+	// name the right nodes; one that names nothing is dropped as it is read.
+	if cfg.MapLayout != nil {
+		if err := st.PutSetting(ctx, model.MapLayoutSettingKey, cfg.MapLayout); err != nil {
+			return err
+		}
 	}
 	if err := st.SetDependencies(ctx, deps); err != nil {
 		return err
