@@ -11,9 +11,10 @@
 // Services and programs to watch (#62), and containers and virtual machines,
 // are the exception: empty means none, since "every service" is hundreds of
 // readings nobody wants. They are names typed or picked from what the machine
-// said it has (watchPicker).
+// said it has (watchPicker). A machine's containers and guests are few enough
+// to show whole, so they can be ticked, or all the running ones added at once.
 
-import { h, chipInput } from '../components.js';
+import { h, chipInput, icon } from '../components.js';
 
 /** The kinds of reading an agent collects, in the order they are listed. */
 export const COLLECT_FAMILIES = [
@@ -129,27 +130,72 @@ export function watchPicker({ value = {}, inventory = null, note = null } = {}) 
     { key: 'containers', title: 'Containers to watch', placeholder: 'e.g. web, nextcloud-db-1', help: 'Docker or Podman containers, by name as docker ps shows it. Each reports its state and health, restarts in the last hour, and processor and memory use against its limit. Critical when one stops, a warning while it is unhealthy or restarting. The machine reads its Docker socket only once a container is named here.' },
     { key: 'vms', title: 'Virtual machines to watch', placeholder: 'e.g. dc01', help: 'Hyper-V guests on this machine, by name as Hyper-V Manager shows it. Each reports its state, uptime, and processor and memory use. Critical when one is off, a warning while it is paused or saved. Give a guest a threshold of its own if it is meant to be off.' },
   ];
+  // Containers and guests are a handful, not hundreds, so they are listed in
+  // full as boxes to tick, with a button that adds every running one.
+  const tickable = new Set(['containers', 'vms']);
+  const isRunning = (i) => /^running|^\d+ running/.test(i.detail || '');
   const parts = kinds.map((k) => {
     const holder = h('div');
     let chips = null;
     const listNote = h('p', { class: 'note' });
+    const quick = h('div', { class: 'stack-sm watch-quick' });
     const build = (inv) => {
       const items = inv?.[k.key] || [];
       const current = chips ? chips.value : (value[k.key] || []).filter(Boolean);
-      chips = chipInput({ values: current, placeholder: k.placeholder, suggestions: items.map((i) => i.name) });
+      let boxes = [];
+      let addRunning = null;
+      // Keeps the boxes and the button in step with the names in the box.
+      const sync = (names) => {
+        const chosen = new Set(names);
+        for (const b of boxes) b.input.checked = chosen.has(b.name);
+        if (addRunning) {
+          const missing = items.filter((i) => isRunning(i) && !chosen.has(i.name)).length;
+          addRunning.disabled = missing === 0;
+          addRunning.lastChild.textContent = missing ? `Watch all running (${missing} more)` : 'All running ones are watched';
+        }
+      };
+      chips = chipInput({ values: current, placeholder: k.placeholder, suggestions: items.map((i) => i.name), onChange: sync });
       chips.input.setAttribute('aria-label', k.title);
       holder.replaceChildren(chips);
-      const running = items.filter((i) => /^running|^\d+ running/.test(i.detail || '')).length;
+      const running = items.filter(isRunning).length;
+      const pickable = tickable.has(k.key) && items.length > 0;
       listNote.textContent = items.length
-        ? `${items.length} on this machine${k.key === 'processes' ? '' : `, ${running} running`} — start typing to pick one.`
+        ? `${items.length} on this machine${k.key === 'processes' ? '' : `, ${running} running`} — ${pickable ? 'tick the ones to watch, or type a name.' : 'start typing to pick one.'}`
         : '';
+      if (!pickable) { quick.replaceChildren(); quick.hidden = true; return; }
+      const prefix = `watch-${++seq}-${k.key}`;
+      boxes = items.map((i, n) => {
+        const input = h('input', { type: 'checkbox', id: `${prefix}-${n}` });
+        input.addEventListener('change', () => {
+          const now = chips.value.filter((v) => v !== i.name);
+          if (input.checked) now.push(i.name);
+          chips.value = now;
+          sync(now);
+        });
+        return {
+          name: i.name, input,
+          el: h('label', { class: 'checkbox', for: input.id }, input,
+            h('span', null, i.name, i.detail ? h('span', { class: 'dim small collect-detail' }, i.detail) : null)),
+        };
+      });
+      addRunning = running ? h('button', { class: 'btn btn-sm', type: 'button', onclick: () => {
+        const now = chips.value;
+        for (const i of items) if (isRunning(i) && !now.includes(i.name)) now.push(i.name);
+        chips.value = now;
+        sync(now);
+      } }, icon('plus'), h('span')) : null;
+      quick.replaceChildren(
+        addRunning ? h('div', { class: 'btn-group' }, addRunning) : null,
+        h('div', { class: 'collect-cols' }, boxes.map((b) => b.el)));
+      quick.hidden = false;
+      sync(current);
     };
     build(inventory);
     return {
       key: k.key,
       build,
       el: h('fieldset', { class: 'collect-group', 'data-watch': k.key }, h('legend', null, k.title),
-        holder, h('p', { class: 'note' }, k.help), listNote),
+        holder, quick, h('p', { class: 'note' }, k.help), listNote),
       value: () => chips.value,
     };
   });

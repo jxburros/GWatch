@@ -12,9 +12,9 @@ release is published as `v<VERSION>` by the Release workflow, dispatched from
 
 ## 0.8.8 (not yet released)
 
-GWatch 0.8.8 and gwatch-agent 0.8.6 ship together. The agent has no changes of
-its own: it is rebuilt with the configuration model it shares with GWatch,
-which gained the network map's arrangement.
+GWatch 0.8.8 and gwatch-agent 0.8.6 ship together. The agent is rebuilt with
+the configuration model it shares with GWatch, which gained the network map's
+arrangement, and its control panel can add every running container at once.
 
 ### Added
 
@@ -44,6 +44,13 @@ which gained the network map's arrangement.
   shows* can make it status only or colour only. *Line colour shows* chooses
   between chosen colours with outages in red (the default), chosen colours only,
   and the status of the node a line leads to.
+- **Pick a machine's containers instead of typing them.** Where a machine's
+  containers and virtual machines are chosen — on an agent's node, and on the
+  hardware panel of the computer GWatch runs on — every container its Docker
+  has is listed with its state and image, to tick, and *Watch all running*
+  adds each running one at once. A stopped one is left for you to choose.
+  Hyper-V guests are offered the same way. The agent's control panel has the
+  same button once it has listed what the machine has.
 
 ### Changed
 

@@ -9,7 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as nodeDetailView from '../../../web/views/node-detail.js';
 import * as nodesView from '../../../web/views/nodes.js';
-import { collectionPicker, describeSelection } from '../../../web/views/agent-collect.js';
+import { collectionPicker, describeSelection, watchPicker } from '../../../web/views/agent-collect.js';
 import { addAgentNode, pairingWatch } from '../../../web/views/machines.js';
 import { mountView, waitFor } from '../view-harness.mjs';
 
@@ -330,6 +330,60 @@ test('an agent is told which containers to watch, and shows them', async (t) => 
     return collect.containers?.includes('homeassistant') ? collect : null;
   });
   assert.deepEqual(saved.containers.sort(), ['homeassistant', 'nextcloud', 'nextcloud-db']);
+});
+
+// A machine's containers are a handful, so they are listed whole to tick, and
+// every running one can be added at once; a stopped one is left for a person
+// to choose, and a name typed by hand keeps its box in step.
+test('a machine\'s containers can be ticked, or all the running ones added at once', () => {
+  const inventory = {
+    services: [{ name: 'nginx', detail: 'running · nginx' }],
+    containers: [
+      { name: 'web', detail: 'running · nginx:1.27' }, { name: 'db', detail: 'running · postgres:17' },
+      { name: 'cache', detail: 'running · redis:7' }, { name: 'old-backup', detail: 'exited · restic/restic' },
+    ],
+    vms: [{ name: 'dc01', detail: 'running · 2 virtual processors' }, { name: 'lab', detail: 'off · 2 virtual processors' }],
+  };
+  const picker = watchPicker({ value: { containers: ['db'] }, inventory });
+  document.body.append(picker.el);
+  try {
+    const box = picker.el.querySelector('[data-watch="containers"]');
+    const boxes = [...box.querySelectorAll('input[type="checkbox"]')];
+    assert.equal(boxes.length, 4, 'every container is listed, stopped ones too');
+    assert.match(box.textContent, /exited · restic\/restic/, 'with its state and image');
+    assert.deepEqual(boxes.map((b) => b.checked), [false, true, false, false], 'the watched one is ticked');
+    assert.match(box.textContent, /tick the ones to watch/);
+
+    const all = button(box, 'Watch all running');
+    assert.match(all.textContent, /2 more/);
+    all.click();
+    assert.deepEqual(picker.value().containers, ['db', 'web', 'cache'], 'the running ones are added, the exited one is not');
+    assert.ok(all.disabled, 'nothing is left to add');
+    assert.match(all.textContent, /All running ones are watched/);
+    assert.deepEqual(boxes.map((b) => b.checked), [true, true, true, false]);
+
+    // Ticking adds, unticking removes, and the button notices.
+    boxes[3].checked = true; boxes[3].dispatchEvent(new window.Event('change'));
+    boxes[0].checked = false; boxes[0].dispatchEvent(new window.Event('change'));
+    assert.deepEqual(picker.value().containers, ['db', 'cache', 'old-backup']);
+    assert.ok(!all.disabled);
+    assert.match(all.textContent, /1 more/);
+
+    // Removing a chip unticks its box.
+    box.querySelector('button[aria-label="Remove db"]').click();
+    assert.equal(boxes[1].checked, false);
+
+    // Guests are offered the same way; services, hundreds long, are not.
+    const vms = picker.el.querySelector('[data-watch="vms"]');
+    button(vms, 'Watch all running').click();
+    assert.deepEqual(picker.value().vms, ['dc01']);
+    assert.equal(picker.el.querySelectorAll('[data-watch="services"] input[type="checkbox"]').length, 0);
+
+    // A list made later keeps what is chosen.
+    picker.setInventory({ containers: [{ name: 'web', detail: 'running · nginx:1.27' }] });
+    assert.deepEqual(picker.value().containers, ['cache', 'old-backup']);
+    assert.ok(!button(picker.el.querySelector('[data-watch="containers"]'), 'Watch all running').disabled);
+  } finally { picker.el.remove(); }
 });
 
 // The computer GWatch runs on has no agent: its list is set on its own

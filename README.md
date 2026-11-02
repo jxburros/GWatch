@@ -32,8 +32,9 @@ clean groups, and **lines keep their thickness** however far the map is zoomed
 out. A node shows **its own colour and its status** side by side. You can
 **drag nodes into place** (pinned for everyone, with *Tidy up*), **fold
 clusters** away, and run a **what-if simulation** of a failure or maintenance.
-**Present** shows the map full screen and frozen for an audience. See
-[`CHANGELOG.md`](CHANGELOG.md).
+**Present** shows the map full screen and frozen for an audience. A machine's
+**containers** can now be ticked from its own list, or **all the running ones
+added at once**, instead of typed by name. See [`CHANGELOG.md`](CHANGELOG.md).
 
 ## What's new in 0.8.6
 

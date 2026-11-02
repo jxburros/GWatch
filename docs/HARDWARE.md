@@ -743,7 +743,10 @@ charted but never alerted on.
 Names are chosen in the same places as services, and the same lists are offered
 to pick from: an agent sends every container its Docker has and every guest its
 hypervisor has with its check-in, and the hardware panel and the control panel
-make the list when you ask. In `agent.json`:
+make the list when you ask. A machine's containers and guests are listed in
+full, each with its state (and a container's image), to tick, and **Watch all
+running** adds every running one at once — so watching everything a Docker host
+runs now is one click; a stopped one is left for you to choose. In `agent.json`:
 `{ "containers": ["nextcloud", "nextcloud-db"], "vms": ["dc01"] }`.
 
 **Nothing asks Docker or Hyper-V anything until a name is given.** Then:

@@ -369,12 +369,13 @@ function buildCollect() {
    a list of names, one per line; nothing is watched, and neither Docker nor
    Hyper-V is asked anything, until a name is given. The machine's own list is
    long (hundreds of services on Windows), so it is fetched only when asked and
-   offered as boxes to tick under a filter, ticking adding the name to the list. */
+   offered as boxes to tick under a filter, ticking adding the name to the list.
+   Containers and guests also get a button that adds every running one. */
 const WATCH_KINDS = [
   { key: 'services', title: 'Services to watch', hint: 'One per line. A systemd unit on Linux (nginx), a service or display name on Windows (Spooler), a launchd label on macOS. GWatch reports each as running or stopped, and a stopped one is critical by default.' },
   { key: 'processes', title: 'Programs to watch', hint: 'One per line, by executable name (plex, postgres). GWatch reports how many copies are running, and none is critical by default.' },
-  { key: 'containers', title: 'Containers to watch', placeholder: 'web\nnextcloud-db-1', hint: 'One per line, by name as docker ps shows it. The agent reads them from the Docker (or Podman) socket, so its account must be allowed to use it — which also lets it read everything else the daemon knows. GWatch reports each one\u2019s state, health, restarts and use of its limits; a stopped one is critical by default.' },
-  { key: 'vms', title: 'Virtual machines to watch', placeholder: 'dc01', hint: 'One per line, by name as Hyper-V Manager shows it. The agent\u2019s account must be in the local "Hyper-V Administrators" group (the installed service, as LocalSystem, is). GWatch reports each one\u2019s state, uptime and use; one that is off is critical by default.' },
+  { key: 'containers', tickAll: true, title: 'Containers to watch', placeholder: 'web\nnextcloud-db-1', hint: 'One per line, by name as docker ps shows it. The agent reads them from the Docker (or Podman) socket, so its account must be allowed to use it — which also lets it read everything else the daemon knows. GWatch reports each one\u2019s state, health, restarts and use of its limits; a stopped one is critical by default.' },
+  { key: 'vms', tickAll: true, title: 'Virtual machines to watch', placeholder: 'dc01', hint: 'One per line, by name as Hyper-V Manager shows it. The agent\u2019s account must be in the local "Hyper-V Administrators" group (the installed service, as LocalSystem, is). GWatch reports each one\u2019s state, uptime and use; one that is off is critical by default.' },
 ];
 
 function buildWatch(coll) {
@@ -397,12 +398,30 @@ function buildWatch(coll) {
         });
         return h('label', { class: 'check', for: input.id }, input, h('span', { class: 't' }, h('span', null, i.name), i.detail ? h('span', { class: 'd' }, i.detail) : null));
       }));
+      syncRunning();
     };
+    const running = () => items.filter((i) => /^running|^\d+ running/.test(i.detail || '')).map((i) => i.name);
+    const addRunning = h('button', { type: 'button', onclick: () => {
+      const now = names();
+      for (const n of running()) if (!now.includes(n)) now.push(n);
+      text.value = now.join('\n');
+      draw();
+    } });
+    const syncRunning = () => {
+      const chosen = new Set(names());
+      const missing = running().filter((n) => !chosen.has(n)).length;
+      runningRow.hidden = !k.tickAll || running().length === 0;
+      addRunning.disabled = missing === 0;
+      addRunning.textContent = missing ? `Watch all running (${missing} more)` : 'All running ones are watched';
+    };
+    const runningRow = h('div', { class: 'row', hidden: true }, addRunning);
     filter.addEventListener('input', draw);
     text.addEventListener('change', draw);
+    list.addEventListener('change', syncRunning);
+    text.addEventListener('input', syncRunning);
     return {
       key: k.key,
-      el: h('fieldset', { 'data-watch': k.key }, h('legend', null, k.title), text, h('p', { class: 'note' }, k.hint), filter, list),
+      el: h('fieldset', { 'data-watch': k.key }, h('legend', null, k.title), text, h('p', { class: 'note' }, k.hint), runningRow, filter, list),
       offer(found) { items = found || []; filter.hidden = items.length === 0; draw(); },
       value: () => [...new Set(names())],
     };
