@@ -10,6 +10,19 @@ release is published as `v<VERSION>` by the Release workflow, dispatched from
 `main`. It refuses to publish a tag that disagrees with the file — see
 [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## 0.8.9 (not yet released)
+
+GWatch only; gwatch-agent stays at 0.8.6. No change to the program: this
+release drops the manual approval gates from the release process.
+
+### Documentation
+
+- **No required reviewers on the release Environments.** `docs/RELEASING.md`
+  no longer tells maintainers to put a required reviewer on the `release` and
+  `authenticode` GitHub Environments, which paused every signing and Windows
+  build job for approval. The `main` branch restriction, the environment-scoped
+  signing secret and the federated credential are the protection.
+
 ## 0.8.8 (not yet released)
 
 GWatch 0.8.8 and gwatch-agent 0.8.6 ship together. The agent has no changes of
