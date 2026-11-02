@@ -468,10 +468,9 @@ repository.
    Signer* before the rename). It needs nothing else.
 7. **Create the `authenticode` environment** in GitHub (*Settings → Environments*), restrict
    its deployment branches to `main` (releases are dispatched from `main`), and add the
-   variables above to it. A required reviewer is possible but makes every Windows build job
-   wait for approval, on top of the `release` environment's approval of the ed25519
-   signing jobs; the federated credential and the branch restriction are what keep other
-   workflows out.
+   variables above to it. Do not add a required reviewer: the federated credential and the
+   branch restriction are what keep other workflows out, and a reviewer would only stall
+   every Windows build job.
 8. **Dry-run it.** Dispatch the Release workflow with `dry_run` on. Each Windows job's
    summary should list its files and their signer; download a setup program from the run's
    artifacts and check *Properties → Digital Signatures* on Windows.
@@ -755,18 +754,18 @@ and says so.
 
 ## Protected publishing
 
-Signing jobs require the `release` GitHub Environment, disable build-cache restores and use actions pinned to commits. Configure that environment to require a reviewer and restrict its deployment branches to `main`: releases are dispatched from `main`, so a `v*`/`agent-v*` tag restriction alone would refuse every release job. Move `GWATCH_SIGNING_KEY` from repository secrets into this environment and remove the repository copy; an environment declaration alone cannot protect a remaining repository secret. GitHub never reveals an existing secret. If the offline seed is unavailable, the main-only `Migrate release signing secret` workflow seals it directly to the release Environment public key, producing only a ciphertext envelope. Apply that JSON through the Environment secrets API, confirm the destination exists, then delete the repository secret. The environment reviewer must verify the destination public key and key id against the API before approving. Optional Homebrew/winget tokens are available only to their publishing steps, and checkouts do not persist credentials. Container publication waits for the signed release. Weekly CI includes vulnerability scans.
+Signing jobs require the `release` GitHub Environment, disable build-cache restores and use actions pinned to commits. Restrict that environment's deployment branches to `main` and do not add required reviewers or a wait timer — the branch restriction and environment-scoped secret are the protection, and a review gate only stalls the release: releases are dispatched from `main`, so a `v*`/`agent-v*` tag restriction alone would refuse every release job. Move `GWATCH_SIGNING_KEY` from repository secrets into this environment and remove the repository copy; an environment declaration alone cannot protect a remaining repository secret. GitHub never reveals an existing secret. If the offline seed is unavailable, the main-only `Migrate release signing secret` workflow seals it directly to the release Environment public key, producing only a ciphertext envelope. Apply that JSON through the Environment secrets API, confirm the destination exists, then delete the repository secret. Verify the destination public key and key id against the API before dispatching. Optional Homebrew/winget tokens are available only to their publishing steps, and checkouts do not persist credentials. Container publication waits for the signed release. Weekly CI includes vulnerability scans.
 
 The Linux job runs staticcheck, all root race tests, real-server browser tests and shell installer lint. `make ci` is the local subset; use `make test-postgres`, `make test-mysql` and the alternative SQLite build/test targets for backend coverage. Installers are published with their respective core/agent releases.
 
 
 ### Protected signing-key migration
 
-Create the `release` Environment with required maintainer review and selected deployment
-branches (`main`, which both this one-time migration and releases are dispatched from).
-Get its secrets public key and key ID from the GitHub API. Dispatch
-`migrate-signing-secret.yml` on main with those two public values. Approve the Environment
-job after checking that the values name this repository's Environment. The artifact
+Create the `release` Environment with selected deployment branches (`main`, which both
+this one-time migration and releases are dispatched from) and no required reviewers.
+Get its secrets public key and key ID from the GitHub API, check that they name this
+repository's Environment, and dispatch `migrate-signing-secret.yml` on main with those
+two public values. The artifact
 contains only an anonymous sealed-box ciphertext, which only GitHub's Environment key
 can decrypt. PUT the artifact JSON to the Environment's `GWATCH_SIGNING_KEY` secret
 endpoint, confirm it exists, then delete the repository-level copy. Never print or
