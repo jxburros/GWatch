@@ -117,7 +117,7 @@ jobs:
         mkdir -p dist
         CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=ci-${GITHUB_SHA::7}" -o dist/gwatch-windows-amd64.exe .
         ls -lh dist
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: gwatch-windows-amd64
         path: dist/gwatch-windows-amd64.exe
@@ -141,7 +141,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         }
         Get-ChildItem scripts\installer\Output
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: gwatch-windows-installer
         path: |
@@ -296,7 +296,7 @@ jobs:
         GWATCH_REAL=1 npx playwright test
     - name: Keep the real-server browser traces
       if: failure()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: real-server-playwright-traces
         path: test-results/
@@ -634,7 +634,7 @@ jobs:
         ls -lh
     - name: Include verified installer
       run: cp scripts/install.sh dist/install.sh
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: unsigned-gwatch
         path: dist/*
@@ -690,7 +690,7 @@ jobs:
         go run ./cmd/gwatch-sign sign -version "$RELEASE_VERSION" dist/gwatch-*
         go run ./cmd/gwatch-sign verify -version "$RELEASE_VERSION" dist/gwatch-*
         ls -lh dist
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: signed-native-gwatch
         path: dist/*
@@ -729,7 +729,7 @@ jobs:
         sh packaging/nfpm/gwatch/package.sh "$GWATCH_VERSION" dist/server-packages amd64 arm64 arm
         (cd dist/server-packages && sha256sum *.deb *.rpm > "gwatch-linux-packages-${GWATCH_VERSION}.sha256")
         cat "dist/server-packages/gwatch-linux-packages-${GWATCH_VERSION}.sha256"
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: server-linux-packages
         path: dist/server-packages/*
@@ -840,7 +840,7 @@ jobs:
         ls -lh
     - name: Include verified installer
       run: cp scripts/install-agent.sh dist/install-agent.sh
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: unsigned-gwatch-agent
         path: dist/*
@@ -896,7 +896,7 @@ jobs:
         go run ./cmd/gwatch-sign sign -version "$RELEASE_VERSION" dist/gwatch-agent-*
         go run ./cmd/gwatch-sign verify -version "$RELEASE_VERSION" dist/gwatch-agent-*
         ls -lh dist
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: signed-native-gwatch-agent
         path: dist/*
@@ -935,7 +935,7 @@ jobs:
         sh packaging/nfpm/package.sh "$AGENT_VERSION" dist/packages amd64 arm64 arm
         (cd dist/packages && sha256sum *.deb *.rpm > "gwatch-agent-linux-packages-${AGENT_VERSION}.sha256")
         cat "dist/packages/gwatch-agent-linux-packages-${AGENT_VERSION}.sha256"
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: agent-linux-packages
         path: dist/packages/*
@@ -983,12 +983,12 @@ jobs:
         sh packaging/homebrew/package.sh "$AGENT_VERSION" dist/homebrew
         ruby -c dist/homebrew/gwatch-agent.rb
         (cd dist/homebrew && sha256sum *.tar.gz > "gwatch-agent-homebrew-${AGENT_VERSION}.sha256")
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: homebrew-formula
         path: dist/homebrew/gwatch-agent.rb
         if-no-files-found: error
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: agent-homebrew
         path: |-
@@ -1080,12 +1080,12 @@ jobs:
     - name: Zip the manifests
       shell: pwsh
       run: Compress-Archive -Path "dist\winget\manifests\GWatch.Agent\$env:AGENT_VERSION\*" -DestinationPath "dist\winget\gwatch-agent-winget-manifests-$env:AGENT_VERSION.zip"
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: winget-manifests
         path: dist/winget/manifests
         if-no-files-found: error
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: agent-winget
         path: |-
@@ -1139,7 +1139,7 @@ jobs:
         RELEASE_APP: gwatch
       run: node .toolkit/src/release.mjs stage --app "$RELEASE_APP" --from artifacts --bundle unified-bundle --sha
         "$RELEASE_SOURCE_SHA"
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: bundle-gwatch
         path: unified-bundle
@@ -1192,7 +1192,7 @@ jobs:
         RELEASE_APP: gwatch-agent
       run: node .toolkit/src/release.mjs stage --app "$RELEASE_APP" --from artifacts --bundle unified-bundle --sha
         "$RELEASE_SOURCE_SHA"
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: bundle-gwatch-agent
         path: unified-bundle
