@@ -2,7 +2,7 @@
 //
 // A small icon by the clock that says whether the agent is reporting, opens
 // the control panel, and nothing else. It is deliberately a thin shim over
-// what already exists (entry 6 of docs/AGENT-DECISIONS.md): what it shows comes
+// what already exists (entry 6 of docs/development/AGENT-DECISIONS.md): what it shows comes
 // from the status file the service writes after every report (status.go), and
 // everything it can do is done by starting `gwatch-agent ui`, the panel. It
 // holds no settings, sends nothing anywhere and listens on nothing.

@@ -9,7 +9,7 @@
 // without the local setting the agent ignores whatever a check-in says about
 // checks, and this file's code never runs.
 //
-// What can be asked of it is narrow on purpose (docs/AGENT-DECISIONS.md,
+// What can be asked of it is narrow on purpose (docs/development/AGENT-DECISIONS.md,
 // entry 16). A check definition is data: one of the built-in network check
 // types (ping, TCP, HTTP and its keyword/JSON/certificate forms, DNS, SNMP),
 // an address, and the settings that type reads. A script, a hardware check or

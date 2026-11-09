@@ -8,22 +8,62 @@ your data, but the interface and the JSON API can still change between releases.
 The version a build reports comes from the [`VERSION`](VERSION) file, and a
 release is published as `v<VERSION>` by the Release workflow, dispatched from
 `main`. It refuses to publish a tag that disagrees with the file — see
-[`docs/RELEASING.md`](docs/RELEASING.md).
+[`docs/development/RELEASING.md`](docs/development/RELEASING.md).
 
-## 0.8.9 (not yet released)
+## 0.8.10 (not yet released)
+
+GWatch 0.8.10 and gwatch-agent 0.8.7 ship together. One security fix, and the
+documentation reorganised around the person using GWatch.
+
+### Security
+
+- **A request GWatch makes to itself is no longer the local administrator.** A
+  client on the computer GWatch runs on is the administrator with no sign-in,
+  unless **Require sign-in on this computer too** is on. GWatch also makes
+  requests on other people's instructions (an HTTP, keyword or JSON check, a
+  webhook action, a Matter server address), and one aimed at GWatch's own port
+  arrived over loopback and was given that same access. A read-write API key
+  may create and test HTTP checks, so it could do anything an administrator
+  can, including the things keys are refused. GWatch now remembers the loopback
+  connections it opens itself and never gives them the local-administrator
+  shortcut: such a request has to carry a credential like any other. If you
+  have handed out a read-write API key (the MCP companion's included), update.
+  The agent is rebuilt with the same change to the checks it shares with
+  GWatch; nothing else in it changes.
+
+### Documentation
+
+- **The README is written for the person installing GWatch**: what it is for,
+  how to install it on Windows, Docker, Linux and macOS, and the first ten
+  minutes. Building, testing and releasing moved to
+  [`CONTRIBUTING.md`](CONTRIBUTING.md) and
+  [`docs/development/`](docs/development/README.md).
+- **Developer documents live in `docs/development/`**: `RELEASING.md`,
+  `RELEASE-TEST-PLAN.md`, `AGENT-DECISIONS.md`, the product brief and the
+  October review moved there, and building and testing got its own
+  `DEVELOPMENT.md`. [`docs/README.md`](docs/README.md) is an index of
+  everything, by what you are trying to do.
+- **New: `SECURITY.md`, `CONTRIBUTING.md` and issue templates.**
+- **Corrections from an audit of every document against the code**, among
+  them: agent examples used `https://` for a server that listens on plain
+  `http://`; the Linux packages and macOS were missing from the install
+  summary; this changelog said releases that were published were not;
+  `ROADMAP.md` described finished work as planned.
+
+## 0.8.9 (not published; its changes ship in 0.8.10)
 
 GWatch only; gwatch-agent stays at 0.8.6. No change to the program: this
 release drops the manual approval gates from the release process.
 
 ### Documentation
 
-- **No required reviewers on the release Environments.** `docs/RELEASING.md`
+- **No required reviewers on the release Environments.** `docs/development/RELEASING.md`
   no longer tells maintainers to put a required reviewer on the `release` and
   `authenticode` GitHub Environments, which paused every signing and Windows
   build job for approval. The `main` branch restriction, the environment-scoped
   signing secret and the federated credential are the protection.
 
-## 0.8.8 (not yet released)
+## 0.8.8 — 2026-11-02
 
 GWatch 0.8.8 and gwatch-agent 0.8.6 ship together. The agent has no changes of
 its own: it is rebuilt with the configuration model it shares with GWatch,
@@ -84,7 +124,7 @@ which gained the network map's arrangement.
   up from 1.5. Before 0.8.5 a line's thickness shrank with the drawing, which
   is why a map of a few hundred nodes showed hairlines.
 
-## 0.8.7 (not yet released)
+## 0.8.7 (not published; its changes shipped in 0.8.8)
 
 GWatch only; gwatch-agent stays at 0.8.5. No change to the program: this
 release carries the repository's full review.
@@ -97,7 +137,7 @@ release carries the repository's full review.
   landscape — with every finding filed as an issue under
   [#199](https://github.com/jxburros/GWatch/issues/199).
 
-## 0.8.6 (not yet released)
+## 0.8.6 (not published; its changes shipped in 0.8.8)
 
 GWatch 0.8.6 and gwatch-agent 0.8.5 ship together. No change to GWatch or the
 agent themselves: both are rebuilt by an updated release workflow.
@@ -111,7 +151,7 @@ agent themselves: both are rebuilt by an updated release workflow.
   `actions/setup-node` 7, `docker/setup-buildx-action` 4, `docker/setup-qemu-action`
   4, `docker/build-push-action` 7 and `docker/login-action` 4.
 
-## 0.8.5 (not yet released)
+## 0.8.5 — 2026-10-31
 
 GWatch 0.8.5 and gwatch-agent 0.8.4 ship together. The agent has no changes of its
 own: it is rebuilt with the code it shares with GWatch, which gained node colours
@@ -159,7 +199,7 @@ pings GWatch hands it for each check.
   widget, used to thin every line to a hairline whatever thickness was chosen.
   A link's style is drawn as it is changed and saved just after.
 
-## 0.8.4 (not yet released)
+## 0.8.4 (not published; its changes shipped in 0.8.5)
 
 GWatch 0.8.4 and gwatch-agent 0.8.3 ship together: the agent reads the containers
 and virtual machines below.
@@ -186,7 +226,7 @@ and virtual machines below.
   [`docs/HARDWARE.md`](docs/HARDWARE.md#containers-and-virtual-machines), and running
   GWatch's own container with the socket in [`docs/DOCKER.md`](docs/DOCKER.md).
 
-## 0.8.3 (not yet released)
+## 0.8.3 — 2026-10-25
 
 GWatch only; gwatch-agent stays at 0.8.2.
 
@@ -197,7 +237,7 @@ GWatch only; gwatch-agent stays at 0.8.2.
   **Discover devices** tile is gone: **Discover** is already on the Nodes toolbar,
   beside **Add node**.
 
-## 0.8.2 (not yet released)
+## 0.8.2 — 2026-10-24
 
 0.8.1 was never published, so everything under it below ships in 0.8.2. Agent
 0.8.2 is released alongside.
@@ -537,7 +577,7 @@ Security fixes on top of 0.7.0.
   (`POST /ingest/checkin`): which readings were chosen, when to ask again, the newest
   agent release (a hint only) and, during a rotation, the replacement token. It has no
   field for a URL, a command, a file or a version to install, and the agent still opens
-  every connection. See [`docs/AGENT-DECISIONS.md`](docs/AGENT-DECISIONS.md), entry 12.
+  every connection. See [`docs/development/AGENT-DECISIONS.md`](docs/development/AGENT-DECISIONS.md), entry 12.
 - **The agent keeps one editable file.** `agent.json` holds the server, token, name,
   intervals, auto-update, certificate trust and a collection limit; the service is
   registered with no settings of its own, so a change is an edit and a restart rather
@@ -554,7 +594,7 @@ Security fixes on top of 0.7.0.
   has, the token, a test reading, an update check, start / stop / restart, and the
   file itself. It runs as the person who opened it rather than inside the root/SYSTEM
   service, so it can change only what that person could; see entry 6 of
-  [`docs/AGENT-DECISIONS.md`](docs/AGENT-DECISIONS.md).
+  [`docs/development/AGENT-DECISIONS.md`](docs/development/AGENT-DECISIONS.md).
 
 - **Network map: clusters, and lines you can style.**
   - **Clusters layout.** The *Radial* layout, which put every node on rings
@@ -604,7 +644,7 @@ Security fixes on top of 0.7.0.
   to notice that readings have stopped. A node's hardware charts and the hardware list
   are served from the results, and **Settings › Retention › Keep hardware check results
   for** now bounds hardware checks' results (every other check follows the setting for
-  individual results). See entry 15 of [`docs/AGENT-DECISIONS.md`](docs/AGENT-DECISIONS.md).
+  individual results). See entry 15 of [`docs/development/AGENT-DECISIONS.md`](docs/development/AGENT-DECISIONS.md).
   - **Behaviour that changes:** a machine no hardware check watches keeps only its
     newest reading, in memory — the migration drops what the old table held for such
     machines; deleting an agent removes its registration but leaves the node and its
@@ -969,7 +1009,7 @@ pick it up by themselves.
   registers the service itself the agent's own service commands point at
   `systemctl`, `brew services` or `docker`. Release binaries still update
   themselves, and no package is ever named like a self-update asset. The
-  reasoning is entry 10 of `docs/AGENT-DECISIONS.md`.
+  reasoning is entry 10 of `docs/development/AGENT-DECISIONS.md`.
 - `gwatch-agent pair` saves the server address (and `--insecure`, `--name`)
   beside the token, so `gwatch-agent run` needs no arguments afterwards; with
   the Linux packages, `sudo gwatch-agent pair --server … --code …` also enables
@@ -990,7 +1030,7 @@ The Homebrew tap needs a `jxburros/homebrew-tap` repository and a
 `HOMEBREW_TAP_TOKEN` secret, and the winget submission a `WINGET_TOKEN`
 secret; without them those two jobs skip with a notice and keep the formula
 and manifests as workflow artifacts. The container package has to be made
-public once, after its first push. `docs/RELEASING.md` has the details.
+public once, after its first push. `docs/development/RELEASING.md` has the details.
 
 ## 0.3.1
 
@@ -1016,7 +1056,7 @@ public once, after its first push. `docs/RELEASING.md` has the details.
   `gwatch-agent rollback`; `--auto-update=false` (or
   `GWATCH_AGENT_AUTO_UPDATE=off`) turns the automatic half off.
   See [`docs/HARDWARE.md`](docs/HARDWARE.md#keeping-agents-up-to-date) and
-  [`docs/RELEASING.md`](docs/RELEASING.md#releasing-the-agent).
+  [`docs/development/RELEASING.md`](docs/development/RELEASING.md#releasing-the-agent).
 - **GWatch shows which machines are behind.** Settings › Hardware counts the
   machines running an older agent than the newest release and marks them in
   the table, and a machine's hardware panel marks its own. It is a label and
@@ -1130,7 +1170,7 @@ The 2026-09-21 sprint: everything labelled `sprint-plan` in the tracker.
   reference material it never had — the Node and Check objects, every check
   type's configuration fields, a table of all 31 event types, and the
   `settings.general`/`alerts`/`retention` fields with their defaults — and its
-  stream, version and dashboard entries were corrected. `docs/RELEASING.md`
+  stream, version and dashboard entries were corrected. `docs/development/RELEASING.md`
   had the wrong CI job count and a repository layout missing ten packages.
   `ROADMAP.md` still listed SNMP as a non-goal after it shipped in 0.2.2.
   `docs/DATABASE.md` gained `GWATCH_DB_PATH`.
@@ -1206,7 +1246,7 @@ The 2026-09-19 sprint: everything labelled `sprint-plan` in the tracker.
   `docs/`, which now carry what it used to repeat. The mock demo interface
   (`?mock=1`) wears an undismissable "Mock data" banner.
 - **The MCP companion is released with its own `mcp/vX.Y.Z` tags** (#11), so
-  `go install .../mcp/cmd/gwatch-mcp@latest` resolves. `docs/RELEASING.md`
+  `go install .../mcp/cmd/gwatch-mcp@latest` resolves. `docs/development/RELEASING.md`
   explains when to bump `mcp/VERSION`.
 
 ### Fixed

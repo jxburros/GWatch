@@ -48,8 +48,9 @@ Then it's an ordinary "Next, Next, Finish" wizard:
      checked, the installer also opens the chosen port in Windows Firewall so other
      devices can reach it.
    - A note reminds you that GWatch has **no password by default**. If you check the
-     "allow other devices" box, plan to set one in step 3 of *Using GWatch* below before
-     you consider it safe to leave switched on.
+     "allow other devices" box, plan to set one straight away (see
+     [3. Using GWatch](#3-using-gwatch) below) before you consider it safe to leave
+     switched on.
 5. **Additional icons** — optionally add a desktop shortcut, in addition to the Start
    Menu one that's always created.
 6. **Ready to Install** — click **Install**. This copies the program, registers GWatch
@@ -76,28 +77,41 @@ things out as you go. Tips are off until you turn them on.
 
 ## Installing the agent on other machines
 
-`gwatch-setup-<version>.exe` installs the monitor. The reporting agent is a separate
-download, from its own release: look for the newest release tagged `agent-v…` on the
-[releases page](https://github.com/jxburros/GWatch/releases) and take
-`gwatch-agent-setup-<version>.exe` from it. It installs the small reporting agent on a
-machine you want GWatch to watch — a file server, a spare laptop, the desktop in the
-other room. Run it **on that machine**, not on the one running GWatch.
+`gwatch-setup-<version>.exe` installs the monitor. The reporting agent is a separate,
+smaller program for a machine you want GWatch to watch — a file server, a spare laptop,
+the desktop in the other room. You install it **on that machine**, not on the one
+running GWatch.
 
-The agent has its own version and its own releases because it keeps itself up to date:
-you install it once on a machine and it takes later agent releases by itself, so its
-version does not follow GWatch's. See [`HARDWARE.md`](HARDWARE.md#keeping-agents-up-to-date).
+**Step 1: download the agent's setup program.** The agent has its own releases, so it is
+not among the files of the GWatch release you downloaded above:
 
-Before you start, get a pairing code:
+1. Open the [releases page](https://github.com/jxburros/GWatch/releases).
+2. Scroll to the newest release whose name starts with `agent-v` (the release at the top
+   of the page may be one of GWatch's own, which start with `v`).
+3. Under **Assets**, download `gwatch-agent-setup-<version>.exe` and copy it to the
+   machine you want to watch.
+
+The agent's version number does not follow GWatch's, so do not expect the two to match.
+It keeps itself up to date: you install it once and it takes later agent releases by
+itself. See [`HARDWARE.md`](HARDWARE.md#keeping-agents-up-to-date).
+
+**Step 2: get a pairing code.**
 
 1. In GWatch, open **Nodes**, choose **Add node**, then **A machine with the GWatch agent**.
 2. Give the machine a name (and untick anything you do not want monitored). GWatch shows
-   an eight-character code like `ABCD-2345`.
+   an eight-character code like `ABCD-2345`. Leave that dialog open: it tells you when the
+   machine has paired.
 3. The code is good for that one machine and expires after about fifteen minutes. If it
    lapses, generate another — they are free.
 
-Then, on the other machine, run `gwatch-agent-setup-<version>.exe` and fill in the
+**Step 3: run the setup program.** The other machine has to be able to reach GWatch, so
+the GWatch computer must be accepting connections from the network: the box on the
+installer's Network access page, or **Settings › Network access › Allow access from
+other devices on my network**. Then, on the other machine, run `gwatch-agent-setup-<version>.exe` and fill in the
 **Connect to GWatch** page: the server's address (for example
-`http://gwatch.lan:7230`), the pairing code, and optionally a name. **Test connection**
+`http://gwatch.lan:7230` or `http://192.168.1.20:7230` — it starts with `http://` unless
+you have put GWatch behind an HTTPS [reverse proxy](REMOTE-ACCESS.md)), the pairing
+code, and optionally a name. **Test connection**
 checks the address answers as a GWatch before anything is installed, without using the
 code (Next runs the same check if you skip it). The installer then exchanges the code for
 a credential that can do exactly one thing — submit that machine's readings — and
@@ -113,10 +127,11 @@ Nothing is opened up on the machine running the agent: it dials out to GWatch an
 up, and GWatch is given no way back in. To install across several machines at once:
 
 ```powershell
-gwatch-agent-setup-0.1.0.exe /VERYSILENT /SERVER=http://gwatch.lan:7230 /CODE=ABCD-2345
+gwatch-agent-setup-<version>.exe /VERYSILENT /SERVER=http://gwatch.lan:7230 /CODE=ABCD-2345
 ```
 
-Each machine needs its own code. See [`HARDWARE.md`](HARDWARE.md) for what the agent
+Each machine needs its own code. `/NAME=…` sets the name the machine reports, and
+`/INSECURE=1` accepts a self-signed certificate when GWatch is behind HTTPS. See [`HARDWARE.md`](HARDWARE.md) for what the agent
 reports and how to read it.
 
 The agent is also packaged for winget (`winget install GWatch.Agent`), Homebrew, apt/dnf
@@ -216,7 +231,7 @@ your history and settings; choose **Yes** to remove everything.
 
 - Neither installer is Authenticode-signed yet, hence the SmartScreen warning in step 1.
   The release workflow signs them as soon as its signing account is set up — see
-  [`docs/RELEASING.md`](RELEASING.md#authenticode-signing).
+  [`docs/development/RELEASING.md`](development/RELEASING.md#authenticode-signing).
 - The in-app updater (**Settings › Updates**) does not download or install the
   setup program itself; it manages the `gwatch.exe` program file directly, in place. Both
   work fine, and either one applies as an upgrade path.
@@ -239,7 +254,8 @@ want to build `gwatch.exe` from source yourself.
    ```
    This copies the program to `C:\Program Files\GWatch`, registers the `GWatch` service
    (automatic start, restarts on failure), starts it, and adds a Start-menu shortcut that
-   opens the interface. Data lives in `C:\ProgramData\GWatch` (`gwatch.db`, `logs\`, `backups\`).
+   opens the interface. It ends by printing `GWatch is running. Open http://127.0.0.1:7230
+   in your browser.` Data lives in `C:\ProgramData\GWatch` (`gwatch.db`, `logs\`, `backups\`).
    Add `-Listen 0.0.0.0:7230` to serve the interface to the whole network from the start
    (it can also be switched on later in Settings › Network access).
 3. Open <http://127.0.0.1:7230> (or run `gwatch open`).

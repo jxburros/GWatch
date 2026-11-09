@@ -1,7 +1,11 @@
 # GWatch with Docker Compose — see docs/DOCKER.md.
 #
-#   docker compose up -d
-#   open http://<this machine>:7230 and create the administrator account
+#   1. docker compose up -d
+#   2. Create the first administrator account with the `docker exec` command
+#      in docs/DOCKER.md ("First run"). Opening the page first only shows a
+#      sign-in screen: under the default bridge network your browser is not
+#      "this computer" to GWatch, and there is no account to sign in with yet.
+#   3. Open http://<this machine>:7230 and sign in with that account.
 #
 # Upgrade by pulling a newer image tag and running `docker compose up -d`
 # again; the in-app updater can tell you a release exists but cannot replace

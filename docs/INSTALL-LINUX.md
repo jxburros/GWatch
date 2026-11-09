@@ -10,7 +10,7 @@ Each GWatch release carries `gwatch_<version>-1_{amd64,arm64,armhf}.deb` and `gw
 sudo apt install ./gwatch_<version>-1_amd64.deb      # or: sudo dnf install ./gwatch-<version>-1.x86_64.rpm
 ```
 
-The package installs `/usr/bin/gwatch`, the `gwatch` systemd unit and `/etc/gwatch/gwatch.env` (root-only, kept across upgrades), creates the system user `gwatch`, and enables and starts the service on `http://127.0.0.1:7230`. The installer prints the address and the command that creates the first administrator (see below).
+The package installs `/usr/bin/gwatch`, the `gwatch` systemd unit and `/etc/gwatch/gwatch.env` (root-only, kept across upgrades), creates the system user `gwatch`, and enables and starts the service on `http://127.0.0.1:7230`. The installer prints the address and the command that creates the first administrator; [First administrator](#first-administrator) below has the details. `sudo systemctl status gwatch` should say `active (running)`.
 
 The service runs as `gwatch`, not root, and can write only `/var/lib/gwatch` (database, key, logs, backups). Its single capability is `CAP_NET_RAW`, for the built-in ping. The unit also sets `NoNewPrivileges`, `ProtectSystem=strict`, a system-call filter and the rest of systemd's sandboxing; `systemd-analyze security gwatch` rates it about 1.7 ("OK"). Command actions and custom-script checks run inside the same sandbox. To let them write elsewhere, or to listen on a port below 1024, add a drop-in with `sudo systemctl edit gwatch` (examples are in the unit file's header) instead of editing the unit.
 
@@ -31,20 +31,63 @@ Switching from `gwatch install` to the package: run `sudo /usr/local/bin/gwatch 
 
 ## Verified installation
 
-Install curl, jq and OpenSSL 3 from your distribution, then run:
+**Before you start**, the install script needs three tools and stops with a message if one is missing: `curl`, `jq` and OpenSSL 3 (`openssl version` must say 3.0 or newer; version 1.1 cannot check the release signature). Install them from your distribution:
+
+```sh
+sudo apt install curl jq openssl      # Debian, Ubuntu, Raspberry Pi OS
+sudo dnf install curl jq openssl      # Fedora, RHEL and relatives
+```
+
+Then run:
 
 ```sh
 curl -fsSL https://github.com/jxburros/GWatch/releases/latest/download/install.sh | sudo sh
 ```
 
-The installer checks SHA-256 and an Ed25519 signature against its embedded release key before executing the download. An absent or invalid signature stops installation. Options include `--version`, `--listen 0.0.0.0:7230`, `--no-start` and `--uninstall`. Download the script first to review it.
+The installer checks SHA-256 and an Ed25519 signature against its embedded release key before executing the download. An absent or invalid signature stops installation. It ends with `GWatch installed. Open http://127.0.0.1:7230 (or use an SSH tunnel).` — next, create the [first administrator](#first-administrator).
 
-For a manually verified binary:
+To pass options, put them after `sh -s --`, for example `… | sudo sh -s -- --listen 0.0.0.0:7230`. The options are `--version X.Y.Z` (a release other than the newest), `--listen ADDRESS`, `--no-start` and `--uninstall` (removes the service; data and program are kept). To review the script first, download it, read it, and run `sudo sh install.sh`.
+
+If you would rather not run the script, download `gwatch-linux-amd64` (or `-arm64`, `-arm`) and its `.sha256` file from the release, check that `sha256sum gwatch-linux-amd64` prints the hash in the `.sha256` file, then:
 
 ```sh
 chmod +x gwatch-linux-amd64
 sudo ./gwatch-linux-amd64 install --listen 127.0.0.1:7230
 ```
+
+It prints the address to open when the service has started. The next section says what that command sets up.
+
+## First administrator
+
+A fresh install listens on `127.0.0.1:7230`, has no accounts, and treats a browser on the same machine as an administrator with no password. On a machine with a desktop, open `http://127.0.0.1:7230` there and you are in. On a headless server, keep the listener on loopback and do one of these.
+
+**From your desktop, through an SSH tunnel:**
+
+```sh
+ssh -L 7230:127.0.0.1:7230 user@server
+```
+
+Leave that running, open `http://127.0.0.1:7230` on your desktop, and create an administrator in Settings > Users & access. On the same page, switch on **Require sign-in on this computer too**, so that other users of the server (and anything else that can reach its loopback address) have to sign in as well.
+
+**Or from a shell on the server.** Write the account to a file only you can read, in an editor so the password stays out of your shell history:
+
+```sh
+umask 077
+nano admin.json
+```
+
+```json
+{"username":"admin","password":"at-least-8-characters","role":"admin"}
+```
+
+```sh
+curl --fail -H 'Content-Type: application/json' --data-binary @admin.json http://127.0.0.1:7230/api/users
+rm admin.json
+```
+
+GWatch answers with the new account, something like `{"id":1,"username":"admin","role":"admin",…}`. The first account is always an administrator, the user name needs at least 2 characters and the password at least 8. Until **Require sign-in on this computer too** is switched on, the same request from the server's own shell keeps working without a password, so switch it on once you have signed in.
+
+Only then open GWatch to the network, if you want it there: see [Network and ping](#network-and-ping).
 
 ## What `gwatch install` sets up
 
@@ -58,11 +101,11 @@ On a machine that runs systemd, `sudo gwatch install`:
 
 Install is safe to run again. Re-running it updates the program and the unit and restarts the service; `--listen` or `--data-dir` change those settings, and leaving them out keeps what the last install chose. `sudo gwatch install --listen 0.0.0.0:7230` is how to open the interface to the LAN from the command line.
 
-Machines that do not run systemd get the plain service the earlier releases installed, run as root: an OpenRC script (`/etc/init.d/GWatch`, added to the default runlevel and kept running by `supervise-daemon`) on Alpine and the other OpenRC systems, and a System V init script anywhere else, a container with no init among them. Both read `/etc/gwatch/gwatch.env` before starting the service, and log to `/var/log/gwatch.log` and `/var/log/gwatch.err`.
+Machines that do not run systemd get the plain service that releases before 0.8.0 installed, run as root: an OpenRC script (`/etc/init.d/GWatch`, added to the default runlevel and kept running by `supervise-daemon`) on Alpine and the other OpenRC systems, and a System V init script anywhere else, a container with no init among them. Both read `/etc/gwatch/gwatch.env` before starting the service, and log to `/var/log/gwatch.log` and `/var/log/gwatch.err`.
 
-### Upgrading from an earlier release
+### Upgrading from 0.7.x or earlier
 
-Releases before this one installed a unit called `GWatch.service` that ran as root, kept the program in `/usr/local/libexec/gwatch` and, when install was run with `sudo` and no `--data-dir`, kept the data in `/root/.local/share/gwatch`. Running `sudo gwatch install` with the new release moves all of that over: it stops and removes `GWatch.service`, moves a data directory under `/root` to `/var/lib/gwatch` (it refuses, and says why, if `/var/lib/gwatch` already holds files or is on a different filesystem), hands the data directory to the `gwatch` user, and removes the old program from `/usr/local/libexec/gwatch`. Take a backup first (Settings > Backups).
+Releases before 0.8.0 installed a unit called `GWatch.service` that ran as root, kept the program in `/usr/local/libexec/gwatch` and, when install was run with `sudo` and no `--data-dir`, kept the data in `/root/.local/share/gwatch`. Running `sudo gwatch install` from 0.8.0 or later moves all of that over: it stops and removes `GWatch.service`, moves a data directory under `/root` to `/var/lib/gwatch` (it refuses, and says why, if `/var/lib/gwatch` already holds files or is on a different filesystem), hands the data directory to the `gwatch` user, and removes the old program from `/usr/local/libexec/gwatch`. Take a backup first (Settings > Backups).
 
 ### The unit
 
@@ -86,7 +129,7 @@ sudo systemctl edit gwatch
 
 ### What custom checks and script actions can do
 
-Custom checks and script actions run as the `gwatch` user, inside the same sandbox as the service. Under earlier releases they ran as root. Concretely, a command run by GWatch now:
+Custom checks and script actions run as the `gwatch` user, inside the same sandbox as the service. Before 0.8.0 they ran as root. Concretely, a command run by GWatch now:
 
 - can write only to the data directory (and its own private `/tmp`); the rest of the filesystem is read-only to it, and `/home` and `/root` are invisible.
 - cannot gain privileges: `sudo`, and set-user-ID programs generally, do not work under `NoNewPrivileges=yes`.
@@ -114,23 +157,6 @@ gwatch ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx.service
 
 and, because sudo is a set-user-ID program, a drop-in with `NoNewPrivileges=no`, `RestrictSUIDSGID=no`, `CapabilityBoundingSet=` emptied (an empty assignment resets it) and `PrivateDevices=no`. That gives up a good part of the sandbox for every command the service runs, which is why it is not the default.
 
-## First administrator on a headless server
-
-Keep the initial listener on loopback. Open an SSH tunnel from your desktop:
-
-```sh
-ssh -L 7230:127.0.0.1:7230 user@server
-```
-
-Open `http://127.0.0.1:7230`, create an administrator in Settings > Users & access, and enable the local sign-in requirement. Alternatively, create the first administrator from a shell on the server:
-
-```sh
-# A private admin.json contains username, password, and role set to admin.
-curl --fail -H 'Content-Type: application/json' --data-binary @admin.json http://127.0.0.1:7230/api/users
-```
-
-Delete the credential file afterward. Existing installations require an authenticated administrator to create accounts.
-
 ## Network and ping
 
 Settings > Network access changes the port live; zero retains the startup default. If binding fails, the old listener is restored and a restart action is offered. To change the startup address, run `sudo gwatch install --listen ADDRESS`, or edit `GWATCH_LISTEN` in `/etc/gwatch/gwatch.env` and restart. On headless machines `gwatch open` prints the URL.
@@ -144,7 +170,7 @@ sudo firewall-cmd --add-port=7230/tcp --permanent
 sudo firewall-cmd --reload
 ```
 
-Use a source-subnet restriction when only your LAN should connect. Settings shows a command for detected ufw/firewalld installations. Use HTTPS through a reverse proxy for remote credentials.
+Use a source-subnet restriction when only your LAN should connect. Settings shows a command for detected ufw/firewalld installations. To reach GWatch from outside your network, put it behind a VPN or an HTTPS reverse proxy; see [REMOTE-ACCESS.md](REMOTE-ACCESS.md).
 
 ### Ping permissions
 
@@ -181,11 +207,13 @@ Monitor health also shows the most recent time a ping check fell back to the sys
 
 ## Updates and removal
 
-The service cannot replace its own program: `/usr/local/bin` is root's, and `ProtectSystem=strict` makes it read-only to the service in any case. Settings > Updates therefore tells you when a release is out but says it cannot install it from there. To update, run the installer again, which verifies the release and keeps your settings:
+The service cannot replace its own program: `/usr/local/bin` is root's, and `ProtectSystem=strict` makes it read-only to the service in any case. Settings > Updates therefore tells you when a release is out but says it cannot install it from there. To update, run the installer again (it needs the same `curl`, `jq` and OpenSSL 3), which verifies the release and keeps your settings:
 
 ```sh
 curl -fsSL https://github.com/jxburros/GWatch/releases/latest/download/install.sh | sudo sh
 ```
+
+Settings > Updates then shows the new version.
 
 or, with a binary you have verified yourself, `sudo ./gwatch-linux-amd64 install`. Package-managed builds refuse self-update; use the package manager instead.
 
@@ -210,10 +238,17 @@ Use `linux-arm64` on 64-bit Raspberry Pi OS and `linux-arm` on ARMv7 systems. Or
 
 ## Agent on Linux or macOS
 
-Download `install-agent.sh` from the desired `agent-v...` release, inspect it, then run:
+The agent is the small program that reports another machine's hardware to GWatch; [HARDWARE.md](HARDWARE.md#another-machine-with-the-agent) explains it. To install it with the verifying script:
+
+1. In GWatch, choose **Nodes > Add node > A machine with the GWatch agent**, name the machine, and note the pairing code it shows (good for about fifteen minutes).
+2. Open the [releases page](https://github.com/jxburros/GWatch/releases) and find the newest release whose name starts with `agent-v`. The agent has its own releases, so the one at the top of the page may be GWatch's own.
+3. Under **Assets**, download `install-agent.sh` to the machine you want to watch, and read it.
+4. Run it there with GWatch's address and the code. As for the server script, `curl`, `jq` and OpenSSL 3 must be installed:
 
 ```sh
-sudo sh install-agent.sh --server https://gwatch.example --code ABCD-2345
+sudo sh install-agent.sh --server http://gwatch.lan:7230 --code ABCD-2345
 ```
+
+The address is the one that machine reaches GWatch at, so GWatch has to be listening on the network ([Network and ping](#network-and-ping)); it starts with `http://` unless GWatch is behind an HTTPS [reverse proxy](REMOTE-ACCESS.md). The machine appears on its node in GWatch within a minute.
 
 The script detects Linux/macOS and amd64/arm64/ARMv7, verifies the release signature, and installs a systemd/launchd service. OpenSSL 3 must be on PATH, including on macOS. Prefer [Homebrew or Linux packages](HARDWARE.md) for package-managed updates. CLI pairing with explicit `--insecure` trusts the first TLS key once, saves its SHA-256 pin and rejects later key changes. Serve mode requires a separate token, defaults to loopback and limits failed authentication attempts.

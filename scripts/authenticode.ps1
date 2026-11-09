@@ -93,7 +93,7 @@ function Invoke-Configure {
         else { $set += $required[$name] }
     }
     if ($set.Count -eq 0) {
-        $msg = "Authenticode signing is not configured, so the Windows executables and setup programs in this build are NOT Authenticode-signed (SmartScreen will warn about an unknown publisher). Set the AZURE_SIGNING_* variables described in docs/RELEASING.md to sign them."
+        $msg = "Authenticode signing is not configured, so the Windows executables and setup programs in this build are NOT Authenticode-signed (SmartScreen will warn about an unknown publisher). Set the AZURE_SIGNING_* variables described in docs/development/RELEASING.md to sign them."
         Write-Host "::warning title=Unsigned Windows build::$msg"
         Add-Summary "### :warning: Windows binaries are not Authenticode-signed`n`n$msg`n"
         Set-Output "enabled" "false"

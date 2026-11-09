@@ -22,7 +22,7 @@ Only GWatch's built-in network checks:
 
 A script never runs on a collector, and cannot be made to: running GWatch's
 commands on another machine is exactly the remote execution the agent was built
-never to allow (see [the decisions](AGENT-DECISIONS.md#16-an-agent-may-run-gwatchs-network-checks-from-where-it-is-if-both-sides-agree)).
+never to allow (see [the decisions](development/AGENT-DECISIONS.md#16-an-agent-may-run-gwatchs-network-checks-from-where-it-is-if-both-sides-agree)).
 A hardware check reads the machine an agent is already reporting, and a Matter
 check needs its sidecar on GWatch's own network.
 

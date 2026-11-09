@@ -15,6 +15,7 @@ import (
 
 	"github.com/jxburros/GWatch/internal/auth"
 	"github.com/jxburros/GWatch/internal/model"
+	"github.com/jxburros/GWatch/internal/selfconn"
 	"github.com/jxburros/GWatch/internal/store"
 )
 
@@ -345,6 +346,14 @@ var forwardingHeaders = []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Ho
 // is never a local one, and a header can only ever take this principal away.
 func (s *Server) isLocalClient(r *http.Request) bool {
 	if !s.isLoopback(r) {
+		return false
+	}
+	// A request GWatch made itself — an HTTP check, a webhook action or a
+	// Matter URL pointed at GWatch's own port — also arrives over loopback.
+	// It was asked for by whoever configured it, which may be an API key, so
+	// it is not "a person at this computer" and has to bring a credential
+	// like anyone else.
+	if selfconn.Is(r.RemoteAddr) {
 		return false
 	}
 	for _, h := range forwardingHeaders {

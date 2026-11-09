@@ -17,7 +17,7 @@
 # GWATCH_SIGNING_CERT_THUMBPRINT and each executable is signed before it is
 # packaged, then the setup program and its uninstaller as Inno Setup builds them.
 # That needs PowerShell 7 (pwsh) and the Windows SDK's signtool.exe; see
-# scripts\authenticode.ps1 and docs/RELEASING.md.
+# scripts\authenticode.ps1 and docs/development/RELEASING.md.
 [CmdletBinding()]
 param(
     [string]$Version,

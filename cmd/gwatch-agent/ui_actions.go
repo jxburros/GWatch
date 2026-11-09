@@ -7,7 +7,7 @@
 // (agentlog.go), "update now" is applyUpdate, the function the automatic
 // updater and `gwatch-agent update` both go through (so a packaged agent
 // refuses it in the same words and for the same reason, entry 10 of
-// docs/AGENT-DECISIONS.md), and pairing again is pair(), exactly as
+// docs/development/AGENT-DECISIONS.md), and pairing again is pair(), exactly as
 // `gwatch-agent pair` runs it.
 //
 // The guard in ui.go applies to all of them unchanged: the loopback Host

@@ -19,7 +19,7 @@ import (
 // list. There is no field here that names a URL to fetch code from, a command
 // to run, a file to write or a version to install, and adding one would change
 // what an agent is, so it is written as a closed set of types rather than a map
-// (docs/AGENT-DECISIONS.md, entry 12).
+// (docs/development/AGENT-DECISIONS.md, entry 12).
 
 // Collection limits. They bound what an agent will accept from a server and
 // what a server will accept from a person, so a confused client cannot make
@@ -350,6 +350,6 @@ type AgentSettings struct {
 	// collecting on for this agent and the agent said in this check-in that
 	// its own configuration allows it, so neither side alone can start it and
 	// no check's credentials go to a machine that has not opted in. See
-	// model/collector.go and docs/AGENT-DECISIONS.md, entry 16.
+	// model/collector.go and docs/development/AGENT-DECISIONS.md, entry 16.
 	Collector *CollectorAssignment `json:"collector,omitempty"`
 }

@@ -1,7 +1,7 @@
 // Asking the operating system for an administrator's rights.
 //
 // The control panel runs as whoever started it (ui.go, and entry 6 of
-// docs/AGENT-DECISIONS.md), which is right, but on most machines the agent's
+// docs/development/AGENT-DECISIONS.md), which is right, but on most machines the agent's
 // settings and its service belong to root or the administrators, and "run
 // sudo gwatch-agent ui from a terminal" is no answer for someone who opened
 // the panel from the Start menu precisely because they do not use a terminal.

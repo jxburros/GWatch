@@ -11,7 +11,7 @@
 # The installer's sha256 is computed here from the file that is about to be
 # uploaded; winget refuses an installer whose hash differs, which is this
 # package's integrity check. (The setup program is not Authenticode-signed —
-# see docs/RELEASING.md#the-installer-artefacts — and is not in the ed25519
+# see docs/development/RELEASING.md#the-installer-artefacts — and is not in the ed25519
 # self-update chain; nothing installs it but winget or a person.)
 set -eu
 

@@ -46,6 +46,8 @@ options the Help page only mentions in passing.
 19. [Lesser-known corners](#19-lesser-known-corners)
 20. [When something is wrong](#20-when-something-is-wrong)
 
+Then: [Where to go next](#where-to-go-next) — the other documents.
+
 ---
 
 ## 1. Your first half-hour
@@ -604,8 +606,7 @@ There are fourteen widgets:
 resize. From the keyboard, focus the grip and use the **arrow keys** to move it
 one cell at a time, or **Shift + arrows** to resize — the new position is read
 out as it changes, so this works with a screen reader. A widget lands in the
-cell under the pointer when you let go (0.4.0 and earlier could drop it many
-rows further down until the page was reloaded).
+cell under the pointer when you let go.
 
 ### The network map
 
@@ -796,11 +797,37 @@ back only as far as raw history is kept, 30 days by default.
 
 ## 9. Incidents and Audit
 
-**Incidents** is the timeline: outages, recoveries, warnings, certificate
+**Incidents** in the sidebar has three tabs: **Incidents**, **Events** and
+**Reports**.
+
+### Incidents: outages you can acknowledge
+
+The page opens on the outages that are open right now, one card per node
+however many of its checks are down. A filter above the list switches between
+*Active* (open or acknowledged — the default), *All*, *Open*, *Acknowledged*
+and *Resolved*.
+
+**Timeline and notes** on a card opens the incident: when it opened and how
+long it has lasted, its notes, and the monitoring events that belong to it.
+From there you can:
+
+- **Acknowledge** it — "I have seen this". The node's repeat down alerts stop
+  while it is acknowledged, and the incident records who acknowledged it and
+  how long that took.
+- **Resolve** it by hand, or leave it: when all the node's enabled checks
+  recover, GWatch resolves it itself.
+- **Add note** — an attributed note kept with the incident.
+
+Viewers can read incidents; changing one needs an administrator.
+
+### Events: the timeline
+
+The **Events** tab is the raw log: outages, recoveries, warnings, certificate
 warnings, alerts sent and suppressed, silences, maintenance windows,
 configuration changes, service starts and stops, sleep gaps, backups,
 discovery sweeps, rules firing, and your own notes. Filter it by node and by
-type.
+type. A node page's timeline link, and a status indicator, land here already
+filtered.
 
 > **Filtering by a type includes its counterpart.** Asking for `down` gives
 > you the recoveries too, `silenced` gives you the unsilences, and so on — the
@@ -810,6 +837,23 @@ type.
 **Add note** writes a human annotation into the timeline, either against a node
 or on its own. This is how "rebooted the router" ends up next to the outage it
 explains.
+
+### Reports: availability on paper
+
+The **Reports** tab builds an availability report: choose **From** and
+**Until**, optionally groups and tags, and an **availability target** (99.9%
+unless you change it), then **Open printable report**. It opens as one
+self-contained page — availability from the samples GWatch actually took,
+incident durations, slow checks and expiring certificates, with latency charts
+by group if you tick the box. Use the browser's Print or *Save as PDF*;
+nothing is sent to an outside service to make it.
+
+An administrator can also add **scheduled reports** — weekly or monthly, to
+their own list of recipients, each with its own groups, tags and target. They
+are sent through the SMTP settings in **Settings › Alerts**, so set those up
+first.
+
+### Audit
 
 **Audit** is the same log with the full apparatus, in three tabs:
 
@@ -845,7 +889,7 @@ blank actor column means "nobody did this, it just happened".
 - **SMTP** — host, port, security (*STARTTLS* on 587, *TLS/SSL* on 465, or
   *none*), from address, user name and password.
 
-**Send a test message** is not optional in spirit. An alerting setup you have
+**Send test email** is not optional in spirit. An alerting setup you have
 never watched deliver is a guess.
 
 Alert emails are sent at most three at a time, and one that fails is tried
@@ -1105,7 +1149,7 @@ The friendly path: **Nodes › Add node › A machine with the GWatch agent**.
 Give the machine a name and, if you like, untick the kinds of reading you do not
 want. GWatch shows a short
 **pairing code** — deliberately short enough to type off the screen, good for
-one machine for a few minutes. On the other machine:
+one machine for fifteen minutes. On the other machine:
 
 ```sh
 gwatch-agent pair --server http://<gwatch>:7230 --code XXXX-XXXX --name "Media server"
@@ -1313,10 +1357,25 @@ than this option.
 
 ### API keys
 
-For things that are not browsers, scoped **read-only** or **read-write**.
+For things that are not browsers, scoped **read-only** or **read-write**. A
+read-only key reads what a viewer sees; a read-write key can also manage nodes
+and checks, maintenance windows, dashboards, wallboards and charts, and
+acknowledge incidents.
+
 Either scope is *always* refused on settings, backups and restores, updates,
-accounts, keys, the configuration export, the service log, and anything that
-runs a trigger or an endpoint — so a read-write key is not an administrator.
+accounts, keys, the configuration export, the service log, discovery, agent
+pairing, notification rules, and anything that runs a trigger or an endpoint —
+so a read-write key is not an administrator. Nor can any key create, edit, test
+or run a check that runs code (a custom script, or a hardware check reading a
+metrics address): those are set up by an administrator in the browser.
+[`API.md`](API.md#authentication-and-roles) has the full list.
+
+A key is shown once, when you make it; GWatch keeps only a digest.
+
+> **GWatch does not trust its own requests** (from 0.8.10). If something GWatch
+> itself sends — an HTTP check, a webhook action, a Matter server address — is
+> pointed at GWatch's own address, it is not treated as "a person at this
+> computer". Give it an API key header, as you would for any other client.
 
 Revoking is immediate, and the audit log keeps the key's name so you can still
 read back what it did.
@@ -1468,19 +1527,49 @@ A short list of things that exist but are easy to never find.
 
 ## 20. When something is wrong
 
-| Symptom | Look at |
+Start with **Settings › Monitor health** and **Audit › Service log**: between
+them they usually say what GWatch thinks is wrong. Then find the symptom below.
+
+**Getting in**
+
+| Symptom | What to do |
 |---|---|
-| **Ping checks fail with a permission error** | **Settings › General › Ping method** — switch to *System ping command*. In Docker, add `--cap-add NET_RAW`. See [`DOCKER.md`](DOCKER.md) |
-| **Everything went down at once** | The parent node. Then **Incidents** filtered to *affected by parent* — dependency suppression may be doing its job |
-| **No alerts arriving** | **Settings › Alerts**, then send the test. Then **Incidents › Alerts suppressed** for cooldowns, silences and maintenance windows |
-| **Too many alerts** | Raise **failures before down**, raise the **cooldown**, or set a dependency so one outage reports once |
-| **An SNMP check times out** | A wrong community string looks identical to an unreachable device. Re-check the community, then that SNMP is enabled on the device — [`SNMP.md`](SNMP.md) |
-| **A machine's hardware readings stopped** | The agent. `gwatch-agent status` on that machine, then `gwatch-agent once` to test the token |
+| **Windows says "Windows protected your PC" when installing** | That is SmartScreen: the installer is not Authenticode-signed yet. Click **More info**, then **Run anyway**, if you trust the download — see [`INSTALL.md`](INSTALL.md) |
+| **The page will not open from another device** | By default GWatch answers on its own computer only. Turn on **Settings › Network access › Allow access from other devices on my network** and use one of the addresses listed there (`http://<its address>:7230`, not `127.0.0.1`). If it still will not load, the firewall on the GWatch machine is blocking the port — the same tab shows the command to allow it |
+| **A red banner says the service cannot be reached** | The browser has lost GWatch itself. `gwatch status` on that machine says whether the service is running; `gwatch start` starts it |
+| **Forgot the administrator password** | Open `http://127.0.0.1:7230` in a browser *on the computer GWatch runs on*: there you are an administrator without signing in, and can set a new password in **Settings › Users & access**. Another administrator can do the same from anywhere. This does not work if **Require sign-in on this computer too** is on — there is no reset command, so keep a second administrator account if you turn that on |
+| **Locked out after enabling remote access** | Other devices have to sign in; the computer GWatch runs on does not, unless you also turned on **Require sign-in on this computer too**. Sign in there and create or fix the account |
+
+**Checks**
+
+| Symptom | What to do |
+|---|---|
+| **Ping checks fail with a permission error** | GWatch was not allowed to open an ICMP socket. Set **Settings › General › Ping method** to *System ping command*. In Docker, either run the container with `--cap-add NET_RAW` (the quick start does) or use that same setting — [`DOCKER.md`](DOCKER.md#ping) |
+| **Everything went down at once** | Look at the parent node first. Then **Incidents › Events** filtered to *Affected by parent* — dependency suppression may be doing its job |
+| **An SNMP check times out** | A wrong community string looks identical to an unreachable device. Re-check the community, then that SNMP is enabled on the device and allows the GWatch machine — [`SNMP.md`](SNMP.md) |
 | **Discovery only finds Docker's network** | Bridge networking. Use host or macvlan — [`DOCKER.md`](DOCKER.md) |
-| **A gap in the charts** | **Incidents › Monitoring gaps** — the computer was asleep or offline |
+| **A check is failing and the message does not say why** | Click the result row to open the [result inspector](#the-result-inspector), or press **Run now** and read the fresh result |
+
+**Machines with the agent**
+
+| Symptom | What to do |
+|---|---|
+| **The agent will not pair** | Three usual causes. The code has run out — it works once and for fifteen minutes, so make a new one. The agent cannot reach GWatch — `--server` must be an address that machine can open (not `127.0.0.1`), which needs **Allow access from other devices** on and the port through the firewall. Or too many wrong codes were typed from that machine: wait a minute and try again |
+| **A machine's hardware readings stopped** | The agent. `gwatch-agent status` on that machine, then `gwatch-agent once` to test that it can still reach GWatch and its token is accepted |
+
+**Alerts**
+
+| Symptom | What to do |
+|---|---|
+| **No alert email arriving** | In **Settings › Alerts**, check **Send alerts** is on and there is a recipient, then press **Send test email** — it uses exactly the settings a real alert would and shows the mail server's own error. If the test arrives but alerts do not, look at **Incidents › Events** filtered to *Alerts suppressed*: a cooldown, silence, maintenance window, acknowledged incident or down parent will be named there. And check the spam folder |
+| **Too many alerts** | Raise **failures before down**, raise the **cooldown**, group alerts for the same node, or set a dependency so one outage reports once — [section 10](#10-email-alerts) |
+
+**History and charts**
+
+| Symptom | What to do |
+|---|---|
+| **A gap in the charts** | **Incidents › Events** filtered to *Monitoring gaps* — the computer was asleep or offline |
 | **A chart is empty beyond 30 days** | Named-metric series are read from raw history only. **Settings › Retention** |
-| **Locked out after enabling remote access** | The loopback shortcut still applies unless you also turned on "require sign-in on this computer too" |
-| **GWatch itself seems unwell** | **Settings › Monitor health**, then **Audit › Service log** |
 
 ---
 
@@ -1500,16 +1589,3 @@ A short list of things that exist but are easy to never find.
 | [`RESTORE.md`](RESTORE.md) | Moving to a new machine |
 | [`PRIVACY.md`](PRIVACY.md) | What is stored, where, and what never leaves |
 
-
-## Incidents and reports
-
-Incidents opens on active outages, grouped by node. Open an incident to acknowledge
-it (stopping repeat notifications), add an attributed note, or resolve it. Recovery of
-all enabled checks closes it automatically. Its timeline retains the related monitoring
-events and shows acknowledgment/resolution duration. The Events tab keeps the raw log.
-
-The Reports tab generates a printable HTML report for a selected range, group/tag scope
-and optional availability target. Administrators can save weekly or monthly email
-schedules. Configure SMTP first. The attached HTML is self-contained; open it in your
-browser and Print to PDF. No external PDF service is contacted. Reports include
-observed-sample availability, incident durations, slow checks and expiring certificates.

@@ -12,7 +12,7 @@
 //   * revoke and delete.
 //
 // GWatch never connects to the machine. Everything here is stored in GWatch and
-// reaches the agent the next time the agent asks (docs/AGENT-DECISIONS.md, 12).
+// reaches the agent the next time the agent asks (docs/development/AGENT-DECISIONS.md, 12).
 
 import { api } from '../api.js';
 import {

@@ -37,7 +37,8 @@ to be open before an assistant can change anything:
 
 On top of that, **GWatch denies a few things to every API key whatever its scope**: settings,
 backups, the service log, config export, the network info, automation triggers, custom endpoints,
-software updates, user accounts and API keys themselves. There are deliberately **no tools** for
+notification rules, discovery, agent pairing, software updates, user accounts and API keys
+themselves. There are deliberately **no tools** for
 any of that — a tool for it could only ever return 403. An assistant can help you run your
 monitoring; it cannot reconfigure the machine your monitor runs on, grant itself more access, or
 read your SMTP password.
@@ -62,12 +63,16 @@ go install github.com/jxburros/GWatch/mcp/cmd/gwatch-mcp@latest
 The main package lives at `mcp/cmd/gwatch-mcp` rather than at the module root so that `go install`
 produces a binary called `gwatch-mcp`; installing the module root would name the binary `mcp`.
 
+> **`@latest` is currently one version behind.** This README describes `gwatch-mcp` 0.1.2
+> (`mcp/VERSION`), but the newest published tag is `mcp/v0.1.1`, so that is what `go install …@latest`
+> builds until 0.1.2 is tagged. To get exactly what is described here, build from a checkout (below).
+
 `gwatch-mcp` is released with its own **nested-module tags**, `mcp/v<version>` (not the root
 module's `v<version>`), which is what makes `@latest` above resolve at all — Go's module
 resolution needs a tag prefixed with the module's own subdirectory to find a version of code that
 lives under `mcp/` rather than at the repository root. Its binaries still ship inside the *core*
 GitHub release, cross-compiled from whatever `mcp/VERSION` says at the time; see
-[`docs/RELEASING.md`](../docs/RELEASING.md#releasing-the-mcp-companion) for the full release
+[`docs/development/RELEASING.md`](../docs/development/RELEASING.md#releasing-the-mcp-companion) for the full release
 process.
 
 **Or from a checkout:**
@@ -208,8 +213,25 @@ and GWatch's own `error` message.
 ### Not available, on purpose
 
 No tools for settings, backups, the service log, config export, automation triggers, custom
-endpoints, software updates, user accounts or API keys. GWatch refuses all of those to every API
-key whatever its scope, so there is nothing for a tool to do there.
+endpoints, notification rules, discovery, agent pairing, software updates, user accounts or API
+keys. GWatch refuses all of those to every API key whatever its scope, so there is nothing for a
+tool to do there.
+
+Checks that run code are out too: the write tools cannot create, edit or test a custom-script
+check or a hardware check that reads a metrics URL, and `gwatch_run_node` skips any the node
+already has. GWatch refuses those to every key; an administrator sets them up in the browser.
+
+### Not available yet
+
+These are things an API key *may* do in GWatch, but `gwatch-mcp` has no tool for them so far:
+
+- **Incidents** — listing grouped incidents, acknowledging, resolving or annotating one.
+  (`gwatch_overview` and `gwatch_events` show what is open and the timeline; `gwatch_add_note`
+  writes a timeline note, not an incident note.)
+- **Maintenance windows** — reading or creating them. `gwatch_silence_node` is the nearest thing.
+- **Hardware readings** — the per-machine view (`/api/hosts`). A hardware check's status and
+  latest result still appear through `gwatch_get_node` and `gwatch_check_results`.
+- Dashboards, wallboards, saved charts, the network map's arrangement and availability reports.
 
 ## Developing
 

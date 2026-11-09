@@ -431,7 +431,7 @@ Once Parts 1–2 pass:
 - [ ] **Download the RC's setup programs from GitHub** on a clean VM and install
       them: this is the first time you'll see what users see, including the
       **SmartScreen "unknown publisher" warning** (expected until code signing is
-      set up — docs/RELEASING.md › Authenticode signing).
+      set up — docs/development/RELEASING.md › Authenticode signing).
 - [ ] All files are on the RC's release page: both setup programs, the `.exe`
       programs, `.sha256` and `.sig` files.
 - [ ] Then tag `v0.8.0` and `agent-v0.8.0` for the real release.

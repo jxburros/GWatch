@@ -14,7 +14,7 @@
 # self-updating release binary — before each run.
 #
 # What the package does, and why it is shaped this way, is in
-# docs/HARDWARE.md#linux-packages and docs/AGENT-DECISIONS.md (entry 10). In
+# docs/HARDWARE.md#linux-packages and docs/development/AGENT-DECISIONS.md (entry 10). In
 # short: the binary is packaged so that it never replaces itself (apt or dnf
 # owns it), the unit runs `gwatch-agent run` with no arguments, and
 # `sudo gwatch-agent pair --server … --code …` is the whole setup — it keeps

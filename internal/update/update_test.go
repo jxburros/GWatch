@@ -531,7 +531,7 @@ func TestPickAssetIgnoresCompanionBinaries(t *testing.T) {
 }
 
 // TestReleaseFamiliesStayApart is the guarantee the separate agent release
-// rests on (docs/RELEASING.md): GWatch and the hardware agent publish into the
+// rests on (docs/development/RELEASING.md): GWatch and the hardware agent publish into the
 // same repository, tagged v1.2.3 and agent-v1.2.3, and neither may ever be
 // offered the other's build. A server that installed an agent over itself, or
 // an agent that installed a server, would be unrecoverable on a remote

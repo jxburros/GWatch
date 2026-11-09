@@ -4,238 +4,244 @@
 
 [![CI](https://github.com/jxburros/GWatch/actions/workflows/ci.yml/badge.svg)](https://github.com/jxburros/GWatch/actions/workflows/ci.yml)
 
-GWatch is a calm monitor for a home network and its services. It runs as a Windows
-background service (or a plain console program on Linux/macOS), checks your router,
-servers, websites and APIs on a schedule, keeps long-term history in an embedded SQLite
-database (or on your own PostgreSQL/MySQL server — [`docs/DATABASE.md`](docs/DATABASE.md)), sends email alerts that do not spam, can run webhooks / git commands / scripts
-when something changes, and shows everything in a compact dark or light web interface
-served on `http://127.0.0.1:7230` (optionally to the rest of your LAN).
+GWatch watches your home or small-office network and tells you, calmly, when
+something is wrong. It knows which device depends on which, so when the router
+dies you get **one alert and a map of what went down with it**, not twenty.
 
-No cloud account, no AI features in the product itself, never exposed to the internet
-by itself. (An optional, separate MCP companion can let an assistant *read* your
-monitoring if you set one up — see [`mcp/README.md`](mcp/README.md).) The original
-product brief is [`local-network-monitoring-product-brief.md`](local-network-monitoring-product-brief.md);
-some of its non-goals have since shipped in a narrow form, and [`ROADMAP.md`](ROADMAP.md)
-is where the current scope and its limits are kept.
+It runs on a computer you own, as a Windows service, a Linux service, a Mac
+service or a Docker container, and you use it in a browser at
+`http://127.0.0.1:7230`. There is no cloud account, nothing is sent anywhere,
+and it is never exposed to the internet unless you arrange that yourself.
 
-> **GWatch is in beta (0.8.9).** It works and it looks after your data, but the
-> interface and the JSON API can still change between releases, and bugs are likelier
-> now than they will be at 1.0 — which is reserved for the first public, stable
-> release. [`CHANGELOG.md`](CHANGELOG.md) lists what is in each version, and
-> [`ROADMAP.md`](ROADMAP.md#known-gaps) the known gaps it still ships with. Please [report anything that looks wrong](https://github.com/jxburros/GWatch/issues).
+![The GWatch dashboard: health counters, what needs attention, and latency charts](marketing/beta/screens/dashboard-dark.png)
 
-## What's new in 0.8.8
+> **GWatch is in beta (0.8.10).** It works and it looks after your data, but the
+> interface and the JSON API can still change between releases, and bugs are
+> likelier now than they will be at 1.0. [`CHANGELOG.md`](CHANGELOG.md) lists
+> what is in each version, and [`ROADMAP.md`](ROADMAP.md) what is known to be
+> missing. Please [report anything that looks wrong](https://github.com/jxburros/GWatch/issues).
 
-0.8.8, with gwatch-agent 0.8.6, rebuilds the **network map** for big networks.
-The clusters layout is redone so a few hundred nodes lay out at once and read as
-clean groups, and **lines keep their thickness** however far the map is zoomed
-out. A node shows **its own colour and its status** side by side. You can
-**drag nodes into place** (pinned for everyone, with *Tidy up*), **fold
-clusters** away, and run a **what-if simulation** of a failure or maintenance.
-**Present** shows the map full screen and frozen for an audience. See
-[`CHANGELOG.md`](CHANGELOG.md).
+## Contents
 
-## What's new in 0.8.6
-
-0.8.6, with gwatch-agent 0.8.5, changes nothing in GWatch or the agent: both are
-rebuilt by a release workflow that no longer waits for the release commit to be on
-`main` and runs on updated GitHub Actions. See [`CHANGELOG.md`](CHANGELOG.md).
-
-## What's new in 0.8.5
-
-0.8.5, with gwatch-agent 0.8.4, draws the network map's **clusters as rings** — each node in the middle of
-what depends on it, each switch starting a ring of its own — and gives nodes a
-**colour of their own** on the map and in the node list. Line thickness now works
-on any size of map, **Charts** open blank, **Discover** can set the check interval
-and what the new nodes depend on, and **Settings › General › Pings per check**
-sets how many pings a ping check sends. See [`CHANGELOG.md`](CHANGELOG.md).
-
-## What's new in 0.8.4
-
-0.8.4, with gwatch-agent 0.8.3, **watches Docker containers and Hyper-V virtual
-machines**: name the ones on a machine that should be running, and each becomes
-readings of its hardware check — a container's state, health, restarts in the last
-hour and use of its limits, a guest's state and use — chosen where services and
-programs are. See [`docs/HARDWARE.md`](docs/HARDWARE.md#containers-and-virtual-machines).
-
-## What's new in 0.8.3
-
-0.8.3 tidies the **Add node** picker: the agent machine is offered once, as
-**A machine with the GWatch agent**, and the duplicate **Discover devices** tile is
-gone — **Discover** stays on the Nodes toolbar. gwatch-agent stays at 0.8.2.
-
-## What's new in 0.8.2
-
-0.8.2, which carries the unpublished 0.8.1, is a fixes release for GWatch and
-gwatch-agent from a full review of both: tighter handling of stored credentials (API
-keys, redirects, the timeline), restores that keep agents and check states straight,
-charts and maintenance windows that keep to local time across daylight-saving
-changes, sturdier installs and command lines, and editors that no longer drop
-settings on save. Full detail in [`CHANGELOG.md`](CHANGELOG.md).
-
-## What's new in 0.8.0
-
-Since 0.7.2: on Linux, **`gwatch install` creates a hardened systemd service**
-running as its own `gwatch` user, and the server now comes as **`.deb` and `.rpm`
-packages** too; **remote collectors** let a paired agent check the nodes at a
-second site; **Matter devices**, **services and programs** (`service:` and
-`process:` readings) and more **alert channels** (Telegram, Discord, Gotify,
-Matrix, Twilio SMS, PagerDuty, Opsgenie) can be watched and alerted on;
-**restores are atomic, validated and previewed**, and take a safety backup
-first; and alerts can be **grouped per node** or sent as a **warning digest**.
-
-The agent moves to **gwatch-agent 0.8.0** alongside it: it keeps held readings
-through a restart, comes back after a power cut, and has a control panel. Full detail in [`CHANGELOG.md`](CHANGELOG.md).
+- [What it does](#what-it-does)
+- [Install](#install)
+- [Your first ten minutes](#your-first-ten-minutes)
+- [Watching other machines: the agent](#watching-other-machines-the-agent)
+- [Is it for you?](#is-it-for-you)
+- [Security you should know about](#security-you-should-know-about)
+- [Documentation](#documentation)
+- [What's new](#whats-new)
+- [Contributing and development](#contributing-and-development)
+- [Licence, trademarks and credits](#licence-trademarks-and-credits)
 
 ## What it does
 
-- **Check types**: Ping, HTTP/S, HTTPS certificate, TCP port, DNS, Keyword, JSON, Custom
-  script (run your own command), Hardware health (this computer, or any machine you
-  install the small agent on — processor, memory, swap, load, disks, inodes, network and
-  disk throughput), SNMP (readings off a router, switch or access point — test the
-  connection and pick ports by name, no OIDs to look up) and Matter (sensors, plugs and
-  bridges read through a python-matter-server sidecar — load its devices and tick the
-  readings).
-- **Every reading stands on its own**: each hardware metric, each SNMP OID and a JSON
-  check's recorded value has its own value, status, threshold, chart, incident and
-  trigger variable.
-- **Nodes** group several checks, with templates, groups, tags, dependencies and importance,
-  and sort by status, name, address or importance.
-- **Network map**: the dependencies between nodes drawn as a tree, coloured by status, with
-  the reach of an outage traced in red — on its own page or as a dashboard widget.
-- **Discovery**: ping a subnet, see what answers with its name and open ports, and add the
-  devices you tick as nodes — with a template suggested for each. No nmap, nothing to install.
-- **Bulk edit** changes one setting — interval, timeout, thresholds, groups, tags, importance,
-  enabled, alert overrides — across as many nodes and checks as you tick, in one go.
-- **Alerts by email** after N consecutive failures, on recovery, or for warnings, with
-  cooldowns, silencing, maintenance windows and dependency-aware suppression.
-- **Notification rules** across nodes — "tell me when two of my three DNS servers are
-  down" — joined by all, any or at-least-N, with the same actions triggers use.
-- **Incident timeline**, **dashboards**, a **Charts** tab (with timestacked charts that lay a
-  metric over its own earlier days, weeks or months) and an **Audit** tab with full
-  history — rolled up and pruned automatically, so the database grows by roughly one daily
-  summary per check per day once the finer data ages out (daily summaries are kept forever
-  unless you set a limit).
-- **Alert channels**: besides email, alerts can also go to Slack, Teams, Discord,
-  Telegram, Matrix, ntfy, Gotify, Pushover, SMS (Twilio), PagerDuty or Opsgenie, per
-  severity and node group, with the same silences, maintenance and dependency rules.
-- **Automation**: triggers and custom inbound endpoints run webhooks, the same
-  notification channels, git commands or scripts when something changes.
-- **Wallboards** for a spare monitor or tablet, with an optional no-sign-in projected view.
-  The interface is responsive, so a narrow window or a tablet can read it, but it is built
-  for a desk: GWatch is not a phone app and is not designed to run on phone hardware.
-- **Accounts and API keys**, scoped read-only or read-write, plus opt-in **remote access**.
-- **Your choice of database**: the embedded SQLite file by default, or your own
-  PostgreSQL or MySQL/MariaDB server, with `gwatch migrate-db` to move an install across.
-- **Runs anywhere**: a Windows service, a console program on Linux/macOS, or the official
-  multi-arch Docker image.
-- **Self-updating**, with every release cryptographically signed and verified before install.
-- **Backups**: one-click, password-encrypted, restorable on a new machine in one step.
-- **Keyboard- and screen-reader-accessible** throughout, with a "View as table"
-  alternative for every chart; CI runs axe over every route in both themes.
+**Checks the things you care about, on a schedule.**
+Ping, websites and APIs (HTTP/S, keyword, JSON values), HTTPS certificates
+before they expire, TCP ports, DNS, your own scripts, routers and switches over
+SNMP (pick ports by name, no OIDs to look up), Matter smart-home devices, and
+the hardware health of any computer you install the small
+[agent](#watching-other-machines-the-agent) on, including its Docker containers
+and Hyper-V virtual machines.
+
+**Understands what depends on what.**
+Say that the NAS is plugged into the office switch and the switch into the
+router. When the switch fails, GWatch checks it before blaming the NAS, alerts
+you once, and holds back the rest. The **network map** draws those
+dependencies, colours them by status and traces the reach of an outage. You can
+arrange it by hand, fold parts away, run a **what-if** ("what goes down if this
+switch fails?") and present it full screen.
+
+**Alerts without the noise.**
+Email, Slack, Teams, Discord, Telegram, Matrix, ntfy, Gotify, Pushover, SMS
+(Twilio), PagerDuty or Opsgenie. Alerts wait for a number of failures in a row,
+respect cooldowns, silences and maintenance windows, and can be grouped per
+node or sent as a digest. **Rules** cover the cases one check cannot: "tell me
+when two of my three DNS servers are down".
+
+**Keeps history and shows it well.**
+Dashboards you lay out yourself, charts that can lay a metric over its own
+earlier days or weeks, an incident timeline, an audit log, and wallboards for a
+spare screen. History is rolled up and pruned automatically, so the database
+stays small.
+
+**Gets set up quickly.**
+Discovery pings a range, shows what answered with its name and open ports, and
+adds the devices you tick with a suggested template. Bulk edit changes one
+setting across as many nodes as you like.
+
+**Does something about it, if you want.**
+Triggers and inbound endpoints can call a webhook, send a notification, run a
+git command or run a script when something changes.
+
+**Looks after itself.**
+One-click encrypted backups that restore on a new machine in one step. Updates
+are signed and verified before they install. Accounts with administrator and
+viewer roles, and API keys that are read-only or read-write. Your data lives in
+one SQLite file by default, or on your own PostgreSQL or MySQL/MariaDB server.
+
+**Works for everyone.**
+The whole interface works from the keyboard and with a screen reader, every
+chart has a "view as table", and it comes in dark and light.
 
 ## Install
 
-**Windows** — download `gwatch-setup-<version>.exe` from the
-[latest release](https://github.com/jxburros/GWatch/releases/latest) and run it: it asks for
-a port and whether to allow other devices on your network, then installs and starts the
-`GWatch` service. Full walkthrough (including the PowerShell-only path, upgrading and
-uninstalling): [`docs/INSTALL.md`](docs/INSTALL.md).
+| You have | Do this | Full guide |
+|---|---|---|
+| **Windows** | Download `gwatch-setup-<version>.exe` from the [latest release](https://github.com/jxburros/GWatch/releases/latest) and run it. It asks for a port and whether other devices on your network may connect, then installs and starts the `GWatch` service. | [`docs/INSTALL.md`](docs/INSTALL.md) |
+| **Linux** (Debian, Ubuntu, Raspberry Pi OS, Fedora and relatives) | Download the `.deb` or `.rpm` for your machine from the [latest release](https://github.com/jxburros/GWatch/releases/latest) and install it with `sudo apt install ./gwatch_<version>-1_amd64.deb` or `sudo dnf install ./gwatch-<version>-1.x86_64.rpm`. It runs as its own unprivileged user in a hardened systemd service. Any other systemd distribution: the signed `install.sh`. | [`docs/INSTALL-LINUX.md`](docs/INSTALL-LINUX.md) |
+| **Docker** | `docker run -d --name gwatch -p 7230:7230 -v gwatch-data:/data --cap-add NET_RAW ghcr.io/jxburros/gwatch:latest`, or `docker compose up -d` with the [`docker-compose.yml`](docker-compose.yml) here. Then create the first administrator account with the one command in the guide: in a container there is no "this computer" to trust. | [`docs/DOCKER.md`](docs/DOCKER.md) |
+| **macOS** | Download `gwatch-darwin-arm64` (Apple silicon) or `gwatch-darwin-amd64` (Intel) from the [latest release](https://github.com/jxburros/GWatch/releases/latest), then `chmod +x` it and run `sudo ./gwatch-darwin-arm64 install` to set it up as a background service. To try it without installing, run `./gwatch-darwin-arm64 run --data-dir ./data`. | `gwatch --help` |
 
-**Docker** — `docker run -d --name gwatch -p 7230:7230 -v gwatch-data:/data --cap-add NET_RAW ghcr.io/jxburros/gwatch:latest`,
-then create the first administrator account with one `docker exec` (a request from your
-browser does not arrive over loopback, so the no-password local shortcut does not apply
-in a container) and open `http://<the docker host>:7230`. Multi-arch (`linux/amd64`,
-`linux/arm64`, `linux/arm/v7`), a `docker-compose.yml` in the repository root, the exact first-run
-command, and what else changes inside a container (ping, discovery, hardware readings,
-upgrades): [`docs/DOCKER.md`](docs/DOCKER.md).
+Then open <http://127.0.0.1:7230> on that computer (for Docker,
+`http://<the docker host>:7230`).
 
-**Linux/macOS** — run it straight from source (Go 1.26+):
+Windows will warn that the setup program is from an unknown publisher: the
+installers are not yet signed with a Windows certificate
+([more about that warning](docs/INSTALL.md#known-limitations)). Every release
+file is signed with GWatch's own key, and GWatch verifies that signature before
+it installs any update.
 
-```bash
-go run . run --data-dir ./data
-```
+Want to build it from source instead? See
+[`docs/development/DEVELOPMENT.md`](docs/development/DEVELOPMENT.md).
 
-Then open <http://127.0.0.1:7230> — monitoring runs only while this process runs. See
-`gwatch --help` (or `--listen`/`GWATCH_LISTEN` to change the address) for the rest of the flags.
+## Your first ten minutes
 
-## The GWatch Agent
+1. **Open GWatch** and take the short tour it offers.
+2. **Add your network.** On **Nodes**, press **Discover**, type your range (for
+   example `192.168.1.0/24`), tick the devices you want and add them. Or press
+   **Add node** and type a name and an address.
+3. **Say what depends on what.** Edit a node and set **Depends on** (the NAS
+   depends on the switch, the switch on the router). This is what keeps alerts
+   down to one per outage and what the network map draws.
+4. **Turn on alerts.** In **Settings**, set up email or one of the other
+   channels and send yourself a test.
+5. **Make a backup.** **Settings › Backups** takes one click, and it is how you
+   move GWatch to another machine later.
+
+The [user guide](docs/USER-GUIDE.md) walks through every screen from there.
+
+## Watching other machines: the agent
 
 <img src="web/agent-logo.png" alt="" width="84" align="right">
 
-`gwatch-agent` is the small, dependency-free companion that reports hardware
-health — processor, memory, swap, load, disks, inodes, network and disk
-throughput — from another machine back to your GWatch server. Add a machine
-from **Nodes › Add node › A machine with the GWatch agent**, then type the short code it shows into the
-agent's Windows installer, or run:
+`gwatch-agent` is a small program you install on another computer so GWatch can
+see its processor, memory, disks, network, services, Docker containers and
+Hyper-V machines. In GWatch, choose **Nodes › Add node › A machine with the
+GWatch agent**. It shows a short code. Type that code into the agent's Windows
+installer, or on Linux and macOS run:
 
 ```
-gwatch-agent install --server https://gwatch.lan:7230 --code XXXX-XXXX
+gwatch-agent install --server http://<your GWatch computer>:7230 --code XXXX-XXXX
 ```
 
-It installs itself as a background service and starts reporting within a
-minute, on Windows, Linux or macOS, and the pairing dialog in GWatch says so as
-it happens. It keeps itself up to date from its own signed releases, or is
-installed and updated by `apt`/`dnf` (`.deb`/`.rpm`), Homebrew, winget or as a
-container image instead. It can also run the other way round —
-`gwatch-agent serve` exposes a metrics endpoint for GWatch to poll — for the
-machines that can't reach out on their own. See
-[`docs/HARDWARE.md`](docs/HARDWARE.md) for the full setup and
-[`docs/AGENT-DECISIONS.md`](docs/AGENT-DECISIONS.md) for what the agent
-deliberately does and does not do on a machine.
+The agent starts reporting within a minute and keeps itself up to date from its
+own signed releases. It only ever sends readings: GWatch cannot run commands on
+the machine through it.
 
-## Read more
+- Use `http://` unless you have put GWatch behind a reverse proxy that provides
+  `https://` ([remote access](docs/REMOTE-ACCESS.md)). GWatch itself listens on
+  plain HTTP, and it must allow other devices on your network to connect.
+- What it can measure differs by system: Linux has the most (temperatures
+  included), Windows has no temperatures, and macOS has no processor-use
+  reading or temperatures yet. The table is in
+  [`docs/HARDWARE.md`](docs/HARDWARE.md).
+- An agent can also run GWatch's checks from a second site
+  ([remote collectors](docs/COLLECTORS.md)).
 
-| Document | What it covers |
+## Is it for you?
+
+GWatch sits between the simple uptime checkers and the big network-management
+systems.
+
+| | Simple uptime checkers | **GWatch** | Enterprise monitoring suites |
+|---|---|---|---|
+| Set-up | minutes | minutes | hours to days |
+| Checks websites, ports, certificates | yes | yes | yes |
+| One alert per outage, not one per device | rarely | **yes** | yes |
+| Hardware health of your machines | no | yes, with a small agent | yes |
+| Routers and switches (SNMP) | rarely | yes, the common readings | yes, in depth |
+| Smart-home (Matter) devices | no | yes | no |
+| Runs as a Windows service | rarely | yes | rarely |
+| Public status page | usually | **not yet** | sometimes |
+| Single sign-on, two-factor sign-in | sometimes | **not yet** | yes |
+| Hundreds of notification services | often | twelve, plus webhooks | often |
+| Phone app | sometimes | no; the web page works on a tablet, and phones are being improved | sometimes |
+
+It is a good fit if you look after 10 to 100 devices at home or in a small
+office and want dependable, quiet alerts with history, on your own hardware. It
+is not the right tool if you need a public status page today, sign-in through
+your identity provider, or deep SNMP with vendor MIBs.
+
+## Security you should know about
+
+- **Anyone using the computer GWatch runs on is an administrator by default,**
+  with no sign-in. That is what makes a fresh install work with no set-up. On a
+  shared machine, create an account and turn on **Settings › Users & access ›
+  Require sign-in on this computer too**. Background:
+  [the local administrator trust model](docs/DISCLAIMER.md#how-gwatch-ships).
+- **Other devices cannot connect unless you allow it,** and when you do, they
+  have to sign in.
+- **GWatch can run scripts** (custom checks and automation). Only an
+  administrator signed in at the web page can create those; API keys cannot.
+  On Windows the service normally runs as LocalSystem, so treat the
+  administrator account accordingly.
+- **Do not put GWatch directly on the internet.** Use a VPN or a reverse proxy
+  with TLS: [`docs/REMOTE-ACCESS.md`](docs/REMOTE-ACCESS.md).
+- **Found a vulnerability?** Please report it privately:
+  [`SECURITY.md`](SECURITY.md).
+
+## Documentation
+
+Everything is indexed in [`docs/README.md`](docs/README.md). The ones most
+people want:
+
+| | |
 |---|---|
-| [`docs/USER-GUIDE.md`](docs/USER-GUIDE.md) | **Start here.** Every screen and setting in the interface, in order: nodes and check types, discovery, bulk edit, dashboards, charts, alerts, rules, automation, wallboards, and the corners most people never find |
-| [`docs/API.md`](docs/API.md) | The JSON API: authentication and roles, every endpoint, custom checks, platform notes |
-| [`docs/INSTALL.md`](docs/INSTALL.md) | The Windows installer walkthrough, the PowerShell scripts, upgrading, uninstalling |
-| [`docs/DATABASE.md`](docs/DATABASE.md) | Keeping the data on your own PostgreSQL or MySQL/MariaDB server instead of the SQLite file: setup, `database.json`, TLS, `gwatch migrate-db` |
-| [`docs/DOCKER.md`](docs/DOCKER.md) | Running GWatch in a container: the first account, the `/data` volume, ping and discovery inside Docker, upgrading by pulling |
-| [`docs/HARDWARE.md`](docs/HARDWARE.md) | Hardware health, the agent, its trust model, and what each platform can measure |
-| [`docs/COLLECTORS.md`](docs/COLLECTORS.md) | Remote collectors: checking a second site through a paired agent, what it is sent (credentials included) and what happens when it goes quiet |
-| [`docs/AGENT-DECISIONS.md`](docs/AGENT-DECISIONS.md) | Why the agent is built the way it is: self-update, what GWatch deliberately cannot do to a machine, and the options not taken |
-| [`docs/SNMP.md`](docs/SNMP.md) | SNMP checks: enabling SNMP on a router or switch, choosing OIDs, interface traffic in bits per second |
-| [`docs/MATTER.md`](docs/MATTER.md) | Matter devices: running python-matter-server beside GWatch, commissioning with a pairing code, the readings and what Thread needs |
-| [`docs/RECIPES.md`](docs/RECIPES.md) | Ready-made trigger/endpoint recipes: Home Assistant, Slack/Discord, ntfy/Pushover, Docker, git |
-| [`docs/REMOTE-ACCESS.md`](docs/REMOTE-ACCESS.md) | Reaching GWatch from outside your network safely — accounts, API keys, Tailscale, a TLS proxy |
-| [`docs/RESTORE.md`](docs/RESTORE.md) | Moving GWatch to a new machine: backup, restore, and what does and doesn't come across |
-| [`docs/RELEASING.md`](docs/RELEASING.md) | Building and testing locally, CI, repository layout, and cutting a signed release |
-| [`docs/PRIVACY.md`](docs/PRIVACY.md) | What GWatch stores, where, and the fact that none of it goes anywhere |
-| [`docs/TERMS.md`](docs/TERMS.md) | Terms of use — acceptable use, no warranty, limitation of liability |
-| [`docs/DISCLAIMER.md`](docs/DISCLAIMER.md) | The security choices that are yours to make, and what happens if you make them badly |
-| [`mcp/README.md`](mcp/README.md) | `gwatch-mcp` — an optional MCP server so an AI assistant can read (and, if you allow it, manage) your monitoring. The in-app guide, and the downloadable agent skill, are under **Settings › AI & MCP** |
-| [`CHANGELOG.md`](CHANGELOG.md) | What shipped in each release |
-| [`ROADMAP.md`](ROADMAP.md) | What's planned and roughly when |
+| **Using GWatch** | [User guide](docs/USER-GUIDE.md) (start here) · [Recipes for automation](docs/RECIPES.md) · [Troubleshooting](docs/USER-GUIDE.md#20-when-something-is-wrong) |
+| **Installing and running** | [Windows](docs/INSTALL.md) · [Linux](docs/INSTALL-LINUX.md) · [Docker](docs/DOCKER.md) · [Backups and moving machine](docs/RESTORE.md) · [Remote access](docs/REMOTE-ACCESS.md) · [PostgreSQL or MySQL](docs/DATABASE.md) |
+| **Watching more** | [Hardware and the agent](docs/HARDWARE.md) · [A second site](docs/COLLECTORS.md) · [SNMP](docs/SNMP.md) · [Matter](docs/MATTER.md) |
+| **Integrating** | [JSON API](docs/API.md) · [AI assistants (MCP)](mcp/README.md) |
+| **Policies** | [Privacy](docs/PRIVACY.md) · [Terms](docs/TERMS.md) · [Disclaimer](docs/DISCLAIMER.md) · [Security](SECURITY.md) |
 
-Local access trusts all users and processes on the server as administrators by
-default; on Windows, automation normally runs as LocalSystem. On shared machines,
-create an account and turn on **Require sign-in on this computer too**. See the
-[local administrator trust model](docs/DISCLAIMER.md#how-gwatch-ships), including
-why the default is retained and how to use a less-privileged service account.
+GWatch has no AI features of its own. The optional, separate MCP companion lets
+an assistant *read* your monitoring (and change it only if you allow that); the
+set-up guide is in the app under **Settings › AI & MCP**.
 
-## License, trademarks and credits
+## What's new
 
-GWatch is source-available under the [GWatch Community License](LICENSE): free to use,
-modify, and distribute, including commercially for deployment, support, and
-customization work — but the unmodified software itself may not be resold or offered
-as a paid hosted service. See [`TRADEMARKS.md`](TRADEMARKS.md) for the separate policy
-on using the GWatch name and logo; forks and derivatives must keep the GWatch name, logo,
-and copyright line visible. The setup program shows the licence and a digest of the
-terms, privacy and disclaimer documents above before it installs anything.
+**0.8.10** fixes a security problem: a request GWatch made to its own address
+(an HTTP check or webhook pointed at itself) was treated as the local
+administrator, which let a read-write API key do more than it should. If you
+have handed out a read-write API key, update. The documentation has also been
+reorganised around the person using GWatch.
 
-GWatch is developed by **Jeffrey Guntly** and **Garrett Guntly**, and published by
-**JX Holdings, LLC**.
+**0.8.8** rebuilt the network map for big networks: faster layout, dragging
+nodes into place, folding clusters, what-if simulation and a presentation mode.
+
+Everything else, version by version: [`CHANGELOG.md`](CHANGELOG.md).
+
+## Contributing and development
+
+Bug reports and ideas are welcome in
+[issues](https://github.com/jxburros/GWatch/issues). To build, test or change
+GWatch, start with [`CONTRIBUTING.md`](CONTRIBUTING.md); the developer
+documents (building and testing, the release process, design decisions) are in
+[`docs/development/`](docs/development/README.md), and what is planned is in
+[`ROADMAP.md`](ROADMAP.md).
+
+## Licence, trademarks and credits
+
+GWatch is source-available under the [GWatch Community License](LICENSE): free
+to use, modify and distribute, including commercially for deployment, support
+and customisation work. The unmodified software itself may not be resold or
+offered as a paid hosted service. It is not an open-source licence in the OSI
+sense. See [`TRADEMARKS.md`](TRADEMARKS.md) for the separate policy on the
+GWatch name and logo; forks and derivatives must keep the name, logo and
+copyright line visible. The setup program shows the licence and a digest of the
+terms, privacy and disclaimer documents before it installs anything.
+
+GWatch is developed by **Jeffrey Guntly** and **Garrett Guntly**, and published
+by **JX Holdings, LLC**.
 
 Copyright (c) 2026 JX Holdings. Original developers: Jeffrey Guntly and Garrett Guntly.
-
-For signed Linux installation, systemd, headless setup and Raspberry Pi builds, see [Installing on Linux](docs/INSTALL-LINUX.md).
-
-## Unified release procedure
-
-`release.json` is the authoritative release manifest. Keep configured embedded versions synchronized and advance affected apps (patch by default) before merging changes into main. The first adoption establishes a baseline; later PRs must pass **Release version validation**.
-
-Use **Actions → Release → Run workflow** from **main**, choose stable or preview, and leave **dry_run** enabled first. Only apps ahead of their published version in their own namespace are selected. Build/test/sign all required packages before publishing. Tag pushes and merges no longer publish migrated apps automatically. After inspecting the dry run, dispatch with dry_run disabled; the run proceeds without manual approval steps. Published versions are never overwritten; use a new version for a correction.
-
-See [.release/README.md](.release/README.md) for this repository's inventory, credentials, compatibility, and validation limits. Shared implementation: [JX Holdings release infrastructure](https://github.com/JX-Holdings-LLC/release-infrastructure).

@@ -12,7 +12,7 @@
 // lists built-in network checks to run (collector.go, entry 16). GWatch's
 // answer has no field for a command, a script, a file or a version to install,
 // so there is nothing in it that could make this machine run something it did
-// not choose to (docs/AGENT-DECISIONS.md, entry 12).
+// not choose to (docs/development/AGENT-DECISIONS.md, entry 12).
 package main
 
 import (

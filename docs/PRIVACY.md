@@ -74,7 +74,9 @@ Inside the database:
   the results of that machine's hardware check.
 - **Incidents and the audit log** — outages, recoveries, warnings, maintenance
   windows, configuration changes, backups and restores, service start and stop,
-  sleep gaps, and your own notes. Sign-ins and failed sign-in attempts are
+  sleep gaps, and your own notes, including the notes on an incident and who
+  acknowledged or resolved it. Scheduled report definitions and their
+  recipient lists are kept here too. Sign-ins and failed sign-in attempts are
   recorded with the IP address they came from, and every change carries the name
   of whoever made it.
 - **User accounts** — usernames, roles, and passwords stored only as argon2id
@@ -112,7 +114,10 @@ Protect the data directory accordingly — see [`DISCLAIMER.md`](DISCLAIMER.md).
 
 None of this is transmitted anywhere by GWatch itself. Exports (CSV, PNG, JSON
 configuration, the service log) and backup archives are files GWatch hands to
-you; where they go afterwards is entirely your decision.
+you; where they go afterwards is entirely your decision. The JSON
+configuration export is made to be shareable: it leaves out credentials,
+accounts, API keys, agent records, incident notes and report recipients. An
+encrypted backup is the complete copy.
 
 ## What GWatch sends over the network
 
@@ -137,6 +142,8 @@ Only what you configure, and only to destinations you chose.
 3. **Alert email**, if you configure it — sent through your own SMTP server,
    with your credentials, to the addresses you nominate. GWatch has no mail
    relay of its own, so if you do not configure SMTP, no email is ever sent.
+   Scheduled availability reports are opt-in and go the same way: through your
+   SMTP server, to the recipients you chose for each report.
 4. **Update checks.** A check makes a request to `api.github.com` for the
    GWatch repository's releases, and installing an update downloads the asset
    from GitHub. When an administrator opens the page of a machine that runs
@@ -238,12 +245,3 @@ data; we do not want it and have nowhere to put it.
   network without exposing it
 - [`LICENSE`](../LICENSE) — what you may do with the code
 
-
-### Availability reports and agent lookups (0.6)
-
-Scheduled reports are opt-in and send only through the configured SMTP server to the
-recipients you choose. Report definitions, incident notes and delivery state stay in the
-configured local/database backend. The agent-version lookup (`GET /api/agents/latest`)
-contacts GitHub only while automatic update checks are enabled; disabling them prevents
-that background request as well. Exported shareable configuration removes credentials,
-account/key/agent records, incident notes and report recipients.
