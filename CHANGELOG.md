@@ -49,6 +49,14 @@ documentation reorganised around the person using GWatch.
   `http://`; the Linux packages and macOS were missing from the install
   summary; this changelog said releases that were published were not;
   `ROADMAP.md` described finished work as planned.
+- **Governance documents for contributors and AI coding agents.** `AGENTS.md`
+  and [`development-docs/`](development-docs/coreIdentity.md) set out what
+  GWatch is and must not become, how it is developed and what counts as done,
+  its current architecture, and the roadmap. The roadmap moved from
+  `ROADMAP.md` to
+  [`development-docs/productRoadmap.md`](development-docs/productRoadmap.md),
+  rebuilt around every open issue; the original public-release plan, all
+  shipped, is kept in `development-docs/architecture-plans/archives/`.
 
 ## 0.8.9 (not published; its changes ship in 0.8.10)
 

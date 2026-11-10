@@ -18,7 +18,9 @@ coverage.out
 test-results/
 playwright-report/
 coverage.txt
-.claude/
+# Local Claude Code state stays out; the project's shared agent skills are committed.
+.claude/*
+!.claude/skills/
 gwatch.key
 release.key
 # devDependencies for the web test suite (tests/web/) only — the shipped

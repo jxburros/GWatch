@@ -50,7 +50,7 @@ Find the document by what you are trying to do. New here? Read the
 | [`../SECURITY.md`](../SECURITY.md) | Reporting a vulnerability |
 | [`../LICENSE`](../LICENSE) and [`../TRADEMARKS.md`](../TRADEMARKS.md) | The licence, and the policy on the name and logo |
 | [`../CHANGELOG.md`](../CHANGELOG.md) | What changed in each version |
-| [`../ROADMAP.md`](../ROADMAP.md) | What is planned and what is known to be missing |
+| [`../development-docs/productRoadmap.md`](../development-docs/productRoadmap.md) | What is planned and what is known to be missing |
 
 ## Work on GWatch itself
 
