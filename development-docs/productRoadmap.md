@@ -6,8 +6,9 @@
 Rebuilt on 2026-11-10 from the former ROADMAP.md (November 2026), every open issue on
 jxburros/GWatch at that date, docs/development/REVIEW-2026-10-31.md and the "not yet"
 notes in docs/. Each open issue was checked against the code at 0.8.10; the one found
-complete (#194, release blockers) was closed. The original public-release plan, all of
-it shipped, moved to architecture-plans/archives/original-public-release-plan.md.
+complete (#194, release blockers) was closed. The former ROADMAP.md, including the
+original public-release plan (all shipped), is archived in full at
+architecture-plans/archives/ROADMAP-2026-11-09.md.
 Version numbers for the stages below have not been assigned by the maintainers.
 -->
 
@@ -213,7 +214,7 @@ A candidate is promoted when a maintainer opens an issue for it and places it in
 
 ### Narrow shapes that must hold
 
-Several features that were once non-goals shipped in a deliberately narrow form. The shape is the constraint; widening it is a project-level decision.
+Several features that were once non-goals shipped in a deliberately narrow form. The shape is the constraint; widening it is a project-level decision. The full reasoning for taking each one up is in the archived roadmap, [`architecture-plans/archives/ROADMAP-2026-11-09.md`](architecture-plans/archives/ROADMAP-2026-11-09.md#explicit-non-goals-keep-scope-from-drifting-toward-zabbixprtg).
 
 **SNMP (#39).** A check, not a subsystem: a list of numeric OIDs polled on the check's own schedule, each a named metric through the same scheduler, alerting, charting and retention as every other check. No MIB files or MIB compiler, no trap listener. "Walk this device" is an editor aid, capped and one device at a time — never inventory.
 
@@ -221,7 +222,7 @@ Several features that were once non-goals shipped in a deliberately narrow form.
 
 **Remote collectors (#123).** With both the machine's owner and the administrator opting in, an agent runs the built-in network checks (ping, TCP, HTTP and relatives, DNS, SNMP) of nodes pointed at it and posts the results — data from a closed list, never a script, over connections the agent opens. Not a second GWatch, a fleet or remote execution. Reasoning: `docs/development/AGENT-DECISIONS.md` entry 16.
 
-**Network discovery (#42).** A sweep started by a person, then forgotten: at most 4,096 addresses, at most 24 TCP ports (ten by default), administrator only, one run at a time, results in memory until the next run or a restart, nothing added until ticked. No scheduled or continuous scanning, no inventory, no fingerprinting, no `nmap`, no SNMP probing during a sweep, no new-device alerts. Automatic topology discovery (#233) must fit within this.
+**Network discovery (#42).** Decided at the 2026-09-19 planning meeting for fast onboarding. A sweep started by a person, then forgotten: at most 4,096 addresses, at most 24 TCP ports (ten by default), administrator only, one run at a time, results in memory until the next run or a restart, nothing added until ticked. No scheduled or continuous scanning, no inventory, no fingerprinting, no `nmap`, no SNMP probing during a sweep, no new-device alerts. Automatic topology discovery (#233) must fit within this.
 
 ---
 

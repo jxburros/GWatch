@@ -55,8 +55,9 @@ documentation reorganised around the person using GWatch.
   its current architecture, and the roadmap. The roadmap moved from
   `ROADMAP.md` to
   [`development-docs/productRoadmap.md`](development-docs/productRoadmap.md),
-  rebuilt around every open issue; the original public-release plan, all
-  shipped, is kept in `development-docs/architecture-plans/archives/`.
+  rebuilt around every open issue; the old `ROADMAP.md`, with the original
+  public-release plan (all shipped), is archived in
+  `development-docs/architecture-plans/archives/`.
 
 ## 0.8.9 (not published; its changes ship in 0.8.10)
 

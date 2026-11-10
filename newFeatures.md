@@ -4,7 +4,7 @@ The historical intake list for feature ideas that may later be promoted into `de
 
 ## Intake from the documentation (2026-11-10)
 
-- [ ] Official Home Assistant add-on and Unraid template for the container image (former `ROADMAP.md` §4.2, "once the image has had some use") — listed as a candidate in `productRoadmap.md` §8
+- [ ] Official Home Assistant add-on and Unraid template for the container image (former `ROADMAP.md` §4.2, now archived, "once the image has had some use") — listed as a candidate in `productRoadmap.md` §8
 - [ ] Neighbour-table (ARP) names in discovery on macOS (`docs/API.md` → Discovery, "not yet on macOS") — candidate in `productRoadmap.md` §8
 
 ## Promoted (kept for history)

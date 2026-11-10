@@ -10,7 +10,7 @@
 
 <!--
 Set up on 2026-11-10 from evidence already in the repository: README.md, the former
-ROADMAP.md (now development-docs/productRoadmap.md), CONTRIBUTING.md, SECURITY.md,
+ROADMAP.md (archived at development-docs/architecture-plans/archives/ROADMAP-2026-11-09.md), CONTRIBUTING.md, SECURITY.md,
 docs/PRIVACY.md, docs/development/PRODUCT-BRIEF.md, docs/development/AGENT-DECISIONS.md,
 docs/development/REVIEW-2026-10-31.md and the code. Nothing here was invented; where a
 statement is an inference rather than something the repository says outright, it is
