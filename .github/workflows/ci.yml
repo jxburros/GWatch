@@ -106,7 +106,7 @@ jobs:
         mkdir -p dist
         CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=ci-${GITHUB_SHA::7}" -o dist/gwatch-windows-amd64.exe .
         ls -lh dist
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: gwatch-windows-amd64
         path: dist/gwatch-windows-amd64.exe
@@ -133,7 +133,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         }
         Get-ChildItem scripts\installer\Output
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: gwatch-windows-installer
         path: |
@@ -303,7 +303,7 @@ jobs:
         GWATCH_REAL=1 npx playwright test
     - name: Keep the real-server browser traces
       if: failure()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: real-server-playwright-traces
         path: test-results/
