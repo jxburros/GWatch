@@ -10,7 +10,24 @@ release is published as `v<VERSION>` by the Release workflow, dispatched from
 `main`. It refuses to publish a tag that disagrees with the file — see
 [`docs/development/RELEASING.md`](docs/development/RELEASING.md).
 
-## 0.8.10 (not yet released)
+## 0.8.11 (not yet released)
+
+GWatch only; gwatch-agent stays at 0.8.7. No change to the program: this
+release adds the project's governance documents and rebuilds the roadmap.
+
+### Documentation
+
+- **Governance documents for contributors and AI coding agents.** `AGENTS.md`
+  and [`development-docs/`](development-docs/coreIdentity.md) set out what
+  GWatch is and must not become, how it is developed and what counts as done,
+  its current architecture, and the roadmap. The roadmap moved from
+  `ROADMAP.md` to
+  [`development-docs/productRoadmap.md`](development-docs/productRoadmap.md),
+  rebuilt around every open issue; the old `ROADMAP.md`, with the original
+  public-release plan (all shipped), is archived in
+  `development-docs/architecture-plans/archives/`.
+
+## 0.8.10 (not published; its changes ship in 0.8.11)
 
 GWatch 0.8.10 and gwatch-agent 0.8.7 ship together. One security fix, and the
 documentation reorganised around the person using GWatch.

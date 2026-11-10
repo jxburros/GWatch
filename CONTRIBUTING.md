@@ -14,7 +14,7 @@ answer. Take care not to paste passwords, tokens or API keys.
 **Security problems are different: do not open a public issue.** See
 [`SECURITY.md`](SECURITY.md).
 
-Before asking for a feature, look at [`ROADMAP.md`](ROADMAP.md). It lists what is
+Before asking for a feature, look at the [roadmap](development-docs/productRoadmap.md). It lists what is
 planned and what GWatch has decided not to become, with the reasons.
 
 ## Changing the code

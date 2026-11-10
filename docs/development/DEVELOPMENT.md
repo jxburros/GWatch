@@ -127,4 +127,5 @@ job — see ["Releasing the MCP companion"](RELEASING.md#releasing-the-mcp-compa
 | `packaging/` | The agent's packages: `build-agent.sh` (the packaged builds), `nfpm/` (`.deb`/`.rpm`, systemd unit, maintainer scripts), `homebrew/`, `winget/` and `docker/Dockerfile.agent` — see ["The agent packages"](RELEASING.md#the-agent-packages) |
 | `VERSION` | The version every build reports; a release is the tag `v<VERSION>` |
 | `mcp/` | The MCP companion, a separate Go module with its own `VERSION` — see [`mcp/README.md`](../../mcp/README.md) |
+| `AGENTS.md`, `CLAUDE.md`, `development-docs/` | Governance for contributors and AI coding agents: identity, development standards and the Definition of Done, current architecture, the roadmap; `features.md`, `newFeatures.md`, `current-checklist/`, `audits/` and `human-qa/` are the working records that go with them, and `.claude/skills/` holds the two agent skills |
 | `Dockerfile`, `.dockerignore`, `docker-compose.yml` | The container image (`make docker`) and a ready-to-run Compose file — see [`DOCKER.md`](../DOCKER.md) |

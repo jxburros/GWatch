@@ -15,10 +15,10 @@ and it is never exposed to the internet unless you arrange that yourself.
 
 ![The GWatch dashboard: health counters, what needs attention, and latency charts](marketing/beta/screens/dashboard-dark.png)
 
-> **GWatch is in beta (0.8.10).** It works and it looks after your data, but the
+> **GWatch is in beta (0.8.11).** It works and it looks after your data, but the
 > interface and the JSON API can still change between releases, and bugs are
 > likelier now than they will be at 1.0. [`CHANGELOG.md`](CHANGELOG.md) lists
-> what is in each version, and [`ROADMAP.md`](ROADMAP.md) what is known to be
+> what is in each version, and the [roadmap](development-docs/productRoadmap.md) what is known to be
 > missing. Please [report anything that looks wrong](https://github.com/jxburros/GWatch/issues).
 
 ## Contents
@@ -227,8 +227,10 @@ Bug reports and ideas are welcome in
 [issues](https://github.com/jxburros/GWatch/issues). To build, test or change
 GWatch, start with [`CONTRIBUTING.md`](CONTRIBUTING.md); the developer
 documents (building and testing, the release process, design decisions) are in
-[`docs/development/`](docs/development/README.md), and what is planned is in
-[`ROADMAP.md`](ROADMAP.md).
+[`docs/development/`](docs/development/README.md), and what is planned is in the
+[roadmap](development-docs/productRoadmap.md). AI coding agents start at
+[`AGENTS.md`](AGENTS.md), which points to the project's governance documents in
+[`development-docs/`](development-docs/coreIdentity.md).
 
 ## Licence, trademarks and credits
 
