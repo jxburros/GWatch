@@ -17,7 +17,7 @@ import (
 // Remote collectors (issue #123): the routes a collector talks to and the one
 // an administrator uses to make an agent one. What a collector is and why it
 // is shaped the way it is are in internal/model/collector.go and
-// docs/AGENT-DECISIONS.md, entry 16.
+// docs/development/AGENT-DECISIONS.md, entry 16.
 
 // maxResultsBody bounds a batch of results. A result is well under a
 // kilobyte, more for an SNMP check with many OIDs; MaxCollectorBatch of them

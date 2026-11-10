@@ -564,7 +564,7 @@ Local browser interface
 > internet-facing by itself), SNMP checks, a CPU/memory/disk/network agent
 > (`gwatch-agent`), and network discovery (a ping sweep with a short port list). An
 > optional MCP companion for AI assistants exists as a separate program; the
-> application itself still has no AI features. [`ROADMAP.md`](ROADMAP.md) records
+> application itself still has no AI features. [`ROADMAP.md`](../../ROADMAP.md) records
 > why each was taken up and the constraints that keep it narrow; it, not this list, is
 > the current statement of scope.
 

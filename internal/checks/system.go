@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/jxburros/GWatch/internal/model"
+	"github.com/jxburros/GWatch/internal/selfconn"
 )
 
 // HostReader supplies hardware readings that were taken elsewhere: by the
@@ -147,7 +148,7 @@ func scrapeHostMetrics(ctx context.Context, check model.Check) (model.HostMetric
 	timeout := attemptTimeout(check)
 	transport := &http.Transport{
 		Proxy:                 nil, // a local monitor always connects directly
-		DialContext:           (&net.Dialer{Timeout: timeout, KeepAlive: -1}).DialContext,
+		DialContext:           selfconn.DialContext((&net.Dialer{Timeout: timeout, KeepAlive: -1}).DialContext),
 		TLSClientConfig:       &tls.Config{InsecureSkipVerify: check.Config.IgnoreTLSErrors, MinVersion: tls.VersionTLS12}, //nolint:gosec // user opt-in
 		TLSHandshakeTimeout:   timeout,
 		ResponseHeaderTimeout: timeout,

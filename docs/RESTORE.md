@@ -21,15 +21,25 @@ On the machine you are moving away from:
    itself never uploads it anywhere).
 
 If automatic backups are enabled, any archive listed under **Backups on this
-computer** already satisfies step 2-3; download the newest one instead.
+computer** will do in place of steps 2 and 3: download the newest one. You need the
+automatic-backup password to restore it.
 
 ## 2. Install GWatch on the new machine
 
-Follow the normal install steps for the platform: [`docs/INSTALL.md`](INSTALL.md)
-for Windows, or build/run the binary directly on Linux/macOS (see the main
-[`README.md`](../README.md#install)). Start the service once so it creates its data
-directory (`gwatch.db`, `logs/`, `backups/`) and finishes first-run setup, then
-open the web interface.
+Follow the normal install steps for the platform: [`INSTALL.md`](INSTALL.md) for
+Windows, [`INSTALL-LINUX.md`](INSTALL-LINUX.md) for Linux and Raspberry Pi,
+[`DOCKER.md`](DOCKER.md) for a container, or the main
+[`README.md`](../README.md#install) for running the binary directly. Start the
+service once so it creates its data directory (`gwatch.db`, `gwatch.key`, `logs/`,
+`backups/`), then open the web interface.
+
+Do not create accounts on the new machine first if you can avoid it: on a machine
+with no accounts the archive's accounts are all brought back without asking. That
+works when you open GWatch on the machine itself (or through an SSH tunnel), where
+you are an administrator with no sign-in. In a Docker container you have to create
+one administrator before you can sign in at all ([`DOCKER.md`](DOCKER.md#quick-start));
+there, tick **Re-create accounts and agents that have been deleted since this
+backup** when you restore, or the archive's other accounts are left out.
 
 ## 3. Restore the archive
 
@@ -173,12 +183,16 @@ restore started while one is running is refused (`409`).
   computer, they are re-created without asking. An agent that is still here keeps its
   link to its node. An archive from an older version has none of these and leaves them
   untouched.
-- Optionally, the **history**, which includes what each hardware check recorded: a machine's readings are its check's results, kept like any other check's. (An archive from before that carries a separate list of hardware readings; it is not read, because every reading in it was also a result of a hardware check.)
 - **Settings**: general, alerts (including SMTP configuration), retention
-  policy, network access, appearance, and the automatic-backup schedule.
+  policy, network access (including the access password for other devices),
+  appearance, and the automatic-backup schedule. Stored passwords come across
+  with them.
 - Optionally, **history**: raw results, rollups (5-minute/hourly/daily) and the
   event/incident timeline, when the archive included it and you chose to
-  restore it. When history is not restored (including configuration-only
+  restore it. That includes what each hardware check recorded: a machine's
+  readings are its check's results, kept like any other check's. (An archive
+  from 0.6.x or earlier carries a separate list of hardware readings; it is not
+  read, because every reading in it was also a result of a hardware check.) When history is not restored (including configuration-only
   archives), existing results and rollups for matching check IDs, incidents for
   matching nodes, and the event timeline are kept. Nodes and checks absent from
   the archive are removed, together with their associated history. Existing
@@ -215,11 +229,6 @@ database without an archive.
   encryption, and the new machine seals them again with its own `gwatch.key`.
   (The keys that verify signed release updates are built into the program, so
   there is nothing about updates to carry over either.)
-- The **access password** for remote/LAN access is restored as part of
-  settings (it travels with the config), but SMTP and automatic-backup
-  passwords are only ever stored encrypted/hashed as GWatch normally does —
-  restoring them onto a new machine works the same as restoring any other
-  setting.
 - **Browser sessions and pairing codes.** Everyone signs in once more on the new
   machine, and a machine still waiting to be enrolled needs a new code. On a machine
   with no accounts yet, a browser on that machine is an administrator, so you can
@@ -243,8 +252,7 @@ After restoring:
 3. If you restored history, open a node's **Charts** and confirm data extends
    back further than "just now".
 4. Open **Audit › Event log** and confirm a "Backup restored" event was
-   recorded with the expected node/check counts, and (if you restored history)
-   the counts match what you saw in step 1 of the archive's own creation.
+   recorded with the expected node and check counts.
 5. If alerts are enabled, send a test email from **Settings › Alerts** to
    confirm SMTP settings came across correctly.
 6. If automatic backups were enabled, confirm **Settings › Backups** shows

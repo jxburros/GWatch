@@ -5,115 +5,27 @@ binary can prove the file it just downloaded came from you. Every release asset
 is signed with an ed25519 key whose public half is compiled into the binary; an
 update that does not verify is refused, not installed with a warning.
 
-## Building and testing locally
+## The release manifest and the Release workflow
 
-```bash
-make test                         # go vet + unit and integration tests (SQLite)
-make ci                           # local checks (CI also tests platform/backend integrations): gofmt, vet, go mod tidy, race tests,
-                                  #   the mcp/ module, the jsdom web suite and the Playwright/axe suite
-make cover                        # race tests plus a per-function coverage report
-make test-postgres / test-mysql   # the store, backup, API, engine and hostmon suites against a server
-make web-check                    # node --check over every web/*.js (needs node on PATH)
-make web-test                     # the jsdom suite in tests/web/
-make web-typecheck                # tsc over the web/ files marked // @ts-check (see tsconfig.json)
-make web-e2e                      # Playwright + axe over every route, in tests/e2e/
-make build / build-ncruces / build-cgo   # build with each of the three SQLite drivers
-make windows                      # cross-compile dist/gwatch.exe from Linux/macOS
-make docker                       # build the container image (see DOCKER.md)
-make agent                        # build dist/gwatch-agent for this platform
-make agent-all                    # build it for Windows, Linux and macOS, amd64/arm64/arm
-make agent-packages               # the agent's .deb and .rpm, into dist/packages (nfpm, pinned, via go run)
-make agent-image                  # the agent's container image, for this platform
-make mcp-build / mcp-test / mcp-fmt   # the same, for the mcp/ module (see mcp/README.md)
-make keygen / sign / verify-release   # the release signing key and release assets (below)
-```
+`release.json` is the authoritative release manifest. Keep the embedded versions
+(`VERSION`, `cmd/gwatch-agent/VERSION`) in step with it, and advance every affected
+app (patch by default) before a change merges into `main`: pull requests must pass
+**Release version validation**.
 
-The test suite needs no external network: HTTP, TLS and DNS checks are exercised against
-local `httptest` servers and a fake in-process DNS resolver, and ping output is parsed
-from fixtures, so the tests are deterministic on a CI runner. See the [`Makefile`](../Makefile)
-for what each target actually runs.
+Use **Actions → Release → Run workflow** from `main`, choose stable or preview, and
+leave **dry_run** enabled first. Only apps ahead of their published version in their
+own namespace are selected. All required packages are built, tested and signed before
+anything is published. Tag pushes and merges do not publish on their own. After
+inspecting the dry run, dispatch again with dry_run disabled; the run proceeds without
+manual approval steps. Published versions are never overwritten: a correction is a new
+version.
 
-By default every test runs on SQLite. The store, backup, API, engine and hostmon suites
-also run against a PostgreSQL or MySQL server when `GWATCH_TEST_DB` and a DSN are set —
-see [`DATABASE.md`](DATABASE.md#for-developers); CI does this on the Linux job with
-service containers.
+See [`.release/README.md`](../../.release/README.md) for this repository's inventory,
+credentials, compatibility and validation limits. The shared implementation is the
+[JX Holdings release infrastructure](https://github.com/JX-Holdings-LLC/release-infrastructure).
 
-## Continuous integration
-
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on every push and pull
-request with the following jobs:
-
-| Job | Runner | What it does |
-|---|---|---|
-| `ci` ("Lint, build, test (Windows)") | `windows-latest` | gofmt, vet, `go mod tidy`/`verify`, build + full test suite, the mcp/ module, web-asset `node --check` plus the jsdom suite (`npm test`, `tests/web/`) and the web type check (`npm run typecheck`), PowerShell script parsing, compiles both Inno Setup installers, and dry-runs the release's Authenticode signing with a throwaway certificate ([below](#authenticode-signing)) |
-| `linux` ("Test (Linux)") | `ubuntu-latest` | gofmt, vet, staticcheck, build, full test and race suites (root and mcp/), the migration/store/backup/api/engine/hostmon suites against PostgreSQL 16 and MySQL 8 service containers ([`DATABASE.md`](DATABASE.md#for-developers)), `govulncheck` for both modules, and the browser accessibility suite (`npm run test:e2e` — Playwright drives Chromium through every route with an axe-core scan) |
-| `macos` ("Test (macOS)") | `macos-latest` | vet + test only — deliberately lean, but this is what actually compiles and exercises `internal/sysmetrics/collect_darwin.go` |
-| `docker` ("Container image") | `ubuntu-latest` | builds the `Dockerfile` for `linux/amd64` and `linux/arm/v7`, checks `gwatch version` inside it, then starts the container and waits for `/api/health` to answer 200 |
-| `server-packaging` ("Server packages") | `ubuntu-latest` | builds the server's `.deb`/`.rpm` for all three architectures and checks the `.deb`'s contents, then `scripts/ci/linux-service-test.sh package`: install, the same service assertions as `linux-service` (exposure at most 2.0), refuse to self-update or register a second service, upgrade to a newer `.deb` with the data intact, remove (data kept) and purge (nothing left) — see ["The server packages"](#the-server-packages) |
-| `linux-service` ("Service lifecycle (Linux)") | `ubuntu-latest` | `scripts/ci/linux-service-test.sh binary`: `gwatch install`, then asserts the unit runs as `gwatch` with `/var/lib/gwatch` and only `CAP_NET_RAW`, passes `systemd-analyze verify` and scores at most 4.5 in `systemd-analyze security`, answers `/api/health`, takes a first administrator, a sign-in and a ping check with a result, and leaves nothing behind after `gwatch uninstall --purge --yes` |
-| `agent-packaging` ("Agent packages") | `ubuntu-latest` | builds the agent's `.deb`/`.rpm` for all three architectures, installs the `.deb` on the runner's systemd and takes it through install → refuse to self-update → configure → run → purge, renders the Homebrew formula (`ruby -c`) and the winget manifests (validated against winget's 1.6.0 schemas), builds the agent image and has it read the runner through a mounted host root, and checks no package output is named like a self-update asset — see ["The agent packages"](#the-agent-packages) |
-
-Windows builds the Inno Setup installers and validates PowerShell scripts. Linux tests
-the installed systemd service and journal output; Linux and macOS both exercise their
-native collectors.
-
-The `ci` job also compiles the winget variant of the agent setup program, so a change to
-`scripts/installer/gwatch-agent.iss` that breaks it fails a pull request rather than a tag.
-
-Releases are no longer started by pushing a `v*` or `agent-v*` tag. They are built by
-[`.github/workflows/release.yml`](../.github/workflows/release.yml), dispatched by hand
-from `main` (**Actions → Release → Run workflow**, a dry run first — see the
-[README](../README.md#unified-release-procedure) and
-[`.release/README.md`](../.release/README.md)). It re-runs the `ci`, `linux` and `macos`
-jobs above, then builds, signs and publishes each app that `release.json` puts ahead of
-its published version: `gwatch-build`/`gwatch-sign` for GWatch (the steps below), the
-`gwatch-agent-*` and agent packaging jobs for the agent
-(["The agent packages"](#the-agent-packages)), and the container images only after the
-release they belong to is published (["The container image"](#the-container-image)).
-Where the sections below tag a commit and push the tag, dispatch that workflow instead;
-the tag it releases under comes from the version file. Pushing `mcp/v0.1.0` still runs `mcp-tag` in `ci.yml`, a guard
-job — see ["Releasing the MCP companion"](#releasing-the-mcp-companion).
-
-## Repository layout
-
-| Path | Purpose |
-|---|---|
-| `main.go` | CLI, service commands (through `internal/svc`), HTTP server bound to localhost by default |
-| `migrate_db.go` | `gwatch migrate-db`: copies a SQLite install into a PostgreSQL/MySQL database |
-| `internal/model` | Shared data types and JSON wire format |
-| `internal/dbconfig` | Which database to open: flags, `GWATCH_DB_*`, `database.json`, then the SQLite default |
-| `internal/store` | Schema, migrations, single queued writer, rollups and history queries, over a dialect layer that speaks SQLite, PostgreSQL and MySQL/MariaDB |
-| `internal/checks` | Check runners: ping, http, cert, tcp, dns, keyword, json, custom, system (hardware) and snmp; node templates |
-| `internal/engine` | Scheduler, result processing, alert rules, dependencies, maintenance, retention, health, triggers, notification rules |
-| `internal/actions` | Automation actions: HTTP requests, git commands, custom scripts, run-node, and the Slack / Teams / ntfy / Pushover notifiers |
-| `internal/auth` | Roles, principals, password hashing, sessions and API-key digests |
-| `internal/secrets` | The envelope that seals individual configuration values with the machine-local `gwatch.key` |
-| `internal/discovery` | Subnet sweeps: what answers, what it is called, which ports are open |
-| `internal/hostmon` | The newest hardware reading of each machine, in memory: samples this machine, accepts agent pushes (the engine then has the machine's check judge them) |
-| `internal/sysmetrics` | The platform-tagged collectors behind `hostmon` (`collect_linux.go`, `collect_darwin.go`, `collect_windows.go`) |
-| `internal/update` | GitHub release check, download, checksum, signature verification and executable swap |
-| `internal/svc` | Background-service hosting for both programs: Windows Service Control Manager, launchd, systemd (OpenRC and System V as fallbacks) — see [the checklist below](#service-hosting-manual-checks) |
-| `internal/serviceinstall` | The protected copy of the program a service runs, and the server's own hardened systemd installation |
-| `internal/mailer` | SMTP delivery and alert email rendering |
-| `internal/backup` | Encrypted backup archives and restore |
-| `internal/logging` | The size-rotated file + in-memory service log behind `/api/logs` |
-| `internal/api` | JSON API (see [`API.md`](API.md)) and static UI serving |
-| `cmd/gwatch-agent` | The one-directional hardware agent installed on other machines ([`HARDWARE.md`](HARDWARE.md)) |
-| `cmd/gwatch-sign` | Maintainer CLI: generate the release signing key, sign and verify release assets |
-| `cmd/gwatch-rsrc/` | Builds the `.syso` resource objects that put the icons inside the Windows executables — GWatch's mark in `gwatch.exe`, the agent's in `gwatch-agent.exe` (`make rsrc`) |
-| `web/` | The browser interface (vanilla HTML/CSS/JS, no build step, embedded into the binary; open with `?mock=1` for an in-browser demo backend) |
-| `web/fonts/` | Barlow and Kode Mono, latin subsets, self-hosted so the UI still requests nothing from the internet ([SIL OFL 1.1](../web/fonts/OFL.txt)) |
-| `tests/web/` | The jsdom suite for `web/` (`make web-test`). It lives outside `web/` so `//go:embed` never ships it |
-| `tests/contract/` | `api-shapes.json`: the keys and JSON types of the real handlers' answers to a set of GETs, written by `internal/api/mock_contract_test.go` (`GWATCH_UPDATE_CONTRACT=1 go test ./internal/api -run TestMockContractShapes` after a handler changes) and held against `web/mock.js` by `tests/web/mock-contract.test.mjs`, so the demo backend cannot drift from the API unnoticed |
-| `tsconfig.json` | Type checking for `web/` (`make web-typecheck`): JSDoc types, no build. Checked today: `components.js`, `api.js`, `fmt.js`, `chart-config.js`, `netmap.js` — a file opts in with `// @ts-check` as its first line; the steps are in `tsconfig.json`, and `tests/web/typecheck-coverage.test.mjs` keeps the list from shrinking |
-| `tests/e2e/` | Playwright + axe over every route, in both themes (`make web-e2e`); `playwright.config.mjs` and `package.json` configure both suites |
-| `skill/` | The downloadable agent skill served by `GET /api/mcp/skill`, versioned by `skill/VERSION` |
-| `scripts/` | Windows build / install / uninstall PowerShell scripts |
-| `scripts/installer/` | The two Inno Setup scripts, their shared branding and the wizard artwork |
-| `packaging/` | The agent's packages: `build-agent.sh` (the packaged builds), `nfpm/` (`.deb`/`.rpm`, systemd unit, maintainer scripts), `homebrew/`, `winget/` and `docker/Dockerfile.agent` — see ["The agent packages"](#the-agent-packages) |
-| `VERSION` | The version every build reports; a release is the tag `v<VERSION>` |
-| `mcp/` | The MCP companion, a separate Go module with its own `VERSION` — see [`mcp/README.md`](../mcp/README.md) |
-| `Dockerfile`, `.dockerignore`, `docker-compose.yml` | The container image (`make docker`) and a ready-to-run Compose file — see [`DOCKER.md`](DOCKER.md) |
+Building, testing, continuous integration and the repository layout are in
+[`DEVELOPMENT.md`](DEVELOPMENT.md).
 
 ## One-time setup
 
@@ -131,7 +43,7 @@ Do this once, on a machine you trust, before the first signed release.
    add `release.key` to `.gitignore` — it must never be committed.
 
 2. **Pin the public key.** Paste the printed `ed25519:<base64>` line into
-   [`internal/update/release_keys.txt`](../internal/update/release_keys.txt),
+   [`internal/update/release_keys.txt`](../../internal/update/release_keys.txt),
    below the comment. Commit it. Every binary built from then on trusts that
    key.
 
@@ -147,7 +59,7 @@ Do this once, on a machine you trust, before the first signed release.
 
 ## Cutting a release
 
-The version lives in the [`VERSION`](../VERSION) file at the repository root.
+The version lives in the [`VERSION`](../../VERSION) file at the repository root.
 That is what a local `make build`, `scripts\build.ps1` and both setup programs
 read, so a build always reports the version of the commit it came from. A
 release is that file (and `release.json`, which repeats it) plus a matching tag:
@@ -334,7 +246,7 @@ The two are built by different jobs because the agent releases on its own
 both, in the `ci` job, so neither script can rot unnoticed.
 
 Both are compiled with `iscc /DAppVersion=<tag> /DExePath=<exe>` — see
-[`scripts/installer/README.md`](../scripts/installer/README.md) for what they do and how
+[`scripts/installer/README.md`](../../scripts/installer/README.md) for what they do and how
 to build them locally. Three things to keep in mind:
 
 - Both are **Authenticode-signed**, with the executables inside them and their
@@ -351,10 +263,10 @@ to build them locally. Three things to keep in mind:
 
 The wizard artwork under `scripts/installer/assets/` is committed, not generated at
 release time, so a release needs no image tooling on the runner. Both marks come
-from the logo kits in [`brand/`](../brand/README.md); if one changes, rebuild the
+from the logo kits in [`brand/`](../../brand/README.md); if one changes, rebuild the
 kit, copy its files into `web/` and the masters into `scripts/installer/assets/`,
 then run `python3 scripts/installer/make-assets.py` and `make rsrc` (see
-[`scripts/installer/README.md`](../scripts/installer/README.md#branding-assets)).
+[`scripts/installer/README.md`](../../scripts/installer/README.md#branding-assets)).
 Both installers are light-themed only.
 
 ## Authenticode signing
@@ -500,8 +412,8 @@ branch of `scripts/authenticode.ps1` the same way.
 
 ## Releasing the agent
 
-`gwatch-agent` ([`docs/HARDWARE.md`](HARDWARE.md)) has its own version, in
-[`cmd/gwatch-agent/VERSION`](../cmd/gwatch-agent/VERSION), and its own tag
+`gwatch-agent` ([`docs/HARDWARE.md`](../HARDWARE.md)) has its own version, in
+[`cmd/gwatch-agent/VERSION`](../../cmd/gwatch-agent/VERSION), and its own tag
 scheme, `agent-v<version>`. It is part of the root module — unlike the MCP
 companion, there is no `go install` story to satisfy — so the separate tag
 exists for a different reason: **the agent updates itself**, and a thing that
@@ -529,7 +441,7 @@ git push origin agent-v0.5.0
 `cmd/gwatch-agent/VERSION` and gwatch-agent's `version` in `release.json` bumped and
 `.release/notes/gwatch-agent/<version>.md` written in step 1.) Its `gwatch-agent-build`
 and `gwatch-agent-sign` jobs in
-[`.github/workflows/release.yml`](../.github/workflows/release.yml) fail if the tag
+[`.github/workflows/release.yml`](../../.github/workflows/release.yml) fail if the tag
 does not match `cmd/gwatch-agent/VERSION`, fails if the signing key is missing
 or is not one the shipped agents trust, then cross-compiles seven targets
 (the six the server is built for, plus `linux/arm` for the Raspberry Pi class
@@ -576,7 +488,7 @@ own machines, and look at them before you expect anyone else to take it.
 ## The agent packages
 
 The agent is also published as a `.deb`, an `.rpm`, a Homebrew formula, a winget package
-and a container image ([`HARDWARE.md`](HARDWARE.md#installing-from-a-package-manager)).
+and a container image ([`HARDWARE.md`](../HARDWARE.md#installing-from-a-package-manager)).
 Each is a job in the release workflow that runs after `gwatch-agent-build` and after
 `agent-packaging`, the pull-request job that built and exercised the same packages; the
 files are published with the agent release, and the tap, winget and container jobs run
@@ -636,7 +548,7 @@ The `.deb`'s `Maintainer` field is `JX Holdings, LLC <https://github.com/jxburro
 ## The server packages
 
 The server is also published as a `.deb` and an `.rpm` for amd64, arm64 and armhf
-([`INSTALL-LINUX.md`](INSTALL-LINUX.md#from-a-deb-or-rpm-package)). `server-linux-packages`
+([`INSTALL-LINUX.md`](../INSTALL-LINUX.md#from-a-deb-or-rpm-package)). `server-linux-packages`
 runs in a GWatch release after `gwatch-build` and `server-packaging` (the pull-request job
 that built and exercised the same packages), checks the tag against `VERSION`, builds them
 with `packaging/nfpm/gwatch/package.sh` and hands `gwatch_<v>-1_{amd64,arm64,armhf}.deb`,
@@ -669,13 +581,13 @@ first push, make the package public in the repository's Packages settings, or a
 The image is not in the signed self-update chain either. The binary inside it carries
 the version from the tag like every other artefact, but the in-app updater cannot
 replace an executable in a read-only image directory and says so; container users
-upgrade by pulling ([`DOCKER.md`](DOCKER.md#upgrading)). The image's own integrity
+upgrade by pulling ([`DOCKER.md`](../DOCKER.md#upgrading)). The image's own integrity
 comes from the registry's digest, not from a `.sig`.
 
 ## Releasing the MCP companion
 
-`gwatch-mcp` ([`mcp/README.md`](../mcp/README.md)) is a separate Go module
-(`mcp/go.mod`) with its own version, in [`mcp/VERSION`](../mcp/VERSION). It
+`gwatch-mcp` ([`mcp/README.md`](../../mcp/README.md)) is a separate Go module
+(`mcp/go.mod`) with its own version, in [`mcp/VERSION`](../../mcp/VERSION). It
 does not share the core `VERSION` file or the core `v<VERSION>` tag scheme —
 it uses **nested-module tags**, `mcp/v<VERSION>`, which is the scheme Go's
 module resolution expects for a module that lives in a subdirectory of the
@@ -702,7 +614,7 @@ git push origin mcp/v0.2.0
 ```
 
 Pushing an `mcp/v*` tag runs the `mcp-tag` job in
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml): it fails if the
+[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml): it fails if the
 tag does not match `mcp/VERSION`, and builds the module, but it does **not**
 publish a separate GitHub release. `gwatch-mcp` binaries ship inside the
 *core* release instead — the `gwatch-build` job's "Cross-compile the MCP
@@ -722,13 +634,13 @@ the HTTP client, the MCP transport layer or the SDK pin.
 
 ### The agent skill
 
-[`skill/SKILL.md`](../skill/SKILL.md) is the document an assistant reads to
+[`skill/SKILL.md`](../../skill/SKILL.md) is the document an assistant reads to
 learn how to use the MCP tools well. It is embedded into the core binary
 (`//go:embed skill` in `main.go`) and handed out by **Settings › AI & MCP**,
 which also remembers who last downloaded which version and mentions when the
 embedded copy has moved on since.
 
-It has its own version, in [`skill/VERSION`](../skill/VERSION) and repeated in
+It has its own version, in [`skill/VERSION`](../../skill/VERSION) and repeated in
 the front matter of `SKILL.md`, independent of both `VERSION` and
 `mcp/VERSION`. **Bump it whenever `SKILL.md` changes in a way users should
 re-download** — new guidance, a new tool, a corrected instruction. Typo fixes

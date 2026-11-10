@@ -1,9 +1,11 @@
 package api
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/jxburros/GWatch/internal/checks"
 	"github.com/jxburros/GWatch/internal/model"
 )
 
@@ -182,5 +184,43 @@ func TestLimiterKeysAreDistinct(t *testing.T) {
 	}
 	if a, b := limiterIPKey("2001:db8::1"), limiterIPKey("2001:db8::ffff"); a != b {
 		t.Fatalf("addresses in one /64 should share a bucket: %q vs %q", a, b)
+	}
+}
+
+// A read-write API key may create and test HTTP checks. Pointed at GWatch's
+// own port, such a check arrives over loopback, and loopback is the
+// administrator with no sign-in. The request GWatch makes for the key must not
+// inherit that: it is not a person at this computer. The test server's check
+// runner is a stub, so this runs the real one, as the engine would.
+func TestSelfTargetedHTTPCheckIsNotLocalAdmin(t *testing.T) {
+	ts, _ := newTestServer(t)
+	admin := bootstrapAdmin(t, ts, "admin", "correct horse battery")
+
+	check := model.Check{Type: model.CheckHTTP, Name: "self", TimeoutSeconds: 5, Config: model.CheckConfig{
+		Target:         ts.URL + "/api/users",
+		Method:         "POST",
+		Headers:        map[string]string{"Content-Type": "application/json"},
+		Body:           `{"username":"pwned","password":"correct horse battery","role":"admin"}`,
+		ExpectedStatus: "200-599",
+	}}
+	res := checks.Run(context.Background(), check, checks.Options{})
+	if res.Details.StatusCode != 401 {
+		t.Fatalf("a request GWatch made to itself should be refused as signed out (401), got %d: %s", res.Details.StatusCode, res.Message)
+	}
+
+	var users []model.User
+	if code, body, _ := as(t, ts, creds{Cookie: admin}, "GET", "/api/users", nil, &users); code != 200 {
+		t.Fatalf("list users: %d %s", code, body)
+	}
+	for _, u := range users {
+		if u.Username == "pwned" {
+			t.Fatal("a self-targeted HTTP check created an administrator")
+		}
+	}
+
+	// A person's browser on this computer still is the local administrator
+	// once the check's connection has closed.
+	if code, body, _ := as(t, ts, creds{}, "GET", "/api/users", nil, nil); code != 200 {
+		t.Fatalf("a loopback client should still be the local administrator: %d %s", code, body)
 	}
 }

@@ -57,7 +57,7 @@ plain `iscc gwatch.iss` works for a quick local test build.
 CI compiles both setup programs on every push and pull request. Open the run on
 the **Actions** tab and download the **`gwatch-windows-installer`** artefact.
 Tagging `v0.1.0` attaches both to the GitHub release — see
-[`docs/RELEASING.md`](../../docs/RELEASING.md).
+[`docs/development/RELEASING.md`](../../docs/development/RELEASING.md).
 
 ## What the monitor's installer does
 
@@ -216,7 +216,7 @@ committed object would pin it to whatever it was when the object was generated.
   executables inside them only once its signing account is configured; until then they
   are unsigned and Windows SmartScreen shows an "unknown publisher" warning. A local
   build signs when `GWATCH_SIGNING_CERT_THUMBPRINT` is set. See
-  [`docs/RELEASING.md`](../../docs/RELEASING.md#authenticode-signing).
+  [`docs/development/RELEASING.md`](../../docs/development/RELEASING.md#authenticode-signing).
 - On upgrade, if the port or LAN setting changes, the already-registered `GWatch`
   service keeps its original `--data-dir`/`--listen` arguments: the installer
   calls `gwatch.exe start`, not a fresh `gwatch.exe install`, when the service

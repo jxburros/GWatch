@@ -54,25 +54,48 @@ runs on and posts the reading to GWatch every minute.
    will be watched as, carrying a hardware check that is completed and switched
    on the moment the machine actually pairs, and shows an eight-character
    **pairing code** with the command to run.
-2. Install the agent on the machine you want to watch (below, or the Windows
-   installer) and run the command GWatch showed:
+2. Get the agent onto the machine you want to watch (see
+   [Getting the agent](#getting-the-agent) just below) and pair it. GWatch shows
+   a `gwatch-agent pair …` command with its own address and the code filled in;
+   to pair *and* install the background service in one go, run the same thing
+   with `install` in place of `pair`:
 
    ```
-   gwatch-agent install --server https://gwatch.lan:7230 --code XXXX-XXXX
+   gwatch-agent install --server http://gwatch.lan:7230 --code XXXX-XXXX
    ```
 
-   On Windows, from an Administrator prompt. The agent swaps the code for its
-   own token, installs itself as a background service and starts reporting.
-   The dialog in GWatch tells you when the machine has paired and again when its
-   first reading has arrived.
+   Run it with `sudo` on Linux and macOS, and from an Administrator prompt on
+   Windows. The agent swaps the code for its own token, installs itself as a
+   background service and starts reporting. The dialog in GWatch tells you when
+   the machine has paired and again when its first reading has arrived.
 3. Its readings appear on its node within a minute, and the hardware check
    there starts alerting on the thresholds it was created with. Change them to
    whatever "wrong" means for that machine.
 
-A machine is not a separate thing in GWatch: it is a node, and everything about
-its agent — the token, what it collects, whether it is up to date — is on that
-node, in the **GWatch agent** card (administrators only). There is no hardware
-section under Settings.
+Everything about a machine's agent — the token, what it collects, whether it is
+up to date — is on its node, in the **GWatch agent** card (administrators only).
+
+**The address.** `--server` is the address the *other machine* reaches GWatch
+at, so GWatch must be open to your network (**Settings › Network access › Allow
+access from other devices on my network**). GWatch itself serves plain HTTP, so
+on an ordinary install the address starts with `http://`, as in every example
+on this page. Write `https://` only if you have put GWatch behind a reverse
+proxy with TLS ([`REMOTE-ACCESS.md`](REMOTE-ACCESS.md)), which is what you want
+for an agent that is not on your own network.
+
+### Getting the agent
+
+The agent has its own releases, separate from GWatch's and with their own
+version numbers. On the [releases page](https://github.com/jxburros/GWatch/releases),
+find the newest release whose name starts with `agent-v` (the one at the top of
+the page may be GWatch's own) and look under **Assets**:
+
+| Machine | Take | Then |
+| --- | --- | --- |
+| Windows | `gwatch-agent-setup-<version>.exe` | Run it; it asks for the address and the code. [`INSTALL.md`](INSTALL.md#installing-the-agent-on-other-machines) walks through it |
+| Linux, macOS | `install-agent.sh` | `sudo sh install-agent.sh --server … --code …`, which downloads, verifies and installs the right binary ([`INSTALL-LINUX.md`](INSTALL-LINUX.md#agent-on-linux-or-macos)) |
+| Any, by hand | `gwatch-agent-<os>-<arch>` (`.exe` on Windows) | Make it executable and run the `install` command above |
+| Managed by a package manager | the `.deb` or `.rpm`, Homebrew, winget or the container image | [Installing from a package manager](#installing-from-a-package-manager) |
 
 Before installing anything, `gwatch-agent print` shows exactly what would be
 sent, and contacts nothing. `gwatch-agent once` sends a single reading and
@@ -103,7 +126,7 @@ to change:
 
 ```json
 {
-  "server": "https://gwatch.lan:7230",
+  "server": "http://gwatch.lan:7230",
   "token": "gwa_…",
   "name": "Living room NAS",
   "interval": "1m",
@@ -118,7 +141,7 @@ to change:
 
 | Setting | Meaning |
 | --- | --- |
-| `server` | The address of your GWatch, with the port. |
+| `server` | The address of your GWatch, with the port: `http://…` unless GWatch is behind an HTTPS reverse proxy. |
 | `token` | This machine's credential. It must match the one GWatch shows on the node. |
 | `name` | What the machine calls itself in GWatch. Empty uses the computer's own name. |
 | `interval` | How often a reading is sent (at least `10s`). |
@@ -246,7 +269,7 @@ this one. It sends back an inventory of what it could collect, which is what the
 checkboxes are drawn from. GWatch's answer has no field for a URL, a command, a
 file or a version to install, so it cannot make the machine do anything it did
 not choose to; the full list is in [`API.md`](API.md#asking-for-settings) and the
-reasoning in [`AGENT-DECISIONS.md`](AGENT-DECISIONS.md#12-an-agent-asks-gwatch-for-a-small-fixed-set-of-things).
+reasoning in [`AGENT-DECISIONS.md`](development/AGENT-DECISIONS.md#12-an-agent-asks-gwatch-for-a-small-fixed-set-of-things).
 The one addition is for a machine you have made a [remote collector](COLLECTORS.md)
 on both sides: its answer also lists the network checks to run.
 
@@ -362,30 +385,33 @@ file, which the service gives an access list that lets signed-in users read it
 (the configuration and the token beside it stay the administrators'). When you
 sign in, its console window may flash for a moment before it hides.
 
-**macOS and Linux remain deferred.** Every Go tray library for them needs cgo,
-which the agent's one pure-Go, `CGO_ENABLED=0` cross-compile cannot have; Linux
-desktops disagree about what a tray is (GNOME needs an extension for one at
-all); and each would need its own per-user login autostart. On those platforms
-`gwatch-agent tray` says so and points at `gwatch-agent ui`, which does
-everything the icon would. GWatch itself already notices an agent that stops
-reporting and alerts on it.
+**There is no icon on macOS or Linux.** On those platforms `gwatch-agent tray`
+says so and points at `gwatch-agent ui`, which does everything the icon would,
+and GWatch itself already notices an agent that stops reporting and alerts on
+it. (The reasons are in
+[`AGENT-DECISIONS.md`](development/AGENT-DECISIONS.md#6-the-agent-gets-a-local-control-panel-not-a-tray-icon).)
 
 ### Installing from a package manager
 
 The agent is also packaged for apt/dnf, Homebrew, winget and Docker. A packaged
 agent is the same program with one difference: **the package manager keeps it
 up to date, and the agent never replaces itself** — `gwatch-agent update` tells
-you the package manager's command instead ([why](AGENT-DECISIONS.md#10-a-packaged-agent-belongs-to-its-package-manager-it-does-not-update-itself)).
+you the package manager's command instead ([why](development/AGENT-DECISIONS.md#10-a-packaged-agent-belongs-to-its-package-manager-it-does-not-update-itself)).
 That suits machines you already manage with packages. For a machine nobody logs
-into, the plain binary above, which updates itself, is still the better fit.
+into, the downloads under [Getting the agent](#getting-the-agent), which update
+themselves, are still the better fit.
 
-> **Availability.** The packages are published by release jobs that are newer
-> than the agent releases already out, so they exist from the first `agent-v…`
-> release cut after them. `brew install` also needs the `jxburros/homebrew-tap`
-> repository and `winget install` the listing in winget's catalogue, both set up
-> once by the maintainers ([RELEASING.md](RELEASING.md#the-agent-packages)).
-> Until then the commands below have nothing to install; check the latest agent
-> release for `.deb`, `.rpm` and `gwatch-agent-winget-setup-*` files.
+> **Availability: check before you rely on a channel.** Not every channel
+> below may be live yet. The `.deb` and `.rpm` files are attached to an agent
+> release, so they are there if the newest `agent-v…` release lists them under
+> **Assets**; the container image is there if `docker pull` finds it. Homebrew
+> and winget each need
+> something more that the maintainers set up once — the `jxburros/homebrew-tap`
+> repository, and a listing in winget's catalogue — and until that exists
+> `brew install` and `winget install` find nothing. If a command below says the
+> package cannot be found, that is why: use the setup program, the install
+> script or the plain binary from [Getting the agent](#getting-the-agent)
+> instead.
 
 ### Linux packages
 
@@ -397,7 +423,7 @@ there is nothing to report with yet. Then pair the machine, once:
 
 ```
 sudo apt install ./gwatch-agent_<version>-1_amd64.deb      # or: sudo dnf install ./gwatch-agent-<version>-1.x86_64.rpm
-sudo gwatch-agent pair --server https://gwatch.lan:7230 --code XXXX-XXXX
+sudo gwatch-agent pair --server http://gwatch.lan:7230 --code XXXX-XXXX
 ```
 
 `pair` keeps the token and the server in `/var/lib/gwatch-agent` (root only)
@@ -420,9 +446,11 @@ remove keeps it, so reinstalling does not mean pairing again.
 
 ### macOS: Homebrew
 
+If the tap exists yet (see Availability above):
+
 ```
 brew install jxburros/tap/gwatch-agent
-gwatch-agent pair --server https://gwatch.lan:7230 --code XXXX-XXXX
+gwatch-agent pair --server http://gwatch.lan:7230 --code XXXX-XXXX
 brew services start gwatch-agent
 ```
 
@@ -432,8 +460,10 @@ formula works on Homebrew for Linux too.
 
 ### Windows: winget
 
+If the listing exists yet (see Availability above):
+
 ```
-winget install GWatch.Agent --override "/VERYSILENT /SUPPRESSMSGBOXES /SERVER=https://gwatch.lan:7230 /CODE=XXXX-XXXX"
+winget install GWatch.Agent --override "/VERYSILENT /SUPPRESSMSGBOXES /SERVER=http://gwatch.lan:7230 /CODE=XXXX-XXXX"
 ```
 
 This is the same setup program as the download, run silently with the server
@@ -459,7 +489,7 @@ services:
       - /:/host:ro,rslave
       - gwatch-agent:/var/lib/gwatch-agent
     environment:
-      GWATCH_SERVER: https://gwatch.lan:7230
+      GWATCH_SERVER: http://gwatch.lan:7230
     restart: unless-stopped
 volumes:
   gwatch-agent:
@@ -485,7 +515,7 @@ It runs as an unprivileged user. A filesystem mounted under a directory only
 root can enter cannot be measured that way and shows as a warning on the
 reading; add `user: "0"` if that one matters. It is updated by pulling a newer
 image, never by itself. Why this works, and what it cannot see, is
-[`AGENT-DECISIONS.md`](AGENT-DECISIONS.md#11-the-container-image-watches-the-docker-host-through-the-hosts-own-root).
+[`AGENT-DECISIONS.md`](development/AGENT-DECISIONS.md#11-the-container-image-watches-the-docker-host-through-the-hosts-own-root).
 
 ### What this does and does not give GWatch
 
@@ -520,10 +550,11 @@ the agent is not on your own network — a plain `http://` server hands the
 reading, and the token, to anything on the path. See
 [`REMOTE-ACCESS.md`](REMOTE-ACCESS.md).
 
-With a self-signed certificate, add `--insecure`. The agent still uses TLS; it
-just stops checking the certificate, which means someone able to intercept the
-connection can read the readings and feed GWatch false ones. Nothing more,
-since the token grants nothing else.
+If the proxy has a self-signed certificate, add `--insecure` when pairing. The
+agent still uses TLS; it trusts the certificate it meets that first time and
+remembers its key (`certPin` in `agent.json`), refusing a different one later.
+Whoever can intercept that first connection can read the readings and feed
+GWatch false ones. Nothing more, since the token grants nothing else.
 
 ## A metrics endpoint, read by GWatch
 
@@ -547,6 +578,16 @@ The endpoint returns the reading as JSON, so anything that can serve the same
 shape works here too — `gwatch-agent print` shows the format.
 
 ## What is measured
+
+Linux reports everything in the table. The other two have gaps worth knowing
+before you set thresholds:
+
+- **macOS has no processor utilisation.** It reports load average per core
+  instead; set a load threshold, not a processor one.
+- **Windows and macOS have no temperatures.** Only Linux reports them.
+- **Windows has no load average and no inode counts**, and reads disk
+  throughput only when the agent runs as the installed service or as an
+  administrator.
 
 | | Linux | Windows | macOS |
 | --- | --- | --- | --- |
@@ -895,14 +936,16 @@ list the next time the check is saved.
 
 ## Storage and retention
 
-Readings are stored per machine, not per check, so a machine's history is kept
-whether or not a check happens to be pointed at it, and two checks can watch
-different aspects of the same machine without doubling the data.
+A machine's readings are the results of its hardware check: there is no
+separate store of them. A machine that no hardware check watches therefore has
+no history, only its newest reading.
 
-They are kept for 90 days by default — less than check results, because each
-one is a whole snapshot rather than a single number. Change it under
-**Settings › Retention**. Deleting a registered machine deletes its readings
-with it; revoking only stops the token.
+Hardware check results are kept for 90 days by default, a setting of their own
+because each one is a whole snapshot rather than a single number. Change it
+under **Settings › Retention › Keep hardware check results for**. Removing a
+machine's agent removes its registration and its token (revoking only stops
+the token); the node and the history its check recorded stay until you delete
+the node.
 
 ## Keeping agents up to date
 
@@ -954,12 +997,12 @@ the next `.deb` or `.rpm`, or `docker pull`), and `gwatch-agent version` says
 which package it came from.
 
 Agent releases are tagged `agent-v…` and are separate from GWatch's own — see
-[`RELEASING.md`](RELEASING.md#releasing-the-agent). An agent is never offered a
+[`RELEASING.md`](development/RELEASING.md#releasing-the-agent). An agent is never offered a
 GWatch build, or the other way round.
 
 Why it is built this way, including the option deliberately not taken —
 GWatch pushing updates to agents — is in
-[`AGENT-DECISIONS.md`](AGENT-DECISIONS.md).
+[`AGENT-DECISIONS.md`](development/AGENT-DECISIONS.md).
 
 ## Building the agent
 
@@ -972,19 +1015,21 @@ make agent-packages # the .deb and .rpm, into dist/packages
 make agent-image    # the container image, for this platform
 ```
 
-The packaged builds differ from these by one linker flag,
-`-X main.packagedBy=…`, set by `packaging/build-agent.sh`; everything under
-`packaging/` is how each package is put together.
-
-Its version comes from `cmd/gwatch-agent/VERSION`, not the project's `VERSION`
-file. It imports only the collector, the shared data types and the release
-verifier — no database, no web interface, no GWatch credentials.
+You only need this to build from source; the downloads are under
+[Getting the agent](#getting-the-agent). The agent's version comes from
+`cmd/gwatch-agent/VERSION`, not the project's `VERSION` file, and how the
+packaged builds and releases are made is in
+[`RELEASING.md`](development/RELEASING.md#the-agent-packages).
 
 ## Troubleshooting
 
-**The machine never appears.** Run `gwatch-agent once --server … --token …` on
-it by hand. A rejected token says so plainly; a connection failure names what
-went wrong reaching the server.
+**The machine never appears.** Run `gwatch-agent once` on it by hand, as the
+account that installed the service (root, or an Administrator prompt) so that
+it reads the same `agent.json`; `gwatch-agent config path` says which file it
+is using. A rejected token says so plainly; a connection failure names
+what went wrong reaching the server. The usual causes are an address that
+says `https://` when GWatch serves `http://`, and a GWatch that is not open to
+the network (**Settings › Network access**).
 
 **Is that address even a GWatch?** `gwatch-agent probe --server URL
 [--insecure]` answers in one line, before any code is spent: whether the

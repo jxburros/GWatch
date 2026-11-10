@@ -1,6 +1,6 @@
 # The version lives in the VERSION file, so a local build, the installer and a
 # release all say the same thing. A release is published as v<VERSION> by the
-# Release workflow, which checks the two agree first (see docs/RELEASING.md).
+# Release workflow, which checks the two agree first (see docs/development/RELEASING.md).
 VERSION ?= $(shell tr -d ' \t\r\n' < VERSION)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
@@ -54,7 +54,7 @@ rsrc:
 #
 # It versions on its own too, from cmd/gwatch-agent/VERSION rather than the
 # project's VERSION file, and is released by tagging agent-v<version> (see
-# docs/RELEASING.md). A machine running an agent is usually not a machine
+# docs/development/RELEASING.md). A machine running an agent is usually not a machine
 # anyone logs into, so the agent updates itself from those releases; tying its
 # version to the server's would mean a server release every time the agent
 # needed a fix.
@@ -157,7 +157,7 @@ ci: fmt-check vet tidy-check test-race mcp-test mcp-build web-test web-typecheck
 run:
 	go run . run --data-dir ./data
 
-# Release signing (see docs/RELEASING.md). KEY defaults to release.key; leave it
+# Release signing (see docs/development/RELEASING.md). KEY defaults to release.key; leave it
 # empty to take the key from the GWATCH_SIGNING_KEY environment variable, the
 # way CI does.
 KEY ?= release.key
@@ -182,12 +182,12 @@ sign:
 verify-release:
 	go run ./cmd/gwatch-sign verify -version $(RELEASE_VERSION) dist/gwatch-*
 
-# ---- Agent packages (docs/RELEASING.md#the-agent-packages) ----
+# ---- Agent packages (docs/development/RELEASING.md#the-agent-packages) ----
 #
 # The .deb and .rpm for every Linux architecture the agent is released for,
 # into dist/packages, the way the agent-linux-packages CI job builds them. The
 # binaries inside are built with -X main.packagedBy=deb/rpm and leave updating
-# to apt or dnf (docs/AGENT-DECISIONS.md, entry 10). nfpm is pinned and run
+# to apt or dnf (docs/development/AGENT-DECISIONS.md, entry 10). nfpm is pinned and run
 # with `go run`; set NFPM=nfpm to use an installed copy. The Homebrew tarballs
 # and formula (agent-homebrew) need GNU tar; the winget setup program needs
 # Inno Setup on Windows, so those are left to CI and to the scripts under

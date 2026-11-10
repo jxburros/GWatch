@@ -23,7 +23,8 @@ every scanner on the planet. If you take one thing from this page, take that.
 
 ## Step 1: choose a credential
 
-In the web interface, on the computer GWatch runs on, open **Settings › Users & access**.
+In the web interface, signed in as an administrator (or on the computer GWatch runs
+on), open **Settings › Users & access**.
 
 **A viewer account** is for you, in a browser, on your phone. It can see dashboards,
 charts, history, incidents and the audit log. Every change — nodes, checks, settings,
@@ -51,9 +52,9 @@ on your phone, and GWatch stays bound to its own machine while your phone is sim
 the same private network. Nothing is published, nothing is forwarded, and the traffic
 is encrypted end to end.
 
-With Tailscale, leave `general.remoteAccess` off if the only device that needs GWatch
-is the one running it, or turn it on and reach GWatch at the machine's Tailscale
-address. `tailscale serve` will also put HTTPS in front of it for you.
+With Tailscale, leave **Settings › Network access › Allow access from other devices on
+my network** off if the only device that needs GWatch is the one running it, or turn it
+on and reach GWatch at the machine's Tailscale address (`http://<tailscale address>:7230`). `tailscale serve` will also put HTTPS in front of it for you.
 
 A plain **WireGuard** tunnel to your home router does the same job with more setup.
 
@@ -71,8 +72,8 @@ gwatch.example.com {
 }
 ```
 
-Caddy obtains and renews the certificate itself. Turn on `general.remoteAccess` only if
-the proxy is on a different machine; when the proxy runs alongside GWatch, leave it off
+Caddy obtains and renews the certificate itself. Turn on **Allow access from other
+devices on my network** only if the proxy is on a different machine; when the proxy runs alongside GWatch, leave it off
 and let the proxy reach `127.0.0.1:7230`, so the port is never open on the network.
 
 A proxy on the same machine connects to GWatch from `127.0.0.1`, the address that
@@ -149,11 +150,20 @@ gwatch run --trusted-proxies 10.0.0.0/24            # a proxy elsewhere on the L
 GWATCH_TRUSTED_PROXIES=127.0.0.1 gwatch run         # the same, from the environment
 ```
 
-The value is a list of addresses and CIDR ranges, separated by commas. `gwatch install
---trusted-proxies …` passes it on to the service (on Linux with systemd it is written to
-`/etc/gwatch/gwatch.env`, on a first install or a re-run alike; leaving the flag out of a
-re-run keeps what is there, and you can also edit `GWATCH_TRUSTED_PROXIES=…` in that file
-yourself and restart).
+The value is a list of addresses and CIDR ranges, separated by commas. Those commands
+are for GWatch run by hand in a terminal. For an installed service, set it where the
+service reads it:
+
+- **Linux package or `gwatch install` (systemd):** add `GWATCH_TRUSTED_PROXIES=…` to
+  `/etc/gwatch/gwatch.env` and `sudo systemctl restart gwatch`. With the standalone
+  binary, `sudo gwatch install --trusted-proxies …` writes the same line for you, on a
+  first install or a re-run alike (leaving the flag out of a re-run keeps what is there).
+- **Docker:** `GWATCH_TRUSTED_PROXIES` under `environment:` in the Compose file. The
+  proxy reaches the container from Docker's network, not from `127.0.0.1`, so name that
+  address or range.
+- **Windows service:** `gwatch install --trusted-proxies …` passes it on to the service
+  when the service is registered. A service that is already installed has to be removed
+  first with `gwatch uninstall` (your data is kept), both from an Administrator prompt.
 
 Only for a request whose connection comes from one of those addresses does GWatch read
 `X-Forwarded-For`, from the right: each proxy appends the address it was connected

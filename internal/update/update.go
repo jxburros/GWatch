@@ -26,7 +26,7 @@ import (
 // Client talks to the GitHub API.
 //
 // One repository publishes more than one thing: GWatch itself, and the
-// hardware agent, which versions and releases on its own (docs/RELEASING.md).
+// hardware agent, which versions and releases on its own (docs/development/RELEASING.md).
 // AssetPrefix and TagPrefix are what keep the two apart, so an agent asking
 // what it should move to is never offered a server build, and the other way
 // round. Left empty they describe GWatch, which is what every existing caller

@@ -533,7 +533,7 @@ jobs:
     - macos
     runs-on: windows-latest
     # The Authenticode signer's OIDC federated credential trusts this
-    # environment only (docs/RELEASING.md); id-token lets azure/login use it.
+    # environment only (docs/development/RELEASING.md); id-token lets azure/login use it.
     environment: authenticode
     permissions:
       contents: read
@@ -585,7 +585,7 @@ jobs:
         ls -lh ../dist
     - name: Authenticode configuration
       id: authenticode
-      # Signs only when the AZURE_SIGNING_* variables are set (docs/RELEASING.md);
+      # Signs only when the AZURE_SIGNING_* variables are set (docs/development/RELEASING.md);
       # without them the release goes on unsigned, with a warning in the summary.
       run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Configure
     - name: Sign in to Azure for Authenticode
@@ -678,7 +678,7 @@ jobs:
       env:
         GWATCH_SIGNING_KEY: ${{ secrets.GWATCH_SIGNING_KEY }}
       run: "if [ -z \"$GWATCH_SIGNING_KEY\" ]; then\n  echo \"::error::set the GWATCH_SIGNING_KEY secret (base64\
-        \ ed25519 seed) \u2014 releases must be signed, see docs/RELEASING.md\"\n  exit 1\nfi\npub=\"$(go run ./cmd/gwatch-sign\
+        \ ed25519 seed) \u2014 releases must be signed, see docs/development/RELEASING.md\"\n  exit 1\nfi\npub=\"$(go run ./cmd/gwatch-sign\
         \ pubkey)\"\necho \"signing with $pub\"\nif ! grep -v '^[[:space:]]*#' internal/update/release_keys.txt\
         \ | grep -qF \"$pub\"; then\n  echo \"::error::the GWATCH_SIGNING_KEY secret's public key ($pub) is not\
         \ listed in internal/update/release_keys.txt, so the released binaries would reject their own updates. Add\
@@ -748,7 +748,7 @@ jobs:
     - macos
     runs-on: windows-latest
     # The Authenticode signer's OIDC federated credential trusts this
-    # environment only (docs/RELEASING.md); id-token lets azure/login use it.
+    # environment only (docs/development/RELEASING.md); id-token lets azure/login use it.
     environment: authenticode
     permissions:
       contents: read
@@ -791,7 +791,7 @@ jobs:
         ls -lh dist
     - name: Authenticode configuration
       id: authenticode
-      # Signs only when the AZURE_SIGNING_* variables are set (docs/RELEASING.md);
+      # Signs only when the AZURE_SIGNING_* variables are set (docs/development/RELEASING.md);
       # without them the release goes on unsigned, with a warning in the summary.
       run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Configure
     - name: Sign in to Azure for Authenticode
@@ -884,7 +884,7 @@ jobs:
       env:
         GWATCH_SIGNING_KEY: ${{ secrets.GWATCH_SIGNING_KEY }}
       run: "if [ -z \"$GWATCH_SIGNING_KEY\" ]; then\n  echo \"::error::set the GWATCH_SIGNING_KEY secret (base64\
-        \ ed25519 seed) \u2014 agent releases must be signed or no agent will install them, see docs/RELEASING.md\"\
+        \ ed25519 seed) \u2014 agent releases must be signed or no agent will install them, see docs/development/RELEASING.md\"\
         \n  exit 1\nfi\npub=\"$(go run ./cmd/gwatch-sign pubkey)\"\necho \"signing with $pub\"\nif ! grep -v '^[[:space:]]*#'\
         \ internal/update/release_keys.txt | grep -qF \"$pub\"; then\n  echo \"::error::the GWATCH_SIGNING_KEY secret's\
         \ public key ($pub) is not listed in internal/update/release_keys.txt, so released agents would reject their\
@@ -1004,7 +1004,7 @@ jobs:
     - agent-packaging
     runs-on: windows-latest
     # The Authenticode signer's OIDC federated credential trusts this
-    # environment only (docs/RELEASING.md); id-token lets azure/login use it.
+    # environment only (docs/development/RELEASING.md); id-token lets azure/login use it.
     environment: authenticode
     permissions:
       contents: read
@@ -1037,7 +1037,7 @@ jobs:
       run: sh packaging/build-agent.sh winget "$AGENT_VERSION" dist/packaged windows/amd64
     - name: Authenticode configuration
       id: authenticode
-      # Signs only when the AZURE_SIGNING_* variables are set (docs/RELEASING.md);
+      # Signs only when the AZURE_SIGNING_* variables are set (docs/development/RELEASING.md);
       # without them the release goes on unsigned, with a warning in the summary.
       run: pwsh -NoProfile -File scripts/authenticode.ps1 -Action Configure
     - name: Sign in to Azure for Authenticode

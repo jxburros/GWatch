@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/jxburros/GWatch/internal/model"
+	"github.com/jxburros/GWatch/internal/selfconn"
 )
 
 const userAgent = "GWatch/1.0 (+local network monitor)"
@@ -168,7 +169,7 @@ func runHTTPCheck(ctx context.Context, check model.Check, target string, opts Op
 
 	transport := &http.Transport{
 		Proxy:                  nil, // a local monitor always connects directly
-		DialContext:            (&net.Dialer{Timeout: timeout, KeepAlive: -1}).DialContext,
+		DialContext:            selfconn.DialContext((&net.Dialer{Timeout: timeout, KeepAlive: -1}).DialContext),
 		TLSClientConfig:        &tls.Config{InsecureSkipVerify: cfg.IgnoreTLSErrors, MinVersion: tls.VersionTLS10}, //nolint:gosec // user opt-in
 		TLSHandshakeTimeout:    timeout,
 		ResponseHeaderTimeout:  timeout,

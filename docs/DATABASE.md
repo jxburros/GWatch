@@ -9,9 +9,8 @@ never thought about which database GWatch uses, you do not need to start now.
 This page is for the other case: you already run a **PostgreSQL** or **MySQL/MariaDB**
 server (a NAS with a database app, a home-lab box, a hosted instance) and you would rather
 GWatch kept its history there — for its backups, its disk, or simply so that everything
-you run stores its data in one place. Since this feature landed (#34) GWatch can be
-pointed at either, with the SQLite file still the default and still working exactly as it
-did.
+you run stores its data in one place. GWatch can be pointed at either, with the SQLite
+file still the default and still working exactly as it did.
 
 What does **not** change with the backend: the web interface, the API, backups and
 restores (an encrypted `.gwbackup` archive is the same whichever database it came from),
@@ -178,8 +177,9 @@ the SQLite file into the server once:
 
 1. **Set up the server** as above, and (optionally) save the connection under
    **Settings › Database**, using *Test connection* to be sure it works.
-2. **Stop GWatch** — `gwatch stop` for the Windows service, or Ctrl+C on a console. The
-   copy needs the SQLite file to itself.
+2. **Stop GWatch** — `gwatch stop` from an Administrator prompt for the Windows service,
+   `sudo systemctl stop gwatch` on Linux, `docker compose stop` for a container, or
+   Ctrl+C on a console. The copy needs the SQLite file to itself.
 3. **Run the copy:**
 
    ```
@@ -199,8 +199,9 @@ the SQLite file into the server once:
    data directory owned by anyone but the account running it (root included), so stop
    the service with `sudo systemctl stop gwatch` and run the copy as that user:
    `sudo -u gwatch gwatch migrate-db --data-dir /var/lib/gwatch` (with
-   any `--db-*` flags after it). The command prints its
-   progress by stage and a final count:
+   any `--db-*` flags after it). In a container, run it in a one-off container on the
+   same volume: `docker compose run --rm gwatch migrate-db --db-driver …`. The command
+   prints its progress by stage and a final count:
 
    ```
    Copying C:\ProgramData\GWatch\gwatch.db into postgres://gwatch@db.lan:5432/gwatch
@@ -216,7 +217,8 @@ the SQLite file into the server once:
    The target must be **empty** — a database GWatch has never started against. If it
    already holds GWatch data (say, from the restart in step 1), run again with
    `--replace` to empty it first. Nothing is ever changed in the SQLite file.
-4. **Start GWatch again** (`gwatch start`). The log's first lines name the new database,
+4. **Start GWatch again** (`gwatch start`, `sudo systemctl start gwatch` or
+   `docker compose up -d`). The log's first lines name the new database,
    and **Settings › Database** shows it as the one in use.
 
 What comes across is exactly what a full backup restored onto the server would bring:
@@ -288,7 +290,7 @@ your own disk, and one place for everything you run.
 
 ## For developers
 
-Everything the store asks of the database that the three disagree on lives in
+Nothing in this section is needed to run GWatch. Everything the store asks of the database that the three disagree on lives in
 `internal/store/dialect.go` and the three files beside it; every query is written once,
 in SQLite's form, and translated on its way out. The schema is written once too and
 translated per dialect rather than kept in three copies. The whole store test suite, and

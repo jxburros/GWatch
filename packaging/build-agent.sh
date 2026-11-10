@@ -9,7 +9,7 @@
 # A packaged binary is the release binary with one more linker flag,
 # -X main.packagedBy=<packager>, which makes it leave updating to the package
 # manager that installed it (cmd/gwatch-agent/packaging.go,
-# docs/AGENT-DECISIONS.md entry 10). It is a different binary from the
+# docs/development/AGENT-DECISIONS.md entry 10). It is a different binary from the
 # self-updating gwatch-agent-<os>-<arch> release assets, so it is never
 # published under those names: it goes into a package (.deb, .rpm, the
 # Homebrew tarball, the winget setup program, the container image), and the

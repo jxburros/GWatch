@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/jxburros/GWatch/internal/model"
+	"github.com/jxburros/GWatch/internal/selfconn"
 	"github.com/jxburros/GWatch/internal/subprocess"
 )
 
@@ -350,7 +351,7 @@ func (r *Runner) client(a model.Action) *http.Client {
 	}
 	tr := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: 15 * time.Second}).DialContext,
+		DialContext:           selfconn.DialContext((&net.Dialer{Timeout: 15 * time.Second}).DialContext),
 		TLSHandshakeTimeout:   15 * time.Second,
 		ResponseHeaderTimeout: 60 * time.Second,
 		TLSClientConfig:       &tls.Config{InsecureSkipVerify: a.IgnoreTLSErrors}, //nolint:gosec // user opted in per action

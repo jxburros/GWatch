@@ -16,7 +16,7 @@
 #
 # then paste the printed "ed25519:..." line below this comment, keep
 # release.key offline, and store its base64 seed as the GWATCH_SIGNING_KEY
-# repository secret. See docs/RELEASING.md.
+# repository secret. See docs/development/RELEASING.md.
 #
 # A fork that signs with its own key can instead override this list at build
 # time, without editing the file:

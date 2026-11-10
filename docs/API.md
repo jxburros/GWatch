@@ -1,4 +1,4 @@
-# GWatch localhost API
+# GWatch JSON API
 
 All endpoints are served by the local service on `http://127.0.0.1:7230` (configurable) and
 return JSON unless noted. Errors are `{"error": "message"}` with a 4xx/5xx status.
@@ -14,7 +14,7 @@ follows it. Breaking changes bump the prefix (`/api/v2/…`) and the old prefix 
 working for at least one release, so integrations should use `/api/v1/…`.
 
 Every API response carries `X-GWatch-API-Version: 1`, and `GET /api/version` returns
-`{"version": "0.5.0", "platform": "windows/amd64", "apiVersion": 1}` (`platform` is
+`{"version": "0.8.9", "platform": "windows/amd64", "apiVersion": 1}` (`platform` is
 omitted for callers who have not identified themselves).
 
 ## Platform notes
@@ -32,6 +32,20 @@ omitted for callers who have not identified themselves).
   relying on it — that exercises the exact configuration a real alert would use.
 
 ## Authentication and roles
+
+**In short — who can call what.** The detail, route by route, follows below.
+
+| Caller | Read monitoring data | Change nodes, checks, maintenance, dashboards, wallboards, charts, map layout, incidents | Checks that run code | Settings, accounts, keys, backups, updates, automation, rules, discovery, agents |
+| --- | --- | --- | --- | --- |
+| `admin` account (or `local` / access password) | yes | yes | yes | yes |
+| `viewer` account | yes, plus the service log and the lists of triggers, endpoints and rules | no | no | no |
+| `readwrite` API key | yes | yes | **never** | **never** |
+| `read` API key | yes | no | no | **never** |
+
+An API key can **never create, edit, test, run or switch on a check that runs code or
+carries a stored token to a chosen address** — a `custom` (script) check, or a `system`
+check that reads an agentless metrics URL. Only an administrator signed in to the web
+interface can. Nor can any key reach the administration column, whatever its scope.
 
 Every request resolves to a **principal**, in this order of precedence:
 
@@ -55,6 +69,12 @@ judged like any other remote client — whether or not the proxy is listed in
 `--trusted-proxies`, and whatever address it forwards. A signed-in account is always itself, even on the
 computer GWatch runs on — the cookie is resolved before the loopback shortcut.
 
+**A request GWatch makes to itself is not `local` either** (new in 0.8.10). An HTTP
+check, a webhook action or a Matter server URL pointed at GWatch's own address arrives
+over loopback, but it was asked for by whoever configured it — possibly an API key — so
+it is never treated as a person at this computer. It must carry a credential (an API
+key header, say) like any other client, and is anonymous without one.
+
 If the database cannot be asked whether a session cookie or API key is valid, the
 request is answered `503` with a short `Retry-After` rather than being treated as
 signed out; try again.
@@ -74,24 +94,25 @@ same header indicators. `indicators` is the effective list: normalised, with ids
 counts filled in, and seeded with the defaults when none are stored.
 
 **Roles.** `admin` may change anything. `viewer` may read the overview, status,
-wallboard, stream, nodes and checks, history, events, maintenance, dashboards, wallboards,
-charts,
-groups, templates, the CSV exports of history/results/events, the service log, and the
-list of triggers and endpoints — with the endpoint `token` field blanked and a
-`hasToken` boolean added. Everything else answers 403.
+wallboard, stream, nodes and checks, history, events, incidents, maintenance, dashboards,
+the network map's arrangement, wallboards, charts, hardware readings (`/api/hosts`),
+groups, templates, the CSV exports of history/results/events, a generated availability
+report, the service log, retention status, update status, automation metadata, the
+notification rules, and the list of triggers and endpoints — with the endpoint `token`
+field blanked and a `hasToken` boolean added. Everything else answers 403.
 
 **API keys** are minted in Settings › Users & access (`POST /api/apikeys`) and shown
 once. Only a sha256 digest and the first 12 characters are stored. A key is never an
 administrator, whatever its scope:
 
 - `read` — the viewer read list above, minus the service log, triggers, endpoints,
-  automation metadata, retention status and update status. A check's request
+  rules, automation metadata, retention status and update status. A check's request
   headers, request body, custom-check environment and agentless metrics URL are
   blanked for a key, since they routinely carry credentials; the SNMP and metrics
   secrets come back masked, the same as for a browser.
 - `readwrite` — the same, plus creating, updating, deleting, enabling, running and
   silencing nodes and checks, notes, acknowledging, resolving and annotating incidents,
-  maintenance windows, dashboards, wallboards and charts. A key may lay a wallboard out; it may not project one. It may **not**
+  maintenance windows, dashboards, the network map's arrangement, wallboards and charts. A key may lay a wallboard out; it may not project one. It may **not**
   create, edit or test a `custom` check, or a `system` check that reads an
   agentless URL: both run code or carry a stored token to a chosen address, so an
   administrator must create them in the web interface (403, not 401). The same goes
@@ -1057,9 +1078,9 @@ has, every program running at check-in time, every container its Docker daemon h
 every guest its hypervisor has, listed then and never with a reading, for choosing which
 to watch. Like `/ingest/metrics` the
 route is reached with an agent token and nothing else, shares its failure budget, and is
-outside the authorization table. [`AGENT-DECISIONS.md`](AGENT-DECISIONS.md#12-an-agent-asks-gwatch-for-a-small-fixed-set-of-things)
+outside the authorization table. [`AGENT-DECISIONS.md`](development/AGENT-DECISIONS.md#12-an-agent-asks-gwatch-for-a-small-fixed-set-of-things)
 says why this does not turn GWatch into a control channel, and
-[entry 16](AGENT-DECISIONS.md#16-an-agent-may-run-gwatchs-network-checks-from-where-it-is-if-both-sides-agree)
+[entry 16](development/AGENT-DECISIONS.md#16-an-agent-may-run-gwatchs-network-checks-from-where-it-is-if-both-sides-agree)
 why the collector's checks do not either.
 
 ### Submitting check results (remote collectors)
@@ -1408,7 +1429,7 @@ A signature is mandatory. Each asset is published with a sibling `<asset>.sig` i
 | no `.sig` asset in the release | `the release is not signed` |
 | signature is malformed or from another key | `signature verification failed` |
 
-The `<asset>.sha256` sidecar is still checked when the release publishes one (`checksum mismatch` aborts the update), but it is only a transit-corruption guard and never substitutes for the signature. See [`RELEASING.md`](RELEASING.md).
+The `<asset>.sha256` sidecar is still checked when the release publishes one (`checksum mismatch` aborts the update), but it is only a transit-corruption guard and never substitutes for the signature. See [`RELEASING.md`](development/RELEASING.md).
 
 ## AI assistants (MCP)
 
@@ -1602,11 +1623,15 @@ See [`RESTORE.md`](RESTORE.md) for the end-to-end restore-to-a-new-machine proce
 - A `"discovery"` update carries the sweep's counters instead of a check or node, a few times a second while one is running and once more when it stops: `{"kind":"discovery","discovery":{"id":"6f1c…","state":"running","scanned":118,"total":254,"responders":9}}`. The results themselves are read from `GET /api/discovery/{id}`.
 
 
-## Incidents and availability reports (0.6)
+## Incidents and availability reports
+
+An incident groups one node's outage into a single thing that can be acknowledged and
+resolved; the raw timeline it is built from is under [Events / incidents](#events--incidents).
 
 - `GET /api/incidents?state=active|all|open|acknowledged|resolved` returns grouped node
   incidents (default active). `GET /api/incidents/{id}` returns `{incident, events}`.
-- `POST /api/incidents/{id}/acknowledge`, `/resolve`, or `/note` takes `{ "note": "..." }`.
+- `POST /api/incidents/{id}/{action}`, where `{action}` is `acknowledge`, `resolve` or
+  `note` (anything else is a `400`), takes `{ "note": "..." }`.
   Admins and read-write keys may update; viewers/read keys may read. Notes are limited
   to 8,000 bytes, and `/note` needs one (`400` otherwise); acknowledging an incident that
   is already resolved is a `409`, an unknown incident a `404`. Incidents expose `openedAt`, acknowledgment/resolution times and actors,
@@ -1621,8 +1646,11 @@ See [`RESTORE.md`](RESTORE.md) for the end-to-end restore-to-a-new-machine proce
   downloads self-contained printable HTML for up to 366 days. Viewers/read keys may
   generate a report. Add `charts=1` for group latency charts. Node availability
   aggregates observed samples across its checks.
-- `GET /api/agents/latest` returns an empty release without network access when
-  automatic update checks are disabled. When enabled it caches the agent release lookup.
+- `GET /api/agents/latest` (see [Hardware health](#hardware-health)) returns an empty
+  release without network access when automatic update checks are disabled. When enabled
+  it caches the agent release lookup.
+
+## Notes on secrets and bulk edits
 
 Check secrets have one shared model definition for masking and encryption. Headers and
 custom environment values are masked by key; returning `********` preserves a stored

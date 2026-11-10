@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jxburros/GWatch/internal/model"
+	"github.com/jxburros/GWatch/internal/selfconn"
 )
 
 // runTCPCheck opens a TCP connection to host:port and reports the connect time.
@@ -21,7 +22,7 @@ func runTCPCheck(ctx context.Context, check model.Check, target string) model.Re
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	dialer := &net.Dialer{Timeout: timeout}
 	t0 := time.Now()
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	conn, err := selfconn.DialContext(dialer.DialContext)(ctx, "tcp", addr)
 	elapsed := time.Since(t0)
 	res := model.Result{}
 	if err != nil {

@@ -18,7 +18,7 @@ import (
 // (and so no SNMP community or HTTP header) to an agent whose machine has not
 // opted in.
 //
-// The shape of it keeps the agent's trust model (docs/AGENT-DECISIONS.md,
+// The shape of it keeps the agent's trust model (docs/development/AGENT-DECISIONS.md,
 // entries 12 and 16). The agent still opens every connection: the checks are
 // part of GWatch's answer to the agent's own check-in, the results go out on a
 // route of their own authenticated by the agent's token, and GWatch has no way

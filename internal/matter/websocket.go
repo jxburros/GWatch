@@ -29,6 +29,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jxburros/GWatch/internal/selfconn"
 )
 
 // The standard library has no WebSocket client and the module does not depend
@@ -108,6 +110,7 @@ func dialWebSocket(ctx context.Context, rawURL string) (*wsConn, error) {
 	if err != nil {
 		return nil, err
 	}
+	raw = selfconn.Track(raw)
 	conn := raw
 	if secure {
 		tc := tls.Client(raw, &tls.Config{ServerName: u.Hostname(), MinVersion: tls.VersionTLS12})

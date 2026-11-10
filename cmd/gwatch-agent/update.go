@@ -3,7 +3,7 @@
 // A machine running the agent is, almost by definition, a machine nobody logs
 // into. If updating meant visiting it, the agent installed today would be the
 // agent running in three years, so the agent keeps itself current: it reads
-// the agent releases (agent-v*, its own tags — see docs/RELEASING.md), verifies
+// the agent releases (agent-v*, its own tags — see docs/development/RELEASING.md), verifies
 // the download against the signing keys pinned into this binary, and replaces
 // itself.
 //

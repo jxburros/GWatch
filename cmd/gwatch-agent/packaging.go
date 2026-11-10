@@ -20,7 +20,7 @@
 // never reaches the code that swaps an executable. A flag in a unit file would
 // say the same thing, but it could be edited, forgotten in one of five package
 // formats, or overridden by an environment variable; a build that cannot swap
-// itself cannot be talked into it. See docs/AGENT-DECISIONS.md, entry 10.
+// itself cannot be talked into it. See docs/development/AGENT-DECISIONS.md, entry 10.
 //
 // Nothing here loosens what an update is allowed to be. A packaged agent still
 // reports that a newer release exists (`update --check` asks the same signed

@@ -28,11 +28,38 @@ repository root:
 docker compose up -d
 ```
 
-Then open `http://<the docker host>:7230` and create the administrator account
-(next section). `docker logs gwatch` shows the same log the program writes to
-`/data/logs/`.
+A fresh container needs one more command before you can sign in. In order:
 
-## First run: create an administrator account
+1. **Start the container** with either command above. After about fifteen
+   seconds `docker ps` should show it as `Up … (healthy)`; `docker logs gwatch`
+   shows the same log the program writes to `/data/logs/`.
+2. **Create the first administrator account** from inside the container (why
+   is explained in the next section). Write the account to a file called
+   `admin.json` in a text editor, so the password never appears on a command
+   line:
+
+   ```json
+   {"username":"admin","password":"at-least-8-characters","role":"admin"}
+   ```
+
+   then hand it to GWatch and delete it:
+
+   ```bash
+   docker exec -i gwatch wget -q -O - \
+     --header 'Content-Type: application/json' \
+     --post-file /dev/stdin \
+     http://127.0.0.1:7230/api/users < admin.json
+   rm admin.json
+   ```
+
+   GWatch answers with the new account, something like
+   `{"id":1,"username":"admin","role":"admin",…}`. An error names what was
+   wrong: the password has to be at least 8 characters and the user name at
+   least 2.
+3. **Open `http://<the docker host>:7230`** in your browser and sign in with
+   that account. Add anyone else under **Settings → Users & access**.
+
+## First run: why the account is created from inside the container
 
 GWatch treats a request from the loopback address (127.0.0.1) as coming from
 the person sitting at the computer it runs on, and gives it administrator access
@@ -44,7 +71,13 @@ arrives over loopback. Your browser's request is forwarded through Docker's
 network and reaches GWatch from another address, so it lands on the sign-in
 screen — and on a fresh install there is no account to sign in with yet. The
 screen tells you to "open it on the computer it runs on", which in a container
-means from inside the container. Create the first account with one command:
+means from inside the container. That is what step 2 of the quick start does:
+`docker exec` runs `wget` inside the container, so the request arrives over
+loopback. The first account is always an administrator, whatever `role` says.
+
+GWatch has no command of its own for creating an account, so the request is the
+only way, and the file keeps the password out of sight. The shorter form you
+may see elsewhere puts it on the command line:
 
 ```bash
 docker exec gwatch wget -q -O - \
@@ -53,12 +86,9 @@ docker exec gwatch wget -q -O - \
   http://127.0.0.1:7230/api/users
 ```
 
-The first account is always an administrator, and the password has to be at
-least 8 characters. Sign in with it in your browser, then go to
-**Settings → Users & access** to add anyone else. The password went through
-your shell as a command-line argument, so if that bothers you change it right
-away from the same page (or put the JSON in a file and use `--post-file`
-instead).
+It works, but the password is then saved in your shell's history and is briefly
+visible in the process list to other users of the Docker host. If you use it,
+change the password afterwards under **Settings → Users & access**.
 
 Once one account exists the loopback shortcut only matters for whatever else
 runs inside the container, which is nothing — unless you use host networking,
@@ -165,14 +195,17 @@ cost:
 ## Hardware readings are the container's
 
 A **Hardware health** check reading *This computer* (the **This computer**
-template), and any "this computer" metrics you monitor, describe the container: its share of memory,
-the disk the volume is on, the container's network interfaces. They are not
+template), and any "this computer" metrics you monitor, describe the
+container: its share of memory, the disk the volume is on, the container's
+network interfaces. They are not
 wrong, but they are not the host either.
 
 To watch the host, run `gwatch-agent` on the host itself, as you would for any
-other machine, and point it at the container's published port. The agent is a
-separate download from the [releases page](https://github.com/jxburros/GWatch/releases/latest)
-and [`HARDWARE.md`](HARDWARE.md) walks through registering it.
+other machine, and point it at the container's published port
+(`http://<the docker host>:7230`). The agent is a separate download with its
+own releases, tagged `agent-v…`, and
+[`HARDWARE.md`](HARDWARE.md#another-machine-with-the-agent) walks through
+installing and pairing it.
 
 ### Watching the host's containers
 
@@ -227,8 +260,9 @@ the database is not supported — take a backup first if you want that option.
 
 GWatch's own backups (Settings → Backups) are password-encrypted archives that
 carry the stored secrets themselves rather than needing `gwatch.key`, so one
-archive is a complete copy that restores on any machine — container or not. Make one, download it from the same page, and keep
-it somewhere other than the volume. [`RESTORE.md`](RESTORE.md) covers restoring
+archive is a complete copy that restores on any machine — container or not.
+Make one, download it from the same page, and keep it somewhere other than the
+volume. [`RESTORE.md`](RESTORE.md) covers restoring
 one onto a fresh install; a fresh container with a new empty volume counts.
 
 If you would rather copy the volume itself, copy the whole `/data` directory
@@ -243,7 +277,7 @@ Docker Desktop, most ARM servers) and `linux/arm/v7` (32-bit Raspberry Pi OS):
 
 | Tag | Meaning |
 |---|---|
-| `0.8.0` | Exactly that release. Pin this if you want upgrades to be a decision |
+| `0.8.9` (any version number) | Exactly that release. Pin this if you want upgrades to be a decision |
 | `latest` | The newest stable release (a preview release is published under its version only) |
 
 `docker run --rm ghcr.io/jxburros/gwatch:latest version` prints the version the

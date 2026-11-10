@@ -13,7 +13,7 @@
 //      `/** @type {HTMLElement} */ (el)` where the DOM type is too wide,
 //   3. keep `npm test` and the Playwright suite green: a type fix must never
 //      change what the code does.
-// The checked files are listed in docs/RELEASING.md. The next step up is
+// The checked files are listed in docs/development/RELEASING.md. The next step up is
 // "strictNullChecks": true, which reports about two dozen more places today.
 {
   "compilerOptions": {
