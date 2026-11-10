@@ -1,6 +1,6 @@
 # Features
 
-A running checklist of capabilities GWatch is believed to implement, as of 0.8.10 (gwatch-agent 0.8.7, gwatch-mcp 0.1.2). Keep entries small and concrete so the list can support audits and QA. A listed feature counts as implemented for inventory purposes whether or not it has been tested; the checkbox is a checklist marker, not a test result. Seeded from `README.md` and `docs/USER-GUIDE.md`.
+A running checklist of capabilities GWatch is believed to implement, as of 0.8.11 (gwatch-agent 0.8.7, gwatch-mcp 0.1.2). Keep entries small and concrete so the list can support audits and QA. A listed feature counts as implemented for inventory purposes whether or not it has been tested; the checkbox is a checklist marker, not a test result. Seeded from `README.md` and `docs/USER-GUIDE.md`.
 
 ## Running GWatch
 

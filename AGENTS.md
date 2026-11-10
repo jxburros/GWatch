@@ -76,7 +76,7 @@ If a referenced document is missing, proceed with the available context and reco
 
 ## 5. Project Summary
 
-GWatch is a self-hosted, local-first network and service monitor for a home or small office. It is one Go binary with an embedded, dependency-free web interface, plus two separately versioned companions: `gwatch-agent` (hardware readings and remote collectors) and `gwatch-mcp` (an opt-in MCP server). It is in beta (0.8.10); 1.0 is reserved for the first public, stable release.
+GWatch is a self-hosted, local-first network and service monitor for a home or small office. It is one Go binary with an embedded, dependency-free web interface, plus two separately versioned companions: `gwatch-agent` (hardware readings and remote collectors) and `gwatch-mcp` (an opt-in MCP server). It is in beta (0.8.11); 1.0 is reserved for the first public, stable release.
 
 Important context:
 
@@ -133,7 +133,7 @@ With several requested tasks, complete as many as feasible; if one is blocked, c
 ### Version and Pull Request Rules
 
 - **`release.json` is the authoritative release manifest.** Keep `VERSION` (GWatch), `cmd/gwatch-agent/VERSION`, `mcp/VERSION` and `skill/VERSION` in step with it as `docs/development/RELEASING.md` describes. `package.json` is test tooling and carries no product version.
-- `.release/config.json` lists, per app, the paths that require a version bump. A pull request that changes any of them must advance that app's version (patch by default), add `.release/notes/<app>/<version>.md` and a `CHANGELOG.md` entry, or **Release version validation** fails. Changes outside those paths (for example `development-docs/`, root Markdown, `docs/`) need no bump.
+- **Every pull request into `main` must advance at least one app's version**, documentation-only changes included: `.release/config.json` sets `bumpPolicy: every-main-change`, and **Release version validation** fails otherwise ("Every main change requires a version advance"). The per-app `paths` there say which apps a change *affects*: advance each affected app (patch by default); when no app's paths are touched, advance GWatch, as 0.8.9 and 0.8.11 did. Each advance needs the version file, `release.json`, `.release/notes/<app>/<version>.md`, a `CHANGELOG.md` entry and, for GWatch, the beta version line in `README.md`.
 - Before opening a pull request, ask the maintainer whether the change should bump a version, and if so whether patch, minor or major. Do not choose minor or major yourself.
 - Never dispatch the Release workflow, push tags, or touch signing keys, secrets or `internal/update/release_keys.txt` without an explicit request.
 
@@ -143,7 +143,7 @@ With several requested tasks, complete as many as feasible; if one is blocked, c
 
 GWatch's `CHANGELOG.md` has an established convention, which takes precedence over the generic Spec-Driven Docs agent-entry format:
 
-- Entries are per version (`## 0.8.10 (not yet released)`), grouped under headings such as `### Security`, `### Fixed`, `### Documentation`, and written for the people who run GWatch: what changed for them and why, in plain words. Look at the existing entries for style.
+- Entries are per version (`## 0.8.11 (not yet released)`), grouped under headings such as `### Security`, `### Fixed`, `### Documentation`, and written for the people who run GWatch: what changed for them and why, in plain words. Look at the existing entries for style.
 - Add to the newest unreleased version's entry. If the change requires a version bump (Section 9), the entry belongs to the new version.
 - Never rewrite published entries; the file is append-only in spirit.
 - Never put secrets, tokens or private data in an entry.

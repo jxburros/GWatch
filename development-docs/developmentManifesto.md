@@ -128,7 +128,7 @@ A task is done only when all applicable items are true:
 - Platform-specific changes (Windows service, installers, systemd, macOS collectors, PostgreSQL/MySQL) are noted as relying on CI or on the hand checks in `docs/development/RELEASE-TEST-PLAN.md`.
 - `python3 scripts/ci/check-md-links.py .` passes when Markdown changed.
 - The user or developer document that describes the changed behaviour is updated (`docs/README.md` is the index); `docs/API.md` for any API change.
-- If anything under the release paths in `.release/config.json` changed, the affected app's version is advanced (patch by default) in `release.json` and its version file, release notes are added in `.release/notes/<app>/<version>.md`, and `CHANGELOG.md` has the entry — otherwise **Release version validation** fails. Ask the maintainer before choosing a minor or major bump.
+- Every change merged into `main` advances at least one app's version, documentation-only changes included (`bumpPolicy: every-main-change` in `.release/config.json`): each app whose release paths changed, or GWatch when none did. Patch by default, in `release.json` and the version file, with release notes in `.release/notes/<app>/<version>.md` and the `CHANGELOG.md` entry — otherwise **Release version validation** fails. Ask the maintainer before choosing a minor or major bump (`AGENTS.md` §9).
 - `README.md` is updated when installation, first-run, features or security notes change.
 - `architecture.md` is updated when architecture changed; `productRoadmap.md` only for scope or direction changes.
 - `features.md` is updated when a capability is added, removed or materially changed.

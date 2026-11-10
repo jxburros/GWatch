@@ -10,7 +10,7 @@ The organisational checklist for the current working period. It is not a scope g
 - [ ] #203–#209, #249–#252 Low-severity security findings
 - [ ] #253 Supply-chain scanning
 - [ ] #201 `toolchain` directive
-- [ ] #222 Publish a release that matches `VERSION` (0.8.10)
+- [ ] #222 Publish a release that matches `VERSION` (0.8.11)
 - [ ] #272 Tag the MCP module
 - [ ] #10, #286 Licence decision and launch plan (maintainers)
 - [ ] #120 Authenticode identity (maintainers)

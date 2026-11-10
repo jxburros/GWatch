@@ -46,7 +46,7 @@ This roadmap tells contributors and agents what GWatch is building toward, in wh
 
 ### Current Version / Baseline
 
-GWatch 0.8.10 (beta), gwatch-agent 0.8.7, gwatch-mcp 0.1.2, agent skill 1.0.2. The newest published release is 0.8.8; 0.8.9 and 0.8.10 are not published yet.
+GWatch 0.8.11 (beta), gwatch-agent 0.8.7, gwatch-mcp 0.1.2, agent skill 1.0.2. The newest published release is 0.8.8; 0.8.9 to 0.8.11 are not published yet. 0.8.11 changes only documentation; the program is as in 0.8.10.
 
 ### Current Capabilities
 

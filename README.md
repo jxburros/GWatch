@@ -15,7 +15,7 @@ and it is never exposed to the internet unless you arrange that yourself.
 
 ![The GWatch dashboard: health counters, what needs attention, and latency charts](marketing/beta/screens/dashboard-dark.png)
 
-> **GWatch is in beta (0.8.10).** It works and it looks after your data, but the
+> **GWatch is in beta (0.8.11).** It works and it looks after your data, but the
 > interface and the JSON API can still change between releases, and bugs are
 > likelier now than they will be at 1.0. [`CHANGELOG.md`](CHANGELOG.md) lists
 > what is in each version, and the [roadmap](development-docs/productRoadmap.md) what is known to be
