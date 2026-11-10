@@ -38,7 +38,7 @@ jobs:
     steps:
     - name: Keep LF line endings
       run: git config --global core.autocrlf false
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ needs.plan.outputs.sha }}
@@ -185,7 +185,7 @@ jobs:
         options: --health-cmd "mysqladmin ping -h 127.0.0.1 -pgwatch --silent" --health-interval 5s --health-timeout
           5s --health-retries 30
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ needs.plan.outputs.sha }}
@@ -309,7 +309,7 @@ jobs:
     name: Test (macOS)
     runs-on: macos-latest
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ needs.plan.outputs.sha }}
@@ -334,7 +334,7 @@ jobs:
         - linux/arm/v7
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ needs.plan.outputs.sha }}
@@ -379,7 +379,7 @@ jobs:
     name: Server packages
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ needs.plan.outputs.sha }}
@@ -431,7 +431,7 @@ jobs:
     name: Agent packages
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ needs.plan.outputs.sha }}
@@ -544,7 +544,7 @@ jobs:
     steps:
     - name: Keep LF line endings
       run: git config --global core.autocrlf false
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         fetch-depth: 0
@@ -661,7 +661,7 @@ jobs:
       RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
       RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch'].version }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         ref: ${{ needs.plan.outputs.sha }}
         persist-credentials: false
@@ -706,7 +706,7 @@ jobs:
     permissions:
       contents: read
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ needs.plan.outputs.sha }}
@@ -759,7 +759,7 @@ jobs:
     steps:
     - name: Keep LF line endings
       run: git config --global core.autocrlf false
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         fetch-depth: 0
@@ -867,7 +867,7 @@ jobs:
       RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
       RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].version }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         ref: ${{ needs.plan.outputs.sha }}
         persist-credentials: false
@@ -912,7 +912,7 @@ jobs:
     permissions:
       contents: read
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ needs.plan.outputs.sha }}
@@ -960,7 +960,7 @@ jobs:
       RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].version }}
       RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ needs.plan.outputs.sha }}
@@ -1015,7 +1015,7 @@ jobs:
     steps:
     - name: Keep LF line endings
       run: git config --global core.autocrlf false
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ needs.plan.outputs.sha }}
@@ -1111,7 +1111,7 @@ jobs:
     env:
       RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         ref: ${{ needs.plan.outputs.sha }}
         persist-credentials: false
@@ -1124,7 +1124,7 @@ jobs:
       with:
         name: server-linux-packages
         path: artifacts/linux
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: JX-Holdings-LLC/release-infrastructure
         ref: d7f42f9910c075ef34915fa2b95cf28dd2be534a
@@ -1156,7 +1156,7 @@ jobs:
     env:
       RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         ref: ${{ needs.plan.outputs.sha }}
         persist-credentials: false
@@ -1177,7 +1177,7 @@ jobs:
       with:
         name: agent-winget
         path: artifacts/winget
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: JX-Holdings-LLC/release-infrastructure
         ref: d7f42f9910c075ef34915fa2b95cf28dd2be534a
@@ -1242,7 +1242,7 @@ jobs:
       RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].version }}
       RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         ref: ${{ needs.plan.outputs.sha }}
         persist-credentials: false
@@ -1282,7 +1282,7 @@ jobs:
       run:
         shell: bash
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         ref: ${{ needs.plan.outputs.sha }}
         persist-credentials: false
@@ -1321,7 +1321,7 @@ jobs:
       RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch'].version }}
       RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ needs.plan.outputs.sha }}
@@ -1375,7 +1375,7 @@ jobs:
       RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['gwatch-agent'].version }}
       RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ needs.plan.outputs.sha }}
