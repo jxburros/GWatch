@@ -33,29 +33,16 @@ A fresh container needs one more command before you can sign in. In order:
 1. **Start the container** with either command above. After about fifteen
    seconds `docker ps` should show it as `Up … (healthy)`; `docker logs gwatch`
    shows the same log the program writes to `/data/logs/`.
-2. **Create the first administrator account** from inside the container (why
-   is explained in the next section). Write the account to a file called
-   `admin.json` in a text editor, so the password never appears on a command
-   line:
-
-   ```json
-   {"username":"admin","password":"at-least-8-characters","role":"admin"}
-   ```
-
-   then hand it to GWatch and delete it:
+2. **Create the first administrator account** from inside the
+   container. The command reads the password from standard input, so it is
+   not included in the command arguments or shell history:
 
    ```bash
-   docker exec -i gwatch wget -q -O - \
-     --header 'Content-Type: application/json' \
-     --post-file /dev/stdin \
-     http://127.0.0.1:7230/api/users < admin.json
-   rm admin.json
+   docker exec -it gwatch gwatch user add admin
    ```
 
-   GWatch answers with the new account, something like
-   `{"id":1,"username":"admin","role":"admin",…}`. An error names what was
-   wrong: the password has to be at least 8 characters and the user name at
-   least 2.
+   Enter a password of at least 8 characters when prompted. The first account
+   is always created as an administrator.
 3. **Open `http://<the docker host>:7230`** in your browser and sign in with
    that account. Add anyone else under **Settings → Users & access**.
 
@@ -71,24 +58,9 @@ arrives over loopback. Your browser's request is forwarded through Docker's
 network and reaches GWatch from another address, so it lands on the sign-in
 screen — and on a fresh install there is no account to sign in with yet. The
 screen tells you to "open it on the computer it runs on", which in a container
-means from inside the container. That is what step 2 of the quick start does:
-`docker exec` runs `wget` inside the container, so the request arrives over
-loopback. The first account is always an administrator, whatever `role` says.
-
-GWatch has no command of its own for creating an account, so the request is the
-only way, and the file keeps the password out of sight. The shorter form you
-may see elsewhere puts it on the command line:
-
-```bash
-docker exec gwatch wget -q -O - \
-  --header 'Content-Type: application/json' \
-  --post-data '{"username":"admin","password":"choose-a-good-one","role":"admin"}' \
-  http://127.0.0.1:7230/api/users
-```
-
-It works, but the password is then saved in your shell's history and is briefly
-visible in the process list to other users of the Docker host. If you use it,
-change the password afterwards under **Settings → Users & access**.
+means from inside the container. Step 2 runs the `gwatch user add` command in
+the container itself. It opens the shared data directory directly, so account
+creation does not depend on a loopback HTTP request or a running server.
 
 Once one account exists the loopback shortcut only matters for whatever else
 runs inside the container, which is nothing — unless you use host networking,

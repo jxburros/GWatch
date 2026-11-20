@@ -17,6 +17,7 @@ the alerts and history you already have get more dependable.
 
 ### Changed
 
+- **Create or recover accounts from the command line.** `gwatch user add` and `gwatch user reset-password` operate on the configured data directory and read the new password from standard input; password resets sign the account out of every browser session. The Docker and Linux first-run instructions and the package post-install message now use these commands (#288).
 - **An alert that could not be sent is kept, and sent once it can be.** The
   commonest outage on a home network takes the internet connection with it,
   and with it every way of saying so. An e-mail or channel message that still

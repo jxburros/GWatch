@@ -69,23 +69,15 @@ ssh -L 7230:127.0.0.1:7230 user@server
 
 Leave that running, open `http://127.0.0.1:7230` on your desktop, and create an administrator in Settings > Users & access. On the same page, switch on **Require sign-in on this computer too**, so that other users of the server (and anything else that can reach its loopback address) have to sign in as well.
 
-**Or from a shell on the server.** Write the account to a file only you can read, in an editor so the password stays out of your shell history:
+**Or from a shell on the server.** Create the first administrator directly in the data directory:
 
 ```sh
-umask 077
-nano admin.json
+sudo gwatch user add --data-dir /var/lib/gwatch admin
 ```
 
-```json
-{"username":"admin","password":"at-least-8-characters","role":"admin"}
-```
+Enter a password of at least 8 characters when prompted. The command reads it from standard input, not from a command-line argument, and creates the first account as an administrator. If you lose an account password later, run `sudo gwatch user reset-password --data-dir /var/lib/gwatch admin`; this also signs that account out of every browser session.
 
-```sh
-curl --fail -H 'Content-Type: application/json' --data-binary @admin.json http://127.0.0.1:7230/api/users
-rm admin.json
-```
-
-GWatch answers with the new account, something like `{"id":1,"username":"admin","role":"admin",…}`. The first account is always an administrator, the user name needs at least 2 characters and the password at least 8. Until **Require sign-in on this computer too** is switched on, the same request from the server's own shell keeps working without a password, so switch it on once you have signed in.
+Until **Require sign-in on this computer too** is switched on, the local shell can reach GWatch without a password, so switch it on once you have signed in.
 
 Only then open GWatch to the network, if you want it there: see [Network and ping](#network-and-ping).
 

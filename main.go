@@ -102,6 +102,8 @@ Usage:
   gwatch open                                                open the web interface in your browser
   gwatch migrate-db [--db-* flags] [--replace]               copy the SQLite database into the PostgreSQL/MySQL database
                                                              named by the flags or by database.json, then stop
+  gwatch user add [flags] <username>            create an account; read its password from standard input
+  gwatch user reset-password [flags] <username>                       replace its password and sign out its sessions
   gwatch version
 
 Database (docs/DATABASE.md): GWatch uses the SQLite file gwatch.db in the data directory unless told otherwise
@@ -122,6 +124,13 @@ Environment: GWATCH_DATA_DIR, GWATCH_LISTEN, GWATCH_TRUSTED_PROXIES, GWATCH_DB_*
 
 func main() {
 	cmd, args := splitCommand(os.Args[1:])
+	if cmd == "user" {
+		if err := runUserCommand(args, os.Stdin, os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	fs := flag.NewFlagSet("gwatch", flag.ContinueOnError)
 	fs.Usage = usage
 	cfg := config{}

@@ -70,11 +70,13 @@ if [ "$first" = yes ]; then
 
 From another computer, open an SSH tunnel first (ssh -L 7230:127.0.0.1:7230
 this-server) and browse to the same address. Create the first account -- it
-is always an administrator -- in Settings > Users & access, or from a shell here:
+is always an administrator -- in Settings > Users & access, or from a shell:
 
-  curl -fsS -H 'Content-Type: application/json' \
-    --data '{"username":"admin","password":"choose-a-good-one","role":"admin"}' \
-    http://127.0.0.1:7230/api/users
+  sudo gwatch user add --data-dir /var/lib/gwatch admin
+
+The command reads the password from standard input. To recover a lost password:
+
+  sudo gwatch user reset-password --data-dir /var/lib/gwatch admin
 
 To serve the whole network, set GWATCH_LISTEN=0.0.0.0:7230 in
 /etc/gwatch/gwatch.env and run: sudo systemctl restart gwatch
